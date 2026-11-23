@@ -1,0 +1,81 @@
+// Material basic dialog (modal popup centered in the main viewport).
+module;
+
+#include <string_view>
+
+export module imlui.widgets.dialog;
+
+import imgui;
+import imlui.color;
+import imlui.theme.dpi;
+import imlui.theme.scheme;
+import imlui.theme.typography;
+import imlui.theme.icons;
+import imlui.widgets.common;
+import imlui.widgets.surface;
+import imlui.widgets.text;
+
+export namespace imlui::md {
+
+/// Opens/closes a Material dialog driven by `*open`. Returns true while the
+/// contents should be rendered; then call endDialog().
+bool beginDialog(const char* title, bool* open, float width = 0.0f, std::string_view heroIcon = {});
+void endDialog();
+
+} // namespace imlui::md
+
+module :private;
+
+namespace imlui::md {
+
+bool beginDialog(const char* title, bool* open, float width, std::string_view heroIcon) {
+    const Scheme& s = scheme();
+    if (*open && !ImGui::IsPopupOpen(title)) ImGui::OpenPopup(title);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, s.surfaceContainerHigh.vec4());
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, s.scrim.withAlpha(0.32f).vec4());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, dp(shape().extraLarge));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {dp(24), dp(24)});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f}, ImGuiCond_Always,
+                            {0.5f, 0.5f});
+    const float minW = width > 0 ? width : dp(280), maxW = width > 0 ? width : dp(560);
+    ImGui::SetNextWindowSizeConstraints({minW, 0}, {maxW, vp->Size.y * 0.9f});
+    bool shown = ImGui::BeginPopupModal(title, nullptr,
+                                        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
+                                            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+    ImGui::PopStyleVar(4);
+    ImGui::PopStyleColor(2);
+    if (!shown) {
+        *open = false;
+        return false;
+    }
+    if (!*open || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        *open = false;
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return false;
+    }
+    pushSurface(s.surfaceContainerHigh);
+    const bool hero = hasIcon(heroIcon);
+    if (hero) {
+        float avail = ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - dp(24)) * 0.5f);
+        icon(heroIcon, 24.0f, s.secondary);
+        ImGui::Dummy({0, dp(4)});
+    }
+    std::string_view t = visibleLabel(title);
+    if (!t.empty()) {
+        text(t, TextStyle::HeadlineSmall, s.onSurface, false, hero ? 0.5f : 0.0f);
+        ImGui::Dummy({0, dp(8)});
+    }
+    return true;
+}
+
+void endDialog() {
+    popSurface();
+    ImGui::EndPopup();
+}
+
+} // namespace imlui::md
