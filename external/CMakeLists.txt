@@ -53,3 +53,13 @@ set(SPDLOG_INSTALL       OFF CACHE BOOL "" FORCE)
 add_subdirectory(spdlog EXCLUDE_FROM_ALL)
 set_target_properties(spdlog PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 add_library(ext::spdlog ALIAS spdlog)
+
+# ---------------------------------------------------------------- GoogleTest 1.17.0
+# Only googletest/ is vendored (no gmock, docs, samples or tests). Built only when
+# something links it (the unit tests), with the dynamic CRT like the rest of the project.
+set(gtest_force_shared_crt ON  CACHE BOOL "" FORCE)
+set(INSTALL_GTEST          OFF CACHE BOOL "" FORCE)
+set(BUILD_GMOCK            OFF CACHE BOOL "" FORCE)
+add_subdirectory(googletest EXCLUDE_FROM_ALL)
+# SYSTEM: consumers see gtest headers as system headers (no warnings from them).
+set_target_properties(gtest gtest_main PROPERTIES CXX_SCAN_FOR_MODULES OFF SYSTEM ON)
