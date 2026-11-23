@@ -126,12 +126,6 @@ public:
     /// Monitor content scale (DPI factor) at creation time.
     [[nodiscard]] float contentScale() const { return scale_; }
 
-    /// Must be called after the font atlas changed between frames.
-    void reloadFonts() {
-        ImGui_ImplOpenGL3_DestroyFontsTexture();
-        ImGui_ImplOpenGL3_CreateFontsTexture();
-    }
-
 private:
     GLFWwindow* window_ = nullptr;
     bool glfwInitialized_ = false;

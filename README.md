@@ -27,8 +27,12 @@ build/clang-debug/bin/imlui_app                      # gallery
 build/clang-debug/bin/imlui_app examples/counter.lua
 ```
 
-Dependencies are vendored in `external/` (Dear ImGui 1.91.9b, Lua 5.4.8, GLFW 3.4)
-and are built as plain libraries. Project code only uses them through module wrappers.
+Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4) and are
+built as plain libraries. Project code only uses them through module wrappers.
+
+`external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0).
+ImGui 1.92 rasterizes glyphs on demand, so every text style and icon size stays sharp, including
+when the theme's `fontScale` changes.
 
 Scripts **hot-reload** when you save any `.lua` file next to the script. In dev builds
 (`IMLUI_DEV_PATHS=ON`, the default) `lua/` and `examples/` are read from the source
@@ -69,19 +73,27 @@ tree, so you don't need to rebuild.
 - **Components**: `require "StatCard"` loads `StatCard.lua` from the script's folder, the same way
   QML files work as components.
 - **Common props**: `visible`, `enabled`, `tooltip`, `width`/`height` (dp; `-1` or `fillWidth = true` to fill).
+- **Icons**: any [Material Icons](https://fonts.google.com/icons) name, e.g. `icon = "add"` on `Button`,
+  `IconButton`, `Chip`, `ListItem` and `NavigationItem`, or `leadingIcon`/`trailingIcon` on fields.
+- **Layout**:
+  - `Row { justify = "start" | "center" | "end" | "spaceBetween", align = "center" | "top" | "bottom" }`
+  - `Spacer { fill = true }` in a row takes the remaining width, e.g. `Row { Spacer { fill = true }, Button {...} }`
+  - `Column { align = "center" }` centers its children
+- **Menus**: give any `Button` or `IconButton` a `menu = Menu { MenuItem {...}, Divider {}, ... }`.
+- **Snackbars**: `snackbar("Saved", { action = "Undo", onAction = fn })` from any handler.
 - Indices are **1-based**.
 
 ### Elements
 
 | Group | Elements |
 |---|---|
-| Windows | `ApplicationWindow` (root; `title`, `width`, `height`, `menuBar`, `padding`), `Window`, `Dialog` |
-| Layout | `Column`, `Row` (`spacing`, `align`), `Grid`, `ScrollView`, `ListView`, `Card`, `TabBar`/`Tab`, `Section`, `TreeNode` |
-| Menus | `MenuBar`, `Menu`, `MenuItem` |
-| Text | `Text`/`Label` (`style` = Material type scale, `color`, `wrap`), `Link`, `Separator`, `Spacer` |
-| Controls | `Button` (`variant` = filled, tonal, outlined, text, elevated, fab), `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem` |
-| Inputs | `Slider`, `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker` |
-| Feedback & data | `ProgressBar`, `BusyIndicator`, `Plot`, `Table`, `Canvas` (draw from Lua with `onPaint(self, p)`) |
+| Windows | `ApplicationWindow` (root; `title`, `width`, `height`, `menuBar`, `padding`), `Window`, `Dialog` (`icon`, `width`) |
+| Layout | `Column`, `Row`, `Grid`, `ScrollView` (`color`, `rounding`, `padding`), `ListView`, `Card` (`variant` = elevated, filled, outlined), `TabBar`/`Tab` (`icon`, `variant` = primary, secondary), `Expander`/`Section`, `TreeNode` |
+| App bars & navigation | `TopAppBar` (`title`, `navigationIcon`, `variant` = small, center, medium, large; children are actions), `NavigationItem`, `MenuBar`, `Menu`, `MenuItem` (`icon`, `shortcut`, `checked`) |
+| Text | `Text`/`Label` (`style` = Material type scale, `color`, `wrap`, `align`), `Icon`, `Link`, `Divider`, `Separator`, `Spacer` |
+| Controls | `Button` (`variant` = filled, tonal, outlined, text, elevated, fab; `icon`), `IconButton` (`variant` = standard, filled, tonal, outlined; `checked`/`checkedIcon` toggle), `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip` (`variant` = filter, assist, suggestion), `SegmentedButton`, `ListItem` (`icon`, `supportingText`, `trailingText`, `trailingIcon`) |
+| Inputs | `TextField`/`TextArea` (`variant` = filled, outlined; `label`, `placeholderText`, `leadingIcon`, `trailingIcon`, `supportingText`, `error`, `password`), `ComboBox` (Material dropdown), `Slider`, `SpinBox`, `ColorPicker` |
+| Feedback & data | `ProgressBar`, `CircularProgress`, `BusyIndicator`, `Plot` (`kind` = lines, bars), `Table`, `Canvas` (draw from Lua with `onPaint(self, p)`; `p:line/rect/circle/text/icon/polyline`) |
 | Other | `Timer`, `ImGuiDemo` |
 
 C++ apps can add elements with `engine.renderer().registerElement("MyThing", fn)`. Any
@@ -106,6 +118,9 @@ Color props accept:
 - a role with alpha (`"onSurface/0.6"`)
 - a hex string
 - `{r, g, b, a}`
+
+Widgets use Material's disabled colors (container at 12%, content at 38% of `onSurface`) and
+animated state layers for hover and press.
 
 `themeState{...}` gives you a state table that re-applies the theme on every change, so
 you can bind switches, sliders and color pickers straight to it.

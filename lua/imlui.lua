@@ -56,16 +56,16 @@ local BUILTIN = {
     -- windows
     "ApplicationWindow", "Window", "Dialog",
     -- layout
-    "Column", "Item", "Row", "Grid", "ScrollView", "Card", "TabBar", "Tab", "Section", "TreeNode",
-    -- menus
-    "MenuBar", "Menu", "MenuItem",
+    "Column", "Item", "Row", "Grid", "ScrollView", "Card", "TabBar", "Tab", "Section", "Expander", "TreeNode",
+    -- app bars, navigation & menus
+    "TopAppBar", "NavigationItem", "MenuBar", "Menu", "MenuItem",
     -- text & decoration
-    "Text", "Label", "Link", "Separator", "Spacer",
+    "Text", "Label", "Icon", "Link", "Separator", "Divider", "Spacer",
     -- controls
-    "Button", "Checkbox", "Switch", "RadioButton", "RadioGroup", "Chip", "SegmentedButton", "ListItem",
+    "Button", "IconButton", "Checkbox", "Switch", "RadioButton", "RadioGroup", "Chip", "SegmentedButton", "ListItem",
     "Slider", "SpinBox", "TextField", "TextArea", "ComboBox", "ColorPicker",
     -- data & feedback
-    "ProgressBar", "BusyIndicator", "Plot", "Table", "Canvas",
+    "ProgressBar", "CircularProgress", "BusyIndicator", "Plot", "Table", "Canvas",
     -- non-visual / debugging
     "Timer", "ImGuiDemo",
 }
@@ -277,13 +277,35 @@ function ui.onFrame(fn) table.insert(frameCallbacks, fn) end
 
 --- Called by the engine at the start of every frame.
 function ui.__tick(now)
+    -- Collect first: callbacks may add or clear timers.
+    local due = {}
     for id, t in pairs(timers) do
-        if now >= t.due then
+        if now >= t.due then due[#due + 1] = id end
+    end
+    for _, id in ipairs(due) do
+        local t = timers[id]
+        if t then
             if t.rep then t.due = now + t.interval else timers[id] = nil end
             t.fn()
         end
     end
     for _, fn in ipairs(frameCallbacks) do fn(now) end
+end
+
+-- Snackbar: one app-wide instance, rendered by the engine above everything.
+local snack = ui.element("Snackbar") { shownAt = -1 }
+ui.__overlays = { snack }
+
+--- Shows a brief message at the bottom of the window.
+---   ui.snackbar("Item removed", { action = "Undo", onAction = fn, duration = 4000, closable = false })
+function ui.snackbar(text, opts)
+    opts = opts or {}
+    snack.text = text
+    snack.actionText = opts.action or ""
+    snack.onAction = opts.onAction and function() opts.onAction() end or nil
+    snack.duration = opts.duration or 4000
+    snack.closable = opts.closable or false
+    snack.shownAt = native.time()
 end
 
 ui.time = native.time

@@ -34,7 +34,7 @@ export namespace imlui {
 struct EngineConfig {
     fs::path script;                 ///< main UI script
     std::vector<fs::path> luaPaths;  ///< dirs searched for imlui.lua & modules
-    fs::path font;                   ///< TTF used for the type scale
+    fs::path fontDir;                ///< Roboto + Material Icons
     platform::WindowConfig window;
     bool hotReload = true;
 };
@@ -49,7 +49,7 @@ EngineConfig defaultConfig(int argc, char** argv, const char* sourceDir = nullpt
     EngineConfig cfg;
     cfg.script = argc > 1 ? fs::absolute(fs::path{argv[1]}) : root / "examples" / "gallery.lua";
     cfg.luaPaths = {root / "lua"};
-    cfg.font = exeDir / "fonts" / "Roboto-Medium.ttf";
+    cfg.fontDir = exeDir / "fonts";
     return cfg;
 }
 
@@ -75,7 +75,7 @@ public:
             std::fprintf(stderr, "[imlui] failed to create window\n");
             return 1;
         }
-        loadFonts(cfg_.font.string(), window_.contentScale());
+        loadFonts(cfg_.fontDir, window_.contentScale());
         setTheme(Theme{});
         applyPendingTheme();
 
@@ -117,6 +117,7 @@ private:
     lua::State* L_ = nullptr;
     int rootRef_ = lua::NOREF;
     int tickRef_ = lua::NOREF;
+    int overlayRef_ = lua::NOREF;
     bool quit_ = false;
     bool reload_ = false;
     int appliedW_ = 0, appliedH_ = 0;
@@ -133,6 +134,13 @@ private:
         }
         lua::rawgeti(L_, lua::REGISTRYINDEX, rootRef_);
         renderer_.render(L_, -1);
+        lua::settop(L_, 0);
+        if (overlayRef_ != lua::NOREF) {
+            // ui.__overlays: snackbars and other app-level overlays
+            lua::rawgeti(L_, lua::REGISTRYINDEX, overlayRef_);
+            luaui::Node o{L_, -1};
+            renderer_.renderChildren(o);
+        }
     }
 
     void drawErrors() {
@@ -210,14 +218,14 @@ private:
         lua::setfield(L, -2, "path");
         lua::pop(L);
 
-        constexpr std::string_view boot = R"(local ui = require("imlui"); return ui.__load(...), ui.__tick)";
+        constexpr std::string_view boot = R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
         bool ok = lua::loadbuffer(L, boot, "=imlui.boot") == lua::OK;
         if (!ok) { luaui::reportError(std::string{lua::tostring(L, -1)}); }
         if (ok) {
             lua::pushstring(L, cfg_.script.generic_string());
-            ok = luaui::safeCall(L, 1, 2);
+            ok = luaui::safeCall(L, 1, 3);
         }
-        if (ok && !lua::istable(L, -2)) {
+        if (ok && !lua::istable(L, -3)) {
             luaui::reportError(cfg_.script.generic_string() + ": script must return a root element, e.g. `return ApplicationWindow { ... }`");
             ok = false;
         }
@@ -226,6 +234,7 @@ private:
             setTheme(std::move(previous));
             return;
         }
+        int overlays = lua::istable(L, -1) ? lua::ref(L) : (lua::pop(L), lua::NOREF);
         int tick = lua::ref(L);  // pops __tick
         int root = lua::ref(L);  // pops root
 
@@ -250,6 +259,7 @@ private:
         L_ = L;
         rootRef_ = root;
         tickRef_ = tick;
+        overlayRef_ = overlays;
         std::fprintf(stderr, "[imlui] loaded %s\n", cfg_.script.generic_string().c_str());
     }
 
@@ -306,10 +316,10 @@ private:
             {"dpiScale", [](lua::State* L) -> int { lua::pushnumber(L, dpiScale()); return 1; }},
             {"textSize", [](lua::State* L) -> int {
                 std::string_view s = lua::tostring(L, 1);
-                ImFont* f = ImGui::GetIO().FontDefault;
+                TextStyle st = TextStyle::BodyLarge;
                 if (lua::type(L, 2) == lua::TSTRING)
-                    if (auto st = textStyleFromName(lua::tostring(L, 2))) f = font(*st);
-                ImVec2 sz = f->CalcTextSizeA(f->FontSize * ImGui::GetIO().FontGlobalScale, 3.4e38f, 0.0f, s.data(), s.data() + s.size());
+                    if (auto t = textStyleFromName(lua::tostring(L, 2))) st = *t;
+                ImVec2 sz = font(st)->CalcTextSizeA(fontPixels(st), 3.4e38f, 0.0f, s.data(), s.data() + s.size());
                 lua::pushnumber(L, sz.x / dpiScale());
                 lua::pushnumber(L, sz.y / dpiScale());
                 return 2;
@@ -318,6 +328,14 @@ private:
             {"quit", [](lua::State* L) -> int { self(L).requestQuit(); return 0; }},
             {"reload", [](lua::State* L) -> int { self(L).requestReload(); return 0; }},
             {"imguiVersion", [](lua::State* L) -> int { lua::pushstring(L, ImGui::GetVersion()); return 1; }},
+            // injectMouse(x, y [, down]) — feeds ImGui a mouse event in window pixels (for UI tests).
+            {"injectMouse", [](lua::State* L) -> int {
+                ImGuiIO& io = ImGui::GetIO();
+                io.AddMousePosEvent(static_cast<float>(lua::tonumber(L, 1)), static_cast<float>(lua::tonumber(L, 2)));
+                if (!lua::isnoneornil(L, 3)) io.AddMouseButtonEvent(0, lua::toboolean(L, 3));
+                if (lua::isnumber(L, 4)) io.AddMouseWheelEvent(0.0f, static_cast<float>(lua::tonumber(L, 4)));
+                return 0;
+            }},
         };
         lua::getglobal(L, "package");
         lua::getfield(L, -1, "preload");

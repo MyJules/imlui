@@ -43,4 +43,4 @@ target_link_libraries(imgui_static PUBLIC OpenGL::GL)
 set_target_properties(imgui_static PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 add_library(ext::imgui ALIAS imgui_static)
 
-set(IMLUI_DEFAULT_FONT ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf PARENT_SCOPE)
+set(IMLUI_FONTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fonts PARENT_SCOPE)

@@ -52,5 +52,5 @@ endif()
 add_custom_command(TARGET imlui_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lua $<TARGET_FILE_DIR:imlui_app>/lua
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/examples $<TARGET_FILE_DIR:imlui_app>/examples
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${IMLUI_DEFAULT_FONT} $<TARGET_FILE_DIR:imlui_app>/fonts/Roboto-Medium.ttf
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${IMLUI_FONTS_DIR} $<TARGET_FILE_DIR:imlui_app>/fonts
 )

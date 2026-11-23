@@ -10,6 +10,8 @@ module;
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <unordered_map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -155,17 +157,21 @@ enum class TextStyle : int {
     Count
 };
 
+enum class Weight { Regular, Medium };
+
 struct TextStyleInfo {
     std::string_view name;
-    float size;
+    float size;   ///< dp
+    Weight weight;
 };
 
+/// Material 3 type scale (Roboto: Regular for display/headline/body, Medium for titles/labels).
 inline constexpr std::array<TextStyleInfo, static_cast<int>(TextStyle::Count)> kTextStyles = {{
-    {"displayLarge", 57}, {"displayMedium", 45}, {"displaySmall", 36},
-    {"headlineLarge", 32}, {"headlineMedium", 28}, {"headlineSmall", 24},
-    {"titleLarge", 22}, {"titleMedium", 16}, {"titleSmall", 14},
-    {"bodyLarge", 16}, {"bodyMedium", 14}, {"bodySmall", 12},
-    {"labelLarge", 14}, {"labelMedium", 12}, {"labelSmall", 11},
+    {"displayLarge", 57, Weight::Regular}, {"displayMedium", 45, Weight::Regular}, {"displaySmall", 36, Weight::Regular},
+    {"headlineLarge", 32, Weight::Regular}, {"headlineMedium", 28, Weight::Regular}, {"headlineSmall", 24, Weight::Regular},
+    {"titleLarge", 22, Weight::Regular}, {"titleMedium", 16, Weight::Medium}, {"titleSmall", 14, Weight::Medium},
+    {"bodyLarge", 16, Weight::Regular}, {"bodyMedium", 14, Weight::Regular}, {"bodySmall", 12, Weight::Regular},
+    {"labelLarge", 14, Weight::Medium}, {"labelMedium", 12, Weight::Medium}, {"labelSmall", 11, Weight::Medium},
 }};
 
 std::optional<TextStyle> textStyleFromName(std::string_view name) {
@@ -175,47 +181,76 @@ std::optional<TextStyle> textStyleFromName(std::string_view name) {
 }
 
 namespace detail {
-inline std::array<ImFont*, static_cast<int>(TextStyle::Count)> g_fonts{};
+inline ImFont* g_regular = nullptr;
+inline ImFont* g_medium = nullptr;
+inline ImFont* g_icons = nullptr;
 inline float g_dpi = 1.0f;
+inline std::unordered_map<std::string, unsigned> g_iconCodes;
 } // namespace detail
 
-/// Loads the Material type scale from a TTF file (falls back to the ImGui
-/// default font). Must run before the first frame.
-void loadFonts(const std::string& ttfPath, float dpiScale) {
+/// Loads Roboto Regular/Medium and Material Icons from `dir`. Fonts are
+/// rasterized on demand at any size (ImGui 1.92), so one source per weight
+/// is enough. Must run before the first frame.
+void loadFonts(const std::filesystem::path& dir, float dpiScale) {
     detail::g_dpi = dpiScale;
     ImFontAtlas* atlas = ImGui::GetIO().Fonts;
     atlas->Clear();
-    const bool haveTtf = !ttfPath.empty() && std::filesystem::exists(ttfPath);
-    if (!haveTtf) std::fprintf(stderr, "[imlui] font '%s' not found, using ImGui default font\n", ttfPath.c_str());
-
-    // Body large is the default font, so add it first.
-    // Latin + Latin-1, Cyrillic, general punctuation (— … “ ”), arrows (→).
-    static const ImWchar ranges[] = {0x0020, 0x00FF, 0x0400, 0x052F, 0x2000, 0x206F, 0x2190, 0x21FF, 0};
-    auto add = [&](float px) -> ImFont* {
+    auto load = [&](const char* file) -> ImFont* {
+        auto path = (dir / file).string();
+        if (!std::filesystem::exists(path)) {
+            std::fprintf(stderr, "[imlui] font '%s' not found\n", path.c_str());
+            return nullptr;
+        }
         ImFontConfig cfg;
-        cfg.GlyphRanges = ranges;
-        cfg.OversampleH = 2;
-        cfg.OversampleV = 1;
-        cfg.PixelSnapH = true;
-        if (haveTtf) return atlas->AddFontFromFileTTF(ttfPath.c_str(), px * dpiScale, &cfg);
-        cfg.SizePixels = px * dpiScale;
-        return atlas->AddFontDefault(&cfg);
+        return atlas->AddFontFromFileTTF(path.c_str(), 16.0f, &cfg);
     };
-    ImFont* body = add(kTextStyles[static_cast<int>(TextStyle::BodyLarge)].size);
-    std::vector<std::pair<float, ImFont*>> bySize{{kTextStyles[static_cast<int>(TextStyle::BodyLarge)].size, body}};
-    for (int i = 0; i < static_cast<int>(TextStyle::Count); ++i) {
-        float sz = kTextStyles[i].size;
-        ImFont* f = nullptr;
-        for (auto& [s, font] : bySize)
-            if (s == sz) f = font;
-        if (!f) { f = add(sz); bySize.emplace_back(sz, f); }
-        detail::g_fonts[i] = f;
-    }
-    ImGui::GetIO().FontDefault = body;
+    detail::g_regular = load("Roboto-Regular.ttf");
+    detail::g_medium = load("Roboto-Medium.ttf");
+    detail::g_icons = load("MaterialIconsRound-Regular.otf");
+    if (!detail::g_regular) detail::g_regular = atlas->AddFontDefault();
+    if (!detail::g_medium) detail::g_medium = detail::g_regular;
+    ImGui::GetIO().FontDefault = detail::g_regular;
+
+    // name -> codepoint table shipped with the icon font
+    detail::g_iconCodes.clear();
+    std::ifstream in(dir / "MaterialIconsRound-Regular.codepoints");
+    std::string name, hex;
+    while (in >> name >> hex) detail::g_iconCodes[name] = static_cast<unsigned>(std::stoul(hex, nullptr, 16));
 }
 
-ImFont* font(TextStyle s) { return detail::g_fonts[static_cast<int>(s)]; }
 float dpiScale() { return detail::g_dpi; }
+ImFont* font(TextStyle s) {
+    return kTextStyles[static_cast<int>(s)].weight == Weight::Medium ? detail::g_medium : detail::g_regular;
+}
+/// Size to pass to ImGui::PushFont (dp, before global scale factors).
+float fontSize(TextStyle s) { return kTextStyles[static_cast<int>(s)].size; }
+/// Final pixel size, for ImDrawList::AddText with an explicit font.
+float fontPixels(float sizeDp) {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    return sizeDp * st.FontScaleMain * st.FontScaleDpi;
+}
+float fontPixels(TextStyle s) { return fontPixels(fontSize(s)); }
+void pushFont(TextStyle s) { ImGui::PushFont(font(s), fontSize(s)); }
+
+ImFont* iconFont() { return detail::g_icons; }
+
+/// UTF-8 for a Material icon name ("home", "add", ...); empty if unknown.
+/// A single character or raw UTF-8 string is passed through unchanged.
+std::string iconText(std::string_view name) {
+    auto it = detail::g_iconCodes.find(std::string{name});
+    if (it == detail::g_iconCodes.end()) return {};
+    unsigned c = it->second;
+    std::string out;
+    if (c < 0x80) out += static_cast<char>(c);
+    else if (c < 0x800) { out += static_cast<char>(0xC0 | (c >> 6)); out += static_cast<char>(0x80 | (c & 0x3F)); }
+    else {
+        out += static_cast<char>(0xE0 | (c >> 12));
+        out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (c & 0x3F));
+    }
+    return out;
+}
+bool hasIcon(std::string_view name) { return !name.empty() && detail::g_iconCodes.contains(std::string{name}); }
 
 // ------------------------------------------------------------- theme
 
@@ -292,7 +327,8 @@ inline void applyMaterial(const Theme& t, ImGuiStyle& st) {
     st.ItemInnerSpacing = {sp, sp * 0.5f};
     st.CellPadding = {sp, sp * 0.5f};
     st.IndentSpacing = sp * 3;
-    st.ScrollbarSize = sp * 1.25f;
+    st.ScrollbarSize = sp * 1.5f;
+    st.ScrollbarPadding = sp * 0.25f;
     st.GrabMinSize = sp * 1.5f;
     st.WindowRounding = t.shape.large;
     st.ChildRounding = t.shape.medium;
@@ -321,6 +357,7 @@ inline void applyMaterial(const Theme& t, ImGuiStyle& st) {
     set(ImGuiCol_WindowBg, s.surface);
     set(ImGuiCol_ChildBg, Color{0, 0, 0, 0});
     set(ImGuiCol_PopupBg, s.surfaceContainer);
+    set(ImGuiCol_InputTextCursor, s.primary);
     set(ImGuiCol_Border, s.outlineVariant);
     set(ImGuiCol_BorderShadow, Color{0, 0, 0, 0});
     set(ImGuiCol_FrameBg, s.surfaceContainerHighest);
@@ -341,8 +378,8 @@ inline void applyMaterial(const Theme& t, ImGuiStyle& st) {
     set(ImGuiCol_ButtonHovered, layer(s.secondaryContainer, s.onSecondaryContainer, 0.08f));
     set(ImGuiCol_ButtonActive, layer(s.secondaryContainer, s.onSecondaryContainer, 0.12f));
     set(ImGuiCol_Header, s.secondaryContainer);
-    set(ImGuiCol_HeaderHovered, layer(s.surface, s.onSurface, 0.08f));
-    set(ImGuiCol_HeaderActive, layer(s.secondaryContainer, s.onSecondaryContainer, 0.12f));
+    set(ImGuiCol_HeaderHovered, s.onSurface.withAlpha(0.08f));
+    set(ImGuiCol_HeaderActive, s.onSurface.withAlpha(0.12f));
     set(ImGuiCol_Separator, s.outlineVariant);
     set(ImGuiCol_SeparatorHovered, s.outline);
     set(ImGuiCol_SeparatorActive, s.primary);
@@ -350,7 +387,7 @@ inline void applyMaterial(const Theme& t, ImGuiStyle& st) {
     set(ImGuiCol_ResizeGripHovered, s.primary.withAlpha(0.6f));
     set(ImGuiCol_ResizeGripActive, s.primary);
     set(ImGuiCol_Tab, s.surfaceContainer);
-    set(ImGuiCol_TabHovered, layer(s.surfaceContainer, s.onSurface, 0.08f));
+    set(ImGuiCol_TabHovered, s.onSurface.withAlpha(0.08f));
     set(ImGuiCol_TabSelected, s.secondaryContainer);
     set(ImGuiCol_TabSelectedOverline, s.primary);
     set(ImGuiCol_TabDimmed, s.surfaceContainer);
@@ -393,7 +430,9 @@ inline void applyNow(const Theme& t) {
         if (idx >= 0 && idx < ImGuiCol_COUNT) st.Colors[idx] = col.vec4();
 
     st.ScaleAllSizes(g_dpi);
-    ImGui::GetIO().FontGlobalScale = t.fontScale;
+    st.FontSizeBase = 16.0f;
+    st.FontScaleDpi = g_dpi;
+    st.FontScaleMain = t.fontScale;
 }
 } // namespace detail
 
