@@ -27,5 +27,8 @@
   "buildPresets": [
     { "name": "clang-debug", "configurePreset": "clang-debug" },
     { "name": "clang-release", "configurePreset": "clang-release" }
+  ],
+  "testPresets": [
+    { "name": "clang-debug", "configurePreset": "clang-debug", "output": { "outputOnFailure": true } }
   ]
 }
