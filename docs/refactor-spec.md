@@ -45,6 +45,15 @@ The old modules `imlui.theme` (single file), `imlui.luaui`, `imlui.platform` are
 as above. During phase A, the not-yet-split files (`widgets.cppm`, `renderer.cppm`, `engine.cppm`,
 `imlui.cppm`) are only updated to import the new modules / use the renamed APIs, so the project keeps building.
 
+## Notes from phase A (binding for later phases)
+
+- `Oklch` fields are `l, c, h` (lowercase).
+- Name `lua::State*` parameters `state`, not `L` (the clang-tidy naming check rejects `L`).
+- No module re-exports another: import the module that defines a type you name (`imlui.theme.scheme` for
+  `Scheme`, `imlui.theme.typography` for `TextStyle`, `imlui.color` for `Color`, ...).
+- `loadIcons(dir)` must run after `loadFonts(dir)` (loadFonts clears the atlas).
+- Check naming with `clang-tidy -p build/clang-debug <files>`. It works with modules here.
+
 ## Phase B — widgets (`src/imlui/widgets/`, namespace `imlui::md`)
 
 All widget function names and signatures stay as they are today. Split `widgets.cppm` into:

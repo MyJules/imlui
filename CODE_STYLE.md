@@ -8,6 +8,8 @@ These rules apply to all C++ in `src/` and `app/`. Vendored code in `external/` 
 - C++20, **modules only**. Headers are included only in the global module fragment
   (`module;` ... `export module x;`) of a module, and only third-party headers or the standard library.
 - `app/main.cpp` and every other non-module file use `import` only. They never `#include`.
+  **Exception:** test files in `tests/` include `<gtest/gtest.h>`, because GoogleTest's `TEST`/`EXPECT_*` macros
+  can't be exported from a module. They include nothing else and import everything they test.
 - Third-party libraries are reached through wrapper modules in `src/wrap/` (`lua`, `imgui`, `imlui.log`,
   `imlui.platform.window`). Other code imports the wrapper, never the library header.
 
