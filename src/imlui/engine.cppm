@@ -20,11 +20,20 @@ export module imlui.engine;
 
 import lua;
 import imgui;
-import imlui.platform;
+import lua.stack_guard;
+import imlui.platform.window;
 import imlui.color;
-import imlui.theme;
+import imlui.color.oklch;
+import imlui.color.tonal_palette;
+import imlui.theme.dpi;
+import imlui.theme.scheme;
+import imlui.theme.typography;
+import imlui.theme.icons;
+import imlui.theme.theme;
 import imlui.widgets;
-import imlui.luaui;
+import imlui.lua.errors;
+import imlui.lua.node;
+import imlui.lua.theme_table;
 import imlui.renderer;
 import imlui.log;
 
@@ -36,7 +45,7 @@ struct EngineConfig {
     fs::path script;                 ///< main UI script
     std::vector<fs::path> luaPaths;  ///< dirs searched for imlui.lua & modules
     fs::path fontDir;                ///< Roboto + Material Icons
-    platform::WindowConfig window;
+    platform::Window::Config window;
     bool hotReload = true;
 };
 
@@ -70,7 +79,7 @@ public:
 
     int run() {
         // The window starts hidden: its title and size come from the script.
-        platform::WindowConfig wc = cfg_.window;
+        platform::Window::Config wc = cfg_.window;
         wc.visible = false;
         if (!window_.create(wc)) {
             log::error("failed to create the window");
@@ -78,7 +87,9 @@ public:
         }
         // Keep drawing while the OS blocks the loop (live window resize).
         window_.setRefreshCallback([this] { renderFrame(); });
-        loadFonts(cfg_.fontDir, window_.contentScale());
+        setDpiScale(window_.contentScale());
+        loadFonts(cfg_.fontDir);
+        loadIcons(cfg_.fontDir);
         setTheme(Theme{});
         applyPendingTheme();
 
@@ -114,9 +125,9 @@ private:
     platform::Window window_;
     Renderer renderer_;
     lua::State* L_ = nullptr;
-    int rootRef_ = lua::NOREF;
-    int tickRef_ = lua::NOREF;
-    int overlayRef_ = lua::NOREF;
+    int rootRef_ = lua::noRef;
+    int tickRef_ = lua::noRef;
+    int overlayRef_ = lua::noRef;
     bool quit_ = false;
     bool reload_ = false;
     int appliedW_ = 0, appliedH_ = 0;
@@ -136,19 +147,19 @@ private:
     }
 
     void frame() {
-        if (!L_ || rootRef_ == lua::NOREF) return;
+        if (!L_ || rootRef_ == lua::noRef) return;
         lua::StackGuard guard{L_};
-        if (tickRef_ != lua::NOREF) {
-            lua::rawgeti(L_, lua::REGISTRYINDEX, tickRef_);
+        if (tickRef_ != lua::noRef) {
+            lua::rawgeti(L_, lua::registryIndex, tickRef_);
             lua::pushnumber(L_, ImGui::GetTime());
             luaui::safeCall(L_, 1, 0);
         }
-        lua::rawgeti(L_, lua::REGISTRYINDEX, rootRef_);
+        lua::rawgeti(L_, lua::registryIndex, rootRef_);
         renderer_.render(L_, -1);
         lua::settop(L_, 0);
-        if (overlayRef_ != lua::NOREF) {
+        if (overlayRef_ != lua::noRef) {
             // ui.__overlays: snackbars and other app-level overlays
-            lua::rawgeti(L_, lua::REGISTRYINDEX, overlayRef_);
+            lua::rawgeti(L_, lua::registryIndex, overlayRef_);
             luaui::Node o{L_, -1};
             renderer_.renderChildren(o);
         }
@@ -213,7 +224,7 @@ private:
         lua::State* L = lua::newstate();
         lua::openlibs(L);
         lua::pushlightuserdata(L, this);
-        lua::setfield(L, lua::REGISTRYINDEX, "imlui.engine");
+        lua::setfield(L, lua::registryIndex, "imlui.engine");
         registerNative(L);
         registerPainter(L);
 
@@ -230,7 +241,7 @@ private:
         lua::pop(L);
 
         constexpr std::string_view boot = R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
-        bool ok = lua::loadbuffer(L, boot, "=imlui.boot") == lua::OK;
+        bool ok = lua::loadbuffer(L, boot, "=imlui.boot") == lua::ok;
         if (!ok) { luaui::reportError(std::string{lua::tostring(L, -1)}); }
         if (ok) {
             lua::pushstring(L, cfg_.script.generic_string());
@@ -245,14 +256,14 @@ private:
             setTheme(std::move(previous));
             return;
         }
-        int overlays = lua::istable(L, -1) ? lua::ref(L) : (lua::pop(L), lua::NOREF);
+        int overlays = lua::istable(L, -1) ? lua::ref(L) : (lua::pop(L), lua::noRef);
         int tick = lua::ref(L);  // pops __tick
         int root = lua::ref(L);  // pops root
 
         // Native window properties come from the root element (ApplicationWindow).
         // Size is re-applied on hot reload only when the script changed it.
         {
-            lua::rawgeti(L, lua::REGISTRYINDEX, root);
+            lua::rawgeti(L, lua::registryIndex, root);
             luaui::Node n{L, -1};
             int w = static_cast<int>(n.number("width", 0)), h = static_cast<int>(n.number("height", 0));
             if (w > 0 && h > 0 && (w != appliedW_ || h != appliedH_)) {
@@ -276,14 +287,14 @@ private:
 
     // ------------------------------------------------------------ imlui.native
     static Engine& self(lua::State* L) {
-        lua::getfield(L, lua::REGISTRYINDEX, "imlui.engine");
+        lua::getfield(L, lua::registryIndex, "imlui.engine");
         auto* e = static_cast<Engine*>(lua::touserdata(L, -1));
         lua::pop(L);
         return *e;
     }
 
     static Color argColor(lua::State* L, int idx) {
-        if (lua::type(L, idx) == lua::TSTRING)
+        if (lua::type(L, idx) == lua::Type::String)
             if (auto c = resolveColor(lua::tostring(L, idx))) return *c;
         if (lua::istable(L, idx))
             if (auto c = luaui::Node::colorFromTable(L, idx)) return *c;
@@ -309,7 +320,7 @@ private:
             {"color", [](lua::State* L) -> int { lua::pushstring(L, toHex(argColor(L, 1))); return 1; }},
             {"tone", [](lua::State* L) -> int {
                 Oklch o = toOklch(argColor(L, 1));
-                TonalPalette p{o.h, o.C};
+                TonalPalette p{o.h, o.c};
                 lua::pushstring(L, toHex(p.tone(static_cast<float>(lua::tonumber(L, 2)))));
                 return 1;
             }},
@@ -328,7 +339,7 @@ private:
             {"textSize", [](lua::State* L) -> int {
                 std::string_view s = lua::tostring(L, 1);
                 TextStyle st = TextStyle::BodyLarge;
-                if (lua::type(L, 2) == lua::TSTRING)
+                if (lua::type(L, 2) == lua::Type::String)
                     if (auto t = textStyleFromName(lua::tostring(L, 2))) st = *t;
                 ImVec2 sz = font(st)->CalcTextSizeA(fontPixels(st), 3.4e38f, 0.0f, s.data(), s.data() + s.size());
                 lua::pushnumber(L, sz.x / dpiScale());
@@ -344,7 +355,7 @@ private:
                 std::string_view lv = lua::tostring(L, 1);
                 log::Level l = lv == "trace" ? log::Level::Trace : lv == "debug" ? log::Level::Debug
                              : lv == "warn" ? log::Level::Warn : lv == "error" ? log::Level::Error : log::Level::Info;
-                log::write(l, lua::tostring_any(L, 2), "lua");
+                log::write(l, lua::toStringAny(L, 2), "lua");
                 return 0;
             }},
             // injectMouse(x, y [, down]) — feeds ImGui a mouse event in window pixels (for UI tests).

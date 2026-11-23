@@ -18,10 +18,18 @@ export module imlui.renderer;
 
 import lua;
 import imgui;
+import lua.stack_guard;
 import imlui.color;
-import imlui.theme;
+import imlui.theme.dpi;
+import imlui.theme.scheme;
+import imlui.theme.typography;
+import imlui.theme.icons;
+import imlui.theme.theme;
+import imlui.theme.font_scope;
 import imlui.widgets;
-import imlui.luaui;
+import imlui.lua.errors;
+import imlui.lua.value;
+import imlui.lua.node;
 
 namespace imlui {
 using luaui::Node;
@@ -55,7 +63,7 @@ inline ImDrawList* g_dl = nullptr;
 inline ImVec2 g_origin{};
 
 inline Color colorArg(lua::State* L, int idx, Color def) {
-    if (lua::type(L, idx) == lua::TSTRING)
+    if (lua::type(L, idx) == lua::Type::String)
         if (auto c = resolveColor(lua::tostring(L, idx))) return *c;
     if (lua::istable(L, idx))
         if (auto c = Node::colorFromTable(L, idx)) return *c;
@@ -101,7 +109,7 @@ int text(lua::State* L) {
     std::string_view s = lua::tostring(L, 4);
     Color c = colorArg(L, 5, theme().scheme.onSurface);
     TextStyle st = TextStyle::BodyMedium;
-    if (lua::type(L, 6) == lua::TSTRING)
+    if (lua::type(L, 6) == lua::Type::String)
         if (auto t = textStyleFromName(lua::tostring(L, 6))) st = *t;
     g_dl->AddText(font(st), fontPixels(st), p, u32(c), s.data(), s.data() + s.size());
     return 0;
@@ -268,7 +276,7 @@ public:
     /// `clicked`; renders it while open.
     void attachMenu(const Node& n, bool clicked) {
         lua::State* L = n.state();
-        if (n.pushRaw("menu") != lua::TTABLE) { lua::pop(L); return; }
+        if (n.pushRaw("menu") != lua::Type::Table) { lua::pop(L); return; }
         const int menuIdx = lua::gettop(L);
         ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         if (clicked) ImGui::OpenPopup("##menu");
@@ -576,7 +584,7 @@ void Renderer::registerBuiltins() {
         std::string t = label(n.text(), "tree");
         ImGuiTreeNodeFlags f = ImGuiTreeNodeFlags_SpanAvailWidth;
         if (n.boolean("expanded", false)) f |= ImGuiTreeNodeFlags_DefaultOpen;
-        md::FontScope fs{TextStyle::BodyLarge};
+        FontScope fs{TextStyle::BodyLarge};
         if (ImGui::TreeNodeEx(t.c_str(), f)) {
             r.renderChildren(n);
             ImGui::TreePop();
@@ -699,7 +707,7 @@ void Renderer::registerBuiltins() {
     registerElement("Link", [](R&, const Node& n) {
         std::string t = n.text();
         std::string url = n.string("url", t);
-        md::FontScope fs{TextStyle::BodyLarge};
+        FontScope fs{TextStyle::BodyLarge};
         ImGui::TextLinkOpenURL(t.c_str(), url.c_str());
     });
 
@@ -708,7 +716,7 @@ void Renderer::registerBuiltins() {
         if (t.empty()) {
             md::divider(n.numf("inset", 0.0f), n.numf("insetEnd", 0.0f));
         } else {
-            md::FontScope fs{TextStyle::TitleSmall};
+            FontScope fs{TextStyle::TitleSmall};
             ImGui::PushStyleColor(ImGuiCol_Text, theme().scheme.onSurfaceVariant.vec4());
             ImGui::SeparatorText(t.c_str());
             ImGui::PopStyleColor();
@@ -951,7 +959,7 @@ void Renderer::registerBuiltins() {
                 ImGui::TableNextColumn();
                 md::tableHeaderCell(h, headH);
             }
-            if (n.push("rows") == lua::TTABLE) {
+            if (n.push("rows") == lua::Type::Table) {
                 const int rows = lua::gettop(L);
                 const lua::Integer nr = lua::rawlen(L, rows);
                 const int selected = static_cast<int>(n.number("currentRow", 0));
@@ -961,7 +969,7 @@ void Renderer::registerBuiltins() {
                     for (int c = 0; c < static_cast<int>(headers.size()); ++c) {
                         ImGui::TableNextColumn();
                         lua::rawgeti(L, -1, c + 1);
-                        std::string cell = lua::isnil(L, -1) ? std::string{} : lua::tostring_any(L, -1);
+                        std::string cell = lua::isnil(L, -1) ? std::string{} : lua::toStringAny(L, -1);
                         lua::pop(L);
                         if (c == 0) {
                             ImGui::PushID(static_cast<int>(i));
@@ -1011,7 +1019,7 @@ void Renderer::registerBuiltins() {
         lua::pushboolean(L, hovered);        lua::setfield(L, -2, "hovered");
         lua::pushboolean(L, active);         lua::setfield(L, -2, "pressed");
         lua::pushnumber(L, ImGui::GetTime()); lua::setfield(L, -2, "time");
-        lua::getfield(L, lua::REGISTRYINDEX, "imlui.painter");
+        lua::getfield(L, lua::registryIndex, "imlui.painter");
         lua::setmetatable(L, -2);
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->PushClipRect(p, {p.x + w, p.y + h}, true);
@@ -1101,7 +1109,7 @@ void registerPainter(lua::State* L) {
     lua::pushcfunction(L, &painter::icon);     lua::setfield(L, -2, "icon");
     lua::pushcfunction(L, &painter::polyline); lua::setfield(L, -2, "polyline");
     lua::setfield(L, -2, "__index");
-    lua::setfield(L, lua::REGISTRYINDEX, "imlui.painter");
+    lua::setfield(L, lua::registryIndex, "imlui.painter");
 }
 
 } // namespace imlui

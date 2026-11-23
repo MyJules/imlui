@@ -478,10 +478,10 @@ constexpr ImU32 col32(unsigned r, unsigned g, unsigned b, unsigned a = 255) {
 }
 
 /// ImGui's `-FLT_MIN` idiom: "fill the remaining width" for item widths.
-inline constexpr float fill_width = -1.175494351e-38f;
+inline constexpr float fillWidth = -1.175494351e-38f;
 
 /// IM_ARRAYSIZE replacement.
 template <class T, unsigned N>
-constexpr int array_size(const T (&)[N]) { return static_cast<int>(N); }
+constexpr int arraySize(const T (&)[N]) { return static_cast<int>(N); }
 
 } // namespace imgui

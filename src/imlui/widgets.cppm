@@ -18,7 +18,12 @@ export module imlui.widgets;
 
 import imgui;
 import imlui.color;
-import imlui.theme;
+import imlui.theme.dpi;
+import imlui.theme.scheme;
+import imlui.theme.typography;
+import imlui.theme.icons;
+import imlui.theme.theme;
+import imlui.theme.font_scope;
 
 namespace imlui::md {
 
@@ -30,7 +35,7 @@ inline constexpr float kHuge = 3.4e38f;
 inline ImVec2 add(ImVec2 a, ImVec2 b) { return {a.x + b.x, a.y + b.y}; }
 inline float dp(float v) { return v * dpiScale(); }
 inline const Scheme& S() { return theme().scheme; }
-inline const Shape& shape() { return theme().shape; }
+inline const Theme::Shape& shape() { return theme().shape; }
 
 /// Converts without ImGui's style alpha: disabled colors are explicit.
 inline ImU32 col(Color c) { return ImGui::ColorConvertFloat4ToU32(c.vec4()); }
@@ -116,13 +121,6 @@ inline void drawShadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float
 } // namespace imlui::md
 
 export namespace imlui::md {
-
-struct FontScope {
-    explicit FontScope(TextStyle s) { pushFont(s); }
-    ~FontScope() { ImGui::PopFont(); }
-    FontScope(const FontScope&) = delete;
-    FontScope& operator=(const FontScope&) = delete;
-};
 
 /// Color of the surface widgets are currently drawn on (for cutouts).
 Color surfaceColor() {

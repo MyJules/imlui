@@ -16,24 +16,12 @@ add_subdirectory(external)
 
 # ------------------------------------------------------------------ library
 add_library(imlui STATIC)
+file(GLOB_RECURSE IMLUI_MODULES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cppm)
 target_sources(imlui
     PUBLIC
         FILE_SET CXX_MODULES
         BASE_DIRS src
-        FILES
-            # thin wrappers around the C / C++ headers
-            src/wrap/lua.cppm
-            src/wrap/imgui.cppm
-            src/wrap/platform.cppm
-            src/wrap/log.cppm
-            # imlui itself
-            src/imlui/color.cppm
-            src/imlui/theme.cppm
-            src/imlui/widgets.cppm
-            src/imlui/luaui.cppm
-            src/imlui/renderer.cppm
-            src/imlui/engine.cppm
-            src/imlui/imlui.cppm
+        FILES ${IMLUI_MODULES}
 )
 target_link_libraries(imlui PRIVATE ext::lua ext::imgui ext::spdlog)
 target_compile_features(imlui PUBLIC cxx_std_20)
