@@ -18,6 +18,12 @@ return ApplicationWindow {
 }
 ```
 
+## Documentation
+
+Full docs are in [`docs/`](docs/README.md): [getting started](docs/getting-started.md),
+[architecture](docs/architecture.md), [Lua API](docs/lua-api.md), [elements](docs/elements.md),
+[theming](docs/theming.md), [development](docs/development.md) and [status / changelog](docs/changelog.md).
+
 ## Build (clang + Ninja)
 
 ```

@@ -1,0 +1,306 @@
+# Lua API
+
+Everything here is defined in `lua/imlui.lua` (the DSL prelude) or in the native `imlui.native` library it wraps.
+
+## The script environment
+
+A UI script runs in `ui.env`, not in `_G`. It must **return the root element**, usually an `ApplicationWindow`.
+The engine reports an error if the script returns anything other than a table.
+
+A free name `x` in a script is looked up in this order:
+
+1. **`ui.x`**: everything on this page, plus the built-in element constructors. `ui` itself is also available.
+2. **Lua globals** (`_G`): `math`, `string`, `table`, `os`, `require`, ...
+3. **Element ids**: `TextField { id = "nameField" }` makes `nameField` refer to that element table, QML style.
+4. **Any other Capitalized name** becomes an element constructor (`ui.element(name)`), so elements registered
+   from C++ work without any Lua changes.
+
+```lua
+TextField { id = "nameField", label = "Name", text = "" },
+Text { text = function() return "Hello, " .. nameField.text end },
+```
+
+Ids are global to the loaded UI. Because they are looked up after `ui.*` and globals, an id such as `"table"` or
+`"state"` would be shadowed. The lookup is lazy, so a binding can refer to an id that is declared later in the
+file.
+
+Indices (`currentIndex`, `currentRow`, delegate `index`) are **1-based**.
+
+## Elements
+
+### `element(name) -> constructor`
+
+Returns a constructor for element type `name`. Calling it with a table **turns that table into the element**
+(it is not copied): the prelude sets `__type` and registers `id`. The table's identity matters because it is the
+element's ImGui ID and holds its per-element state.
+
+```lua
+Button { text = "OK", onClicked = function(self) print("clicked", self.text) end }
+Button "OK"      -- a non-table argument becomes the first positional value: { "OK" }
+```
+
+Built-in constructors (the `BUILTIN` list): `ApplicationWindow`, `Window`, `Dialog`, `Column`, `Item`, `Row`,
+`Grid`, `ScrollView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `TopAppBar`, `NavigationItem`,
+`MenuBar`, `Menu`, `MenuItem`, `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer`, `Button`,
+`IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem`, `Slider`,
+`SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker`, `ProgressBar`, `CircularProgress`, `BusyIndicator`,
+`Plot`, `Table`, `Canvas`, `Timer`, `ImGuiDemo`. `Repeater`, `ListView`, `If` and `Loader` have their own
+constructors ([below](#dynamic-children)). Props and signals are in [Elements](elements.md).
+
+### Property values
+
+| Form | Example | Meaning |
+|---|---|---|
+| plain | `text = "Hello"` | A constant. If a widget changes it (for example, typing), the new value is stored on the element. |
+| binding | `text = function(self) return ... end` | Called on every read, every frame. Widget edits are ignored, because the function owns the value. |
+| two-way | `value = bind(s, "volume")` | Reads `s.volume`. Widget edits write `s.volume`. |
+
+### Signals
+
+Signals are `on*` handlers called as `handler(self, ...)`, for example `onClicked(self)`,
+`onToggled(self, checked)`, `onMoved(self, value)`, `onTextChanged(self, text)`, `onAccepted(self, text)` and
+`onActivated(self, index, text)`. Errors in handlers are caught and shown in the error overlay.
+
+## State and bindings
+
+### `state(init) -> proxy`
+
+Creates an observable table. Reads and writes look like a plain table. A write that changes a value (`old ~= new`)
+calls the watchers for that key and then the `"*"` watchers. `pairs(s)` and `#s` work. Only top-level keys are
+observed: `table.insert(s.items, x)` doesn't notify. Bindings still show the change, because they run every frame.
+
+```lua
+local s = state { count = 0, items = {} }
+s.count = s.count + 1
+```
+
+### `watch(state, key, fn) -> fn`
+
+Calls `fn(new, old, key)` whenever `state[key]` changes. Use `"*"` for any key. Asserts that `state` was created by
+`state()`. There is no unwatch.
+
+```lua
+watch(s, "count", function(new, old) log.info("count %d -> %d", old, new) end)
+watch(look, "*", applyTheme)
+```
+
+### `raw(state) -> table`
+
+Returns the underlying (non-proxy) data table, for example for serialization or to pass to `theme()`. For any other
+value it returns the value unchanged.
+
+### `bind(t, key)` / `bind(getter, setter)`
+
+Creates a two-way binding object. `t` can be any table: a `state`, or a plain table like `sel.tags`.
+
+```lua
+Switch { checked = bind(s, "wifi") }
+Chip   { checked = bind(sel.tags, tag) }               -- plain nested table
+Slider { value = bind(function() return s.v * 100 end,  -- getter
+                      function(v) s.v = v / 100 end) }  -- setter
+```
+
+## Components and `require`
+
+### `component(fn) -> constructor`
+
+Wraps `fn(props)` so that `MyComp { ... }` calls it with the props table, or `{}` if there are none. Locals created
+inside `fn` are per instance.
+
+### `require "Name"`
+
+Inside a UI script, `require "Name"` first looks for `Name.lua` **in the script's directory** and runs it in the UI
+environment, the way QML files work as components. Results are cached in `package.loaded` like any `require`.
+`import` is an alias of `require`. If the file isn't found there, the normal `package.path` search runs: the Lua
+path (`lua/`), the script directory, then the Lua defaults.
+
+```lua
+-- StatCard.lua
+return component(function(props)
+    return Card { variant = props.variant or "filled", padding = 20,
+        Text { text = props.title, style = "titleSmall", color = "onSurfaceVariant" },
+        Text { text = props.value, style = "headlineMedium", color = props.color or "primary" },
+    }
+end)
+
+-- gallery.lua
+local StatCard = require "StatCard"
+StatCard { title = "Frame rate", value = function() return ("%.0f fps"):format(fps()) end }
+```
+
+## Dynamic children
+
+`Repeater`, `If` and `Loader` are **inline**: their children are laid out as if they were direct children of the
+parent. A `Repeater` in a `Row` flows horizontally, and in a `Column` it stacks vertically. `visible = false` on
+one of them hides all of its children.
+
+### `Repeater { model, delegate }`
+
+| Prop | Type | Meaning |
+|---|---|---|
+| `model` | list, number, function or `bind` | Items. A number `n` means items `1..n`. |
+| `delegate` | `function(item, index) -> element` | Builds the element for one item. |
+
+Delegate instances are **cached per index**. They are rebuilt only when the item at that index changes
+(`~=` comparison), so per-delegate state survives frames. Extra cached entries are dropped when the model shrinks.
+
+```lua
+Row { spacing = 8,
+    Repeater { model = { "lua", "cpp" }, delegate = function(tag, i)
+        return Chip { text = tag, checked = bind(sel.tags, tag) }
+    end },
+}
+```
+
+### `ListView`
+
+A scrolling `Repeater`: a `ScrollView` whose children come from `model`/`delegate`. It isn't inline. Without
+`delegate`, its array children are used. It takes all `ScrollView` props (`height`, `width`, `padding`, `color`,
+`rounding`, `border`, `spacing`, `align`).
+
+```lua
+ListView { height = 240, model = function() return todo.items end,
+    delegate = function(item, index) return ListItem { text = item } end }
+```
+
+### `If { condition, ...children, otherwise = element }`
+
+Shows its array children while `condition` (a value, function or `bind`) is truthy. Otherwise it shows the single
+element `otherwise`, if one is given.
+
+```lua
+If { condition = function() return s.loggedIn end,
+     Text { text = "Welcome back" },
+     otherwise = Button { text = "Log in", onClicked = login } }
+```
+
+### `Loader { item }`
+
+Shows exactly one element: `item`, or the result of calling `item`. Useful for page switching.
+
+```lua
+Loader { item = function() return pages[nav.page] end }
+```
+
+## Theme
+
+See [Theming](theming.md) for the table fields and the color roles.
+
+| Function | Description |
+|---|---|
+| `theme(t) -> scheme` | Applies theme table `t` **at the start of the next frame**. Returns the scheme `t` produces, as `{ role = "#RRGGBB" }`. Also stores `t` in `ui.__theme`. |
+| `scheme() -> scheme` | The scheme of the theme **currently in effect**. Right after `theme{}` it still returns the old scheme until the next frame. |
+| `schemeFor(t) -> scheme` | The scheme `t` would produce, without applying it. |
+| `themeState(init) -> state` | A `state` that applies itself as the theme now and on every change. Bind controls straight to it. |
+
+```lua
+local look = themeState { seed = "#6750A4", dark = true, fontScale = 1.0 }
+Switch { text = "Dark mode", checked = bind(look, "dark") }
+ColorPicker { label = "Seed", color = bind(look, "seed") }
+```
+
+### `color.*`
+
+These take [color specs](theming.md#color-specs) (role, `role/alpha`, hex, `{r,g,b,a}`) and return a hex string:
+`"#RRGGBB"`, or `"#RRGGBBAA"` when the color isn't opaque. An invalid color raises an error.
+
+| Function | Description |
+|---|---|
+| `color.mix(a, b, t)` | Linear sRGB interpolation from `a` to `b` (`t` in 0..1). |
+| `color.tone(c, t)` | Material tone `t` (0 = black, 100 = white) of `c`'s hue and chroma. |
+| `color.alpha(c, a)` | `c` with alpha `a`. |
+| `color.resolve(c)` | Resolves a spec against the current scheme, for example `color.resolve("primary")`. |
+
+## Timers and frames
+
+Timers run at the start of a frame, so their resolution is one frame. Callbacks may add or clear timers.
+
+| Function | Description |
+|---|---|
+| `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds. |
+| `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. |
+| `clearTimer(id)` | Cancels a timeout or interval. |
+| `onFrame(fn)` | Calls `fn(time)` at the start of every frame, after the timers. It can't be removed. |
+
+```lua
+local id = setInterval(function() s.seconds = s.seconds + 1 end, 1000)
+setTimeout(function() clearTimer(id) end, 10000)
+```
+
+For a timer declared as an element, see the [`Timer` element](elements.md#timer).
+
+## Snackbar
+
+### `snackbar(text, opts?)`
+
+Shows a brief message at the bottom of the window. There is one app-wide snackbar, and a new call replaces the
+current message. It's rendered as an overlay above everything else.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `action` | `""` | Action button label (none if empty). |
+| `onAction` | `nil` | Called when the action is clicked. The snackbar then closes. |
+| `duration` | `4000` | Visible time in ms (plus a short fade). |
+| `closable` | `false` | Shows a close icon. |
+
+```lua
+snackbar("Message archived", { action = "Undo", onAction = function() restore() end })
+```
+
+## Logging
+
+Logging goes through spdlog on the C++ side, with the source tag `[lua]`.
+
+| Function | Description |
+|---|---|
+| `log.trace/debug/info/warn/error(fmt, ...)` | `string.format(fmt, ...)` when arguments are given, otherwise `tostring(fmt)`. |
+| `print(...)` | In UI scripts, logs its tab-joined arguments at info level. |
+
+```lua
+log.info("loaded %d items", #items)
+log.warn("slow frame")
+```
+
+Script errors are logged at error level automatically.
+
+## Misc
+
+| Function | Description |
+|---|---|
+| `time() -> seconds` | Seconds since the app started (`ImGui::GetTime`). |
+| `fps() -> number` | Current frame rate (ImGui's moving average). |
+| `quit()` | Ends the frame loop and exits. |
+| `reload()` | Reloads the script before the next frame (like saving a file). |
+| `setTitle(title)` | Sets the native window title. See the note below. |
+| `textSize(text, style?) -> w, h` | Size of `text` in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`). |
+
+> **Note.** While the root is an `ApplicationWindow`, its `title` (default `"imlui"`) is copied to the native
+> window every frame, so a `setTitle()` call only lasts until the next frame. To change the title, bind
+> `ApplicationWindow { title = function() ... end }` instead.
+
+## `native`
+
+`native` (also `require "imlui.native"`) is the C++ library behind the functions above. The prelude wraps most of
+it. The ones not wrapped are marked **native only**.
+
+| Function | Description |
+|---|---|
+| `native.setTheme(t) -> scheme` | Backs `theme()`. |
+| `native.schemeFor(t) -> scheme` | Backs `schemeFor()`. |
+| `native.scheme() -> scheme` | Backs `scheme()`. |
+| `native.isDark() -> bool` | **Native only.** Whether the current theme is dark. |
+| `native.color(c) -> hex` | Backs `color.resolve`. |
+| `native.tone(c, t) -> hex` | Backs `color.tone`. |
+| `native.mix(a, b, t) -> hex` | Backs `color.mix`. |
+| `native.alpha(c, a) -> hex` | Backs `color.alpha`. |
+| `native.time() -> seconds` | Backs `time()`. |
+| `native.deltaTime() -> seconds` | **Native only.** Duration of the last frame. |
+| `native.fps() -> number` | Backs `fps()`. |
+| `native.dpiScale() -> number` | **Native only.** Current dp → pixel factor. |
+| `native.textSize(text, style?) -> w, h` | Backs `textSize()`. |
+| `native.setTitle(title)` | Backs `setTitle()`. |
+| `native.quit()` | Backs `quit()`. |
+| `native.reload()` | Backs `reload()`. |
+| `native.imguiVersion() -> string` | **Native only.** For example `"1.92.9b"`. |
+| `native.log(level, message)` | Backs `log.*`. `level` is `"trace"`, `"debug"`, `"info"`, `"warn"` or `"error"` (anything else logs at info). |
+| `native.injectMouse(x, y, down?, wheel?)` | **Native only.** Feeds ImGui a mouse event for scripted UI tests: position in window coordinates, an optional left-button state, and an optional vertical wheel delta. See [Development](development.md#scripted-ui-tests). |
