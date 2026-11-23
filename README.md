@@ -27,7 +27,7 @@ build/clang-debug/bin/imlui_app                      # gallery
 build/clang-debug/bin/imlui_app examples/counter.lua
 ```
 
-Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4) and are
+Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3) and are
 built as plain libraries. Project code only uses them through module wrappers.
 
 `external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0).
@@ -80,6 +80,9 @@ tree, so you don't need to rebuild.
   - `Spacer { fill = true }` in a row takes the remaining width, e.g. `Row { Spacer { fill = true }, Button {...} }`
   - `Column { align = "center" }` centers its children
 - **Menus**: give any `Button` or `IconButton` a `menu = Menu { MenuItem {...}, Divider {}, ... }`.
+- **Logging**: C++ uses `import imlui.log;` (spdlog), e.g. `imlui::log::info("loaded {}", path)`.
+  In Lua, use `ui.log.info("x = %d", x)` (also `debug`/`warn`/`error`); `print(...)` in UI scripts logs at info level.
+  Script errors are logged too.
 - **Snackbars**: `snackbar("Saved", { action = "Undo", onAction = fn })` from any handler.
 - Indices are **1-based**.
 

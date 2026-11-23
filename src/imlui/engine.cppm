@@ -26,6 +26,7 @@ import imlui.theme;
 import imlui.widgets;
 import imlui.luaui;
 import imlui.renderer;
+import imlui.log;
 
 namespace fs = std::filesystem;
 
@@ -72,9 +73,11 @@ public:
         platform::WindowConfig wc = cfg_.window;
         wc.visible = false;
         if (!window_.create(wc)) {
-            std::fprintf(stderr, "[imlui] failed to create window\n");
+            log::error("failed to create the window");
             return 1;
         }
+        // Keep drawing while the OS blocks the loop (live window resize).
+        window_.setRefreshCallback([this] { renderFrame(); });
         loadFonts(cfg_.fontDir, window_.contentScale());
         setTheme(Theme{});
         applyPendingTheme();
@@ -96,14 +99,10 @@ public:
             }
             if (reload_) { reload_ = false; reloadNow(); }
 
-            applyPendingTheme();
-            window_.beginFrame();
-            frame();
-            drawErrors();
-            ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
-            window_.endFrame(bg.x, bg.y, bg.z);
-            if (!renderer_.windowTitle().empty()) window_.setTitle(renderer_.windowTitle());
+            window_.pollEvents();
+            renderFrame();
         }
+        log::info("shutting down");
         closeState(L_);
         L_ = nullptr;
         window_.destroy();
@@ -124,6 +123,18 @@ private:
     std::map<fs::path, fs::file_time_type> snapshot_;
 
     // ------------------------------------------------------------ frame
+    /// One complete frame. Also called from inside event processing while
+    /// the window is being resized.
+    void renderFrame() {
+        applyPendingTheme();
+        window_.beginFrame();
+        frame();
+        drawErrors();
+        ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+        window_.endFrame(bg.x, bg.y, bg.z);
+        if (!renderer_.windowTitle().empty()) window_.setTitle(renderer_.windowTitle());
+    }
+
     void frame() {
         if (!L_ || rootRef_ == lua::NOREF) return;
         lua::StackGuard guard{L_};
@@ -260,7 +271,7 @@ private:
         rootRef_ = root;
         tickRef_ = tick;
         overlayRef_ = overlays;
-        std::fprintf(stderr, "[imlui] loaded %s\n", cfg_.script.generic_string().c_str());
+        log::info("loaded {}", cfg_.script.generic_string());
     }
 
     // ------------------------------------------------------------ imlui.native
@@ -328,6 +339,14 @@ private:
             {"quit", [](lua::State* L) -> int { self(L).requestQuit(); return 0; }},
             {"reload", [](lua::State* L) -> int { self(L).requestReload(); return 0; }},
             {"imguiVersion", [](lua::State* L) -> int { lua::pushstring(L, ImGui::GetVersion()); return 1; }},
+            // log(level, message) — level: "trace" | "debug" | "info" | "warn" | "error"
+            {"log", [](lua::State* L) -> int {
+                std::string_view lv = lua::tostring(L, 1);
+                log::Level l = lv == "trace" ? log::Level::Trace : lv == "debug" ? log::Level::Debug
+                             : lv == "warn" ? log::Level::Warn : lv == "error" ? log::Level::Error : log::Level::Info;
+                log::write(l, lua::tostring_any(L, 2), "lua");
+                return 0;
+            }},
             // injectMouse(x, y [, down]) — feeds ImGui a mouse event in window pixels (for UI tests).
             {"injectMouse", [](lua::State* L) -> int {
                 ImGuiIO& io = ImGui::GetIO();

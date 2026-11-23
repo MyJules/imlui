@@ -308,6 +308,23 @@ function ui.snackbar(text, opts)
     snack.shownAt = native.time()
 end
 
+-- Logging goes through spdlog on the C++ side.
+local function logAt(level)
+    return function(fmt, ...)
+        local msg = select("#", ...) > 0 and string.format(fmt, ...) or tostring(fmt)
+        native.log(level, msg)
+    end
+end
+ui.log = { trace = logAt("trace"), debug = logAt("debug"), info = logAt("info"),
+           warn = logAt("warn"), error = logAt("error") }
+
+--- print() in UI scripts logs at info level.
+function ui.print(...)
+    local parts = {}
+    for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+    native.log("info", table.concat(parts, "\t"))
+end
+
 ui.time = native.time
 ui.fps = native.fps
 ui.quit = native.quit

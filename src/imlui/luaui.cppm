@@ -24,6 +24,7 @@ export module imlui.luaui;
 import lua;
 import imlui.color;
 import imlui.theme;
+import imlui.log;
 
 export namespace imlui::luaui {
 
@@ -37,7 +38,7 @@ inline std::vector<std::string> g_errors;
 void reportError(std::string msg) {
     for (const auto& e : detail::g_errors)
         if (e == msg) return;
-    std::fprintf(stderr, "[lua] %s\n", msg.c_str());
+    log::write(log::Level::Error, msg, "lua");
     if (detail::g_errors.size() >= 32) detail::g_errors.erase(detail::g_errors.begin());
     detail::g_errors.push_back(std::move(msg));
 }

@@ -25,6 +25,7 @@ target_sources(imlui
             src/wrap/lua.cppm
             src/wrap/imgui.cppm
             src/wrap/platform.cppm
+            src/wrap/log.cppm
             # imlui itself
             src/imlui/color.cppm
             src/imlui/theme.cppm
@@ -34,7 +35,7 @@ target_sources(imlui
             src/imlui/engine.cppm
             src/imlui/imlui.cppm
 )
-target_link_libraries(imlui PRIVATE ext::lua ext::imgui)
+target_link_libraries(imlui PRIVATE ext::lua ext::imgui ext::spdlog)
 target_compile_features(imlui PUBLIC cxx_std_20)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(imlui PRIVATE -Wall -Wextra -Wno-unused-parameter)
@@ -42,7 +43,7 @@ endif()
 
 # ------------------------------------------------------------------ app
 add_executable(imlui_app app/main.cpp)
-target_link_libraries(imlui_app PRIVATE imlui ext::lua ext::imgui)
+target_link_libraries(imlui_app PRIVATE imlui ext::lua ext::imgui ext::spdlog)
 option(IMLUI_DEV_PATHS "Load lua/ and examples/ from the source tree (hot reload while editing)" ON)
 if(IMLUI_DEV_PATHS)
     target_compile_definitions(imlui_app PRIVATE IMLUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

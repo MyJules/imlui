@@ -10,10 +10,13 @@ module;
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
-#include <cstdio>
+#include <functional>
 #include <string>
+#include <utility>
 
 export module imlui.platform;
+
+import imlui.log;
 
 export namespace imlui::platform {
 
@@ -33,10 +36,10 @@ public:
     Window& operator=(const Window&) = delete;
 
     /// Creates the OS window, a GL 3.3 context and the ImGui context +
-    /// backends. Returns false (and prints why) on failure.
+    /// backends. Returns false (and logs why) on failure.
     bool create(const WindowConfig& cfg) {
         glfwSetErrorCallback([](int code, const char* msg) {
-            std::fprintf(stderr, "[glfw] error %d: %s\n", code, msg);
+            log::write(log::Level::Error, std::to_string(code) + ": " + msg, "glfw");
         });
         if (!glfwInit()) return false;
         glfwInitialized_ = true;
@@ -66,6 +69,18 @@ public:
         ImGui_ImplGlfw_InitForOpenGL(window_, true);
         ImGui_ImplOpenGL3_Init("#version 330");
         backendsReady_ = true;
+
+        // While the user drags a window edge, Windows runs a modal loop inside
+        // glfwPollEvents() and the app loop is stalled. GLFW still calls these
+        // callbacks, so frames are rendered from them to keep the UI live.
+        s_self = this;
+        glfwSetWindowRefreshCallback(window_, [](GLFWwindow*) {
+            if (s_self) s_self->refreshDuringEvents();
+        });
+        glfwSetFramebufferSizeCallback(window_, [](GLFWwindow*, int, int) {
+            if (s_self) s_self->refreshDuringEvents();
+        });
+        log::info("window created ({}x{}, content scale {:.2f})", cfg.width, cfg.height, scale_);
         return true;
     }
 
@@ -77,19 +92,30 @@ public:
             backendsReady_ = false;
         }
         if (window_) { glfwDestroyWindow(window_); window_ = nullptr; }
+        if (s_self == this) s_self = nullptr;
         if (glfwInitialized_) { glfwTerminate(); glfwInitialized_ = false; }
     }
 
     [[nodiscard]] bool shouldClose() const { return glfwWindowShouldClose(window_) != 0; }
     void requestClose() { glfwSetWindowShouldClose(window_, GLFW_TRUE); }
 
-    /// Polls events and starts a new ImGui frame.
-    void beginFrame() {
+    /// Called to render one complete frame (beginFrame ... endFrame) while
+    /// events are being processed, e.g. during a live resize.
+    void setRefreshCallback(std::function<void()> fn) { refresh_ = std::move(fn); }
+
+    /// Processes OS events. May render frames through the refresh callback.
+    void pollEvents() {
+        inPoll_ = true;
         glfwPollEvents();
         if (glfwGetWindowAttrib(window_, GLFW_ICONIFIED)) {
             // Don't spin while minimized.
             glfwWaitEventsTimeout(0.1);
         }
+        inPoll_ = false;
+    }
+
+    /// Starts a new ImGui frame.
+    void beginFrame() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -127,6 +153,17 @@ public:
     [[nodiscard]] float contentScale() const { return scale_; }
 
 private:
+    void refreshDuringEvents() {
+        // Only from inside pollEvents(): no frame is in progress then.
+        if (!inPoll_ || inRefresh_ || !refresh_) return;
+        inRefresh_ = true;
+        refresh_();
+        inRefresh_ = false;
+    }
+
+    static inline Window* s_self = nullptr;
+    std::function<void()> refresh_;
+    bool inPoll_ = false, inRefresh_ = false;
     GLFWwindow* window_ = nullptr;
     bool glfwInitialized_ = false;
     bool backendsReady_ = false;

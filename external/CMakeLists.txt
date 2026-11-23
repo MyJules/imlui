@@ -44,3 +44,12 @@ set_target_properties(imgui_static PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 add_library(ext::imgui ALIAS imgui_static)
 
 set(IMLUI_FONTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fonts PARENT_SCOPE)
+
+# ---------------------------------------------------------------- spdlog
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS   OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_BENCH   OFF CACHE BOOL "" FORCE)
+set(SPDLOG_INSTALL       OFF CACHE BOOL "" FORCE)
+add_subdirectory(spdlog EXCLUDE_FROM_ALL)
+set_target_properties(spdlog PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+add_library(ext::spdlog ALIAS spdlog)

@@ -23,6 +23,7 @@ export module imlui.theme;
 
 import imgui;
 import imlui.color;
+import imlui.log;
 
 export namespace imlui {
 
@@ -198,7 +199,7 @@ void loadFonts(const std::filesystem::path& dir, float dpiScale) {
     auto load = [&](const char* file) -> ImFont* {
         auto path = (dir / file).string();
         if (!std::filesystem::exists(path)) {
-            std::fprintf(stderr, "[imlui] font '%s' not found\n", path.c_str());
+            log::warn("font '{}' not found", path);
             return nullptr;
         }
         ImFontConfig cfg;
