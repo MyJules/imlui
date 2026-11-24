@@ -1,18 +1,19 @@
-// The input of the resource tools: which files go into an embedded block or a .pak archive, under which names.
+// The files the resource tools pack: where each one comes from and its path in the mount, plus the file helpers
+// the tools share.
 module;
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <utility>
 #include <vector>
 
-export module imlui.tools.resource_spec;
+export module imlui.tools.source_files;
 
 export namespace imlui::tools {
 
@@ -20,26 +21,10 @@ export namespace imlui::tools {
 struct SourceFile {
     std::string path; ///< relative to the base folder, `/`-separated (`fonts/Roboto-Regular.ttf`)
     std::filesystem::path file;
+    /// Overrides the size-based compression rule (a manifest's `compress = { [path] = true|false }`); nullopt
+    /// applies it.
+    std::optional<bool> compress;
 };
-
-/// What to pack. CMake writes it as a UTF-8 text file, one `key=value` per line:
-///
-///     name=imlui            identifier of the generated module (imlui_rc only)
-///     mount=imlui:/         the mount point
-///     base=E:/x/lua         the folder the paths are relative to
-///     source=E:/x/lua       optional: the dev source folder baked into the module (imlui_rc only; dev builds)
-///     file=E:/x/lua/a.lua   one line per file (absolute, or relative to base)
-struct ResourceSpec {
-    std::string name;
-    std::string mountPoint;
-    std::filesystem::path base;
-    std::string sourceDir;         ///< UTF-8, "" unless the build has IMLUI_DEV_PATHS=ON
-    std::vector<SourceFile> files; ///< sorted by path
-};
-
-/// Reads a spec file. nullopt, with the reason in `error`, when it can't be read, a key is unknown, or a file
-/// isn't a regular file under base.
-[[nodiscard]] std::optional<ResourceSpec> readSpec(const std::filesystem::path& specFile, std::string& error);
 
 /// Names `files` relative to `base`, or every regular file under `base` (recursively) when `files` is empty.
 /// nullopt, with the reason in `error`, when a file is missing, outside `base`, or two files get the same path.
@@ -106,7 +91,7 @@ std::optional<std::vector<SourceFile>> collectFiles(const fs::path& base, const 
             error = "'" + utf8(input) + "' isn't under the base folder '" + utf8(root) + "'";
             return std::nullopt;
         }
-        out.push_back({path, file});
+        out.push_back({path, file, std::nullopt});
     }
     std::ranges::sort(out, {}, &SourceFile::path);
     for (std::size_t i = 1; i < out.size(); ++i)
@@ -115,45 +100,6 @@ std::optional<std::vector<SourceFile>> collectFiles(const fs::path& base, const 
             return std::nullopt;
         }
     return out;
-}
-
-std::optional<ResourceSpec> readSpec(const fs::path& specFile, std::string& error) {
-    std::ifstream in{specFile, std::ios::binary};
-    if (!in) {
-        error = "can't read '" + utf8(specFile) + "'";
-        return std::nullopt;
-    }
-    ResourceSpec spec;
-    std::vector<fs::path> files;
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) continue;
-        const std::size_t eq = line.find('=');
-        const std::string_view key = std::string_view{line}.substr(0, eq);
-        const std::string_view value =
-            eq == std::string::npos ? std::string_view{} : std::string_view{line}.substr(eq + 1);
-        if (key == "name")
-            spec.name = value;
-        else if (key == "mount")
-            spec.mountPoint = value;
-        else if (key == "base")
-            spec.base = pathFromUtf8(value);
-        else if (key == "source")
-            spec.sourceDir = value;
-        else if (key == "file")
-            files.push_back(pathFromUtf8(value));
-        else {
-            error = utf8(specFile) + ": unknown line '" + line + "'";
-            return std::nullopt;
-        }
-    }
-    // An empty file list means "the whole base folder" to collectFiles(); a spec lists its files explicitly.
-    if (files.empty()) return spec;
-    auto collected = collectFiles(spec.base, files, error);
-    if (!collected) return std::nullopt;
-    spec.files = std::move(*collected);
-    return spec;
 }
 
 } // namespace imlui::tools

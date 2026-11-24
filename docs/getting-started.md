@@ -82,7 +82,7 @@ cmake --preset clang-debug -DIMLUI_DEV_PATHS=OFF
 
 | `IMLUI_DEV_PATHS` | Effect |
 |---|---|
-| `ON` (default) | Every embedded block remembers the folder it was embedded from (`imlui_add_resources`' `BASE`: `lua/`, `external/fonts/`, `examples/gallery/`, ...), and `defaultConfig` mounts those folders over the embedded copies, so editing them hot-reloads without rebuilding. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime. |
+| `ON` (default) | Every embedded package remembers the folder it was embedded from (the `base` of its group in the resource manifest: `lua/`, `external/fonts/`, `examples/gallery/`, ...), and `defaultConfig` mounts those folders over the embedded copies, so editing them hot-reloads without rebuilding. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime. |
 | `OFF` | No source paths are compiled in: the app runs from its embedded files. Use this for a build you move or ship. |
 
 Either way, files next to the executable override the embedded ones: any `*.pak` archive, which mounts itself where
@@ -93,11 +93,20 @@ given on the command line).
 
 ## Shipping an app
 
-An app with its own host embeds its scripts and data with `imlui_add_resources`, like `examples/custom_types`:
+An app with its own host lists its scripts and data in a resource manifest, `resources.lua` next to them, and embeds
+them with `imlui_add_resources`, like `examples/custom_types`:
+
+```lua
+-- resources.lua
+return {
+    prefix = "app",
+    files = { "main.lua" },
+    include = { "components/**/*.lua", "assets/**" },
+}
+```
 
 ```cmake
-imlui_add_resources(my_app NAME my_app PREFIX app BASE ${CMAKE_CURRENT_SOURCE_DIR} FILES main.lua
-                    DIRECTORY components assets)
+imlui_add_resources(my_app resources.lua NAME my_app)
 ```
 
 ```cpp
@@ -105,16 +114,20 @@ import imlui;
 import imlui.embedded.my_app;
 
 int main(int argc, char** argv) {
-    imlui::Engine engine{imlui::defaultConfig(argc, argv, {imlui::embedded::my_app::package()})};
+    imlui::Engine engine{imlui::defaultConfig(argc, argv, imlui::embedded::my_app::packages())};
     return engine.run();
 }
 ```
+
+A file added under `components/` or `assets/` is embedded on the next build; no CMake change. The manifest format
+(groups, mount folders, `exclude`, `compress`) is in [Architecture](architecture.md#resource-manifests).
 
 The host names no file paths: `main.lua` is the resource `app:/main.lua`. The executable then needs nothing next to
 it. Text and fonts are stored zstd-compressed and decompressed on first read. In dev builds the package also knows
 its source folder, which is mounted on top for hot reload; configure with `-DIMLUI_DEV_PATHS=OFF` for the build you
 ship. An `app/` folder next to the executable overrides single embedded `app:/` files. To update files without rebuilding, ship a `.pak` next to the executable:
-`imlui_add_pak(patch PREFIX app BASE ... FILES ...)` in CMake, or `imlui_pack patch.pak app:/ <folder>` by hand.
+`imlui_add_pak(patch patch/resources.lua)` in CMake (a manifest like the one above), or
+`imlui_pack patch.pak app:/ <folder>` by hand.
 Archives override embedded files, and loose folders override both (see
 [Architecture](architecture.md#embedding-and-archives)).
 

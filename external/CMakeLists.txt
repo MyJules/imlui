@@ -46,8 +46,6 @@ target_link_libraries(imgui_static PUBLIC OpenGL::GL)
 set_target_properties(imgui_static PROPERTIES CXX_SCAN_FOR_MODULES OFF SYSTEM ON)
 add_library(ext::imgui ALIAS imgui_static)
 
-set(IMLUI_FONTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fonts PARENT_SCOPE)
-
 # ---------------------------------------------------------------- spdlog
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS   OFF CACHE BOOL "" FORCE)

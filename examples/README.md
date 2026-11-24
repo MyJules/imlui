@@ -24,6 +24,7 @@ binary's folder (the copy). The gallery is also embedded into `imlui_app` as its
 so editing `main.lua`, `StatCard.lua` or `landscape.png` hot-reloads.
 
 Examples with C++ code have their own `CMakeLists.txt` and executable, added by `examples/CMakeLists.txt` when
-`IMLUI_BUILD_EXAMPLES` is `ON` (the default). They embed their scripts with `imlui_add_resources`, so the executable
-needs nothing next to it (`custom_types/` embeds its `main.lua`). To add one, create a folder like `custom_types/`
+`IMLUI_BUILD_EXAMPLES` is `ON` (the default). They embed their scripts with `imlui_add_resources`, listed in a
+`resources.lua` manifest in their folder, so the executable needs nothing next to it (`custom_types/` embeds its
+`main.lua`). The gallery's `resources.lua` embeds its Lua files and images. To add one, create a folder like `custom_types/`
 and add an `add_subdirectory` line to [`CMakeLists.txt`](CMakeLists.txt).

@@ -11,7 +11,8 @@ target_link_libraries(imlui_custom_types PRIVATE imlui ext::lua ext::imgui ext::
 imlui_set_warnings(imlui_custom_types)
 imlui_set_hardening(imlui_custom_types)
 
-# main.lua is embedded (app:/main.lua), so the binary runs on its own: the library embeds its Lua and fonts too.
-# In dev builds (IMLUI_DEV_PATHS=ON) the package knows this folder and defaultConfig mounts it over the embedded copy
-# (hot reload). In a release build, app/main.lua next to the binary would override it.
-imlui_add_resources(imlui_custom_types NAME custom_types PREFIX app BASE ${CMAKE_CURRENT_SOURCE_DIR} FILES main.lua)
+# main.lua is embedded (app:/main.lua, listed in resources.lua), so the binary runs on its own: the library embeds
+# its Lua and fonts too. In dev builds (IMLUI_DEV_PATHS=ON) the package knows this folder and defaultConfig mounts it
+# over the embedded copy (hot reload). In a release build, app/main.lua next to the binary would override it. The
+# module is imlui.embedded.custom_types, named after this folder.
+imlui_add_resources(imlui_custom_types resources.lua)

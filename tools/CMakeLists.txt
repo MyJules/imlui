@@ -4,8 +4,10 @@
 #               which embeds its own Lua and fonts with it.
 #   imlui_pack  builds .pak archives (imlui_add_pak). Uses the archive format from the imlui library.
 #
-# Both encode files the same way (imlui.tools.resource_encoding: zstd when it saves enough). They run on the build
-# machine, so they are built with the same toolchain as everything else (no cross-compiling).
+# Both read the same Lua resource manifests (imlui.tools.resource_manifest, evaluated with the vendored Lua through
+# the `lua` wrapper module, library imlui_lua), write the same Ninja dependency files (imlui.tools.depfile) and encode
+# files the same way (imlui.tools.resource_encoding: zstd when it saves enough). They run on the build machine, so
+# they are built with the same toolchain as everything else (no cross-compiling).
 
 add_library(imlui_resource_tools STATIC)
 target_sources(imlui_resource_tools
@@ -15,10 +17,13 @@ target_sources(imlui_resource_tools
         FILES
             lib/zstd_compress.cppm
             lib/resource_encoding.cppm
-            lib/resource_spec.cppm
+            lib/source_files.cppm
+            lib/glob.cppm
+            lib/depfile.cppm
+            lib/resource_manifest.cppm
             lib/rc.cppm
 )
-target_link_libraries(imlui_resource_tools PRIVATE ext::zstd_compress)
+target_link_libraries(imlui_resource_tools PUBLIC imlui_lua PRIVATE ext::zstd_compress)
 target_compile_features(imlui_resource_tools PUBLIC cxx_std_20)
 imlui_set_warnings(imlui_resource_tools)
 imlui_set_hardening(imlui_resource_tools)

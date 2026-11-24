@@ -18,10 +18,9 @@ import imlui.resources.pak_mount;
 import imlui.resources.package;
 import imlui.app.config;
 import imlui.embedded.imlui;
-import imlui.embedded.imlui_fonts;
 import imlui.lua.errors;
 import imlui.tools.resource_encoding;
-import imlui.tools.resource_spec;
+import imlui.tools.source_files;
 import imlui.tools.pack;
 import imlui.test.headless_frame;
 import imlui.test.memory_mount;
@@ -301,16 +300,19 @@ TEST(PackedResources, EmbeddedThenPakThenDirectory) {
 TEST(EmbeddedLibrary, CarriesTheLuaSideAndTheFonts) {
     Resources res;
     embedded::imlui::mount(res);
-    embedded::imlui_fonts::mount(res);
     EXPECT_EQ(text(res.read("imlui:/imlui.lua")), readSource(std::string{IMLUI_LUA_DIR} + "/imlui.lua"));
     for (const char* font : {"Roboto-Regular.ttf", "Roboto-Medium.ttf", "MaterialIconsRound-Regular.otf",
                              "MaterialIconsRound-Regular.codepoints"})
         EXPECT_EQ(text(res.read(std::string{"imlui:/fonts/"} + font)),
                   readSource(std::string{IMLUI_FONT_DIR} + "/" + font))
             << font;
-    EXPECT_EQ(res.origin("imlui:/imlui.lua"), "embedded 'imlui' imlui.lua");
+    EXPECT_EQ(res.origin("imlui:/imlui.lua"), "embedded 'imlui (imlui:/)' imlui.lua");
     // Text and fonts are worth compressing.
-    for (const auto& e : embedded::imlui_fonts::files()->entries())
+    const auto packages = embedded::imlui::packages();
+    ASSERT_EQ(packages.size(), 2U);
+    const auto* fonts = dynamic_cast<const PackedMount*>(packages[1].files.get());
+    ASSERT_NE(fonts, nullptr);
+    for (const auto& e : fonts->entries())
         if (e.path.ends_with(".ttf")) EXPECT_TRUE(e.compressed) << e.path;
 }
 
@@ -336,13 +338,15 @@ void writeFile(const std::filesystem::path& file, std::span<const std::byte> byt
 } // namespace
 
 TEST(EmbeddedLibrary, PackagesNameTheirMountPointAndSourceFolder) {
-    const ResourcePackage lua = embedded::imlui::package();
+    const std::vector<ResourcePackage> packages = embedded::imlui::packages();
+    ASSERT_EQ(packages.size(), 2U); // resources.lua: lua/ and the fonts
+    const ResourcePackage& lua = packages[0];
     EXPECT_EQ(lua.mountPoint, "imlui:/");
-    EXPECT_EQ(lua.files, embedded::imlui::files());
+    EXPECT_EQ(lua.files, embedded::imlui::packages()[0].files); // one mount per group, shared by every caller
     // The source folder is baked in only with IMLUI_DEV_PATHS=ON.
     if (!lua.sourceDir.empty())
         EXPECT_TRUE(std::filesystem::equivalent(std::filesystem::path{lua.sourceDir}, IMLUI_LUA_DIR));
-    const ResourcePackage fonts = embedded::imlui_fonts::package();
+    const ResourcePackage& fonts = packages[1];
     EXPECT_EQ(fonts.mountPoint, "imlui:/fonts/");
     if (!fonts.sourceDir.empty())
         EXPECT_TRUE(std::filesystem::equivalent(std::filesystem::path{fonts.sourceDir}, IMLUI_FONT_DIR));
@@ -357,14 +361,33 @@ TEST(DefaultConfig, ReleaseRunsFromEmbeddedDataAlone) {
     const EngineConfig cfg = defaultConfig(1, argv, {testApp()});
     EXPECT_EQ(cfg.entry, "app:/main.lua");
     EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'embedded app' }");
-    EXPECT_TRUE(cfg.resources.origin("imlui:/imlui.lua").starts_with("embedded 'imlui'"));
-    EXPECT_TRUE(cfg.resources.origin("imlui:/fonts/Roboto-Regular.ttf").starts_with("embedded 'imlui_fonts'"));
-    EXPECT_EQ(cfg.resources.describe().size(), 3U); // imlui, imlui_fonts, the app: no folders, no archives
+    EXPECT_TRUE(cfg.resources.origin("imlui:/imlui.lua").starts_with("embedded 'imlui (imlui:/)'"));
+    EXPECT_TRUE(
+        cfg.resources.origin("imlui:/fonts/Roboto-Regular.ttf").starts_with("embedded 'imlui (imlui:/fonts/)'"));
+    EXPECT_EQ(cfg.resources.describe().size(), 3U); // imlui:/, imlui:/fonts/, the app: no folders, no archives
 
     // No app package: the library alone, and the entry is still app:/main.lua (reported missing by the Engine).
     const EngineConfig bare = defaultConfig(1, argv);
     EXPECT_EQ(bare.entry, "app:/main.lua");
     EXPECT_EQ(bare.resources.describe().size(), 2U);
+}
+
+TEST(DefaultConfig, CombinesThePackagesOfSeveralModules) {
+    const test::ScopedEnv noDev{"IMLUI_DEV_PATHS", "0"};
+    test::TempDir dir;
+    std::string exe = (dir.path() / "app.exe").string();
+    char* argv[] = {exe.data()};
+    const std::vector<ResourcePackage> app{testApp()};
+    const std::vector<ResourcePackage> plugin{
+        {"plugin:/charts/",
+         std::make_shared<test::MemoryMount>(
+             std::initializer_list<std::pair<const std::string, std::string>>{{"chart.lua", "-- chart"}}, "plugin"),
+         ""}};
+
+    const EngineConfig cfg = defaultConfig(1, argv, {app, plugin});
+    EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'embedded app' }");
+    EXPECT_EQ(text(cfg.resources.read("plugin:/charts/chart.lua")), "-- chart");
+    EXPECT_EQ(cfg.resources.describe().size(), 4U); // the library's two packages, the app, the plugin
 }
 
 TEST(DefaultConfig, ArchivesThenPrefixFoldersOverrideEmbeddedFiles) {

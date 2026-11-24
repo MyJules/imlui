@@ -312,6 +312,12 @@ suppressions. Run `clang-asan` before merging larger changes.
   dev source folder on top, skipped with `IMLUI_DEV_PATHS=0` or when missing; a script argument replacing every
   `app:/` mount, relative paths falling back to the executable's folder), and the harness on embedded data only
   (`Options::embedded`). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
+- `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns, one group
+  and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
+  the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
+  base folder, the sandbox, bad shapes), `manifestDependencies` and the dependency file format, merging groups into
+  one `.pak` (`tools::mergeGroups`), and end to end: the library's embedded packages hold exactly what
+  `resources.lua` lists.
 - **Smoke tests** (`smoke.imlui_app`, `smoke.imlui_custom_types`, `tests/smoke_run.cmake`) run each app like a
   shipped release: the executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
   empty folder under `build/<preset>/tests/smoke/` and started with `IMLUI_DEV_PATHS=0` and
@@ -328,13 +334,17 @@ suppressions. Run `clang-asan` before merging larger changes.
 
 ### Resource tools
 
-`tools/` builds two host tools with the same toolchain (see [Architecture](architecture.md#embedding-and-archives)):
-`imlui_rc`, which `imlui_add_resources` runs to write the blob and the `imlui.embedded.<name>` module into
-`build/<preset>/<dir>/imlui_resources/`, and `imlui_pack`, which builds `.pak` archives (`imlui_add_pak`, or by
-hand: `imlui_pack out.pak app:/ <folder> [files...]`). Their shared code is the `imlui_resource_tools` library
-(`tools/lib/`, links the zstd compressor; it doesn't link `imlui`, which is embedded with it), and the archive
-writer is `imlui_pack_lib` (links `imlui` for `imlui.resources.pak_format`). Generated modules are not checked by
-`tidy`; the generator is.
+`tools/` builds two host tools with the same toolchain (see [Architecture](architecture.md#resource-manifests)).
+Both read a Lua resource manifest (`resources.lua`). `imlui_rc`, which `imlui_add_resources(<target> <manifest>)`
+runs, writes the blob, the `imlui.embedded.<name>` module and the dependency file `<name>.d` into
+`build/<preset>/<dir>/imlui_resources/`; `imlui_rc --list` (target `imlui_resources_<name>_list`, run on every
+build) rewrites `<name>.files` when the manifest's set of files changed, so a file added to a globbed folder
+re-embeds even where Ninja misses the folder's new time. `imlui_pack` builds `.pak` archives
+(`imlui_add_pak(<name> <manifest>)`, or by hand: `imlui_pack out.pak app:/ <folder> [files...]`). Their shared code
+is the `imlui_resource_tools` library (`tools/lib/`, links the zstd compressor and `imlui_lua`, the Lua wrapper; it
+doesn't link `imlui`, which is embedded with it), and the archive writer is `imlui_pack_lib` (links `imlui` for
+`imlui.resources.pak_format`). Generated modules are not checked by `tidy`; the generator is. To see what a manifest
+selects, run `build/<preset>/bin/imlui_rc --list <manifest> <file>` and read the file.
 
 ### The headless frame harness
 

@@ -5,6 +5,7 @@ module;
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -32,8 +33,10 @@ inline constexpr std::size_t minCompressSize = 64;
 [[nodiscard]] bool compressible(std::string_view path);
 
 /// Encodes file `path` with contents `data`: compressed when it's compressible(), at least minCompressSize bytes
-/// and compression saves at least 10 %; stored as is otherwise.
-[[nodiscard]] EncodedResource encodeResource(std::string_view path, std::span<const std::byte> data);
+/// and compression saves at least 10 %; stored as is otherwise. `compress` overrides that rule (a manifest's
+/// `compress` table): true always compresses a non-empty file, false always stores it as is.
+[[nodiscard]] EncodedResource encodeResource(std::string_view path, std::span<const std::byte> data,
+                                             std::optional<bool> compress = std::nullopt);
 
 } // namespace imlui::tools
 
@@ -52,13 +55,14 @@ bool compressible(std::string_view path) {
     return std::ranges::find(packed, std::string_view{ext}) == std::end(packed);
 }
 
-EncodedResource encodeResource(std::string_view path, std::span<const std::byte> data) {
+EncodedResource encodeResource(std::string_view path, std::span<const std::byte> data, std::optional<bool> compress) {
     EncodedResource out;
     out.size = data.size();
-    if (data.size() >= minCompressSize && compressible(path)) {
+    const bool forced = compress.value_or(false) && !data.empty();
+    if (forced || (!compress && data.size() >= minCompressSize && compressible(path))) {
         auto packed = zstd::compress(data);
-        // Keep it only when it saves at least 10 %.
-        if (packed && packed->size() * 10 <= data.size() * 9) {
+        // Keep it only when it saves at least 10 %, unless the manifest asked for it.
+        if (packed && (forced || packed->size() * 10 <= data.size() * 9)) {
             out.stored = std::move(*packed);
             out.compressed = true;
             return out;

@@ -78,8 +78,10 @@ Ship an app as one executable with its Lua scripts, fonts, images and data. Deci
   - **Directory mount:** dev builds and loose overrides. Reports file times for hot reload.
   - **Embedded mount:** data compiled into the exe.
   - **`.pak` mount:** an archive next to the exe.
-- **Embedding:** `imlui_add_resources(target PREFIX app BASE dir FILES ... DIRECTORY ...)` generates a module per
-  target that uses `#embed`. The `-Wpedantic` extension warning is turned off only inside that generated file.
+- **Embedding:** `imlui_add_resources(target resources.lua [NAME name])` generates a module per manifest that uses
+  `#embed`. The `-Wpedantic` extension warning is turned off only inside that generated file. What a package holds
+  is a Lua resource manifest (like Qt's `.qrc`): groups with a prefix, a mount folder, a base folder, files,
+  include/exclude globs and per-file compression overrides.
 - **Compression:** zstd, vendored. Compression is per file and size-based: a file is stored compressed only when
   that saves enough (fonts and text, yes; already-compressed data, no). Files are decompressed on first read and
   cached.
@@ -111,6 +113,12 @@ Order, one commit per step:
 6. *(done)* The PNG/JPG `Image` element.
 7. *(done)* Path-free hosts: `defaultConfig(argc, argv, {packages...})` with `ResourcePackage`s that carry their dev
    source folder; `<exe folder>/<prefix>/` override folders; no `IMLUI_SOURCE_DIR`.
+8. *(done)* Resource manifests: `resources.lua` files (one group or a list; `prefix`, `mount`, `base`, `files`,
+   `include`/`exclude` globs, `compress`) evaluated by the tools in a Lua sandbox, replacing the arguments of
+   `imlui_add_resources(<target> <manifest> [NAME])` and `imlui_add_pak(<name> <manifest> [OUTPUT])`. Generated
+   modules export `packages()`, one `ResourcePackage` per group. Dependencies through a Ninja dependency file plus a
+   file list compared on every build; no configure-time globbing. A `.pak` of several groups needs one prefix and is
+   mounted at their common folder.
 
 ## Next
 

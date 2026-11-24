@@ -39,15 +39,16 @@ Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.
 zstd 1.5.7) and are built as plain libraries. Project code only uses them through module wrappers.
 
 `external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0). The library embeds
-them and `lua/imlui.lua` (zstd-compressed), and `imlui_add_resources` embeds an app's own files the same way, so an
-executable runs on its own; a `.pak` archive or loose files next to it still override.
+them and `lua/imlui.lua` (zstd-compressed, listed in the resource manifest `resources.lua`), and
+`imlui_add_resources` embeds an app's own files the same way, from its own `resources.lua`, so an executable runs on
+its own; a `.pak` archive or loose files next to it still override.
 ImGui 1.92 rasterizes glyphs on demand, so every text style and icon size stays sharp, including
 when the theme's `fontScale` changes.
 
 Scripts **hot-reload** when you save any `.lua` file next to the script (or a file it read). In dev builds
 (`IMLUI_DEV_PATHS=ON`, the default) every embedded block also knows its source folder, so
 `lua/` and the gallery are read from the source tree and you don't need to rebuild. Hosts name no file paths: the
-app is the resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, {imlui::embedded::gallery::package()})`.
+app is the resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded::gallery::packages())`.
 
 ## Layout
 
@@ -62,7 +63,8 @@ app is the resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, {iml
 | `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in elements, one typed `Element` class per module (`button.cppm`, `row.cppm`, ...), and `registerBuiltinTypes` (`builtin.cppm`) |
 | `src/imlui/types/` | `imlui.types.*`: the C++ type system: `ScriptObject`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
 | `src/imlui/resources/` | `imlui.resources*`: resource names (`app:/main.lua`), the `Mount` interface, `DirectoryMount`, `EmbeddedMount`, `PakMount` and the `.pak` format, `Resources` (stacked mounts) |
-| `tools/` | build-time tools: `imlui_rc` (embeds files, for `imlui_add_resources`) and `imlui_pack` (builds `.pak` archives, `imlui_add_pak`); `cmake/ImluiResources.cmake` |
+| `tools/` | build-time tools: `imlui_rc` (embeds the files a Lua resource manifest lists, for `imlui_add_resources`) and `imlui_pack` (builds `.pak` archives, `imlui_add_pak`); `cmake/ImluiResources.cmake` |
+| `resources.lua` | the library's resource manifest: `lua/` at `imlui:/`, the fonts at `imlui:/fonts/` |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |

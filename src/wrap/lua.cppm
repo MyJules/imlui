@@ -1,4 +1,5 @@
-// Module wrapper around the Lua 5.4 C API.
+// Module wrapper around the Lua 5.4 C API. Its own library (imlui_lua), so the resource tools, which can't depend
+// on imlui, evaluate manifests with it too.
 //
 // Most of the Lua API is made of macros (lua_pop, lua_tostring, lua_pcall ...),
 // which cannot cross a module boundary, so every call we use is re-exposed as
@@ -39,6 +40,8 @@ enum class Type : int { None = -1, Nil, Boolean, LightUserData, Number, String, 
 State* newstate();
 void close(State* state);
 void openlibs(State* state);
+/// Opens only the base library (print, pairs, tostring, ...) into the globals; for sandboxes.
+void openbase(State* state);
 
 // ---------------------------------------------------------------- stack
 int gettop(State* state);
@@ -161,6 +164,10 @@ Type toType(int t) { return static_cast<Type>(t); }
 State* newstate() { return luaL_newstate(); }
 void close(State* state) { lua_close(state); }
 void openlibs(State* state) { luaL_openlibs(state); }
+void openbase(State* state) {
+    luaL_requiref(state, LUA_GNAME, luaopen_base, 1);
+    lua_pop(state, 1);
+}
 
 // ---------------------------------------------------------------- stack
 int gettop(State* state) { return lua_gettop(state); }

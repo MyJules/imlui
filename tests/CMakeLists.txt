@@ -18,9 +18,9 @@ imlui_set_hardening(imlui_tests)
 target_compile_definitions(imlui_tests PRIVATE IMLUI_LUA_DIR="${CMAKE_SOURCE_DIR}/lua"
                                                IMLUI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
                                                IMLUI_FONT_DIR="${CMAKE_SOURCE_DIR}/external/fonts")
-# An archive built through imlui_add_pak (examples/counter at app:/counter/), read back by resources_packed_test.
-imlui_add_pak(imlui_test_pak OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/counter.pak PREFIX app MOUNT counter
-              BASE ${CMAKE_SOURCE_DIR}/examples/counter DIRECTORY .)
+# An archive built through imlui_add_pak (examples/counter at app:/counter/, manifest data/counter_pak.lua), read
+# back by resources_packed_test.
+imlui_add_pak(imlui_test_pak data/counter_pak.lua OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/counter.pak)
 add_dependencies(imlui_tests imlui_test_pak)
 target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${CMAKE_CURRENT_BINARY_DIR}/counter.pak"
                                                IMLUI_COUNTER_DIR="${CMAKE_SOURCE_DIR}/examples/counter")

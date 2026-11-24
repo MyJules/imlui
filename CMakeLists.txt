@@ -23,25 +23,39 @@ option(IMLUI_DEV_PATHS "Mount the source folders of embedded files over them (ho
 
 add_subdirectory(external)
 
+# ------------------------------------------------------------------ Lua wrapper (module `lua`)
+# Its own library: the resource tools evaluate manifests with it, and imlui_rc can't depend on the imlui library,
+# which embeds its own files with imlui_rc.
+add_library(imlui_lua STATIC)
+target_sources(imlui_lua
+    PUBLIC
+        FILE_SET CXX_MODULES
+        BASE_DIRS src
+        FILES src/wrap/lua.cppm
+)
+target_link_libraries(imlui_lua PRIVATE ext::lua)
+target_compile_features(imlui_lua PUBLIC cxx_std_20)
+imlui_set_warnings(imlui_lua)
+imlui_set_hardening(imlui_lua)
+
 # ------------------------------------------------------------------ library
 add_library(imlui STATIC)
 file(GLOB_RECURSE IMLUI_MODULES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cppm)
+list(REMOVE_ITEM IMLUI_MODULES ${CMAKE_SOURCE_DIR}/src/wrap/lua.cppm)
 target_sources(imlui
     PUBLIC
         FILE_SET CXX_MODULES
         BASE_DIRS src
         FILES ${IMLUI_MODULES}
 )
-target_link_libraries(imlui PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image ext::zstd)
+target_link_libraries(imlui PUBLIC imlui_lua PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image ext::zstd)
 target_compile_features(imlui PUBLIC cxx_std_20)
 imlui_set_warnings(imlui)
 imlui_set_hardening(imlui)
-# The library carries its own files (imlui.embedded.imlui, imlui.embedded.imlui_fonts), so an app runs without
-# lua/ or fonts/ next to it; defaultConfig() always mounts them, under the .pak archives and folders that override them.
-imlui_add_resources(imlui NAME imlui PREFIX imlui BASE lua DIRECTORY .)
-imlui_add_resources(imlui NAME imlui_fonts PREFIX imlui MOUNT fonts BASE ${IMLUI_FONTS_DIR}
-    FILES Roboto-Regular.ttf Roboto-Medium.ttf LICENSE-Roboto.txt
-          MaterialIconsRound-Regular.otf MaterialIconsRound-Regular.codepoints LICENSE-MaterialIcons.txt)
+# The library carries its own files (imlui.embedded.imlui: lua/ at imlui:/ and the fonts at imlui:/fonts/, listed in
+# resources.lua), so an app runs without them next to it; defaultConfig() always mounts them, under the .pak archives
+# and folders that override them.
+imlui_add_resources(imlui resources.lua NAME imlui)
 
 # ------------------------------------------------------------------ resource tools (imlui_rc, imlui_pack)
 add_subdirectory(tools)
@@ -57,7 +71,7 @@ imlui_set_hardening(imlui_app)
 # library. Every Lua-only example folder (one without a CMakeLists.txt, e.g. examples/counter) is copied next to the
 # binary: a relative script argument missing from the current folder is looked up next to the executable, so
 # `imlui_app examples/counter/main.lua` works from anywhere. Examples with C++ embed their own files.
-imlui_add_resources(imlui_app NAME gallery PREFIX app BASE examples/gallery DIRECTORY .)
+imlui_add_resources(imlui_app examples/gallery/resources.lua NAME gallery)
 file(GLOB IMLUI_EXAMPLE_DIRS LIST_DIRECTORIES true CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/examples/*)
 foreach(dir IN LISTS IMLUI_EXAMPLE_DIRS)
     if(IS_DIRECTORY ${dir} AND NOT EXISTS ${dir}/CMakeLists.txt)
