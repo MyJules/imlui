@@ -6,6 +6,7 @@ module;
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 export module imlui.theme.icons;
@@ -13,6 +14,7 @@ export module imlui.theme.icons;
 import imgui;
 import imlui.log;
 import imlui.resources;
+import imlui.theme.font_check;
 
 export namespace imlui {
 
@@ -37,6 +39,7 @@ namespace imlui {
 
 namespace {
 ImFont* icons = nullptr;
+ResourceData iconBytes; ///< the font's data, which the atlas points into without a copy
 std::unordered_map<std::string, unsigned> iconCodes;
 } // namespace
 
@@ -44,29 +47,36 @@ void loadIcons(const Resources& resources) {
     constexpr std::string_view fontName = "imlui:/fonts/MaterialIconsRound-Regular.otf";
     constexpr std::string_view codepointsName = "imlui:/fonts/MaterialIconsRound-Regular.codepoints";
     icons = nullptr;
-    if (const auto bytes = resources.read(fontName); bytes && !bytes->empty()) {
-        ImFontConfig cfg;
-        cfg.FontDataOwnedByAtlas = false; // the bytes live as long as the mount, like the text fonts
-        icons = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<std::byte*>(bytes->data()),
-                                                           static_cast<int>(bytes->size()), 16.0f, &cfg);
+    iconBytes = {};
+    if (auto bytes = resources.read(fontName); bytes && !bytes->empty()) {
+        if (const auto problem = checkFont(bytes->bytes())) {
+            log::warn("font '{}': {}", fontName, *problem);
+        } else {
+            iconBytes = std::move(*bytes);
+            ImFontConfig cfg;
+            cfg.FontDataOwnedByAtlas = false; // iconBytes keeps the data alive, like the text fonts' handles
+            icons = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<std::byte*>(iconBytes.data()),
+                                                               static_cast<int>(iconBytes.size()), 16.0f, &cfg);
+        }
     } else {
         log::warn("font '{}' not found", fontName);
     }
 
     // name -> codepoint table shipped with the icon font: one "name hex" pair per line
     iconCodes.clear();
-    const auto text = resources.readText(codepointsName);
-    if (!text) {
+    const auto codepoints = resources.read(codepointsName);
+    if (!codepoints) {
         log::warn("icon codepoints '{}' not found", codepointsName);
         return;
     }
+    const std::string_view text = codepoints->text();
     std::vector<std::string_view> words;
-    for (std::size_t pos = 0; pos < text->size();) {
-        const std::size_t start = text->find_first_not_of(" \t\r\n", pos);
+    for (std::size_t pos = 0; pos < text.size();) {
+        const std::size_t start = text.find_first_not_of(" \t\r\n", pos);
         if (start == std::string_view::npos) break;
-        std::size_t end = text->find_first_of(" \t\r\n", start);
-        if (end == std::string_view::npos) end = text->size();
-        words.push_back(text->substr(start, end - start));
+        std::size_t end = text.find_first_of(" \t\r\n", start);
+        if (end == std::string_view::npos) end = text.size();
+        words.push_back(text.substr(start, end - start));
         pos = end;
     }
     for (std::size_t i = 0; i + 1 < words.size(); i += 2) {

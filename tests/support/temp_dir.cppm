@@ -28,6 +28,8 @@ public:
     void write(std::string_view relative, std::string_view content) const;
     /// Moves the modification time of `relative` by `seconds` (deterministic, unlike waiting for the clock).
     void touch(std::string_view relative, int seconds) const;
+    /// Deletes file `relative`.
+    void remove(std::string_view relative) const;
 
 private:
     std::filesystem::path m_path;
@@ -69,6 +71,10 @@ void TempDir::write(std::string_view relative, std::string_view content) const {
 void TempDir::touch(std::string_view relative, int seconds) const {
     const fs::path file = m_path / fs::path{std::u8string{relative.begin(), relative.end()}};
     fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds{seconds});
+}
+
+void TempDir::remove(std::string_view relative) const {
+    fs::remove(m_path / fs::path{std::u8string{relative.begin(), relative.end()}});
 }
 
 } // namespace imlui::test

@@ -2,16 +2,15 @@
 module;
 
 #include <algorithm>
-#include <cstddef>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 export module imlui.resources;
 
+export import imlui.resources.data;
 import imlui.resources.mount;
 import imlui.resources.name;
 
@@ -23,8 +22,8 @@ export namespace imlui {
 /// earlier one and falls back to it for the rest.
 ///
 /// Mount before sharing; after that, every const method is safe from any thread. Copies share the mounts.
-/// Spans returned by read() stay valid as long as the mount that served them, so as long as any Resources
-/// holding it.
+/// The bytes read() returns stay valid while their ResourceData handle (or a copy) lives and the mount that served
+/// them does, so as long as any Resources holds it (see ResourceData).
 class Resources {
 public:
     /// Mounts `mount` at `point` (a full folder name such as `app:/` or `imlui:/fonts/`). Returns false, and
@@ -32,9 +31,9 @@ public:
     bool mount(std::string_view point, std::shared_ptr<Mount> mount);
 
     /// The bytes of file `name`; nullopt when the name is invalid or no mount has the file.
-    [[nodiscard]] std::optional<std::span<const std::byte>> read(std::string_view name) const;
-    /// read() as text.
-    [[nodiscard]] std::optional<std::string_view> readText(std::string_view name) const;
+    [[nodiscard]] std::optional<ResourceData> read(std::string_view name) const;
+    /// A copy of read() as text.
+    [[nodiscard]] std::optional<std::string> readText(std::string_view name) const;
     /// True when `name` is a file or a folder in some mount (mount points and their parents count as folders).
     [[nodiscard]] bool exists(std::string_view name) const;
     /// The entries of folder `name` across its mounts, sorted and without duplicates: file names, and folder names
@@ -105,7 +104,7 @@ std::vector<Resources::Hit> Resources::covering(const ResourceName& name) const 
     return out;
 }
 
-std::optional<std::span<const std::byte>> Resources::read(std::string_view name) const {
+std::optional<ResourceData> Resources::read(std::string_view name) const {
     const auto parsed = parseName(name);
     if (!parsed) return std::nullopt;
     for (const Hit& hit : covering(*parsed))
@@ -113,10 +112,10 @@ std::optional<std::span<const std::byte>> Resources::read(std::string_view name)
     return std::nullopt;
 }
 
-std::optional<std::string_view> Resources::readText(std::string_view name) const {
+std::optional<std::string> Resources::readText(std::string_view name) const {
     const auto bytes = read(name);
     if (!bytes) return std::nullopt;
-    return std::string_view{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+    return std::string{bytes->text()};
 }
 
 bool Resources::exists(std::string_view name) const {

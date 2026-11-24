@@ -74,7 +74,8 @@ Ship an app as one executable with its Lua scripts, fonts, images and data. Deci
   `imlui:/fonts/...` for the library. Libraries and plugins get their own prefix. Paths are normalized, and `..`
   can't leave a mount.
 - **`imlui.resources` (`Resources`):** prefixes map to stacked mounts, and the last mount wins.
-  - The API is `read` (a zero-copy span when the file is stored uncompressed), `exists`, `list` and `modified`.
+  - The API is `read` (zero-copy when the file is stored uncompressed; a `ResourceData` handle keeps a directory
+    file's bytes alive while they're in use), `exists`, `list` and `modified`.
   - **Directory mount:** dev builds and loose overrides. Reports file times for hot reload.
   - **Embedded mount:** data compiled into the exe.
   - **`.pak` mount:** an archive next to the exe.

@@ -24,7 +24,7 @@ public:
     /// Files by normalized path (`a/b.lua`) and contents. Their folders exist implicitly.
     MemoryMount(std::initializer_list<std::pair<const std::string, std::string>> files, std::string name = "memory");
 
-    [[nodiscard]] std::optional<std::span<const std::byte>> read(std::string_view path) const override;
+    [[nodiscard]] std::optional<ResourceData> read(std::string_view path) const override;
     [[nodiscard]] bool exists(std::string_view path) const override;
     [[nodiscard]] std::vector<std::string> list(std::string_view path) const override;
     [[nodiscard]] std::optional<ResourceTime> modified(std::string_view path) const override;
@@ -44,10 +44,10 @@ namespace imlui::test {
 MemoryMount::MemoryMount(std::initializer_list<std::pair<const std::string, std::string>> files, std::string name)
     : m_files{files}, m_name{std::move(name)} {}
 
-std::optional<std::span<const std::byte>> MemoryMount::read(std::string_view path) const {
+std::optional<ResourceData> MemoryMount::read(std::string_view path) const {
     const auto it = m_files.find(path);
     if (it == m_files.end()) return std::nullopt;
-    return std::as_bytes(std::span{it->second.data(), it->second.size()});
+    return ResourceData{std::as_bytes(std::span{it->second.data(), it->second.size()})};
 }
 
 bool MemoryMount::exists(std::string_view path) const {

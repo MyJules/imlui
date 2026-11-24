@@ -187,8 +187,9 @@ Layout notes:
 3. Registers the resource loader (`luaui::registerResources`): the `imlui.resource` library and a
    `package.searchers` entry that finds modules in `imlui:/`. `package.path` keeps Lua's default, for plain Lua
    libraries; imlui's own files never go through it.
-4. Runs a boot chunk: `require("imlui")` (`imlui:/imlui.lua`), `ui.__load(entry)` (`app:/main.lua`, run in
-   `ui.env`), and returns the root, `ui.__tick` and `ui.__overlays`.
+4. Runs a boot chunk: `require("imlui")` (`imlui:/imlui.lua`), `ui.__load(entry)` (`app:/main.lua`, run in its
+   own environment over `ui.env`, see [Resources](#resources)), and returns the root, `ui.__tick` and
+   `ui.__overlays`.
 5. On failure (syntax error, runtime error, or a non-table return), it closes the new state, points the
    singletons back at the old one, restores the previous theme and keeps the old UI. On success, it replaces the
    old state and applies the window title and size (size only if it changed since the last load). Closing a
@@ -209,24 +210,34 @@ at least two characters long, so OS paths such as `C:/x` or `/etc/x` are never n
 
 Each prefix has a stack of **mounts** (`Mount`), each at a mount point: the prefix root (`app:/`) or a folder in it
 (`imlui:/fonts/`). A name is served by the newest mount that has it, so a later mount overrides single files of an
-earlier one. `read` returns a span that stays valid as long as the mount lives; `exists`, `list`, `listRecursive`,
-`modified` and `origin` complete the API.
+earlier one. `read` returns a `ResourceData` (module `imlui.resources.data`): the bytes and a shared handle that
+keeps them alive; `exists`, `list`, `listRecursive`, `modified` and `origin` complete the API. `readText` returns a
+copy as a string.
+
+**Lifetime of the bytes.** They stay valid while the `ResourceData` (or a copy of it) exists **and** the mount that
+returned it does. Immutable mounts serve memory they own for their whole lifetime (`owner()` is null, zero-copy). A
+`DirectoryMount` reads a file into a buffer that its cache and the handles share; when the file changes, the cache
+moves on to a new buffer and the old one is freed with its last handle. So whoever keeps pointing into the bytes
+keeps the handle: the font library holds one per atlas font, the icon font one for the icon atlas font; images copy
+their pixels when they're decoded and Lua copies the text it loads or reads, so they drop theirs at once.
+Hot-reloading a large file therefore holds at most the bytes in use plus the latest version, not every version ever
+read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; every buffer it ever read stays alive until the mount is destroyed, so spans (and the font atlas) can point into them. Reports modification times. |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. An optional set of hidden paths (a package's manifest) is left out of `read`, `exists`, `list` and `modified`. |
 | `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
 | `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
 `EmbeddedMount` and `PakMount` share `PackedMount`: a sorted table of files, each stored as is or as one zstd frame.
 A stored file is served straight from the embedded data or the archive buffer (zero-copy). A compressed one is
 decompressed on its first read, under the mount's mutex, and the buffer is kept until the mount is destroyed, so
-spans stay valid. Corrupt compressed data reads as a missing file and is logged.
+the bytes stay valid as long as the mount. Corrupt compressed data reads as a missing file and is logged.
 
 `defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
 
 1. **Embedded:** the files of every `ResourcePackage` (module `imlui.resources.package`: a mount point, the files,
-   a dev source folder). A package built without embedding (`IMLUI_EMBED_RESOURCES=OFF`) has no files here. The library's own come first, always: `imlui:/` (`src/resources/`) and `imlui:/fonts/` (Roboto,
+   a dev source folder and the paths in it to hide). A package built without embedding (`IMLUI_EMBED_RESOURCES=OFF`) has no files here. The library's own come first, always: `imlui:/` (`src/resources/`) and `imlui:/fonts/` (Roboto,
    Material Icons, the codepoints and the font licenses), the two groups of the library's manifest. Then the host's
    packages, the `app` argument, such as `imlui::embedded::my_app::packages()`.
 2. **Archives:** every `*.pak` next to the executable, in file name order (`mountPaks`), each at the mount point
@@ -240,6 +251,9 @@ spans stay valid. Corrupt compressed data reads as a missing file and is logged.
    the environment variable `IMLUI_DEV_PATHS=0` skips them at runtime. A package without embedded files
    (`IMLUI_EMBED_RESOURCES=OFF`, the default in dev builds) has only this folder: it's mounted even with
    `IMLUI_DEV_PATHS=0`, and when it doesn't exist (the executable was moved to another machine) an error names it.
+   The folder's mount hides the package's `hidden` paths: the manifest itself when it lies in the folder (the
+   library's `src/resources/resources.lua`), so there is no `imlui:/resources.lua` or `app:/resources.lua` in dev
+   builds either, as in embedded ones.
 
 The entry is `app:/main.lua` (`EngineConfig::entry`, which a host can change). A script on the command line replaces
 the app: no package, archive or folder is mounted at `app:/`; the script's folder is mounted there instead (on top,
@@ -251,17 +265,34 @@ from its embedded data alone, while a `.pak` or loose files next to it still ove
 paths.
 
 The fonts are added to the ImGui atlas without a copy
-(`FontDataOwnedByAtlas = false`), pointing into the bytes the mount keeps, so the `Resources` in `EngineConfig`
-must outlive the atlas. The Engine keeps it for its whole lifetime, and the atlas dies with the window in `run()`.
+(`FontDataOwnedByAtlas = false`), pointing into the bytes `Resources::read` returned. The font library keeps their
+`ResourceData` with each atlas font and drops it when the font leaves the atlas (`useFontSet` removes fonts replaced
+by newer bytes; `clearFontLibrary` when the atlas is cleared or destroyed). Immutable mounts own those bytes, so the
+`Resources` in `EngineConfig` must still outlive the atlas. The Engine keeps it for its whole lifetime, and the atlas
+dies with the window in `run()`. Before a font goes to the atlas, `checkFont` (module `imlui.theme.font_check`)
+checks its structure: ImGui parses fonts with stb_truetype, which trusts the data, reads offsets without bounds
+checks and aborts through `IM_ASSERT_USER_ERROR`/`STBTT_assert` on data it doesn't expect. The check walks what
+stb_truetype reads when a font is added and when glyphs are looked up (the table directory, `head`, `hhea`, `hmtx`,
+`maxp`, the Unicode `cmap` subtable it picks, `loca`/`glyf` offsets, or the CFF header, INDEXes, DICTs, Private
+DICTs and FDSelect); glyph outlines themselves aren't decoded. A damaged font is reported like a missing one and the
+built-in face is used.
 
 Lua sees resources in two ways (`imlui.lua.resources`):
 
 - Module search. `require("imlui")` and `require("a.b")` look in `imlui:/` (`a/b.lua`, then `a/b/init.lua`) through a
   `package.searchers` entry. `src/resources/imlui.lua` puts its own searcher in front of it, for components next to the
-  script (`ui.__dir`), loaded in `ui.env`. Chunks are named `@app:/main.lua`, so errors and tracebacks read
-  `app:/main.lua:12: ...`.
-- `ui.resource.read`, `exists` and `url`. A relative name resolves against the folder of the calling script, found
-  from the caller's chunk name.
+  entry script (`ui.__dir`). Chunks are named `@app:/main.lua`, so errors and tracebacks read `app:/main.lua:12: ...`.
+- Script environments. Every UI script loaded as a resource (the entry script by `ui.__load`, components by the
+  searcher) runs in its own environment (`chunkEnv`): a proxy over `ui.env` whose `ui`, and free names `Image`,
+  `theme`, `themeState` and `resource`, are the script's own versions, bound to its full name when it is loaded. So
+  relative names (`ui.resource.*`, `Image { source }`, theme fonts) resolve against the folder of the script whose
+  code makes the call, wherever that code runs, also in tail calls (`return ui.resource.read("x")`), where Lua drops
+  the caller's frame. Everything else reads and writes the shared `ui.env` and `ui` (globals, ids, `ui.x = ...`), as
+  before. Code that uses the plain `ui` table (`require("imlui")`, or code loaded from a string in `ui.env`) finds the
+  calling script from the caller's chunk name on the stack instead, falls back to the main script, and raises a clear
+  error for a relative `ui.resource` name in a tail call, the one case it can't resolve.
+- `ui.resource.read`, `exists` and `url`, and `ui.theme { fonts = ... }`: relative names resolve as above (fonts in
+  C++, `readFonts(state, idx, fonts, script)`, with the script passed as `native.setTheme`'s second argument).
 
 ### Images
 
@@ -331,7 +362,8 @@ exports:
 - `imlui::embedded::<name>::packages()`: a `std::vector<ResourcePackage>`, one per group in manifest order, each
   with its mount point, its `EmbeddedMount` (created on first use and shared) and, when the build has
   `IMLUI_DEV_PATHS=ON` (`imlui_rc --dev-paths`), the group's absolute `base` folder as the dev source folder ("" with
-  `OFF`, so a release binary holds no source paths). Hosts pass it to `defaultConfig`.
+  `OFF`, so a release binary holds no source paths) and `hidden`: the manifest's path in that folder when it lies
+  there. Hosts pass it to `defaultConfig`.
 - `mount(Resources&)`: mounts every group's files at its mount point.
 
 A mount's origin is `embedded '<name>'`, or `embedded '<name> (<mount point>)'` when the manifest has several groups.
@@ -484,6 +516,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
 | `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font` (the scope's face override, else the theme's face for the weight), `fontSize`, `fontPixels`, `pushFont` |
 | `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount` |
+| `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
 | `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `resolveColor`, `imguiColorIndex`, `isStyleField` |
@@ -562,12 +595,13 @@ See [Registering C++ types](extending.md).
 | Module | Purpose |
 |---|---|
 | `imlui.resources.name` | `ResourceName`, `parseName`, `normalizeName`, `normalizePath`, `hasPrefix`, `resolveName(base, name)`, `folderOf` |
+| `imlui.resources.data` | `ResourceData`: the bytes `read` returns and the handle that keeps them alive (`bytes`, `data`, `size`, `text`, `owner`) |
 | `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `modified`, `origin`); `ResourceTime` |
-| `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache |
+| `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache holding each file's latest buffer, and optional hidden paths |
 | `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
 | `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |
 | `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry` |
-| `imlui.resources.package` | `ResourcePackage`: an embedded group's mount point, files and dev source folder; `imlui::embedded::<name>::packages()` returns one per manifest group |
+| `imlui.resources.package` | `ResourcePackage`: an embedded group's mount point, files, dev source folder and the paths its folder mount hides; `imlui::embedded::<name>::packages()` returns one per manifest group |
 | `imlui.resources.pak_mount` | `PakMount`: a `.pak` archive in memory; `open(file, error)`, `fromBytes(bytes, name, error)`, `mountPoint()` |
 | `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive`, `modified`, `origin`, `prefixes`, `describe` |
 

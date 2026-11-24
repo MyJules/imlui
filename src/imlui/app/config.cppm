@@ -5,7 +5,9 @@ module;
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
+#include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -165,7 +167,8 @@ EngineConfig defaultConfig(int argc, char** argv, std::vector<ResourcePackage> a
         if (p.files && (!devPaths || p.sourceDir.empty())) continue;
         const fs::path dir = pathFromUtf8(p.sourceDir);
         if (isDirectory(dir))
-            res.mount(p.mountPoint, std::make_shared<DirectoryMount>(dir));
+            res.mount(p.mountPoint, std::make_shared<DirectoryMount>(
+                                        dir, std::set<std::string, std::less<>>{p.hidden.begin(), p.hidden.end()}));
         else if (!p.files)
             log::error("the files of {} aren't embedded in this build (IMLUI_EMBED_RESOURCES=OFF) and their source "
                        "folder '{}' doesn't exist",

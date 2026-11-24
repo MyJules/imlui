@@ -422,6 +422,12 @@ constexpr bool libraryEmbedded = false;
 TEST(ResourceManifest, EmbeddedLibraryMatchesItsManifest) {
     expectMatchesManifest(embedded::imlui::packages(), fs::path{IMLUI_RESOURCES_DIR} / "resources.lua",
                           libraryEmbedded);
+    // The manifest lies in the first group's folder: the dev folder mount hides it (no imlui:/resources.lua).
+    const auto packages = embedded::imlui::packages();
+    if (!packages[0].sourceDir.empty()) {
+        EXPECT_EQ(packages[0].hidden, std::vector<std::string>{"resources.lua"});
+        EXPECT_TRUE(packages[1].hidden.empty());
+    }
     std::string error;
     const auto m = tools::loadManifest(fs::path{IMLUI_RESOURCES_DIR} / "resources.lua", error);
     ASSERT_TRUE(m) << error;
@@ -445,6 +451,12 @@ TEST(ResourceManifest, NotEmbeddedNamesTheSourceFolders) {
     embedded::smoke_sources::mount(res);
     EXPECT_TRUE(res.exists("app:/main.lua"));
     EXPECT_TRUE(res.exists("app:/images/rgba_4x2.png"));
+    // The manifest isn't a resource: hidden from the folder mounts that hold it.
+    EXPECT_EQ(packages[0].hidden, std::vector<std::string>{"resources.lua"});
+    EXPECT_EQ(packages[1].hidden, std::vector<std::string>{"smoke_app/resources.lua"});
+    EXPECT_FALSE(res.exists("app:/resources.lua"));
+    EXPECT_FALSE(res.read("app:/images/smoke_app/resources.lua"));
+    EXPECT_TRUE(res.exists("app:/images/smoke_app/main.lua"));
     EXPECT_TRUE(res.modified("app:/main.lua")); // directories: hot reload sees changes
     EXPECT_TRUE(res.origin("app:/main.lua").starts_with("directory '"));
 }

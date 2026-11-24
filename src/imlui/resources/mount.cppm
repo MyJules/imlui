@@ -1,15 +1,15 @@
 // Mount: one source of resource files (a directory, data embedded in the executable, a .pak archive).
 module;
 
-#include <cstddef>
 #include <filesystem>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 export module imlui.resources.mount;
+
+export import imlui.resources.data;
 
 export namespace imlui {
 
@@ -28,9 +28,10 @@ public:
     Mount(Mount&&) = delete;
     Mount& operator=(Mount&&) = delete;
 
-    /// The bytes of file `path`, or nullopt when there is no such file. The span stays valid as long as the mount
-    /// lives, even after a later read of a changed file returned newer bytes.
-    [[nodiscard]] virtual std::optional<std::span<const std::byte>> read(std::string_view path) const = 0;
+    /// The bytes of file `path`, or nullopt when there is no such file. They stay valid while the returned handle
+    /// (or a copy) and the mount live, also after a later read of a changed file returned newer bytes (see
+    /// ResourceData).
+    [[nodiscard]] virtual std::optional<ResourceData> read(std::string_view path) const = 0;
     /// True when `path` is a file or a folder ("" always is).
     [[nodiscard]] virtual bool exists(std::string_view path) const = 0;
     /// The entries of folder `path`, sorted: file names, and folder names with a trailing `/`. Empty when `path`

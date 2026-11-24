@@ -158,8 +158,12 @@ is used. A theme can replace both faces with the app's own typeface (see [Fonts]
 
 ## Fonts
 
-`theme { fonts = { ... } }` declares the app's text fonts by [resource name](lua-api.md#resources) (full names,
-such as `"app:/fonts/Inter-Regular.ttf"`; TrueType or OpenType files):
+`theme { fonts = { ... } }` declares the app's text fonts by [resource name](lua-api.md#resources) (TrueType or
+OpenType files): a full name such as `"app:/fonts/Inter-Regular.ttf"`, or a name relative to the folder of the script
+that declares the theme, like `ui.resource.url` and `Image { source }` (`"fonts/Inter-Regular.ttf"` in
+`app:/main.lua` is `app:/fonts/Inter-Regular.ttf`; in `app:/pages/settings.lua` it is
+`app:/pages/fonts/Inter-Regular.ttf`). A `themeState` resolves against the script that created it, every time it
+re-applies.
 
 ```lua
 theme {
@@ -182,14 +186,19 @@ theme {
   them with the rest of the theme at the start of the next frame. Fonts are size-independent in ImGui 1.92, so one
   file per face covers every style, `fontScale` and DPI. The font data is read through Resources without a copy,
   so fonts embedded in the executable work the same as files.
-- **Errors.** A missing file, a file that isn't a font, a name without a prefix or a value that isn't a string is
-  reported in the error overlay (`theme.fonts.regular: font 'app:/fonts/Inter.ttf' not found`). The type-scale
-  face then stays Roboto, a named font draws in its style's face, and a missing fallback is left out.
+- **Errors.** A missing file, a file that isn't a font, a damaged font, a name that leaves its prefix's root
+  (`../../x.ttf`) or a value that isn't a string is reported in the error overlay
+  (`theme.fonts.regular: font 'app:/fonts/Inter.ttf' not found`,
+  `theme.fonts.mono: font 'app:/fonts/Mono.ttf' is damaged: table 'glyf' lies outside the file`). The type-scale
+  face then stays Roboto, a named font draws in its style's face, and a missing fallback is left out. Fonts are
+  checked before they reach ImGui (a truncated or garbled file would otherwise abort the program inside its font
+  parser); see `imlui.theme.font_check` in [Architecture](architecture.md#resources).
 - **Unknown names.** An element whose `font` names no declared font draws in its style's face; the name is logged
   once.
 - **Reuse and hot reload.** Each face (with its fallbacks) becomes one atlas font, reused while its file is
   unchanged: re-applying a theme, `themeState` changes and script reloads don't add fonts. The declared font files
-  are watched in dev builds: editing one reloads the script and replaces its atlas font (the old one is removed).
+  are watched in dev builds: editing one reloads the script and replaces its atlas font (the old one is removed,
+  and with it the old file contents: the library holds a font's bytes exactly as long as its atlas font).
 
 ## Icons
 

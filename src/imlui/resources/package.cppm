@@ -3,6 +3,7 @@ module;
 
 #include <memory>
 #include <string>
+#include <vector>
 
 export module imlui.resources.package;
 
@@ -21,6 +22,9 @@ struct ResourcePackage {
     /// The absolute folder the files come from (the group's `base`) when the build has IMLUI_DEV_PATHS=ON,
     /// otherwise "". defaultConfig() mounts it over the embedded files, so editing them hot-reloads.
     std::string sourceDir;
+    /// Files in `sourceDir` that aren't resources, as paths relative to it: the manifest itself when it lies there
+    /// (`resources.lua`). defaultConfig() hides them from the folder's mount (see DirectoryMount).
+    std::vector<std::string> hidden = {};
 };
 
 } // namespace imlui

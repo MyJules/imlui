@@ -19,12 +19,12 @@ using namespace imlui;
 
 namespace {
 
-/// The bytes of tests/data/`file`.
-std::span<const std::byte> testFile(std::string_view file) {
+/// A copy of the bytes of tests/data/`file`.
+std::vector<std::byte> testFile(std::string_view file) {
     static DirectoryMount data{IMLUI_TEST_DATA_DIR};
     const auto bytes = data.read(file);
     EXPECT_TRUE(bytes) << file;
-    return bytes ? *bytes : std::span<const std::byte>{};
+    return bytes ? std::vector<std::byte>{bytes->bytes().begin(), bytes->bytes().end()} : std::vector<std::byte>{};
 }
 
 std::string_view asText(std::span<const std::byte> bytes) {
@@ -94,7 +94,7 @@ TEST(ImageDecode, ReportsUndecodableData) {
 
     // A truncated PNG: the header is fine, the data isn't.
     const auto png = testFile("rgba_4x2.png");
-    EXPECT_FALSE(decodeImage(png.first(40)).ok());
+    EXPECT_FALSE(decodeImage(std::span{png}.first(40)).ok());
 }
 
 // ------------------------------------------------------------------ sizes and fill modes

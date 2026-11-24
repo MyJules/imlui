@@ -3,6 +3,7 @@ module;
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 export module imlui.lua.theme_table;
 
@@ -14,15 +15,19 @@ import imlui.theme.scheme;
 import imlui.theme.theme;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.resources.name;
 
 export namespace imlui::luaui {
 
-/// Builds a Theme from a Lua table (see docs in src/resources/imlui.lua `ui.theme`).
-Theme themeFromTable(lua::State* state, int idx);
+/// Builds a Theme from a Lua table (see docs in src/resources/imlui.lua `ui.theme`). Relative font names resolve
+/// against the folder of `script` (a full resource name, the script that declared the theme; see readFonts()).
+Theme themeFromTable(lua::State* state, int idx, std::string_view script = {});
 
 /// Reads the `fonts` field of the theme table at `idx` into `fonts` (names only; nothing is loaded), reporting
-/// malformed entries.
-void readFonts(lua::State* state, int idx, FontSet& fonts);
+/// malformed entries. A relative name (`fonts/Inter.ttf`) is resolved against the folder of `script`; full names are
+/// normalized. A name that doesn't resolve (or any relative name without `script`) is kept as given, so loading it
+/// reports it as invalid.
+void readFonts(lua::State* state, int idx, FontSet& fonts, std::string_view script = {});
 
 /// Pushes { primary = "#RRGGBB", ... } for `s`.
 void pushScheme(lua::State* state, const Scheme& s);
@@ -33,7 +38,7 @@ module :private;
 
 namespace imlui::luaui {
 
-Theme themeFromTable(lua::State* state, int idx) {
+Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
     idx = lua::absindex(state, idx);
     lua::StackGuard guard{state};
     Theme t;
@@ -134,13 +139,18 @@ Theme themeFromTable(lua::State* state, int idx) {
     }
     lua::pop(state);
 
-    readFonts(state, idx, t.fonts);
+    readFonts(state, idx, t.fonts, script);
     return t;
 }
 
-void readFonts(lua::State* state, int idx, FontSet& fonts) {
+void readFonts(lua::State* state, int idx, FontSet& fonts, std::string_view script) {
     idx = lua::absindex(state, idx);
     lua::StackGuard guard{state};
+    const auto name = [&](int at) -> std::string {
+        const std::string_view given = lua::tostring(state, at);
+        if (const auto full = script.empty() ? normalizeName(given) : resolveName(script, given)) return *full;
+        return std::string{given};
+    };
     // fonts = { regular = "app:/...", medium = ..., fallback = { ... }, mono = "app:/..." }. Only the names are
     // read here; native.setTheme loads the fonts (loadFontSet()).
     const lua::Type type = lua::getfield(state, idx, "fonts");
@@ -161,12 +171,12 @@ void readFonts(lua::State* state, int idx, FontSet& fonts) {
         const bool isName = lua::type(state, -1) == lua::Type::String;
         if (key == "fallback") {
             if (isName) {
-                fonts.fallback.emplace_back(lua::tostring(state, -1));
+                fonts.fallback.push_back(name(-1));
             } else if (lua::istable(state, -1)) {
                 const lua::Integer n = lua::rawlen(state, -1);
                 for (lua::Integer i = 1; i <= n; ++i) {
                     if (lua::rawgeti(state, -1, i) == lua::Type::String)
-                        fonts.fallback.emplace_back(lua::tostring(state, -1));
+                        fonts.fallback.push_back(name(-1));
                     else
                         reportError("theme.fonts.fallback[" + std::to_string(i) + "]: expected a resource name");
                     lua::pop(state);
@@ -177,11 +187,11 @@ void readFonts(lua::State* state, int idx, FontSet& fonts) {
         } else if (!isName) {
             reportError("theme.fonts." + key + ": expected a resource name such as \"app:/fonts/Inter.ttf\"");
         } else if (key == "regular") {
-            fonts.regular = lua::tostring(state, -1);
+            fonts.regular = name(-1);
         } else if (key == "medium") {
-            fonts.medium = lua::tostring(state, -1);
+            fonts.medium = name(-1);
         } else {
-            fonts.named.insert_or_assign(std::move(key), std::string{lua::tostring(state, -1)});
+            fonts.named.insert_or_assign(std::move(key), name(-1));
         }
         lua::pop(state);
     }

@@ -6,7 +6,10 @@ wraps.
 ## The script environment
 
 A UI script runs in `ui.env`, not in `_G`. It must **return the root element**, usually an `ApplicationWindow`.
-The engine reports an error if the script returns anything other than a table.
+The engine reports an error if the script returns anything other than a table. (Precisely: each script loaded as a
+resource, the entry script and every component, gets its own thin environment over `ui.env`, whose `ui`, `Image`,
+`theme`, `themeState` and `resource` know the script's name, so [relative names](#resources) resolve against its
+folder. Globals, ids and fields set on `ui` are shared by all scripts, as if they ran in `ui.env` itself.)
 
 A free name `x` in a script is looked up in this order:
 
@@ -129,9 +132,11 @@ inside `fn` are per instance.
 
 ### `require "Name"`
 
-Inside a UI script, `require "Name"` first looks for `Name.lua` (then `Name/init.lua`) **in the script's folder**
-(for the entry script, `app:/`) and runs it in the UI environment, the way QML files work as components. `a.b` is
-`a/b.lua`. Results are cached in `package.loaded` like any `require`. `import` is an alias of `require`. If the
+Inside a UI script, `require "Name"` first looks for `Name.lua` (then `Name/init.lua`) **in the entry script's folder**
+(`app:/` for `app:/main.lua`) and runs it in the UI environment, the way QML files work as components. `a.b` is
+`a/b.lua`. Module names are global (one `package.loaded` entry per name), so `require "pages.home"` means
+`app:/pages/home.lua` from every script; relative resource names *inside* `pages/home.lua` (`ui.resource`, `Image`,
+theme fonts) resolve against `app:/pages/`. Results are cached in `package.loaded` like any `require`. `import` is an alias of `require`. If the
 module isn't there, it's looked up in `imlui:/` (in the global environment), then on Lua's default `package.path`.
 Errors and tracebacks name the file as a resource: `app:/StatCard.lua:3: ...`.
 
@@ -173,14 +178,18 @@ local items = parseJson(ui.resource.read("data/items.json"))
 if ui.resource.exists("theme.lua") then ... end
 ```
 
-The calling script is found from the caller's chunk name, which Lua drops in a **tail call**: in
-`return ui.resource.read("x")` a relative name raises an error. Use a full name, a local
-(`local text = ui.resource.read("x"); return text`), or parentheses (`return (ui.resource.read("x"))`).
+The script is known when it is loaded, not looked up on the call stack, so tail calls work too:
+`return ui.resource.read("x")` and a function defined in `app:/pages/home.lua` and called from elsewhere both resolve
+against `app:/pages/`. Only code that doesn't run as a resource script (code using `require("imlui")` directly, or
+code loaded from a string) finds the calling script from the caller's chunk name, falls back to the main script, and
+raises an error for a relative name in `return ui.resource.read("x")`, where Lua drops the caller's frame: use a full
+name, a local, or parentheses (`return (ui.resource.read("x"))`) there.
 
 Every resource a script reads or loads is watched for hot reload when it comes from a folder on disk.
 
 [`Image`](elements.md#image) takes a resource name as its `source`, resolved the same way against the script that
-creates the `Image`: `Image { source = "img/logo.png" }`. An image file that changes on disk is decoded again
+creates the `Image`: `Image { source = "img/logo.png" }`. So do the font names of
+[`theme { fonts = ... }`](theming.md#fonts). An image file that changes on disk is decoded again
 without a script reload.
 
 ## Dynamic children

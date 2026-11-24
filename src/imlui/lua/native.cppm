@@ -122,7 +122,9 @@ constexpr NativeFn nativeFns[] = {
     {"setTheme",
      [](lua::State* state) -> int {
          if (!lua::istable(state, 1)) lua::error(state, "setTheme expects a table");
-         Theme t = themeFromTable(state, 1);
+         // Argument 2: the script that declared the theme, for relative font names.
+         const std::string_view script = lua::type(state, 2) == lua::Type::String ? lua::tostring(state, 2) : "";
+         Theme t = themeFromTable(state, 1, script);
          // Loaded now, so a missing or broken font is reported with the script still running; the theme
          // switches to them when it is applied (between frames).
          for (const auto& e : loadFontSet(t.fonts))
