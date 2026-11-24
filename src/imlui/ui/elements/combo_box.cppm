@@ -3,6 +3,7 @@ export module imlui.ui.elements.combo_box;
 
 import std;
 
+import imgui;
 import imlui.widgets.dropdown;
 import imlui.types.element;
 import imlui.types.frame;
@@ -23,6 +24,8 @@ public:
     static void declare(TypeBuilder<ComboBox>& type);
 
     void render(Frame& frame) override;
+    /// Its width (natural 240dp, fixed, or a fill of `maxWidth`), the field and its supporting text.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::vector<std::string>& model() const;
     void setModel(std::vector<std::string> model);
@@ -105,5 +108,12 @@ const std::string& ComboBox::variant() const { return m_variant; }
 void ComboBox::setVariant(std::string variant) { m_variant = std::move(variant); }
 bool ComboBox::error() const { return m_error; }
 void ComboBox::setError(bool error) { m_error = error; }
+
+std::optional<ImVec2> ComboBox::intrinsicSize(const Frame& frame, float maxWidth) {
+    md::DropdownOptions o;
+    o.supporting = m_supportingText;
+    o.width = frame.widthIn(maxWidth);
+    return md::dropdownSize(o);
+}
 
 } // namespace imlui

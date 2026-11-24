@@ -23,6 +23,8 @@ public:
     static void declare(TypeBuilder<RadioGroup>& type);
 
     void render(Frame& frame) override;
+    /// Its radio buttons, stacked (or side by side when `horizontal`).
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::vector<std::string>& model() const;
     void setModel(std::vector<std::string> model);
@@ -77,5 +79,25 @@ double RadioGroup::currentIndex() const { return m_currentIndex; }
 void RadioGroup::setCurrentIndex(double index) { m_currentIndex = index; }
 bool RadioGroup::horizontal() const { return m_horizontal; }
 void RadioGroup::setHorizontal(bool horizontal) { m_horizontal = horizontal; }
+
+std::optional<ImVec2> RadioGroup::intrinsicSize(const Frame& frame, float) {
+    // render() in numbers: the buttons with no vertical item spacing (ImGui starts each line on a whole pixel), or
+    // side by side 16dp apart.
+    if (m_model.empty()) return std::nullopt; // draws nothing: no item to measure
+    ImVec2 size{0.0f, 0.0f};
+    float y = 0.0f;
+    for (std::size_t i = 0; i < m_model.size(); ++i) {
+        const ImVec2 radio = md::radioSize(Frame::labelId(m_model[i], "r").c_str());
+        if (m_horizontal) {
+            size.x += (i > 0 ? frame.dp(16) : 0.0f) + radio.x;
+            size.y = std::max(size.y, radio.y);
+        } else {
+            size.x = std::max(size.x, radio.x);
+            size.y = y + radio.y;
+            y = std::trunc(y + radio.y);
+        }
+    }
+    return size;
+}
 
 } // namespace imlui

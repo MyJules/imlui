@@ -38,7 +38,7 @@ public:
     /// A child element, valid only inside the forEachChild / withElementProp callback that gives it.
     class Child {
     public:
-        Child(Frame& frame, const luaui::Node& node);
+        Child(const Frame& frame, const luaui::Node& node);
 
         /// Renders the child at the ImGui cursor, through the renderer's per-element wrapper. False when it's
         /// hidden or of an unknown type. A rendered visual child is the last ImGui item afterwards (its group),
@@ -56,9 +56,10 @@ public:
         /// where they are and don't place, count or space them.
         [[nodiscard]] bool isVisual() const;
         /// Whether the child fills the available width: a fill or fill-minus `width` (`fillWidth`), or no `width`
-        /// on a type that fills by default (TypeBuilder::fillsWidth / fillsWidthWhen: Card, TextField, wrapping
-        /// Text, Spacer { fill }, ...). Layouts that share space (Row) give such children a share, read before
-        /// rendering them.
+        /// on a type that fills by default (TypeBuilder::fillsWidth / fillsWidthWhen: Card, TextField, wrapping or
+        /// aligned Text, Spacer { fill }, ...) or on an element that fills by its content
+        /// (Element::contentFillsWidth: a Column holding a fill, a Row with fills). Layouts that share space (Row)
+        /// give such children a share, read before rendering them.
         [[nodiscard]] bool fillsWidth() const;
         [[nodiscard]] const luaui::Node& node() const;
         /// The element type (`__type`), e.g. "Spacer".
@@ -73,8 +74,9 @@ public:
         /// their ImGui state belongs to the child.
         void pushId() const;
 
-        /// The child's intrinsic size with `maxWidth` available (Element::intrinsicSize), when its type can tell
-        /// before rendering: Text, Icon, Button, IconButton, Spacer.
+        /// The child's intrinsic size with `maxWidth` available (Element::intrinsicSize), when it can tell before
+        /// rendering: the built-in leaves, and stacks (Column, Row, Card) whose children all can. Pass the width it
+        /// will render in: a fill's size depends on it.
         [[nodiscard]] std::optional<ImVec2> intrinsicSize(float maxWidth) const;
         /// The size the child will render at with `maxWidth` available, as far as is known before rendering it: its
         /// intrinsic size, else its size on the last frame (lastWidth / lastHeight), else nullopt (its first frame).
@@ -105,7 +107,7 @@ public:
         }
 
     private:
-        Frame& m_frame;
+        const Frame& m_frame;
         luaui::Node m_node;
         ImGuiID m_id;
         bool m_visual;
@@ -129,17 +131,21 @@ public:
     /// `frame.renderStack(child.node())`. Uses that element's `spacing`/`align`.
     void renderChildren(const luaui::Node& parent);
     void renderStack(const luaui::Node& parent);
+    /// The size renderStack() takes with `maxWidth` available, composed from the children's intrinsic sizes: for a
+    /// container's intrinsicSize(). nullopt when a visual child has none; {0, 0} without visual children.
+    [[nodiscard]] std::optional<ImVec2> stackSize(float maxWidth) const;
+    [[nodiscard]] std::optional<ImVec2> stackSize(const luaui::Node& parent, float maxWidth) const;
 
     /// Calls f(Frame::Child&) for every visible child element (inline containers such as Repeater and If
     /// spliced in, hidden children skipped), for custom layouts: place the cursor, then child.render().
     /// Non-visual children come too (child.isVisual() is false): render them, don't lay them out.
     template <class F>
-    void forEachChild(F&& f) {
+    void forEachChild(F&& f) const {
         forEachChild(m_node, f);
     }
     /// The same for the children of another element.
     template <class F>
-    void forEachChild(const luaui::Node& parent, F&& f) {
+    void forEachChild(const luaui::Node& parent, F&& f) const {
         lua::State* state = parent.state();
         m_renderer.forEachChild(parent, [&](int idx) {
             const luaui::Node node{state, idx};
@@ -152,7 +158,7 @@ public:
     /// Calls f(Frame::Child&) with the element held by prop `key` (e.g. ApplicationWindow's `menuBar`,
     /// NavigationRail's `header`) when the prop is a visible element. Returns whether f was called.
     template <class F>
-    bool withElementProp(const char* key, F&& f) {
+    bool withElementProp(const char* key, F&& f) const {
         lua::State* state = m_node.state();
         const int top = lua::gettop(state);
         bool called = false;
@@ -189,6 +195,9 @@ public:
     /// element follows: fixed, fill, fill minus, or `natural` when unset (a type that fills by default fills).
     [[nodiscard]] float resolvedWidth(float natural = 0.0f) const;
     [[nodiscard]] float resolvedHeight(float natural = 0.0f) const;
+    /// resolvedWidth() with `maxWidth` available instead of the layout box's width: for intrinsicSize(), which
+    /// knows the width it will render in before its layout box exists.
+    [[nodiscard]] float widthIn(float maxWidth, float natural = 0.0f) const;
     /// "Label###id": the visible text may change every frame without changing the ImGui ID.
     [[nodiscard]] static std::string labelId(std::string_view text, const char* id);
     /// "start" -> 0, "center" -> 0.5, "end" / "right" / "bottom" -> 1.
@@ -234,7 +243,7 @@ namespace imlui {
 
 // ------------------------------------------------------------ Frame::Child
 
-Frame::Child::Child(Frame& frame, const luaui::Node& node)
+Frame::Child::Child(const Frame& frame, const luaui::Node& node)
     : m_frame{frame}, m_node{node}, m_id{frame.m_renderer.elementImGuiId(node)},
       m_visual{frame.m_renderer.isVisual(node.state(), node.index())} {}
 
@@ -311,6 +320,10 @@ void Frame::renderChildren() { m_renderer.renderChildren(m_node); }
 void Frame::renderStack() { m_renderer.renderStack(m_node); }
 void Frame::renderChildren(const luaui::Node& parent) { m_renderer.renderChildren(parent); }
 void Frame::renderStack(const luaui::Node& parent) { m_renderer.renderStack(parent); }
+std::optional<ImVec2> Frame::stackSize(float maxWidth) const { return m_renderer.stackSize(m_node, maxWidth); }
+std::optional<ImVec2> Frame::stackSize(const luaui::Node& parent, float maxWidth) const {
+    return m_renderer.stackSize(parent, maxWidth);
+}
 
 bool Frame::renderElementProp(const char* key) {
     bool rendered = false;
@@ -332,6 +345,7 @@ float Frame::resolvedWidth(float natural) const {
 float Frame::resolvedHeight(float natural) const {
     return resolveSize(size("height"), layout::availableHeight(), natural);
 }
+float Frame::widthIn(float maxWidth, float natural) const { return resolveSize(size("width"), maxWidth, natural); }
 std::string Frame::labelId(std::string_view text, const char* id) { return imlui::labelId(text, id); }
 float Frame::alignFactor(std::string_view align) { return imlui::alignFactor(align); }
 

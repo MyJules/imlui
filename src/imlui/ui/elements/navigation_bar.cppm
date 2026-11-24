@@ -22,6 +22,9 @@ public:
     static void declare(TypeBuilder<NavigationBar>& type);
 
     void render(Frame& frame) override;
+    /// Its width (a fill of `maxWidth` unless set) and 80dp (taller only for a taller destination). None while a
+    /// destination has no intrinsic size.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     /// The container color; unset: surfaceContainer.
     [[nodiscard]] const std::optional<Color>& color() const;
@@ -63,6 +66,26 @@ void NavigationBar::render(Frame& frame) {
     md::popSurface();
     ImGui::SetCursorScreenPos(p);
     ImGui::Dummy({w, h});
+}
+
+std::optional<ImVec2> NavigationBar::intrinsicSize(const Frame& frame, float maxWidth) {
+    const float w = frame.widthIn(maxWidth);
+    int count = 0;
+    frame.forEachChild([&](Frame::Child& child) { count += child.isVisual() ? 1 : 0; });
+    const float cell = count > 0 ? w / static_cast<float>(count) : w;
+    // The destinations, asked in the scope render() renders them in, each where its cell starts.
+    const NavigationScope scope{{NavigationScope::Style::Bar, cell}};
+    float h = frame.dp(80);
+    bool known = true;
+    int i = 0;
+    frame.forEachChild([&](Frame::Child& child) {
+        if (!child.isVisual() || !known) return;
+        const std::optional<ImVec2> size = child.intrinsicSize(w - std::floor(cell * static_cast<float>(i++)));
+        known = size.has_value();
+        if (known) h = std::max(h, size->y);
+    });
+    if (!known) return std::nullopt;
+    return ImVec2{w, h};
 }
 
 const std::optional<Color>& NavigationBar::color() const { return m_color; }

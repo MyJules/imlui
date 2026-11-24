@@ -3,6 +3,7 @@ export module imlui.ui.elements.plot;
 
 import std;
 
+import imgui;
 import imlui.color;
 import imlui.widgets.chart;
 import imlui.types.element;
@@ -21,6 +22,8 @@ public:
     static void declare(TypeBuilder<Plot>& type);
 
     void render(Frame& frame) override;
+    /// Its width (natural 320dp, fixed, or a fill of `maxWidth`) and height (160dp unless set). None for a fill height.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::vector<float>& values() const;
     void setValues(std::vector<float> values);
@@ -102,5 +105,14 @@ const std::optional<double>& Plot::min() const { return m_min; }
 void Plot::setMin(std::optional<double> min) { m_min = min; }
 const std::optional<double>& Plot::max() const { return m_max; }
 void Plot::setMax(std::optional<double> max) { m_max = max; }
+
+std::optional<ImVec2> Plot::intrinsicSize(const Frame& frame, float maxWidth) {
+    const float height = frame.size("height");
+    if (height < 0) return std::nullopt; // fills a height known only where it renders
+    md::ChartOptions o;
+    o.width = frame.widthIn(maxWidth);
+    o.height = height;
+    return md::chartSize(o);
+}
 
 } // namespace imlui

@@ -17,8 +17,8 @@ export namespace imlui {
 /// A line or paragraph of text (also registered as Label).
 ///
 /// Props:   text = "" (positional), style = "bodyLarge", color = unset (the theme's text color), wrap = false,
-///          align = "start" ("center", "end"; ignored while wrapping), font = "" (a font the theme declares,
-///          drawn at the style's size; "" keeps the type scale's face)
+///          align = "start" ("center", "end"; ignored while wrapping; aligned text fills), font = "" (a font the
+///          theme declares, drawn at the style's size; "" keeps the type scale's face)
 class Text final : public Element {
 public:
     static void declare(TypeBuilder<Text>& type);
@@ -35,6 +35,9 @@ public:
     void setColor(std::optional<Color> color);
     [[nodiscard]] bool wrap() const;
     void setWrap(bool wrap);
+    /// Wrapping or aligned (not "start"): its size depends on the available width, so it fills (a Row gives it a
+    /// share, and it wraps or aligns in that).
+    [[nodiscard]] bool followsWidth() const;
     /// "start", "center" or "end": the line's position in the available width.
     [[nodiscard]] const std::string& align() const;
     void setAlign(std::string align);
@@ -70,7 +73,7 @@ void Text::declare(TypeBuilder<Text>& type) {
         .property("align", &Text::align, &Text::setAlign)
         .property("font", &Text::font, &Text::setFont)
         .defaultProperty("text")
-        .fillsWidthWhen(&Text::wrap); // wrapping text takes a share of a Row and wraps at it
+        .fillsWidthWhen(&Text::followsWidth); // takes a share of a Row, and wraps or aligns in it
 }
 
 void Text::render(Frame&) {
@@ -78,11 +81,9 @@ void Text::render(Frame&) {
     md::text(m_text, m_textStyle, m_color, m_wrap, Frame::alignFactor(m_align));
 }
 
-std::optional<ImVec2> Text::intrinsicSize(const Frame&, float) {
-    // Wrapping text fills (its width is the parent's to give); aligned text is offset within the available width.
-    if (m_wrap || Frame::alignFactor(m_align) > 0.0f) return std::nullopt;
+std::optional<ImVec2> Text::intrinsicSize(const Frame&, float maxWidth) {
     FontFaceScope face{m_font};
-    return md::textSize(m_text, m_textStyle);
+    return md::textSize(m_text, m_textStyle, m_wrap, Frame::alignFactor(m_align), maxWidth);
 }
 
 const std::string& Text::text() const { return m_text; }
@@ -95,6 +96,7 @@ void Text::setStyle(std::string style) {
 const std::optional<Color>& Text::color() const { return m_color; }
 void Text::setColor(std::optional<Color> color) { m_color = color; }
 bool Text::wrap() const { return m_wrap; }
+bool Text::followsWidth() const { return m_wrap || Frame::alignFactor(m_align) > 0.0f; }
 void Text::setWrap(bool wrap) { m_wrap = wrap; }
 const std::string& Text::align() const { return m_align; }
 void Text::setAlign(std::string align) { m_align = std::move(align); }

@@ -7,6 +7,7 @@ import imgui;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.item_size;
 import imlui.ui.layout_box;
 
 export namespace imlui {
@@ -15,12 +16,16 @@ export namespace imlui {
 ///
 /// Props:   padding = 0, spacing = unset (ImGui item spacing), align = "start" ("center", "end")
 /// Raw:     width (the children's layout box: `align`, fills and wrapping use it; unset: the parent's box, less the
-///          padding on the right)
+///          padding on the right, and a column holding a fill fills itself: contentFillsWidth)
 class Column final : public Element {
 public:
     static void declare(TypeBuilder<Column>& type);
 
     void render(Frame& frame) override;
+    /// Its stack (Frame::stackSize) and padding, when every visual child has an intrinsic size.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
+    /// It holds a child that fills (and has no `width`): it is as wide as the available width.
+    [[nodiscard]] bool contentFillsWidth(const Frame& frame) override;
 
     [[nodiscard]] float padding() const; ///< dp around the content
     void setPadding(float padding);
@@ -75,6 +80,35 @@ void Column::render(Frame& frame) {
         ImGui::Unindent(pad);
         ImGui::Dummy({0, pad - ImGui::GetStyle().ItemSpacing.y});
     }
+}
+
+std::optional<ImVec2> Column::intrinsicSize(const Frame& frame, float maxWidth) {
+    // render() in numbers: the children's box, the stack in it, and the padding's dummies (ImGui starts each line on
+    // a whole pixel).
+    const float pad = frame.dp(m_padding);
+    const float width = frame.size("width");
+    float reserved = 0.0f, inner = pad > 0 ? maxWidth - 2.0f * pad : maxWidth;
+    if (width != 0) inner = reserved = resolveSize(width, std::max(0.0f, maxWidth - pad), 0.0f);
+    const std::optional<ImVec2> stack = frame.stackSize(std::max(0.0f, inner));
+    if (!stack) return std::nullopt;
+    // Without padding, width or children, its group holds no item: ImGui measures it by whatever came before.
+    if (pad <= 0 && width == 0 && stack->x == 0.0f && stack->y == 0.0f) return std::nullopt;
+    const float w = pad + std::max(stack->x, reserved);
+    if (pad <= 0) return ImVec2{w, stack->y};
+    const float lineGap = ImGui::GetStyle().ItemSpacing.y;
+    const float dummy = pad - lineGap; // the padding dummies' height
+    const float top = std::trunc(std::max(0.0f, dummy) + lineGap);
+    const float stackBottom = top + stack->y;
+    const float below = std::trunc(stackBottom + lineGap);
+    const float bottom =
+        std::max({stackBottom, below + dummy, std::trunc(below + std::max(0.0f, dummy) + lineGap) - lineGap});
+    return ImVec2{w, bottom};
+}
+
+bool Column::contentFillsWidth(const Frame& frame) {
+    bool fills = false;
+    frame.forEachChild([&](Frame::Child& c) { fills = fills || (c.isVisual() && c.fillsWidth()); });
+    return fills;
 }
 
 float Column::padding() const { return m_padding; }

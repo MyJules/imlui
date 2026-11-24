@@ -21,6 +21,8 @@ export namespace imlui::md {
 /// resolveSize (itemWidth): 0 is the natural 200dp, -1 fills (the Slider element passes -1 when unset).
 bool slider(const char* id, double* v, double vmin, double vmax, double step = 0.0, float width = 0.0f,
             const char* valueFormat = "%.2f");
+/// The size of slider() with `width` (resolved like itemWidth(): 0 is the natural 200dp).
+[[nodiscard]] ImVec2 sliderSize(float width);
 
 } // namespace imlui::md
 
@@ -52,12 +54,14 @@ double snapToStep(double v, double vmin, double step) {
 
 } // namespace
 
+ImVec2 sliderSize(float width) { return {itemWidth(width, dp(200)), dp(44)}; }
+
 bool slider(const char* id, double* v, double vmin, double vmax, double step, float width, const char* valueFormat) {
     const Scheme& s = scheme();
-    const float w = itemWidth(width, dp(200));
-    const float h = dp(44);
+    const ImVec2 size = sliderSize(width);
+    const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton(id, {w, h});
+    ImGui::InvisibleButton(id, size);
     const bool dis = itemDisabled();
     ImGuiID iid = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();

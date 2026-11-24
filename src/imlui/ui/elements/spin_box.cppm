@@ -3,6 +3,7 @@ export module imlui.ui.elements.spin_box;
 
 import std;
 
+import imgui;
 import imlui.widgets.spin_box;
 import imlui.types.element;
 import imlui.types.frame;
@@ -22,6 +23,8 @@ public:
     static void declare(TypeBuilder<SpinBox>& type);
 
     void render(Frame& frame) override;
+    /// Its width (natural 200dp, fixed, or a fill of `maxWidth`) and the field's height.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] double value() const;
     void setValue(double value);
@@ -98,5 +101,9 @@ const std::string& SpinBox::label() const { return m_label; }
 void SpinBox::setLabel(std::string label) { m_label = std::move(label); }
 const std::string& SpinBox::variant() const { return m_variant; }
 void SpinBox::setVariant(std::string variant) { m_variant = std::move(variant); }
+
+std::optional<ImVec2> SpinBox::intrinsicSize(const Frame& frame, float maxWidth) {
+    return md::spinBoxSize(m_label, frame.widthIn(maxWidth), m_variant == "outlined");
+}
 
 } // namespace imlui

@@ -3,6 +3,9 @@ module;
 
 export module imlui.ui.elements.circular_progress;
 
+import std;
+
+import imgui;
 import imlui.widgets.progress;
 import imlui.types.element;
 import imlui.types.frame;
@@ -20,6 +23,8 @@ public:
     static void declare(TypeBuilder<CircularProgress>& type);
 
     void render(Frame& frame) override;
+    /// Its diameter (`size`, else 48dp) squared.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] double value() const;
     void setValue(double value);
@@ -59,5 +64,9 @@ bool CircularProgress::indeterminate() const { return m_indeterminate; }
 void CircularProgress::setIndeterminate(bool indeterminate) { m_indeterminate = indeterminate; }
 double CircularProgress::thickness() const { return m_thickness; }
 void CircularProgress::setThickness(double thickness) { m_thickness = thickness; }
+
+std::optional<ImVec2> CircularProgress::intrinsicSize(const Frame& frame, float) {
+    return md::circularProgressSize(frame.size("size"));
+}
 
 } // namespace imlui

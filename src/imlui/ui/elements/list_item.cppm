@@ -3,6 +3,7 @@ export module imlui.ui.elements.list_item;
 
 import std;
 
+import imgui;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -21,6 +22,8 @@ public:
     static void declare(TypeBuilder<ListItem>& type);
 
     void render(Frame& frame) override;
+    /// Its width (natural 320dp, fixed, or a fill of `maxWidth`): 56dp, 72dp with supporting text.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const; ///< the headline
     void setText(std::string text);
@@ -86,5 +89,12 @@ const std::string& ListItem::trailingIcon() const { return m_trailingIcon; }
 void ListItem::setTrailingIcon(std::string icon) { m_trailingIcon = std::move(icon); }
 bool ListItem::selected() const { return m_selected; }
 void ListItem::setSelected(bool selected) { m_selected = selected; }
+
+std::optional<ImVec2> ListItem::intrinsicSize(const Frame& frame, float maxWidth) {
+    md::ListItemOptions o;
+    o.supporting = m_supportingText;
+    o.width = frame.widthIn(maxWidth);
+    return md::listItemSize(o);
+}
 
 } // namespace imlui

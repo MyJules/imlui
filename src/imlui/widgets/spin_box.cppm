@@ -16,6 +16,8 @@ export namespace imlui::md {
 /// Numeric field with decrement / increment icon buttons. Returns true when the value changed.
 bool spinBox(const char* id, double* v, double vmin, double vmax, double step, int decimals, std::string_view label,
              float width = 0.0f, bool outlined = false);
+/// The size of spinBox() with the same `label` and `width` (resolved like itemWidth(): 0 is the natural 200dp).
+[[nodiscard]] ImVec2 spinBoxSize(std::string_view label, float width, bool outlined);
 
 } // namespace imlui::md
 
@@ -23,9 +25,28 @@ module :private;
 
 namespace imlui::md {
 
+namespace {
+
+/// The input's top in a spin box `h` tall, for a `lineH` line.
+float spinInputY(std::string_view label, bool outlined, float h, float lineH) {
+    return (!label.empty() && !outlined) ? dp(24) + (dp(24) - lineH) * 0.5f : (h - lineH) * 0.5f;
+}
+
+} // namespace
+
+ImVec2 spinBoxSize(std::string_view label, float width, bool outlined) {
+    const float w = itemWidth(width == 0.0f ? dp(200) : width, dp(200));
+    const float h = dp(56);
+    pushFont(TextStyle::BodyLarge);
+    const float lineH = ImGui::GetFontSize();
+    ImGui::PopFont();
+    // The container, and the input on its line (taller only with a large font).
+    return {w, std::max(h, spinInputY(label, outlined, h, lineH) + lineH)};
+}
+
 bool spinBox(const char* id, double* v, double vmin, double vmax, double step, int decimals, std::string_view label,
              float width, bool outlined) {
-    const float w = itemWidth(width == 0.0f ? dp(200) : width, dp(200));
+    const float w = spinBoxSize(label, width, outlined).x;
     const float h = dp(56);
     ImGui::PushID(id);
     ImGui::BeginGroup();
@@ -44,7 +65,7 @@ bool spinBox(const char* id, double* v, double vmin, double vmax, double step, i
 
     pushFont(TextStyle::BodyLarge);
     const float lineH = ImGui::GetFontSize();
-    const float inputY = (!label.empty() && !outlined) ? dp(24) + (dp(24) - lineH) * 0.5f : (h - lineH) * 0.5f;
+    const float inputY = spinInputY(label, outlined, h, lineH);
     ImGui::SetCursorScreenPos({f.inputX, f.p.y + inputY});
     ImGui::PushStyleColor(ImGuiCol_FrameBg, Color{0, 0, 0, 0}.vec4());
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Color{0, 0, 0, 0}.vec4());

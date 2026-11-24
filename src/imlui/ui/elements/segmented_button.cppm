@@ -3,6 +3,7 @@ export module imlui.ui.elements.segmented_button;
 
 import std;
 
+import imgui;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -22,6 +23,8 @@ public:
     static void declare(TypeBuilder<SegmentedButton>& type);
 
     void render(Frame& frame) override;
+    /// Its segments (each as wide as the widest label), or its `width`; none without items.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::vector<std::string>& model() const;
     void setModel(std::vector<std::string> model);
@@ -68,5 +71,10 @@ const std::vector<std::string>& SegmentedButton::icons() const { return m_icons;
 void SegmentedButton::setIcons(std::vector<std::string> icons) { m_icons = std::move(icons); }
 double SegmentedButton::currentIndex() const { return m_currentIndex; }
 void SegmentedButton::setCurrentIndex(double index) { m_currentIndex = index; }
+
+std::optional<ImVec2> SegmentedButton::intrinsicSize(const Frame& frame, float maxWidth) {
+    if (m_model.empty()) return std::nullopt; // draws nothing: no item to measure
+    return md::segmentedSize(m_model, frame.widthIn(maxWidth));
+}
 
 } // namespace imlui

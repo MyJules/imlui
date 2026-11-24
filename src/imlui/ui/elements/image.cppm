@@ -33,6 +33,9 @@ public:
     static void declare(TypeBuilder<Image>& type);
 
     void render(Frame& frame) override;
+    /// Its `width` / `height` (a fill width of `maxWidth`), the image's own size (as dp) or the aspect ratio for
+    /// what is unset, the placeholder's for a broken image. None for a fill height.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& source() const;
     void setSource(std::string source);
@@ -57,6 +60,16 @@ public:
     [[nodiscard]] const std::string& resolvedSource() const;
 
 private:
+    /// The source looked up: the image (null without a source or when it can't be drawn), why it can't be drawn
+    /// ("" when it can), and its natural size (image pixels; the placeholder's for a broken image).
+    struct Lookup {
+        const ImageCache::Image* image = nullptr;
+        std::string error;
+        std::string resolved; ///< the full resource name
+        ImVec2 natural{0.0f, 0.0f};
+    };
+    [[nodiscard]] Lookup lookup(const Frame& frame) const;
+
     /// Sets the read-only properties and tells Lua about the ones that changed.
     void publish(std::string status, double implicitWidth, double implicitHeight);
     /// Reports `message` to the error overlay the first time this element meets it.
@@ -102,32 +115,46 @@ void Image::declare(TypeBuilder<Image>& type) {
         .defaultProperty("source");
 }
 
-void Image::render(Frame& frame) {
-    // Resolve the source and look the image up.
-    const ImageCache::Image* image = nullptr;
-    std::string error;
-    m_resolved.clear();
+Image::Lookup Image::lookup(const Frame& frame) const {
+    Lookup l;
     if (!m_source.empty()) {
         const auto name = resolveName(frame.node().string("__base", "app:/"), m_source);
         if (!name)
-            error = "Image: invalid source '" + m_source + "'";
+            l.error = "Image: invalid source '" + m_source + "'";
         else if (ImageCache* images = frame.images(); !images)
-            error = "Image: no image cache (the host didn't set one)";
+            l.error = "Image: no image cache (the host didn't set one)";
         else {
-            m_resolved = *name;
-            image = &images->get(*name);
-            if (!image->ready()) error = "Image: " + image->error();
+            l.resolved = *name;
+            l.image = &images->get(*name);
+            if (!l.image->ready()) l.error = "Image: " + l.image->error();
         }
     }
+    if (l.image && l.image->ready())
+        l.natural = {static_cast<float>(l.image->width()), static_cast<float>(l.image->height())};
+    else if (!l.error.empty())
+        l.natural = {placeholderSize, placeholderSize};
+    return l;
+}
+
+std::optional<ImVec2> Image::intrinsicSize(const Frame& frame, float maxWidth) {
+    const float height = frame.size("height");
+    if (height < 0) return std::nullopt; // fills a height known only where it renders
+    // render()'s size: decoding the image now is what render() would do on this frame anyway.
+    return imageSize(lookup(frame).natural, frame.dp(1.0f), frame.widthIn(maxWidth), height);
+}
+
+void Image::render(Frame& frame) {
+    // Resolve the source and look the image up.
+    const Lookup found = lookup(frame);
+    const ImageCache::Image* image = found.image;
+    const std::string& error = found.error;
+    m_resolved = found.resolved;
     const auto mode = parseFillMode(m_fillMode);
     if (!mode) reportOnce("Image: unknown fillMode '" + m_fillMode + "' (stretch, fit, crop or tile)");
     if (!error.empty()) reportOnce(error);
 
     const bool ready = image && image->ready();
-    const ImVec2 natural = ready                ? ImVec2{static_cast<float>(image->width()),
-                                                         static_cast<float>(image->height())}
-                           : !error.empty()     ? ImVec2{placeholderSize, placeholderSize}
-                                                : ImVec2{0.0f, 0.0f};
+    const ImVec2 natural = found.natural;
     publish(ready ? "ready" : !error.empty() ? "error" : "none", ready ? image->width() : 0, ready ? image->height() : 0);
 
     // Lay out: one item of the computed size.

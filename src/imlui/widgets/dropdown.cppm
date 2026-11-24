@@ -24,6 +24,8 @@ struct DropdownOptions {
 /// Exposed dropdown menu (text-field look + menu). `current` is 0-based, -1 = none.
 bool dropdown(const char* id, const std::vector<std::string>& items, int* current, const DropdownOptions& o,
               const std::vector<std::string>& icons = {});
+/// The size of dropdown() with the same options (`o.width` resolved like itemWidth(): 0 is the natural 240dp).
+[[nodiscard]] ImVec2 dropdownSize(const DropdownOptions& o);
 
 } // namespace imlui::md
 
@@ -31,9 +33,18 @@ module :private;
 
 namespace imlui::md {
 
+ImVec2 dropdownSize(const DropdownOptions& o) {
+    const float w = itemWidth(o.width == 0.0f ? dp(240) : o.width, dp(240));
+    const float h = dp(56);
+    // The supporting text's dummy is on the line below the field's (ImGui's next line: a whole pixel, the item
+    // spacing below).
+    if (o.supporting.empty()) return {w, h};
+    return {w, std::trunc(h + ImGui::GetStyle().ItemSpacing.y) + dp(20)};
+}
+
 bool dropdown(const char* id, const std::vector<std::string>& items, int* current, const DropdownOptions& o,
               const std::vector<std::string>& icons) {
-    const float w = itemWidth(o.width == 0.0f ? dp(240) : o.width, dp(240));
+    const float w = dropdownSize(o).x;
     const float h = dp(56);
     ImGui::PushID(id);
     ImGui::BeginGroup();

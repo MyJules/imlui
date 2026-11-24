@@ -3,6 +3,7 @@ export module imlui.ui.elements.checkbox;
 
 import std;
 
+import imgui;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -20,6 +21,8 @@ public:
     static void declare(TypeBuilder<Checkbox>& type);
 
     void render(Frame& frame) override;
+    /// The box and its label.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -58,5 +61,9 @@ const std::string& Checkbox::text() const { return m_text; }
 void Checkbox::setText(std::string text) { m_text = std::move(text); }
 bool Checkbox::checked() const { return m_checked; }
 void Checkbox::setChecked(bool checked) { m_checked = checked; }
+
+std::optional<ImVec2> Checkbox::intrinsicSize(const Frame&, float) {
+    return md::checkboxSize(Frame::labelId(m_text, "cb").c_str());
+}
 
 } // namespace imlui

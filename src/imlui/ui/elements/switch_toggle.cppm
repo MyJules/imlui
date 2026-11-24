@@ -3,6 +3,7 @@ export module imlui.ui.elements.switch_toggle;
 
 import std;
 
+import imgui;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -21,6 +22,8 @@ public:
     static void declare(TypeBuilder<Switch>& type);
 
     void render(Frame& frame) override;
+    /// The track and its label.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -65,5 +68,9 @@ bool Switch::checked() const { return m_checked; }
 void Switch::setChecked(bool checked) { m_checked = checked; }
 bool Switch::icons() const { return m_icons; }
 void Switch::setIcons(bool icons) { m_icons = icons; }
+
+std::optional<ImVec2> Switch::intrinsicSize(const Frame&, float) {
+    return md::switchSize(Frame::labelId(m_text, "sw").c_str());
+}
 
 } // namespace imlui

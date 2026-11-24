@@ -17,6 +17,8 @@ export namespace imlui::md {
 
 /// Color swatch + hex, opening a picker popup. `c` is edited in place. Returns true when it changed.
 bool colorField(const char* id, Color* c, std::string_view label, bool alpha, float width = 0.0f);
+/// The size of colorField() with the same color, label and `width` (resolved like itemWidth()).
+[[nodiscard]] ImVec2 colorFieldSize(Color c, std::string_view label, float width = 0.0f);
 
 } // namespace imlui::md
 
@@ -24,14 +26,18 @@ module :private;
 
 namespace imlui::md {
 
+ImVec2 colorFieldSize(Color c, std::string_view label, float width) {
+    const float natural = dp(8) + dp(40) + dp(16) +
+                          std::max(measure(TextStyle::BodyLarge, toHex(c)).x, measure(TextStyle::BodySmall, label).x) +
+                          dp(16) + dp(24) + dp(16);
+    return {itemWidth(width, natural), dp(56)};
+}
+
 bool colorField(const char* id, Color* c, std::string_view label, bool alpha, float width) {
     const Scheme& s = scheme();
-    const float h = dp(56);
     const std::string hex = toHex(*c);
-    const float natural = dp(8) + dp(40) + dp(16) +
-                          std::max(measure(TextStyle::BodyLarge, hex).x, measure(TextStyle::BodySmall, label).x) +
-                          dp(16) + dp(24) + dp(16);
-    const float w = itemWidth(width, natural);
+    const ImVec2 size = colorFieldSize(*c, label, width);
+    const float w = size.x, h = size.y;
     ImGui::PushID(id);
     ImVec2 p = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::InvisibleButton("##swatch", {w, h});

@@ -25,6 +25,8 @@ public:
     static void declare(TypeBuilder<Slider>& type);
 
     void render(Frame& frame) override;
+    /// Its natural 200dp, a fixed width, or a fill of `maxWidth`; 44dp high.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] double value() const;
     void setValue(double value);
@@ -87,5 +89,9 @@ double Slider::stepSize() const { return m_stepSize; }
 void Slider::setStepSize(double step) { m_stepSize = step; }
 const std::optional<std::string>& Slider::format() const { return m_format; }
 void Slider::setFormat(std::optional<std::string> format) { m_format = std::move(format); }
+
+std::optional<ImVec2> Slider::intrinsicSize(const Frame& frame, float maxWidth) {
+    return md::sliderSize(frame.widthIn(maxWidth));
+}
 
 } // namespace imlui

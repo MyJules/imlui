@@ -23,6 +23,9 @@ enum class CardVariant { Elevated, Filled, Outlined };
 void beginCard(const char* id, CardVariant v, float width = 0.0f, float padding = 16.0f, float height = 0.0f,
                std::optional<Color> color = std::nullopt, float rounding = -1.0f);
 void endCard();
+/// The size beginCard() .. endCard() takes with the same `width`, `padding` and `height`, around content
+/// `contentHeight` tall (an auto-height card: ImGui fits it to its content, in whole pixels, plus the padding).
+[[nodiscard]] ImVec2 cardSize(float width, float padding, float height, float contentHeight);
 
 } // namespace imlui::md
 
@@ -51,7 +54,7 @@ void beginCard(const char* id, CardVariant v, float width, float padding, float 
     const Scheme& s = scheme();
     ImGuiID key = ImGui::GetID(id);
     const float rnd = rounding >= 0 ? dp(rounding) : dp(shape().medium);
-    const float w = itemWidth(width, dp(320));
+    const float w = cardSize(width, padding, height, 0.0f).x;
     Color bg = color.value_or(v == CardVariant::Filled     ? s.surfaceContainerHighest
                               : v == CardVariant::Outlined ? s.surface
                                                            : s.surfaceContainerLow);
@@ -78,6 +81,15 @@ void beginCard(const char* id, CardVariant v, float width, float padding, float 
     ImGui::PopStyleColor(2);
     pushSurface(bg);
     cards.push_back({key});
+}
+
+ImVec2 cardSize(float width, float padding, float height, float contentHeight) {
+    // ImGui sizes a child window in whole pixels.
+    const float w = std::trunc(itemWidth(width, dp(320)));
+    if (height > 0) return {w, std::trunc(height)};
+    // ImGui's auto-fit size of a child window: its content's whole pixels plus the padding, at least its minimum.
+    const float fit = std::trunc(contentHeight) + 2.0f * dp(padding);
+    return {w, std::max({fit, 4.0f, ImGui::GetStyle().WindowRounding - 1.0f})};
 }
 
 void endCard() {

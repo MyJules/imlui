@@ -38,6 +38,7 @@ import lua;
 import imgui;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.ui.layout_box;
 import imlui.ui.renderer;
 import imlui.types.script_object;
 import imlui.types.element;
@@ -103,7 +104,7 @@ public:
     // Renderer::Types: the Renderer renders every element through these.
     [[nodiscard]] Kind kind(std::string_view type) const override;
     void renderElement(Renderer& renderer, const luaui::Node& node) override;
-    [[nodiscard]] bool fillsWidth(const luaui::Node& node) override;
+    [[nodiscard]] bool fillsWidth(Renderer& renderer, const luaui::Node& node) override;
     [[nodiscard]] std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
                                                       float maxWidth) override;
     [[nodiscard]] std::uint64_t elementId(const luaui::Node& node) override;
@@ -188,7 +189,46 @@ struct Box {
     int syncedFrame = -1;
     std::uint64_t syncedChanges = 0;
     std::uint64_t syncedFields = 0;
+    /// What layouts asked this frame (fillsWidth, intrinsicSize): a container composes its children's sizes, and its
+    /// parent asks it too, so each element answers once a frame per question. See LayoutMemo.
+    struct LayoutMemo {
+        struct Size {
+            float maxWidth;
+            bool shrinkToFit; ///< asked in an auto-sized window's box (wrapping text measures differently there)
+            std::optional<ImVec2> size;
+        };
+        int frame = -1;
+        std::uint64_t changes = 0;
+        std::optional<bool> fills;
+        std::array<Size, 4> sizes{}; ///< the latest answers, oldest first
+        std::size_t count = 0;
+
+        [[nodiscard]] const Size* find(float maxWidth, bool shrinkToFit) const {
+            for (std::size_t i = 0; i < count; ++i)
+                if (sizes[i].maxWidth == maxWidth && sizes[i].shrinkToFit == shrinkToFit) return &sizes[i];
+            return nullptr;
+        }
+        void add(const Size& size) {
+            if (count == sizes.size())
+                std::shift_left(sizes.begin(), sizes.end(), 1);
+            else
+                ++count;
+            sizes[count - 1] = size;
+        }
+    } memo;
 };
+
+/// The memo of `b`, emptied when it is from another frame or Lua that may have changed tables ran since
+/// (luaui::changes(), like the sync skip). A sync empties it too (syncInstance).
+Box::LayoutMemo& freshMemo(Box& b) {
+    const int frame = ImGui::GetCurrentContext() ? ImGui::GetFrameCount() : -1;
+    if (b.memo.frame != frame || b.memo.changes != luaui::changes()) {
+        b.memo = {};
+        b.memo.frame = frame;
+        b.memo.changes = luaui::changes();
+    }
+    return b.memo;
+}
 
 /// Whether syncInstance may skip an element synced earlier in the frame.
 enum class Sync {
@@ -402,6 +442,7 @@ void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) 
     lua::pushvalue(state, tbl);
     luaui::safeRead(state, 2, 0);
     b.syncing = false;
+    b.memo = {}; // its answers may have changed with its properties
     b.syncedFrame = frame;
     b.syncedChanges = luaui::changes(); // before componentComplete(), whose handlers may change the table
     b.syncedFields = fields;
@@ -714,15 +755,29 @@ std::optional<ImVec2> TypeRegistry::intrinsicSize(Renderer& renderer, const Node
     if (!info || !info->visual()) return std::nullopt;
     Box* b = syncBox(node, *info, Sync::OncePerFrame);
     if (!b) return std::nullopt;
+    const bool shrink = layout::shrinkToFit();
+    if (const auto* known = freshMemo(*b).find(maxWidth, shrink)) return known->size;
+    const std::uint64_t changes = luaui::changes();
     const Frame frame{renderer, node, &m_instances, info->fillsWidth(b->element)};
-    return b->element->intrinsicSize(frame, maxWidth);
+    std::optional<ImVec2> size = b->element->intrinsicSize(frame, maxWidth);
+    // Kept unless something reset the memo meanwhile (a sync of this element again, Lua that may change tables).
+    if (b->element && b->memo.frame >= 0 && b->memo.changes == changes) b->memo.add({maxWidth, shrink, size});
+    return size;
 }
 
-bool TypeRegistry::fillsWidth(const Node& node) {
+bool TypeRegistry::fillsWidth(Renderer& renderer, const Node& node) {
     const TypeInfo* info = find(node.type());
     if (!info) return false;
-    if (!info->fillsWidthDependsOnInstance()) return info->fillsWidth(nullptr);
-    return info->fillsWidth(renderSync(node));
+    Box* b = syncBox(node, *info, Sync::OncePerFrame);
+    if (!b) return info->fillsWidth(nullptr);
+    if (info->fillsWidth(b->element)) return true;
+    Box::LayoutMemo& memo = freshMemo(*b);
+    if (memo.fills) return *memo.fills;
+    const std::uint64_t changes = luaui::changes();
+    const Frame frame{renderer, node, &m_instances, false};
+    const bool fills = b->element->contentFillsWidth(frame);
+    if (b->element && b->memo.frame >= 0 && b->memo.changes == changes) b->memo.fills = fills;
+    return fills;
 }
 
 std::uint64_t TypeRegistry::elementId(const Node& node) {
