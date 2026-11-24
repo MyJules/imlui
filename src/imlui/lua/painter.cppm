@@ -1,7 +1,11 @@
 // The painter object handed to Canvas.onPaint: immediate drawing into the
-// canvas' ImGui draw list, in dp relative to the canvas origin.
+// canvas' ImGui draw list, in dp relative to the canvas origin. Lines, rects and
+// circles use the Material shape helpers (imlui.widgets.common): true radii, smooth
+// arcs and pixel-snapped strokes.
 module;
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +20,7 @@ import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.theme.theme;
 import imlui.lua.node;
+import imlui.widgets.common;
 
 export namespace imlui::luaui {
 
@@ -62,33 +67,46 @@ void ready(lua::State* state) {
 // All methods are called as p:method(...), so argument 1 is the painter.
 int line(lua::State* state) {
     ready(state);
-    target->AddLine(pt(state, 2), pt(state, 4), u32(colorArg(state, 6, theme().scheme.onSurface)),
-                    dp(num(state, 7, 1.0f)));
+    const ImVec2 a = pt(state, 2), b = pt(state, 4);
+    const Color c = colorArg(state, 6, theme().scheme.onSurface);
+    const float thickness = dp(num(state, 7, 1.0f));
+    if (a.y != b.y && a.x != b.x) {
+        target->AddLine(a, b, u32(c), thickness);
+        return 0;
+    }
+    // Axis-aligned: a pixel-snapped band. ImGui's AddLine centers its stroke on (x + 0.5, y + 0.5), the
+    // middle of the pixel at (x, y); the band is centered there too, `px` whole pixels wide.
+    const float px = std::max(1.0f, std::floor(thickness + 0.5f));
+    const float offset = 0.5f - px * 0.5f;
+    if (a.y == b.y)
+        md::hLine(target, std::min(a.x, b.x), std::max(a.x, b.x), a.y + offset, c, px);
+    else
+        md::vLine(target, a.x + offset, std::min(a.y, b.y), std::max(a.y, b.y), c, px);
     return 0;
 }
 
 int rect(lua::State* state) {
     ready(state);
-    ImVec2 a = pt(state, 2);
-    ImVec2 b{a.x + dp(num(state, 4)), a.y + dp(num(state, 5))};
-    ImU32 c = u32(colorArg(state, 6, theme().scheme.primary));
-    float r = dp(num(state, 7));
+    const ImVec2 a = pt(state, 2);
+    const ImVec2 b{a.x + dp(num(state, 4)), a.y + dp(num(state, 5))};
+    const Color c = colorArg(state, 6, theme().scheme.primary);
+    const float r = dp(num(state, 7));
     if (lua::toboolean(state, 8))
-        target->AddRect(a, b, c, r, dp(num(state, 9, 1.0f)));
+        md::strokeRoundRect(target, a, b, r, c, dp(num(state, 9, 1.0f)));
     else
-        target->AddRectFilled(a, b, c, r);
+        md::fillRoundRect(target, a, b, r, c);
     return 0;
 }
 
 int circle(lua::State* state) {
     ready(state);
-    ImVec2 c = pt(state, 2);
-    float r = dp(num(state, 4));
-    ImU32 col = u32(colorArg(state, 5, theme().scheme.primary));
+    const ImVec2 c = pt(state, 2);
+    const float r = dp(num(state, 4));
+    const Color col = colorArg(state, 5, theme().scheme.primary);
     if (lua::toboolean(state, 6))
-        target->AddCircle(c, r, col, 0, dp(num(state, 7, 1.0f)));
+        md::strokeCircle(target, c, r, col, dp(num(state, 7, 1.0f)));
     else
-        target->AddCircleFilled(c, r, col);
+        md::fillCircle(target, c, r, col);
     return 0;
 }
 
