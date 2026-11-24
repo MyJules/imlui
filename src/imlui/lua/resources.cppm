@@ -63,11 +63,11 @@ std::string quoted(std::string_view name) { return "'" + std::string{name} + "'"
 int loadChunk(lua::State* state, const Context& ctx, std::string_view name, int envIndex) {
     const auto canonical = normalizeName(name);
     if (!canonical) return fail(state, "invalid resource name " + quoted(name));
-    const auto code = ctx.resources->readText(*canonical);
+    const auto code = ctx.resources->read(*canonical); // Lua copies the text it needs
     if (!code) return fail(state, "resource " + quoted(*canonical) + " not found");
     remember(ctx, *canonical);
     const std::string chunkName = "@" + *canonical;
-    if (lua::loadbufferx(state, *code, chunkName.c_str(), "t") != lua::ok) {
+    if (lua::loadbufferx(state, code->text(), chunkName.c_str(), "t") != lua::ok) {
         lua::pushnil(state);
         lua::insert(state, -2); // nil, message
         return 2;
@@ -112,10 +112,10 @@ int readFn(lua::State* state) {
     const std::string_view name = lua::tostring(state, 1);
     const auto canonical = normalizeName(name);
     if (!canonical) return fail(state, "invalid resource name " + quoted(name));
-    const auto text = ctx.resources->readText(*canonical);
-    if (!text) return fail(state, "resource " + quoted(*canonical) + " not found");
+    const auto bytes = ctx.resources->read(*canonical);
+    if (!bytes) return fail(state, "resource " + quoted(*canonical) + " not found");
     remember(ctx, *canonical);
-    lua::pushstring(state, *text);
+    lua::pushstring(state, bytes->text()); // a copy
     return 1;
 }
 

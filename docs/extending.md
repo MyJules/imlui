@@ -545,8 +545,11 @@ imlui::EngineConfig config =
 ```
 
 Scripts then use `require` and `ui.resource.read("plugin:/data.json")`. A new kind of file source implements
-`imlui::Mount` (`read`, `exists`, `list`, `modified`, `origin`). Its `read` returns a span that must stay valid as
-long as the mount lives: the font atlas and other long-lived users point into it without copying.
+`imlui::Mount` (`read`, `exists`, `list`, `modified`, `origin`). Its `read` returns an `imlui::ResourceData`: the bytes
+plus an optional shared owner. The bytes must stay valid while that handle (or a copy) and the mount live: the font
+atlas points into them without copying and keeps the handle as long as it does. Memory the mount owns for its whole
+lifetime needs no owner (`ResourceData{bytes}`); bytes that can be replaced (a changed file) go with a
+`shared_ptr` to their buffer (`ResourceData{bytes, buffer}`), so they're freed once nothing holds them.
 
 ## Threading and frame requests
 

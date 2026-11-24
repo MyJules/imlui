@@ -6,10 +6,10 @@
 // declares its faces as a FontSet (Lua: `ui.theme { fonts = { ... } }`); useFontSet() makes it current.
 module;
 
-#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -23,6 +23,7 @@ import imgui;
 import imlui.log;
 import imlui.resources;
 import imlui.resources.name;
+import imlui.theme.font_check;
 
 export namespace imlui {
 
@@ -41,17 +42,19 @@ struct FontSet {
 };
 
 /// Forgets every font loaded so far (call right after clearing the atlas) and reads fonts from `resources` from now
-/// on. The atlas doesn't copy font data, it points into the bytes Resources::read returned, so `resources` (its
-/// mounts) must outlive the font atlas.
+/// on. The atlas doesn't copy font data, it points into the bytes Resources::read returned; the library keeps their
+/// ResourceData handles as long as it keeps the atlas font, so `resources` (its mounts) must outlive the font atlas.
 void resetFontLibrary(const Resources& resources);
 
-/// Forgets every font and the resources, so nothing is loaded until the next resetFontLibrary(). Call before the
-/// font atlas (the ImGui context) or the resources go away.
+/// Forgets every font and the resources, so nothing is loaded until the next resetFontLibrary(), and lets go of the
+/// fonts' bytes. Call when the font atlas is cleared or destroyed (it points into those bytes), before the resources
+/// go away.
 void clearFontLibrary();
 
 /// Loads every font of `set`, with its fallbacks merged in, into the atlas, reusing fonts already loaded from the
 /// same bytes; a resource that now returns other bytes (its file changed) is loaded again. Returns one message per
-/// font or fallback that couldn't be loaded (missing, not a font). Safe inside a frame: it only adds fonts.
+/// font or fallback that couldn't be loaded (missing, not a font, damaged: see checkFont()). Safe inside a frame: it
+/// only adds fonts.
 std::vector<std::string> loadFontSet(const FontSet& set);
 
 /// Makes `set` the fonts in use (loading what's missing, failures logged; a face that fails falls back to the
@@ -95,11 +98,14 @@ struct SourceBytes {
 struct Entry {
     ImFont* font = nullptr;
     std::vector<SourceBytes> sources; ///< the face, then each fallback (empty span: missing)
+    /// The bytes the atlas font points into (FontDataOwnedByAtlas = false): kept alive with it. While they are, a
+    /// newer read of a changed file can't land at the same address, so `sources` tell the versions apart.
+    std::vector<ResourceData> data;
 };
 
 const Resources* library = nullptr;
 std::map<std::string, Entry, std::less<>> cache; ///< by cacheKey()
-std::vector<ImFont*> replaced;                   ///< removed at the next useFontSet()
+std::vector<Entry> replaced;                     ///< removed from the atlas (and their bytes released) at useFontSet()
 ImFont* defaultFont = nullptr;                   ///< ImGui's own, when the built-in Regular face is missing
 
 ImFont* currentRegular = nullptr;
@@ -115,39 +121,31 @@ std::string cacheKey(std::string_view name, std::span<const std::string> fallbac
     return key;
 }
 
-/// Whether `bytes` start like a TrueType/OpenType font or collection (stb_truetype asserts on anything else).
-bool looksLikeFont(std::span<const std::byte> bytes) {
-    if (bytes.size() < 12) return false;
-    const auto is = [&](std::string_view tag) {
-        return std::ranges::equal(bytes.first(4), tag,
-                                  [](std::byte b, char c) { return b == static_cast<std::byte>(c); });
-    };
-    return is(std::string_view{"\0\1\0\0", 4}) || is("OTTO") || is("true") || is("ttcf");
-}
-
-/// Reads font `name`; empty span and a message in `error` when it is invalid, missing or not a font.
-std::span<const std::byte> readFont(std::string_view name, std::string& error) {
+/// Reads font `name`; nullopt and a message in `error` when it is invalid, missing, not a font or damaged.
+std::optional<ResourceData> readFont(std::string_view name, std::string& error) {
     const auto canonical = normalizeName(name);
     if (!canonical) {
         error = "invalid font resource name '" + std::string{name} + "' (expected e.g. 'app:/fonts/Inter.ttf')";
-        return {};
+        return std::nullopt;
     }
-    const auto bytes = library->read(*canonical);
+    auto bytes = library->read(*canonical);
     if (!bytes || bytes->empty()) {
         error = "font '" + *canonical + "' not found";
-        return {};
+        return std::nullopt;
     }
-    if (!looksLikeFont(*bytes)) {
-        error = "'" + *canonical + "' is not a TrueType/OpenType font";
-        return {};
+    // stb_truetype trusts the data and aborts (or reads out of bounds) on a damaged font.
+    if (const auto problem = checkFont(bytes->bytes())) {
+        error = *problem == notAFont ? "'" + *canonical + "' is not a TrueType/OpenType font"
+                                     : "font '" + *canonical + "' is damaged: " + *problem;
+        return std::nullopt;
     }
-    return *bytes;
+    return bytes;
 }
 
-ImFont* addFont(std::span<const std::byte> bytes, ImFont* mergeInto) {
+ImFont* addFont(const ResourceData& bytes, ImFont* mergeInto) {
     ImFontConfig cfg;
-    // The bytes stay alive as long as the mount (see Mount::read), so the atlas needn't own a copy. ImGui only
-    // reads them, but its API takes a non-const pointer.
+    // The cache entry keeps the bytes' handle as long as the atlas font, so the atlas needn't own a copy. ImGui
+    // only reads them, but its API takes a non-const pointer.
     cfg.FontDataOwnedByAtlas = false;
     if (mergeInto) {
         cfg.MergeMode = true;
@@ -162,33 +160,35 @@ ImFont* addFont(std::span<const std::byte> bytes, ImFont* mergeInto) {
 /// fallbackErrors()).
 ImFont* fontFor(std::string_view name, std::span<const std::string> fallback, std::string& error) {
     if (!library) return nullptr;
-    const auto face = readFont(name, error);
-    if (face.empty()) return nullptr;
-    std::vector<SourceBytes> sources{{face.data(), face.size()}};
-    std::vector<std::span<const std::byte>> fallbackBytes;
+    auto face = readFont(name, error);
+    if (!face) return nullptr;
+    Entry entry;
+    entry.sources.push_back({face->data(), face->size()});
+    entry.data.push_back(std::move(*face));
     for (const auto& f : fallback) {
         std::string ignored; // reported once by fallbackErrors(), not once per font
-        const auto bytes = readFont(f, ignored);
-        fallbackBytes.push_back(bytes);
-        sources.push_back({bytes.data(), bytes.size()});
+        auto bytes = readFont(f, ignored).value_or(ResourceData{});
+        entry.sources.push_back({bytes.data(), bytes.size()});
+        entry.data.push_back(std::move(bytes));
     }
 
     const std::string key = cacheKey(name, fallback);
     auto it = cache.find(key);
     if (it != cache.end()) {
-        if (it->second.sources == sources) return it->second.font;
+        if (it->second.sources == entry.sources) return it->second.font;
         // Its file changed: build a new font. The old one may be pushed in this frame; it goes at useFontSet().
-        replaced.push_back(it->second.font);
+        replaced.push_back(std::move(it->second));
         cache.erase(it);
     }
-    ImFont* font = addFont(face, nullptr);
-    if (!font) {
+    entry.font = addFont(entry.data.front(), nullptr);
+    if (!entry.font) {
         error = "font '" + std::string{name} + "' could not be loaded";
         return nullptr;
     }
-    for (const auto& bytes : fallbackBytes)
-        if (!bytes.empty()) addFont(bytes, font);
-    cache.emplace(key, Entry{font, std::move(sources)});
+    for (std::size_t i = 1; i < entry.data.size(); ++i)
+        if (!entry.data[i].empty()) addFont(entry.data[i], entry.font);
+    ImFont* font = entry.font;
+    cache.emplace(key, std::move(entry));
     return font;
 }
 
@@ -197,7 +197,7 @@ std::vector<std::string> fallbackErrors(const FontSet& set) {
     std::vector<std::string> errors;
     std::string error;
     for (const auto& f : set.fallback)
-        if (readFont(f, error).empty()) errors.push_back("fallback: " + error);
+        if (!readFont(f, error)) errors.push_back("fallback: " + error);
     return errors;
 }
 
@@ -267,9 +267,9 @@ void useFontSet(const FontSet& set) {
 
     // Between frames nothing is pushed, and the faces in use were just looked up again, so the fonts replaced
     // by newer bytes are unused now.
-    for (ImFont* f : replaced)
-        ImGui::GetIO().Fonts->RemoveFont(f);
-    replaced.clear();
+    for (const Entry& e : replaced)
+        ImGui::GetIO().Fonts->RemoveFont(e.font);
+    replaced.clear(); // and with them the last handles to their bytes, unless another font shares them
 }
 
 ImFont* regularFace() { return currentRegular; }

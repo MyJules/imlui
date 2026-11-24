@@ -32,9 +32,9 @@ using namespace imlui;
 
 namespace {
 
-std::string text(std::optional<std::span<const std::byte>> bytes) {
+std::string text(const std::optional<ResourceData>& bytes) {
     if (!bytes) return "<none>";
-    return std::string{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+    return std::string{bytes->text()};
 }
 
 std::span<const std::byte> bytesOf(std::string_view s) { return std::as_bytes(std::span{s.data(), s.size()}); }
@@ -144,6 +144,7 @@ TEST(EmbeddedMount, ReadsStoredAndCompressedFiles) {
     // A stored file is served straight from the blob (zero-copy).
     const auto tiny = mount.read("tiny.txt");
     EXPECT_EQ(tiny->data(), fx.blob().data() + fx.records()[1].offset);
+    EXPECT_EQ(tiny->owner(), nullptr); // the mount's memory: nothing to keep alive per handle
 
     EXPECT_TRUE(mount.exists(""));
     EXPECT_TRUE(mount.exists("sub"));
@@ -341,10 +342,10 @@ namespace {
 /// An embedded app package, as imlui_add_resources generates it; `sourceDir` is "" like in a release build.
 ResourcePackage testApp(std::string sourceDir = {}) {
     return {"app:/",
-            std::make_shared<test::MemoryMount>(std::initializer_list<std::pair<const std::string, std::string>>{
-                                                    {"main.lua", "return Text { text = 'embedded app' }"},
-                                                    {"data.txt", "embedded data"}},
-                                                "test app"),
+            std::make_shared<test::MemoryMount>(
+                std::initializer_list<std::pair<const std::string, std::string>>{
+                    {"main.lua", "return Text { text = 'embedded app' }"}, {"data.txt", "embedded data"}},
+                "test app"),
             std::move(sourceDir)};
 }
 

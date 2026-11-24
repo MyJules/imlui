@@ -336,9 +336,9 @@ end
       colors    = { primary = "#FF5722", surface = "#101010" },   -- override any role
       imgui     = { WindowBg = "#000000" },                      -- override raw ImGuiCol_*
       style     = { FrameRounding = 6, ItemSpacing = { 10, 6 } }, -- override raw ImGuiStyle fields
-      fonts     = {                                              -- resource names; unset: Roboto
+      fonts     = {                     -- resource names, full or relative to this script's folder; unset: Roboto
           regular  = "app:/fonts/Inter-Regular.ttf",   -- type-scale faces
-          medium   = "app:/fonts/Inter-Medium.ttf",
+          medium   = "fonts/Inter-Medium.ttf",
           fallback = { "app:/fonts/NotoSansJP.otf" },  -- merged into every text font for missing glyphs
           mono     = "app:/fonts/JetBrainsMono.ttf",   -- any other key: a named font, Text { font = "mono" }
       },
@@ -347,9 +347,29 @@ end
   Color props everywhere accept a role name ("primary"), role with alpha
   ("onSurface/0.6"), a hex string, or {r, g, b, a} in 0..1.
 ]]
-function ui.theme(t)
+
+-- The full name of the resource script holding the code that called the function at stack level `level` (1: the
+-- caller of callingScript), or nil when that code isn't a resource script (code loaded from a string) or Lua
+-- dropped its frame (the function was tail-called; then the second result is true). Scripts loaded as resources
+-- don't need this: their `ui` and free names carry their own script (see chunkEnv below); it serves code that uses
+-- the plain `ui` table.
+local function callingScript(level)
+    local fn = debug.getinfo(level + 1, "t")
+    if fn and fn.istailcall then return nil, true end
+    local caller = debug.getinfo(level + 2, "S")
+    local source = caller and caller.source
+    if source and source:match("^@%l[%w_%-]+:/") then return source:sub(2) end
+    return nil
+end
+
+-- Applies theme `t`. Relative font names resolve against the folder of `script` (a full resource name).
+local function applyTheme(t, script)
     ui.__theme = t
-    return native.setTheme(t)
+    return native.setTheme(t, script)
+end
+
+function ui.theme(t)
+    return applyTheme(t, callingScript(1) or ui.__script or "app:/")
 end
 
 --- Current color scheme as { role = "#RRGGBB" }.
@@ -358,14 +378,18 @@ function ui.scheme() return native.scheme() end
 --- Scheme a theme table *would* produce, without applying it.
 function ui.schemeFor(t) return native.schemeFor(t) end
 
---- A ui.state whose every change re-applies it as the theme. Bind switches,
---- color pickers, sliders... directly to it.
-function ui.themeState(init)
+local function themeStateFor(init, script)
     local s = ui.state(init)
-    local function apply() ui.theme(ui.raw(s)) end
+    local function apply() applyTheme(ui.raw(s), script) end
     ui.watch(s, "*", apply)
     apply()
     return s
+end
+
+--- A ui.state whose every change re-applies it as the theme. Bind switches,
+--- color pickers, sliders... directly to it.
+function ui.themeState(init)
+    return themeStateFor(init, callingScript(1) or ui.__script or "app:/")
 end
 
 ui.color = {
@@ -523,97 +547,138 @@ local function needResources()
     if resource == nil then error("ui.resource: no resource system (the library runs without an engine)", 3) end
 end
 
--- `name` resolved against the folder of the script that called the ui.resource function calling this (its chunk
--- name is `@prefix:/...`), or of the main script when that code isn't a resource (code loaded from a string).
--- Errors at that caller on an invalid name. Stack: 1 = resolve, 2 = the ui.resource function, 3 = its caller.
-local function resolve(name)
+-- `name` resolved against the folder of resource `script`. Errors at the caller of the ui.resource function calling
+-- this. Stack: 1 = resolveIn, 2 = the ui.resource function, 3 = its caller.
+local function resolveIn(script, name)
     if type(name) ~= "string" then error("resource name must be a string, got " .. type(name), 3) end
-    local base = ui.__script or "app:/"
-    local api = debug.getinfo(2, "t")
-    if api and api.istailcall then
-        -- `return ui.resource.read("x")`: Lua dropped the caller's frame, so its script is unknown.
-        if not name:match("^%a[%w_%-]*:") then
-            error("ui.resource: a relative name in a tail call (`return ui.resource.f(name)`) can't be resolved; " ..
-                  "use a full name or wrap the call in parentheses", 3)
-        end
-    else
-        local caller = debug.getinfo(3, "S")
-        local source = caller and caller.source
-        if source and source:match("^@%l[%w_%-]+:/") then base = source:sub(2) end
-    end
-    local full, err = resource.resolve(base, name)
+    local full, err = resource.resolve(script, name)
     if not full then error(err, 3) end
     return full
 end
 
---- Image { source = "logo.png" }: `source` is a resource name; a relative one is resolved (in C++, at every render,
---- so bindings work too) against the folder of the script that created the Image, stored as `__base`.
-local image = ui.Image
-function ui.Image(props)
-    if type(props) ~= "table" then props = { props } end
-    local base = ui.__script or "app:/"
-    local self = debug.getinfo(1, "t")
-    if not (self and self.istailcall) then -- `return Image { ... }` hides the creating script
-        local caller = debug.getinfo(2, "S")
-        local source = caller and caller.source
-        if source and source:match("^@%l[%w_%-]+:/") then base = source:sub(2) end
+-- The script the plain ui.resource functions resolve `name` against: the one holding the code that called them, or
+-- the main script when that code isn't a resource script (code loaded from a string). Stack: 1 = this, 2 = the
+-- ui.resource function, 3 = its caller.
+local function callerScript(name)
+    local script, tail = callingScript(2)
+    if tail and type(name) == "string" and not name:match("^%a[%w_%-]*:") then
+        -- `return ui.resource.read("x")` in code that uses the plain `ui` (require("imlui")): Lua dropped the
+        -- caller's frame, so its script is unknown. A resource script's own `ui` doesn't have this problem.
+        error("ui.resource: a relative name in a tail call (`return ui.resource.f(name)`) can't be resolved in " ..
+              "code that isn't a resource script; use a full name or wrap the call in parentheses", 3)
     end
-    props.__base = base
-    return image(props)
+    return script or ui.__script or "app:/"
+end
+
+-- The ui.resource functions, resolving relative names against scriptFor(name). They call it directly, so its stack
+-- level 2 is the function and 3 its caller, and keep their results in locals: a tail call would hide the caller.
+local function resourceApi(scriptFor)
+    local api = {}
+
+    --- The full, normalized name of `name`.
+    function api.url(name)
+        needResources()
+        local full = resolveIn(scriptFor(name), name)
+        return full
+    end
+
+    --- The contents of resource `name` as a string, or nil and a message when there is no such file.
+    function api.read(name)
+        needResources()
+        local full = resolveIn(scriptFor(name), name)
+        local text, err = resource.read(full)
+        return text, err
+    end
+
+    --- True when resource `name` is a file or a folder.
+    function api.exists(name)
+        needResources()
+        local full = resolveIn(scriptFor(name), name)
+        local found = resource.exists(full)
+        return found
+    end
+
+    return api
 end
 
 --- ui.resource: files from the app's resources. Names are full (`app:/data/items.json`, `imlui:/...`) or
 --- relative to the folder of the calling script (`data/items.json`, `../shared/x.lua`).
---- (The results are kept in locals below: a tail call would hide the caller from resolve().)
-ui.resource = {}
+ui.resource = resourceApi(callerScript)
 
---- The full, normalized name of `name`.
-function ui.resource.url(name)
-    needResources()
-    local full = resolve(name)
-    return full
+--- Image { source = "logo.png" }: `source` is a resource name; a relative one is resolved (in C++, at every render,
+--- so bindings work too) against the folder of the script that created the Image, stored as `__base`.
+local image = ui.Image
+local function imageIn(props, script)
+    if type(props) ~= "table" then props = { props } end
+    props.__base = script
+    return image(props)
 end
-
---- The contents of resource `name` as a string, or nil and a message when there is no such file.
-function ui.resource.read(name)
-    needResources()
-    local full = resolve(name)
-    local text, err = resource.read(full)
-    return text, err
-end
-
---- True when resource `name` is a file or a folder.
-function ui.resource.exists(name)
-    needResources()
-    local full = resolve(name)
-    local found = resource.exists(full)
-    return found
+function ui.Image(props)
+    return imageIn(props, callingScript(1) or ui.__script or "app:/")
 end
 
 -------------------------------------------------------------------------------
 -- Script loading
 -------------------------------------------------------------------------------
 
--- `require "MyComponent"` inside a UI script loads MyComponent.lua from the script's folder (a resource
--- folder such as `app:/`) in the UI environment, like QML files as components. Modules not found there are
--- looked up in `imlui:/` by the engine's searcher, then on package.path.
+-- What a script loaded as a resource sees as `ui`: the ui table, with the functions that resolve relative names
+-- (ui.resource.*, Image, theme, themeState) bound to `script`, so they work wherever its code runs, tail calls
+-- included. Everything else reads and writes the ui table itself.
+local function scriptUi(script)
+    local own = {
+        resource = resourceApi(function() return script end),
+        Image = function(props) return imageIn(props, script) end,
+        theme = function(t) return applyTheme(t, script) end,
+        themeState = function(init) return themeStateFor(init, script) end,
+    }
+    return setmetatable({}, {
+        __index = function(_, k)
+            local v = own[k]
+            if v ~= nil then return v end
+            return ui[k]
+        end,
+        __newindex = ui,
+    }), own
+end
+
+-- The environment of a UI script loaded as resource `script` (the entry script, components): ui.env, except that
+-- `ui` and the free names of the bound functions (Image, theme, ...) come from scriptUi(script). Globals it assigns
+-- go to ui.env, so they're shared between scripts as before.
+local function chunkEnv(script)
+    local scoped, own = scriptUi(script)
+    return setmetatable({}, {
+        __index = function(_, k)
+            local v = rawget(ui.env, k) -- a global a script assigned wins, as in ui.env
+            if k == "ui" and v == ui then return scoped end
+            if v ~= nil then return v end
+            v = own[k]
+            if v ~= nil then return v end
+            return ui.env[k]
+        end,
+        __newindex = ui.env,
+    })
+end
+
+-- `require "MyComponent"` inside a UI script loads MyComponent.lua from the entry script's folder (a resource
+-- folder such as `app:/`) in its own environment (chunkEnv), like QML files as components. Modules not found there
+-- are looked up in `imlui:/` by the engine's searcher, then on package.path.
 table.insert(package.searchers, 2, function(name)
     if not ui.__dir or resource == nil then return nil end
     local full, tried = resource.find(name, ui.__dir)
     if not full then return tried end
-    local chunk, err = resource.load(full, ui.env)
+    local chunk, err = resource.load(full, chunkEnv(full))
     if not chunk then error(err, 0) end
     return chunk, full
 end)
 ui.import = require
 
---- Runs the UI script `name` (a full resource name such as `app:/main.lua`) in the UI environment and returns
---- its result. Its folder is where `require` finds components.
+--- Runs the UI script `name` (a full resource name such as `app:/main.lua`) in its environment (chunkEnv) and
+--- returns its result. Its folder is where `require` finds components.
 function ui.__load(name)
     if resource == nil then error("ui.__load: no resource system", 0) end
     ui.__script = name
     ui.__dir = name:match("^(.*/)") or name
-    local chunk, err = resource.load(name, ui.env)
+    local chunk, err = resource.load(name, chunkEnv(name))
     if not chunk then error(err, 0) end
     return chunk()
 end

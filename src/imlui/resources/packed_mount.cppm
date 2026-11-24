@@ -25,7 +25,8 @@ export namespace imlui {
 
 /// Files packed into one block of memory (data compiled into the executable, a .pak archive read into memory).
 /// A stored file is served straight from that memory (zero-copy). A compressed one is decompressed on its first
-/// read and the result is cached until the mount is destroyed, so every span stays valid as long as the mount.
+/// read and the result is cached until the mount is destroyed, so all bytes stay valid as long as the mount (the
+/// ResourceData handles have no owner).
 /// The files never change: modified() is always nullopt.
 class PackedMount : public Mount {
 public:
@@ -41,7 +42,7 @@ public:
     /// later one is kept. The memory behind every `data` must outlive the mount.
     explicit PackedMount(std::vector<Entry> entries);
 
-    [[nodiscard]] std::optional<std::span<const std::byte>> read(std::string_view path) const override;
+    [[nodiscard]] std::optional<ResourceData> read(std::string_view path) const override;
     [[nodiscard]] bool exists(std::string_view path) const override;
     [[nodiscard]] std::vector<std::string> list(std::string_view path) const override;
     [[nodiscard]] std::optional<ResourceTime> modified(std::string_view path) const override;
@@ -86,11 +87,11 @@ std::optional<std::size_t> PackedMount::find(std::string_view path) const {
     return static_cast<std::size_t>(it - m_entries.begin());
 }
 
-std::optional<std::span<const std::byte>> PackedMount::read(std::string_view path) const {
+std::optional<ResourceData> PackedMount::read(std::string_view path) const {
     const auto index = find(path);
     if (!index) return std::nullopt;
     const Entry& entry = m_entries[*index];
-    if (!entry.compressed) return entry.data;
+    if (!entry.compressed) return ResourceData{entry.data};
 
     std::scoped_lock lock{m_mutex};
     auto& cached = m_decompressed[*index];
@@ -107,7 +108,7 @@ std::optional<std::span<const std::byte>> PackedMount::read(std::string_view pat
         }
         cached = std::move(bytes);
     }
-    return std::span<const std::byte>{*cached};
+    return ResourceData{*cached}; // owned by the mount until it is destroyed
 }
 
 bool PackedMount::exists(std::string_view path) const {

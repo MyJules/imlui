@@ -16,9 +16,9 @@ using namespace imlui;
 
 namespace {
 
-std::string text(std::optional<std::span<const std::byte>> bytes) {
+std::string text(const std::optional<ResourceData>& bytes) {
     if (!bytes) return "<none>";
-    return std::string{reinterpret_cast<const char*>(bytes->data()), bytes->size()};
+    return std::string{bytes->text()};
 }
 
 /// A MemoryMount (immutable, like an embedded one) with `files`.
@@ -148,7 +148,48 @@ TEST(DirectoryMount, ReportsModificationTimesAndRereadsChangedFiles) {
     ASSERT_TRUE(after);
     EXPECT_GT(*after, *before);
     EXPECT_EQ(text(mount.read("a.lua")), "newer");
-    EXPECT_EQ(text(first), "old") << "spans read earlier stay valid";
+    EXPECT_EQ(text(first), "old") << "bytes read earlier stay valid while their handle lives";
+}
+
+TEST(DirectoryMount, FreesSupersededBuffersOnceNothingHoldsThem) {
+    test::TempDir dir;
+    dir.write("a.txt", "v0");
+    DirectoryMount mount{dir.path()};
+    std::vector<std::weak_ptr<const void>> versions;
+    const auto held = mount.read("a.txt"); // a holder of version 0, like a font in use
+    ASSERT_TRUE(held && held->owner());
+    versions.push_back(held->owner());
+    for (int i = 1; i <= 20; ++i) {
+        dir.write("a.txt", "v" + std::to_string(i) + std::string(static_cast<std::size_t>(i) * 1000, 'x'));
+        dir.touch("a.txt", 10 * i);
+        const auto bytes = mount.read("a.txt"); // dropped at the end of the iteration
+        ASSERT_TRUE(bytes);
+        EXPECT_TRUE(bytes->text().starts_with("v" + std::to_string(i)));
+        versions.push_back(bytes->owner());
+    }
+    // Live: the version still held and the latest one (the mount's cache). Every other buffer is gone.
+    for (std::size_t i = 0; i < versions.size(); ++i)
+        EXPECT_EQ(versions[i].expired(), i != 0 && i + 1 != versions.size()) << "version " << i;
+    EXPECT_EQ(text(held), "v0") << "bytes held by a handle stay valid";
+
+    // Removing the file drops the cache's reference too.
+    dir.remove("a.txt");
+    EXPECT_FALSE(mount.read("a.txt"));
+    EXPECT_TRUE(versions.back().expired());
+}
+
+TEST(DirectoryMount, HidesTheFilesItIsToldTo) {
+    test::TempDir dir;
+    dir.write("resources.lua", "return {}");
+    dir.write("main.lua", "return 1");
+    dir.write("sub/resources.lua", "-- not hidden: another path");
+    DirectoryMount mount{dir.path(), {"resources.lua"}};
+    EXPECT_FALSE(mount.read("resources.lua"));
+    EXPECT_FALSE(mount.exists("resources.lua"));
+    EXPECT_FALSE(mount.modified("resources.lua"));
+    EXPECT_EQ(mount.list(""), (std::vector<std::string>{"main.lua", "sub/"}));
+    EXPECT_EQ(text(mount.read("sub/resources.lua")), "-- not hidden: another path");
+    EXPECT_EQ(mount.list("sub"), (std::vector<std::string>{"resources.lua"}));
 }
 
 // ------------------------------------------------------------------ Resources
@@ -236,6 +277,21 @@ protected:
                      read = function(n) local t = ui.resource.read(n); return t end,
                      tailUrl = function(n) return ui.resource.url(n) end })");
         m_dir.write("sub/info.txt", "sub info");
+        // Code that uses the plain ui table (require("imlui")) instead of its script's own.
+        m_dir.write("sub/plain.lua", R"(
+            local plain = require("imlui")
+            return { url = function(n) local u = plain.resource.url(n); return u end,
+                     tailUrl = function(n) return plain.resource.url(n) end })");
+        m_dir.write("pages/page.lua", R"(
+            local data = ui.resource.read("data.txt")
+            sharedFromPage = "page"
+            ui.fromPage = true
+            return { data = data, seen = sharedFromMain, img = Image { source = "pic.png" },
+                     tailRead = function() return ui.resource.read("data.txt") end,
+                     tailFreeRead = function() return resource.read("data.txt") end,
+                     tailImage = function() return Image { "pic.png" } end,
+                     tailUiImage = function() return ui.Image { "pic.png" } end })");
+        m_dir.write("pages/data.txt", "page data");
         m_dir.write("Broken.lua", "local x = = 1");
         m_dir.write("pkg/init.lua", "return { name = 'pkg' }");
         m_frame.resources().mount("app:/", std::make_shared<DirectoryMount>(m_dir.path()));
@@ -310,7 +366,17 @@ TEST_F(LuaResourcesTest, ResourceFunctionsResolveAgainstTheCallingScript) {
         assert(helper.url("../data.json") == "app:/data.json")
         assert(helper.read("info.txt") == "sub info")
         assert(helper.tailUrl("app:/a/../b") == "app:/b", "full names work in tail calls")
-        local tailOk, tailErr = pcall(helper.tailUrl, "info.txt")
+        assert(helper.tailUrl("info.txt") == "app:/sub/info.txt", "a script's own ui resolves in tail calls too")
+
+        -- The plain ui table finds the calling script on the stack, which a tail call loses.
+        local plain = require("sub.plain")
+        assert(plain.url("info.txt") == "app:/sub/info.txt", plain.url("info.txt"))
+        assert(plain.tailUrl("app:/a/../b") == "app:/b")
+        local tailOk, tailErr = pcall(plain.tailUrl, "info.txt")
+        assert(not tailOk and tailErr:find("tail call", 1, true), tailErr)
+        -- So does code loaded from a string.
+        local fromString = load([[return ui.resource.url("x")]], "=string", "t", ui.env)
+        tailOk, tailErr = pcall(fromString)
         assert(not tailOk and tailErr:find("tail call", 1, true), tailErr)
 
         local ok, e = pcall(ui.resource.url, "../../outside")
@@ -321,6 +387,27 @@ TEST_F(LuaResourcesTest, ResourceFunctionsResolveAgainstTheCallingScript) {
         assert(not ok and e:find("must be a string", 1, true), e)
     )");
     EXPECT_TRUE(m_frame.loadedResources().contains("app:/sub/info.txt"));
+}
+
+TEST_F(LuaResourcesTest, ComponentsInSubfoldersResolveAgainstTheirOwnFolder) {
+    run(R"(
+        ui.__load("app:/main.lua")
+        sharedFromMain = "main"
+        local page = require("pages.page")
+        assert(page.data == "page data", tostring(page.data))
+        assert(page.img.__base == "app:/pages/page.lua", page.img.__base)
+        assert(page.tailRead() == "page data", "tail calls resolve against the component's folder")
+        assert(page.tailFreeRead() == "page data", "the free name `resource` is the script's own too")
+        assert(page.tailImage().__base == "app:/pages/page.lua")
+        assert(page.tailUiImage().__base == "app:/pages/page.lua")
+
+        -- Scripts still share one environment: globals, ids and writes to ui.
+        assert(page.seen == "main")
+        assert(sharedFromPage == "page")
+        assert(ui.fromPage == true)
+        assert(ui.resource.url("data.txt") == "app:/data.txt", "code outside the scripts uses the main script")
+    )");
+    EXPECT_TRUE(m_frame.loadedResources().contains("app:/pages/data.txt"));
 }
 
 TEST_F(LuaResourcesTest, ModulesInImluiPrefixLoadInTheGlobalEnvironment) {
