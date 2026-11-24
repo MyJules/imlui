@@ -7,48 +7,72 @@
 // A box belongs to the ImGui window it was pushed in (and to the frame): in another window (a popup, a child window
 // a container opened without a box of its own) the queries fall back to that window's content region. When ImGui
 // itself narrows the region under a box (a table cell begun after the box was pushed), the narrower edge wins.
+//
+// Auto-sized windows (a Window with autoResize, a Dialog, menus, popups) take their content's width, so their
+// content must not size itself by the window's width: a fill there would keep the window at whatever width it once
+// had (it could grow, never shrink back). Their root box is shrink-to-fit (shrinkToFitBox()): a fill resolves to the
+// window's minimum content width, widened to the widest claimWidth() of the last frame (menu rows), never to the
+// window's current width, so the window's width depends on its content only. Content may still grow past it (a
+// long label), up to the maximum width, where text wraps.
 export module imlui.ui.layout_box;
 
 import std;
 
 import imgui;
+import imlui.ui.frame_request;
 
 export namespace imlui::layout {
 
 /// The space given to a container's children, in absolute screen pixels.
 struct Box {
-    /// Right edge: the available width at the cursor is `right - cursor x`, so Indent / SameLine / a Row's x
-    /// positions shrink it.
+    /// Right edge, where a fill ends: the available width at the cursor is `right - cursor x`, so Indent / SameLine /
+    /// a Row's x positions shrink it.
     float right = 0.0f;
     /// Bottom edge; unset uses the ImGui window's content region.
     std::optional<float> bottom;
-    /// Reserved for auto-sized windows (not applied yet): the window takes its content's width, so a fill
-    /// resolves to minW instead of the current window width.
+    /// How far content may reach, where text wraps; unset: `right`. Past `right` in an auto-sized window.
+    std::optional<float> wrapRight;
+    /// An auto-sized window's box (shrinkToFitBox(), or insetBox() inside one): pushing it widens `right` to the
+    /// widest claimWidth() of the last frame (up to wrapRight).
     bool shrinkToFit = false;
-    float minW = 0.0f;
-    float maxW = std::numeric_limits<float>::max();
 };
 
 /// The ImGui content region at the cursor as a box (what the queries use where no box was pushed).
 [[nodiscard]] Box regionBox();
 /// A box ending at `right`.
 [[nodiscard]] Box boxTo(float right);
+/// The root box of an auto-sized window, at the cursor: a fill is `minWidth` wide (or as wide as the widest
+/// claimWidth() of the last frame), and content may grow, and text wraps, up to `maxWidth`.
+[[nodiscard]] Box shrinkToFitBox(float minWidth, float maxWidth);
+/// The current box, `inset` pixels narrower on the right (still shrink-to-fit in an auto-sized window).
+[[nodiscard]] Box insetBox(float inset);
 
-/// Right edge of the current box (screen x).
+/// Right edge of the current box (screen x): where a fill ends.
 [[nodiscard]] float boxRight();
-/// Width / height available at the cursor in the current box (>= 0).
+/// Width / height available at the cursor in the current box (>= 0): what a fill takes.
 [[nodiscard]] float availableWidth();
 [[nodiscard]] float availableHeight();
-/// The current box's right edge as an ImGui::PushTextWrapPos() position (window-local), for wrapping text at it.
+/// The current box's wrap edge as an ImGui::PushTextWrapPos() position (window-local), for wrapping text at it.
 [[nodiscard]] float textWrapPos();
+/// Whether the current box is in an auto-sized window, whose width follows its content.
+[[nodiscard]] bool shrinkToFit();
+/// The width of a fill that needs at least `natural` pixels (a menu row): max(natural, availableWidth()). In a
+/// shrink-to-fit box it also widens the box's fill width to cover it from the next frame on (asking for a frame
+/// when that changes), so every fill in an auto-sized window (the other rows) matches the widest.
+float claimWidth(float natural);
 
-/// Pushes a box for its lifetime. By default it also mirrors the box to ImGui's own state, so raw ImGui widgets in
-/// custom elements follow it: PushItemWidth(right - cursor x) and PushTextWrapPos(right). The root box of a new
-/// window (Mirror::None) leaves ImGui's per-window defaults alone.
+/// How a box is mirrored to ImGui's own state. ItemWidthAndWrap pushes ImGui's item width (the fill width) and text
+/// wrap position (the wrap edge), so raw ImGui widgets in custom elements follow the box. None, for the root box of
+/// a window that isn't auto-sized, leaves ImGui's per-window defaults alone.
+enum class Mirror { ItemWidthAndWrap, None };
+
+/// Pushes a box until popBox(), for begin/end APIs (md::beginDialog). Prefer BoxScope.
+void pushBox(Box box, Mirror mirror = Mirror::ItemWidthAndWrap);
+void popBox();
+
+/// Pushes a box for its lifetime. Boxes a child left pushed when it threw (a Lua error) are popped with it.
 class BoxScope {
 public:
-    enum class Mirror { ItemWidthAndWrap, None };
-
     explicit BoxScope(Box box, Mirror mirror = Mirror::ItemWidthAndWrap);
     ~BoxScope();
     BoxScope(const BoxScope&) = delete;
@@ -57,8 +81,8 @@ public:
     BoxScope& operator=(BoxScope&&) = delete;
 
 private:
-    bool m_mirrored;
-    int m_exceptions; ///< std::uncaught_exceptions() when pushed
+    std::size_t m_depth; ///< stack size below this box
+    int m_exceptions;    ///< std::uncaught_exceptions() when pushed
 };
 
 } // namespace imlui::layout
@@ -71,9 +95,17 @@ namespace {
 
 struct Entry {
     Box box;
-    const ImDrawList* window; ///< the ImGui window it was pushed in (every window has its own draw list)
-    int frame;                ///< ImGui frame it was pushed in
-    float regionRight;        ///< the window's content region edge at push time (see current())
+    const ImDrawList* window = nullptr; ///< the ImGui window it was pushed in (every window has its own draw list)
+    int frame = 0;                      ///< ImGui frame it was pushed in
+    float regionRight = 0.0f;           ///< the window's content region edge at push time (see current())
+    bool mirrored = false;
+    // Shrink-to-fit only: the widest claim (from `left`) of this frame and of the last one, which is kept in the
+    // window's state storage under `key`.
+    ImGuiStorage* storage = nullptr;
+    ImGuiID key = 0;
+    float left = 0.0f;
+    float lastClaim = 0.0f;
+    float claim = 0.0f;
 };
 
 std::vector<Entry> boxes; // main thread only, like all ImGui code
@@ -81,17 +113,46 @@ std::vector<Entry> boxes; // main thread only, like all ImGui code
 /// Right edge of ImGui's content region at the cursor (narrowed by table cells).
 float regionRight() { return ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x; }
 
+/// The top entry when it belongs to the current window and frame.
+Entry* top() {
+    if (boxes.empty()) return nullptr;
+    Entry& e = boxes.back();
+    if (e.window != ImGui::GetWindowDrawList() || e.frame != ImGui::GetFrameCount()) return nullptr;
+    return &e;
+}
+
 /// The box in effect: the top entry when it belongs to the current window and frame, else the content region.
 Box current() {
-    if (boxes.empty()) return regionBox();
-    const Entry& top = boxes.back();
-    if (top.window != ImGui::GetWindowDrawList() || top.frame != ImGui::GetFrameCount()) return regionBox();
-    Box b = top.box;
+    const Entry* e = top();
+    if (!e) return regionBox();
+    Box b = e->box;
     // The region edge is constant within a window, except where ImGui narrowed it since the push (a table cell):
     // then the cell's edge bounds the box too.
     const float now = regionRight();
-    if (std::fabs(now - top.regionRight) > 0.5f) b.right = std::min(b.right, now);
+    if (std::fabs(now - e->regionRight) > 0.5f) {
+        b.right = std::min(b.right, now);
+        if (b.wrapRight) b.wrapRight = std::min(*b.wrapRight, now);
+    }
     return b;
+}
+
+/// Pops the boxes above `depth`. While an exception unwinds the render pass (a Lua error), a child window or popup
+/// may still be current, whose stacks the ImGui pops would hit; ImGui clears both stacks at the window's next
+/// Begin(), so they are skipped then.
+void popTo(std::size_t depth, bool unwinding) {
+    while (boxes.size() > depth) {
+        const Entry& e = boxes.back();
+        if (e.mirrored && !unwinding) {
+            ImGui::PopTextWrapPos();
+            ImGui::PopItemWidth();
+        }
+        if (e.storage && std::fabs(e.claim - e.lastClaim) > 0.5f) {
+            // The widest claim changed: the fills take it on the next frame.
+            e.storage->SetFloat(e.key, e.claim);
+            requestFrame();
+        }
+        boxes.pop_back();
+    }
 }
 
 } // namespace
@@ -108,6 +169,22 @@ Box boxTo(float right) {
     return b;
 }
 
+Box shrinkToFitBox(float minWidth, float maxWidth) {
+    const float x = ImGui::GetCursorScreenPos().x;
+    Box b;
+    b.right = x + std::max(0.0f, minWidth);
+    b.wrapRight = std::max(b.right, x + maxWidth);
+    b.shrinkToFit = true;
+    return b;
+}
+
+Box insetBox(float inset) {
+    Box b = current();
+    b.right -= inset;
+    if (b.wrapRight) *b.wrapRight -= inset;
+    return b;
+}
+
 float boxRight() { return current().right; }
 
 float availableWidth() { return std::max(0.0f, current().right - ImGui::GetCursorScreenPos().x); }
@@ -121,26 +198,53 @@ float availableHeight() {
 float textWrapPos() {
     // PushTextWrapPos takes a window-local x (ImGui adds the window position and subtracts the scroll); 0 and less
     // mean something else (the window edge, no wrap), so it is at least a pixel.
-    return std::max(1.0f, boxRight() - ImGui::GetWindowPos().x + ImGui::GetScrollX());
+    const Box b = current();
+    return std::max(1.0f, b.wrapRight.value_or(b.right) - ImGui::GetWindowPos().x + ImGui::GetScrollX());
 }
 
-BoxScope::BoxScope(Box box, Mirror mirror)
-    : m_mirrored{mirror == Mirror::ItemWidthAndWrap}, m_exceptions{std::uncaught_exceptions()} {
-    boxes.push_back({box, ImGui::GetWindowDrawList(), ImGui::GetFrameCount(), regionRight()});
-    if (m_mirrored) {
-        ImGui::PushItemWidth(std::max(1.0f, box.right - ImGui::GetCursorScreenPos().x));
+bool shrinkToFit() {
+    const Entry* e = top();
+    return e && e->box.shrinkToFit;
+}
+
+float claimWidth(float natural) {
+    if (Entry* e = top(); e && e->storage)
+        e->claim = std::max(e->claim, ImGui::GetCursorScreenPos().x + natural - e->left);
+    return std::max(natural, availableWidth());
+}
+
+void pushBox(Box box, Mirror mirror) {
+    // Every frame ends with an empty stack, unless a render pass threw past a popBox(): drop what it left.
+    if (!boxes.empty() && boxes.front().frame != ImGui::GetFrameCount()) boxes.clear();
+    Entry e;
+    e.box = box;
+    e.window = ImGui::GetWindowDrawList();
+    e.frame = ImGui::GetFrameCount();
+    e.regionRight = regionRight();
+    e.mirrored = mirror == Mirror::ItemWidthAndWrap;
+    if (box.shrinkToFit) {
+        e.storage = ImGui::GetStateStorage();
+        e.key = ImGui::GetID("##imlui.layout.claim");
+        e.left = ImGui::GetCursorScreenPos().x;
+        e.lastClaim = e.storage->GetFloat(e.key, 0.0f);
+        e.box.right = std::max(box.right, std::min(box.wrapRight.value_or(box.right), e.left + e.lastClaim));
+    }
+    boxes.push_back(e);
+    if (e.mirrored) {
+        ImGui::PushItemWidth(std::max(1.0f, e.box.right - ImGui::GetCursorScreenPos().x));
         ImGui::PushTextWrapPos(textWrapPos());
     }
 }
 
-BoxScope::~BoxScope() {
-    // A Lua error unwinding the render pass (a C++ exception) may leave a child window or popup current, whose
-    // stacks these pops would hit. ImGui clears both stacks at the window's next Begin(), so they are skipped then.
-    if (m_mirrored && std::uncaught_exceptions() == m_exceptions) {
-        ImGui::PopTextWrapPos();
-        ImGui::PopItemWidth();
-    }
-    boxes.pop_back();
+void popBox() {
+    if (!boxes.empty()) popTo(boxes.size() - 1, false);
 }
+
+BoxScope::BoxScope(Box box, Mirror mirror) : m_depth{0}, m_exceptions{std::uncaught_exceptions()} {
+    pushBox(box, mirror);
+    m_depth = boxes.size() - 1; // after pushBox, which may drop stale entries
+}
+
+BoxScope::~BoxScope() { popTo(m_depth, std::uncaught_exceptions() != m_exceptions); }
 
 } // namespace imlui::layout

@@ -1,7 +1,9 @@
 // The window elements as typed elements (ApplicationWindow, Window, Dialog), through the headless frame
 // harness: props reach the instances, the children and the `menuBar` render, two-way `open` with onClosed,
-// the window title, and the defaults.
+// the window title, the defaults, and the width of auto-sized windows (stable with a fill inside, shrinking back).
 #include <gtest/gtest.h>
+
+import std;
 
 import imgui;
 import imlui.color;
@@ -22,13 +24,57 @@ namespace {
 
 using Probe = test::RenderCounter; // a visual element that counts its renders
 
+/// A visual element 20px wide unless its `width` says otherwise (a fill); records its width and the width of the
+/// ImGui window it renders in.
+class WidthProbe final : public Element {
+public:
+    static void declare(TypeBuilder<WidthProbe>&) {}
+
+    void render(Frame& frame) override {
+        m_windowWidth = ImGui::GetWindowWidth();
+        m_width = frame.resolvedWidth(frame.dp(20));
+        ImGui::Dummy({m_width, frame.dp(10)});
+    }
+
+    [[nodiscard]] float windowWidth() const { return m_windowWidth; }
+    [[nodiscard]] float width() const { return m_width; }
+
+private:
+    float m_windowWidth = 0.0f;
+    float m_width = 0.0f;
+};
+
+/// Wider than an auto-resized Window's fill and a Dialog's minimum, narrower than a Dialog's maximum.
+constexpr std::string_view longLabel = "A label long enough to widen a dialog past its minimum width";
+
 class WindowsTest : public ::testing::Test {
 protected:
-    void SetUp() override { m_h.registerType<Probe>("Probe"); }
+    void SetUp() override {
+        m_h.registerType<Probe>("Probe");
+        m_h.registerType<WidthProbe>("WidthProbe");
+    }
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
     int renders(const char* name) { return m_h.instance<Probe>(name)->renders(); }
     /// A press and a release at (x, y), over two frames, then a frame to react.
     void click(const char* root, float x, float y) { m_h.click(root, x, y, 2); }
+
+    /// Renders `frames` frames and returns the width of the window WidthProbe `probe` rendered in, per frame.
+    std::vector<float> windowWidths(const char* probe, int frames) {
+        std::vector<float> widths;
+        for (int i = 0; i < frames; ++i) {
+            m_h.renderFrame("root");
+            widths.push_back(m_h.instance<WidthProbe>(probe)->windowWidth());
+        }
+        return widths;
+    }
+    /// The width the window settles at: the same on the last 10 of 14 frames (an auto-resized window follows the
+    /// last frame's content, a popup's first frame is laid out hidden, a dialog replacing another waits a frame).
+    float settledWidth(const char* probe, std::string_view what) {
+        const std::vector<float> widths = windowWidths(probe, 14);
+        for (std::size_t i = 5; i < widths.size(); ++i)
+            EXPECT_EQ(widths[i], widths[4]) << what << ", frame " << i;
+        return widths.back();
+    }
 
     test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true}};
 };
@@ -177,7 +223,71 @@ TEST_F(WindowsTest, TheCloseButtonWritesOpenBackAndEmitsOnClosed) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+TEST_F(WindowsTest, AnAutoResizedWindowKeepsItsWidthWithAFillAndShrinksBack) {
+    // A fill used to take the window's width, so the window kept the widest width it ever had.
+    run(R"(
+        s = state { label = "Short" }
+        root = Column { Window { title = "W", WidthProbe { id = "fill", width = -1 },
+                                 Text { text = function() return s.label end } } })");
+    const float narrow = settledWidth("fill", "short label");
+    const float pad = ImGui::GetStyle().WindowPadding.x;
+    EXPECT_FLOAT_EQ(m_h.instance<WidthProbe>("fill")->width(), Window::defaultFillWidth); // dp = px here
+    EXPECT_FLOAT_EQ(narrow, Window::defaultFillWidth + 2.0f * pad);
+
+    run(std::format(R"(s.label = "{}")", longLabel));
+    const float wide = settledWidth("fill", "long label");
+    EXPECT_GT(wide, narrow + 10.0f);
+    EXPECT_FLOAT_EQ(m_h.instance<WidthProbe>("fill")->width(), Window::defaultFillWidth); // not the window's width
+
+    run(R"(s.label = "Short")");
+    EXPECT_FLOAT_EQ(settledWidth("fill", "short again"), narrow);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(WindowsTest, AnAutoResizedWindowsWidthIsItsMinimumAndItsFill) {
+    run(R"(root = Column { Window { title = "W", width = 300, autoResize = true,
+                                    WidthProbe { id = "fill", width = -1 } } })");
+    EXPECT_FLOAT_EQ(settledWidth("fill", "width 300"), 300.0f);
+    EXPECT_FLOAT_EQ(m_h.instance<WidthProbe>("fill")->width(), 300.0f - 2.0f * ImGui::GetStyle().WindowPadding.x);
+}
+
 // ------------------------------------------------------------------ Dialog
+
+TEST_F(WindowsTest, ADialogKeepsItsWidthWithAFillAndShrinksBack) {
+    run(R"(
+        s = state { label = "Short" }
+        root = Column { Dialog { open = true, title = "T", WidthProbe { id = "fill", width = -1 },
+                                 Text { text = function() return s.label end } } })");
+    EXPECT_FLOAT_EQ(settledWidth("fill", "short label"), 280.0f); // the minimum (dp = px here)
+    EXPECT_FLOAT_EQ(m_h.instance<WidthProbe>("fill")->width(), 280.0f - 48.0f);
+
+    run(std::format(R"(s.label = "{}")", longLabel));
+    const float wide = settledWidth("fill", "long label");
+    EXPECT_GT(wide, 290.0f);
+    EXPECT_LT(wide, 560.0f);
+    EXPECT_FLOAT_EQ(m_h.instance<WidthProbe>("fill")->width(), 280.0f - 48.0f);
+
+    run(R"(s.label = "Short")");
+    EXPECT_FLOAT_EQ(settledWidth("fill", "short again"), 280.0f);
+
+    // Wrapping text wraps at the maximum width (its longest line may be a word shorter).
+    run(R"(s.label = string.rep("wrapping words ", 40))");
+    run(R"(root = Column { Dialog { open = true, title = "T", WidthProbe { id = "fill", width = -1 },
+                                    Text { wrap = true, text = function() return s.label end } } })");
+    const float wrapped = settledWidth("fill", "wrapping text");
+    EXPECT_LE(wrapped, 560.0f);
+    EXPECT_GT(wrapped, 480.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(WindowsTest, ADialogsFillIsAtLeastItsTitle) {
+    run(R"(root = Column { Dialog { open = true, title = "A title wider than the minimum",
+                                    WidthProbe { id = "fill", width = -1 } } })");
+    const float w = settledWidth("fill", "long title");
+    EXPECT_GT(w, 280.0f);
+    // The fill is as wide as the title, which is what the dialog is as wide as.
+    EXPECT_NEAR(m_h.instance<WidthProbe>("fill")->width(), w - 48.0f, 1.0f); // ImGui truncates window sizes
+}
 
 TEST_F(WindowsTest, DialogDefaults) {
     run("root = Dialog { }");

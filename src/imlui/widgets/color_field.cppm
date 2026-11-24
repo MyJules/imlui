@@ -11,6 +11,7 @@ import imlui.theme.typography;
 import imlui.widgets.common;
 import imlui.widgets.anchored_popup;
 import imlui.widgets.text_field;
+import imlui.ui.layout_box;
 
 export namespace imlui::md {
 
@@ -71,6 +72,8 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
     ImGui::PopStyleColor();
     trackAnchoredPopup(anchored, popup);
     if (popup) {
+        // The popup takes its content's width (240dp): a fill in it doesn't read the popup's width.
+        layout::pushBox(layout::shrinkToFitBox(dp(240), dp(240)));
         float v[4] = {c->r, c->g, c->b, c->a};
         ImGui::SetNextItemWidth(dp(240));
         ImGuiColorEditFlags fl = ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoSmallPreview |
@@ -96,6 +99,7 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
                 *c = alpha ? *nc : nc->withAlpha(1.0f);
                 changed = true;
             }
+        layout::popBox();
         ImGui::EndPopup();
     }
     ImGui::PopID();

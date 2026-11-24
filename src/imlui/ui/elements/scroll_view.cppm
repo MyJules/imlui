@@ -136,7 +136,7 @@ void ScrollView::render(Frame& frame) {
 
     if (m_color) md::pushSurface(*m_color);
     {
-        const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
+        const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
         frame.renderStack();
     }
     if (m_color) md::popSurface();

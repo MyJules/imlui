@@ -8,6 +8,7 @@ import imgui;
 import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
+import imlui.theme.typography;
 import imlui.widgets;
 import imlui.test.headless_frame;
 
@@ -54,29 +55,83 @@ protected:
 // ------------------------------------------------------------------ Snackbar
 
 TEST_F(WidgetsTest, ClosableSnackbarKeepsItsWidthWhateverTheThemeSpacing) {
-    // A theme spacing other than the snackbar's own 8dp gap made the auto-resized window wider every frame.
-    for (const float spacing : {4.0f, 8.0f, 20.0f}) {
-        ImGui::GetStyle().ItemSpacing.x = spacing;
-        for (const bool withAction : {false, true}) {
-            const std::string_view action = withAction ? "Undo" : "";
-            std::vector<float> widths;
-            for (int i = 0; i < 12; ++i) {
-                frame([&] {
-                    bool closed = false;
-                    md::snackbar("Saved", action, 1.0f, true, &closed);
-                    // Appends to the snackbar's window to read its size.
-                    ImGui::Begin(md::scopedWindowName("", "snackbar").c_str());
-                    widths.push_back(ImGui::GetWindowWidth());
-                    ImGui::End();
-                });
+    // A theme spacing other than the snackbar's own 8dp gap made the auto-resized window wider every frame. The
+    // width is now computed from the content: message + gaps + actions + padding, at least 344dp.
+    for (const std::string_view message :
+         {std::string_view{"Saved"}, std::string_view{"A message long enough to widen the bar"}}) {
+        for (const float spacing : {4.0f, 8.0f, 20.0f}) {
+            ImGui::GetStyle().ItemSpacing.x = spacing;
+            for (const bool withAction : {false, true}) {
+                const std::string_view action = withAction ? "Undo" : "";
+                float content = md::measure(TextStyle::BodyMedium, message).x + dp(48) + 2.0f * dp(16);
+                if (withAction) content += dp(8) + md::measure(TextStyle::LabelLarge, action).x + dp(24);
+                const float expected = std::max(dp(344), content);
+                std::vector<float> widths;
+                for (int i = 0; i < 12; ++i) {
+                    frame([&] {
+                        bool closed = false;
+                        md::snackbar(message, action, 1.0f, true, &closed);
+                        // Appends to the snackbar's window to read its size.
+                        ImGui::Begin(md::scopedWindowName("", "snackbar").c_str());
+                        widths.push_back(ImGui::GetWindowWidth());
+                        ImGui::End();
+                    });
+                }
+                for (std::size_t i = 0; i < widths.size(); ++i)
+                    EXPECT_FLOAT_EQ(widths[i], expected)
+                        << message << ", spacing " << spacing << ", action " << withAction << ", frame " << i;
             }
-            // Settled after the first frames (auto-resize follows the last frame's content), then stable.
-            for (std::size_t i = 3; i < widths.size(); ++i)
-                EXPECT_EQ(widths[i], widths[2])
-                    << "spacing " << spacing << ", action " << withAction << ", frame " << i;
-            EXPECT_LT(widths.back(), dp(400)) << "spacing " << spacing;
         }
     }
+}
+
+TEST_F(WidgetsTest, SnackbarWidthIsClampedAndFitsANarrowViewport) {
+    EXPECT_FLOAT_EQ(md::snackbarWidth(dp(100), dp(800)), dp(344)); // the minimum
+    EXPECT_FLOAT_EQ(md::snackbarWidth(dp(500), dp(800)), dp(500)); // the content
+    EXPECT_FLOAT_EQ(md::snackbarWidth(dp(900), dp(800)), dp(672)); // the maximum
+    EXPECT_FLOAT_EQ(md::snackbarWidth(dp(900), dp(600)), dp(568)); // the viewport less 16dp each side
+    EXPECT_FLOAT_EQ(md::snackbarWidth(dp(100), dp(300)), dp(268)); // ... even below the minimum
+}
+
+// ------------------------------------------------------------------ Menus
+
+TEST_F(WidgetsTest, AnAnchoredMenuFitsItsWidestRowAndShrinksBack) {
+    // Rows and fills used to take the menu's current width, so a menu kept the widest width it ever had.
+    std::string label = "Open";
+    float menuWidth = 0.0f, rowWidth = 0.0f, fill = 0.0f;
+    bool opened = false;
+    const auto settle = [&](std::string_view what) {
+        std::vector<float> widths;
+        for (int i = 0; i < 10; ++i) {
+            frame([&] {
+                if (!opened) ImGui::OpenPopup("##menu");
+                opened = true;
+                if (md::beginAnchoredMenu("##menu", {10, 10}, {60, 30}, dp(112))) {
+                    md::menuItem("##short", "Cut");
+                    rowWidth = ImGui::GetItemRectSize().x;
+                    md::menuItem("##label", label);
+                    md::menuDivider();
+                    fill = md::itemWidth(-1.0f, 0.0f);
+                    ImGui::Dummy({fill, 1.0f});
+                    menuWidth = ImGui::GetWindowWidth();
+                    md::endAnchoredMenu();
+                }
+            });
+            widths.push_back(menuWidth);
+        }
+        for (std::size_t i = 3; i < widths.size(); ++i)
+            EXPECT_EQ(widths[i], widths[2]) << what << ", frame " << i;
+        // Every row and every fill is the menu's width (which ImGui truncates to whole pixels).
+        EXPECT_NEAR(rowWidth, menuWidth, 1.0f) << what;
+        EXPECT_NEAR(fill, menuWidth, 1.0f) << what;
+        return menuWidth;
+    };
+    const float narrow = settle("short rows");
+    EXPECT_FLOAT_EQ(narrow, dp(160)); // a row's minimum
+    label = "A menu entry long enough to widen the menu";
+    EXPECT_GT(settle("a long row"), narrow + dp(20));
+    label = "Paste";
+    EXPECT_FLOAT_EQ(settle("short again"), narrow);
 }
 
 // ------------------------------------------------------------------ Chart

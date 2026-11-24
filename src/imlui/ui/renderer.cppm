@@ -17,6 +17,7 @@ import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.layout_box;
+import imlui.ui.frame_request;
 import imlui.ui.props;
 
 export namespace imlui {
@@ -176,8 +177,15 @@ void Renderer::renderStack(const Node& node) {
     const float align = alignFactor(node.string("align", "start"));
     lua::State* state = node.state();
     ImGuiStorage* st = ImGui::GetStateStorage();
-    const float avail = layout::availableWidth();
+    float avail = layout::availableWidth();
     const float x0 = ImGui::GetCursorScreenPos().x;
+    // In an auto-sized window the stack is as wide as its widest child (a fill there is only the window's minimum
+    // width), so `align` places the children in that width, as measured on the last frame. Not in the window's
+    // width: it would follow the window, which follows the aligned children.
+    const bool fit = align > 0.0f && layout::shrinkToFit();
+    const ImGuiID widestKey = fit ? ImGui::GetID("##imlui.stackWidth") : 0;
+    float widest = 0.0f;
+    if (fit) avail = std::max(avail, st->GetFloat(widestKey, 0.0f));
     bool first = true;
     forEachChild(node, [&](int idx) {
         if (!isVisual(state, idx)) {
@@ -195,9 +203,16 @@ void Renderer::renderStack(const Node& node) {
             ImGui::SetCursorScreenPos({x0 + std::max(0.0f, (avail - w) * align), ImGui::GetCursorScreenPos().y});
         }
         render(state, idx);
-        if (align > 0.0f) st->SetFloat(key, ImGui::GetItemRectSize().x);
+        if (align > 0.0f) {
+            st->SetFloat(key, ImGui::GetItemRectSize().x);
+            widest = std::max(widest, ImGui::GetItemRectSize().x);
+        }
         first = false;
     });
+    if (fit && std::fabs(widest - st->GetFloat(widestKey, 0.0f)) > 0.5f) {
+        st->SetFloat(widestKey, widest);
+        requestFrame();
+    }
 }
 
 void Renderer::attachMenu(const Node& node, bool clicked) {
