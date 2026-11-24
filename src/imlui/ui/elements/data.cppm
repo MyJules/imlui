@@ -1,5 +1,5 @@
-// Progress, data and custom drawing: ProgressBar, CircularProgress,
-// BusyIndicator, Plot, Table, Canvas.
+// Progress, data and custom drawing: CircularProgress, BusyIndicator, Plot, Table, Canvas.
+// (ProgressBar is a typed element: imlui.ui.elements.progress_bar.)
 module;
 
 #include <algorithm>
@@ -35,10 +35,6 @@ namespace imlui {
 using luaui::Node;
 
 namespace {
-
-void progressBar(Renderer&, const Node& n) {
-    md::progress(n.boolean("indeterminate", false) ? -1.0f : n.numf("value", 0.0f), sizeProp(n, "width"));
-}
 
 void circularProgress(Renderer&, const Node& n) {
     md::circularProgress(n.boolean("indeterminate", false) ? -1.0f : n.numf("value", 0.0f), sizeProp(n, "size"),
@@ -181,7 +177,6 @@ void canvas(Renderer&, const Node& n) {
 } // namespace
 
 void registerDataElements(Renderer& renderer) {
-    renderer.registerElement("ProgressBar", progressBar);
     renderer.registerElement("CircularProgress", circularProgress);
     renderer.registerElement("BusyIndicator", busyIndicator);
     renderer.registerElement("Plot", plot);

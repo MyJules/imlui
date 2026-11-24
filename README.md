@@ -22,6 +22,7 @@ return ApplicationWindow {
 
 Full docs are in [`docs/`](docs/README.md): [getting started](docs/getting-started.md),
 [architecture](docs/architecture.md), [Lua API](docs/lua-api.md), [elements](docs/elements.md),
+[registering C++ types](docs/extending.md),
 [theming](docs/theming.md), [development](docs/development.md) and [status / changelog](docs/changelog.md).
 
 ## Build (clang + Ninja)
@@ -31,6 +32,7 @@ cmake --preset clang-debug
 cmake --build build/clang-debug
 build/clang-debug/bin/imlui_app                      # gallery
 build/clang-debug/bin/imlui_app examples/counter.lua
+build/clang-debug/bin/imlui_custom_types             # C++ element types and a singleton (docs/extending.md)
 ```
 
 Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3) and are
@@ -54,12 +56,13 @@ tree, so you don't need to rebuild.
 | `src/imlui/lua/` | `imlui.lua.*`: Lua bridge (`Node` bindings and signals, values, errors, theme tables, Canvas painter, `imlui.native`) |
 | `src/imlui/widgets/` | `imlui.widgets.*`: Material widgets drawn with ImGui (buttons, selection, slider, fields, menus, ...) |
 | `src/imlui/ui/` | `imlui.ui.renderer` (walks the Lua element tree every frame) and `imlui.ui.props` |
-| `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in element handlers, by family, and `registerBuiltinElements` |
+| `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in element handlers, by family, the typed `ProgressBar` and `Timer`, and `registerBuiltinElements` / `registerBuiltinTypes` |
+| `src/imlui/types/` | `imlui.types.*`: the C++ type system: `Object`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |
 | `lua/imlui.lua` | the DSL: elements, `state`, `bind`, `Repeater`, `theme`, timers |
-| `examples/` | `gallery.lua` (every element and a live theme editor), `counter.lua`, `StatCard.lua` |
+| `examples/` | `gallery.lua` (every element and a live theme editor), `counter.lua`, `StatCard.lua`, `custom_types.lua` with `custom_types/` (the `imlui_custom_types` app: a C++ `Gauge` element and a `backend` singleton) |
 
 ## Concepts
 
@@ -114,8 +117,24 @@ tree, so you don't need to rebuild.
 | Feedback & data | `ProgressBar`, `CircularProgress`, `BusyIndicator`, `Plot` (`kind` = lines, bars), `Table`, `Canvas` (draw from Lua with `onPaint(self, p)`; `p:line/rect/circle/text/icon/polyline`) |
 | Other | `Timer`, `ImGuiDemo` |
 
-C++ apps can add elements with `engine.renderer().registerElement("MyThing", fn)`. Any
-Capitalized name in a script is a constructor, so `MyThing {}` works immediately.
+C++ apps register their own types, QML style (see [Registering C++ types](docs/extending.md)):
+
+```cpp
+class Gauge final : public imlui::Element {
+public:
+    static void declare(imlui::TypeBuilder<Gauge>& type) {
+        type.property("value", &Gauge::value, &Gauge::setValue).signal("onPeak").method("reset", &Gauge::reset);
+    }
+    void render(imlui::Frame& frame) override;
+    // value(), setValue(double), reset() { ...; notify("value"); }
+};
+
+engine.registerType<Gauge>("Gauge");          // Gauge { value = bind(s, "cpu"), onPeak = fn }, then g:reset()
+engine.registerSingleton("backend", backend); // backend.load, backend:tick(), backend.onTick = fn
+```
+
+The low-level path, `engine.renderer().registerElement("MyThing", fn)`, still works. Any Capitalized name in a
+script is a constructor, so `MyThing {}` works immediately.
 
 ### Theme (decided in Lua)
 

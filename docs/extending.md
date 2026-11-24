@@ -1,0 +1,434 @@
+# Registering C++ types
+
+imlui UIs are written in Lua, but the interesting work of an app usually happens in C++. This page shows how to
+expose C++ to Lua the way Qt exposes C++ to QML (`qmlRegisterType`, `Q_PROPERTY`, `Q_SIGNAL`, `Q_INVOKABLE`
+and singletons):
+
+- an **element type** is a C++ class that scripts instantiate like a built-in: `Gauge { value = ... }`
+- a **singleton** is one C++ object that scripts see as a global: `backend.load`, `backend:tick()`
+
+Both declare their properties, signals and methods once, in a static `declare()` function, and get conversion,
+bindings, two-way write-back, signal dispatch and lifetime handling for free.
+
+```cpp
+import imlui;
+
+class Gauge final : public imlui::Element {
+public:
+    static void declare(imlui::TypeBuilder<Gauge>& type) {
+        type.property("value", &Gauge::value, &Gauge::setValue)
+            .property("label", &Gauge::label, &Gauge::setLabel)
+            .signal("onPeak")
+            .method("reset", &Gauge::reset);
+    }
+
+    void render(imlui::Frame& frame) override; // draw with md:: widgets or frame.drawList()
+
+    double value() const { return m_value; }
+    void setValue(double v) {
+        if (m_value < 0.9 && v >= 0.9) emit("onPeak", v);
+        m_value = v;
+    }
+    const std::string& label() const { return m_label; }
+    void setLabel(std::string l) { m_label = std::move(l); }
+    void reset() {
+        m_value = 0;
+        notify("value"); // tell Lua: writes the value back, emits onValueChanged, requests a frame
+    }
+
+private:
+    double m_value = 0;
+    std::string m_label;
+};
+
+int main(int argc, char** argv) {
+    imlui::Engine engine{imlui::defaultConfig(argc, argv)};
+    engine.registerType<Gauge>("Gauge");
+
+    Backend backend;                              // derives imlui::Object, has a declare()
+    engine.registerSingleton("backend", backend); // the Lua global `backend`
+    return engine.run();
+}
+```
+
+```lua
+local s = state { cpu = 0.4 }
+
+Gauge { id = "cpu", value = bind(s, "cpu"), label = "CPU",
+        onPeak = function(self, v) snackbar(("%s peaked at %.0f%%"):format(self.label, v * 100)) end,
+        onValueChanged = function(self, v) print("now", v) end },
+Button { text = "Reset", onClicked = function() cpu:reset() end },
+Text { text = function() return ("load %.0f%%"):format(backend.load * 100) end },
+
+backend.onLoadChanged = function(v) print("load", v) end
+```
+
+A complete, runnable version is the [`imlui_custom_types` example](#the-example-app).
+
+## Contents
+
+- [Element types](#element-types): `Element`, `render(Frame&)`, the lifecycle hooks
+- [Declaring members](#declaring-members): `TypeBuilder<T>`: properties, signals, methods, `nonVisual`,
+  `defaultProperty`
+- [Property sync](#property-sync): how Lua values reach the setters every frame
+- [Telling Lua about changes](#telling-lua-about-changes): `notify` and `emit`
+- [Singletons](#singletons)
+- [Value conversion](#value-conversion): `LuaConvert<T>` and your own types
+- [Lifetime](#lifetime) and [hot reload](#hot-reload)
+- [Threading and frame requests](#threading-and-frame-requests)
+- [The low-level path: `registerElement`](#the-low-level-path-registerelement)
+- [The example app](#the-example-app)
+- [Reference](#reference): modules and classes
+
+## Element types
+
+An element type derives from `imlui::Element` (module `imlui.types.element`), is default-constructible, and
+registers with `Engine::registerType<T>(name)` before `engine.run()`. The name must start with a capital letter,
+like every element constructor.
+
+```cpp
+class Element : public Object {
+public:
+    virtual void render(Frame& frame) = 0; // every rendered frame the element is visible
+    virtual void componentComplete();      // once: after the first property sync, before the first render
+    virtual void destroyed();              // right before the instance is deleted (no Lua access any more)
+};
+```
+
+`render()` draws the element at the ImGui cursor. Everything the built-in elements can do is available:
+
+| `Frame` member | What |
+|---|---|
+| `renderChildren()` | Renders the children top to bottom. Inline containers (`Repeater`, `If`, ...) are spliced in. |
+| `renderStack()` | Renders the children with the `spacing`/`align` props, like `Column`. |
+| `forEachChild(f)`, `render(child)` | Custom layouts: `f(const luaui::Node& child)` is called per child; place the cursor and call `frame.render(child)`. |
+| `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
+| `size(key)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values). |
+| `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes. |
+| `requestFrame()`, `requestFrameAfter(s)` | Frames are [rendered on demand](architecture.md#on-demand-rendering): anything that changes on its own asks for the next one. |
+| `theme()`, `scheme()` | The current theme and Material color scheme. |
+| `node()` | The element table as a `luaui::Node`: an escape hatch to raw props (`node().string("x")`), `node().emit(...)`, menus. |
+| `renderer()` | The `Renderer`, for `attachMenu` and friends. |
+
+Each visual element is wrapped in an ImGui group and an ImGui ID scope (the element table's address), so plain
+ImGui IDs such as `"##gauge"` are unique per element, and the element counts as one item in a `Row`.
+
+The common props keep working on typed elements without being declared: `visible`, `enabled` and `tooltip` are
+applied by the renderer around `render()`, `id` registers the element for lookup by name, and sizes are read with
+`frame.size("width")` / `frame.size("height")`.
+
+## Declaring members
+
+`static void declare(imlui::TypeBuilder<T>& type)` (module `imlui.types.type_builder`) lists what Lua sees. The
+calls chain. A name can be used only once across properties, methods and signals (a clash throws at registration).
+
+### Properties
+
+```cpp
+type.property("value", &Gauge::value, &Gauge::setValue) // read/write
+    .property("peak", &Gauge::peak);                    // read-only
+```
+
+- The **getter** is anything `std::invoke` can call with a `const T&`, usually `V (T::*)() const`. Its return type
+  (without `const`/`&`) is the property type `V`, which needs a [`LuaConvert<V>`](#value-conversion).
+- The **setter** is anything `std::invoke` can call with `(T&, V)`, usually `void (T::*)(V)` or
+  `void (T::*)(const V&)`.
+- Read-only properties are readable from Lua on singletons and through `notify` write-back, but never synced from
+  the element table.
+
+### Signals
+
+```cpp
+type.signal("onPeak");
+```
+
+Declares a signal name for documentation and validation (it reserves the name). Emit it from C++ with
+`emit("onPeak", args...)`. Handlers are ordinary `on*` fields of the element table. Every property also has a
+change signal `on<Name>Changed`, emitted by `notify(name)`, without declaring it.
+
+### Methods
+
+```cpp
+type.method("reset", &Gauge::reset)
+    .method("setRange", &Gauge::setRange); // void setRange(double min, double max)
+```
+
+Methods are member function pointers, `const` and `noexcept` ones included (pick one of several overloads with a
+`static_cast`). Lua calls them with `:` on the element (through its id or `self`) or on the singleton:
+
+```lua
+cpu:reset()
+cpu:setRange(0, 200)
+local text = backend:describe("cpu")   -- results are converted back
+```
+
+Arguments are checked with `LuaConvert<A>::check`. A wrong argument raises a normal Lua error,
+`bad argument #1 to 'Gauge:setRange' (number expected, got string)`. A C++ exception thrown by the method becomes
+a Lua error too.
+
+### `nonVisual()` and `defaultProperty(name)`
+
+- `type.nonVisual()` makes the element take no layout space or spacing, like `Timer` or `Dialog`.
+- `type.defaultProperty("value")` lets a positional first value set the property, `Gauge { 0.5 }`, like `text`
+  for `Button { "OK" }`. A table in that position is a child, not a value.
+
+## Property sync
+
+Before every `render()`, the renderer **syncs** the declared writable properties from the element table into the
+instance:
+
+1. Each property is read through `luaui::Node`, so all three [property forms](lua-api.md#property-values) work:
+   a plain value, a function binding (re-evaluated every frame), or a two-way `bind()`.
+2. A `nil` value (the prop isn't set) is skipped, and the C++ value stays, so C++ member initializers are the
+   defaults. Exception: an `std::optional<T>` property receives `std::nullopt`.
+3. The value is converted with `LuaConvert<V>`. If the conversion isn't possible, the error goes to the error
+   overlay (`Gauge.value: number expected, got string`) and the setter isn't called.
+4. The **setter runs only if the value differs** from what the getter returns (`operator==`; types without one are
+   always set). Setters can therefore do real work or emit signals without running every frame.
+
+Bindings that read singletons (`function() return backend.load end`) are re-evaluated on every rendered frame,
+like any binding.
+
+Because the sync compares with the getter, the element table is the source of truth: a C++ change that isn't
+`notify`'d is overwritten by the Lua value at the next sync. Always `notify` after changing a property in C++.
+
+## Telling Lua about changes
+
+Both functions live on `imlui::Object` (module `imlui.types.object`), the base of elements and singletons.
+
+### `notify(name)`
+
+Call it after the C++ side changed property `name`. It
+
+1. reads the value through the getter,
+2. on an element, **writes it back** to the element table with `Node::set` semantics: a `bind(t, k)` writes
+   `t[k]`, a `bind(get, set)` calls `set`, a function binding is left alone (it owns the value and wins at the
+   next sync, like a widget edit on a bound prop), a plain value is replaced,
+3. emits `on<Name>Changed` with the new value (`onValueChanged(self, v)` on elements, `onValueChanged(v)` on
+   singletons),
+4. requests a frame (it works outside a frame too).
+
+```cpp
+void Gauge::reset() {
+    setValue(m_min);
+    notify("value"); // a gauge with value = bind(s, "cpu") now sets s.cpu
+}
+```
+
+### `emit(signal, args...)`
+
+Calls the `signal` handler with the arguments converted by `LuaConvert`. Element handlers are called as
+`handler(self, args...)`, singleton handlers as `handler(args...)`. A string literal argument is fine. A
+handler error goes to the error overlay and doesn't propagate. `emit` returns `false` when there's no handler,
+and requests a frame, since handlers usually change state.
+
+```cpp
+emit("onPeak", m_value);
+emit("onRowMoved", from, to, std::string{"drag"});
+```
+
+`emit` is a variadic template, so it lives in the module interface.
+
+## Singletons
+
+A singleton is any object deriving `imlui::Object` with a `declare()`. Register it by reference:
+
+```cpp
+SystemInfo backend;
+engine.registerSingleton("backend", backend); // the object must outlive engine.run()
+```
+
+Scripts see a global userdata:
+
+| Lua | C++ |
+|---|---|
+| `backend.load` | the `load` getter |
+| `backend.paused = true` | the `paused` setter (when the value changed). A read-only property raises `backend.time is read-only`, an unknown name `... has no property 'x'`. |
+| `backend:tick()` | the `tick` method |
+| `backend.onTick = function(n) ... end` | stores a handler for `emit("onTick", n)`. Any `on*` name accepts a function or `nil`. |
+| `backend.onLoadChanged = function(v) ... end` | called by `notify("load")` |
+
+Singleton handlers get no `self` (the singleton is a global anyway). `notify` on a singleton doesn't write
+anything back (Lua always reads it through the getter), but it does call the `on<Name>Changed` handler and
+request a frame, so bindings that read it show the new value.
+
+To bind a widget two-way to a singleton property, use `bind(getter, setter)`:
+
+```lua
+Switch { text = "Paused", checked = bind(function() return backend.paused end,
+                                         function(v) backend.paused = v end) }
+```
+
+## Value conversion
+
+`imlui::LuaConvert<T>` (module `imlui.types.lua_convert`) converts property values, method arguments and
+results, and signal arguments. Built in:
+
+| C++ | Lua | Notes |
+|---|---|---|
+| `bool` | any | Lua truthiness: only `nil` and `false` are false. |
+| integral types | number | Numeric strings convert. Floats truncate toward zero; out-of-range values clamp. |
+| `float`, `double` | number | Numeric strings convert. |
+| `std::string` | string | Numbers convert (`7` reads as `"7"`). |
+| `std::string_view`, `const char*` | string | Push only (results, signal arguments, read-only properties). |
+| `imlui::Color` | color spec | Reads a role name, `"role/alpha"`, hex or `{r, g, b, a}`, like every color prop. Pushes `"#RRGGBB[AA]"`. |
+| `std::optional<T>` | `nil` or `T` | |
+| `std::vector<T>` | sequence | Every element must convert. |
+
+Add your own by specializing it (in your module, in namespace `imlui`):
+
+```cpp
+struct Vec2 { double x = 0, y = 0; bool operator==(const Vec2&) const = default; };
+
+template <>
+struct imlui::LuaConvert<Vec2> {
+    static constexpr std::string_view name = "{x, y}";            // used in error messages
+    static void push(lua::State* s, const Vec2& v) {
+        lua::createtable(s, 0, 2);
+        lua::pushnumber(s, v.x);
+        lua::setfield(s, -2, "x");
+        lua::pushnumber(s, v.y);
+        lua::setfield(s, -2, "y");
+    }
+    static bool check(lua::State* s, int idx) { return lua::istable(s, idx); }
+    static Vec2 get(lua::State* s, int idx) {
+        Vec2 v;
+        lua::getfield(s, idx, "x");
+        v.x = lua::tonumber(s, -1);
+        lua::getfield(s, idx < 0 ? idx - 1 : idx, "y");
+        v.y = lua::tonumber(s, -1);
+        lua::pop(s, 2);
+        return v;
+    }
+};
+```
+
+`push` pushes exactly one value. `check` must not raise errors or leave anything on the stack, and `get` is only
+called after `check` returned true. Leave out `check`/`get` for a push-only type. Give the type an `operator==`
+so the sync can skip unchanged values.
+
+## Lifetime
+
+**Element instances** belong to Lua:
+
+- The DSL constructor (`Gauge { ... }`) creates the C++ instance **immediately**, through the default
+  constructor, and stores it in the element table as `__native`, a full userdata with a `__gc` metamethod. The
+  element table gets a metatable whose `__index` is the type's methods table, which is how `cpu:reset()` works.
+  Element tables otherwise stay what they always were: plain tables with `__type` and array children.
+- Nothing else holds the instance: its link back to the table is weak. When Lua collects the element table, the
+  userdata goes with it, `destroyed()` runs and the instance is deleted. Elements that the UI keeps (the tree
+  returned by the script, ids, captured locals) live as long as the Lua state.
+- Properties are synced at the first render, not in the constructor, so the constructor sees no Lua values.
+  Methods called before the first render see the C++ defaults. `componentComplete()` runs once after the first
+  sync.
+- A table built without the constructor (`{ __type = "Gauge" }`) gets its instance at its first render.
+
+**Singletons** belong to you. The registry keeps a non-owning pointer, and every Lua state the engine creates gets
+a global userdata pointing at the object. The object must outlive `engine.run()`. Declaring it after the
+`Engine` in `main` is enough, because `run()` closes the Lua state before it returns.
+
+Don't keep `Element*` pointers to instances in other C++ objects: Lua decides when they die. Keep shared state
+in a singleton (or a model the singleton owns) and let elements read it through bindings.
+
+## Hot reload
+
+On reload the engine creates a new Lua state and calls `TypeRegistry::install(state)` before the DSL loads. The
+types, methods tables and singleton globals are set up again, so registered types keep working after every
+reload. When the old state closes, every element instance in it is destroyed (`destroyed()` first), and the
+singletons are re-linked to the new state. Singleton handlers (`backend.onTick = ...`) belong to a state, so the
+reloaded script sets them again. If the new script fails to load, the engine keeps the old state and points
+the singletons back at it.
+
+## Threading and frame requests
+
+Lua, the element tree, `notify` and `emit` are **main-thread only**. To hand results from another thread to the
+UI, post a function to the main thread:
+
+```cpp
+engine.post([&backend, result] { backend.setResult(result); }); // thread-safe; wakes the loop
+```
+
+`Engine::post` runs the function at the next loop iteration, outside any frame. The function may call `notify`
+or `emit`, which request a frame. The loop is woken through `glfwPostEmptyEvent`, so this works while the app is
+idle and sleeping. Functions still queued when `run()` returns are dropped.
+
+Frames are rendered on demand. `notify` and `emit` request one, and so do input and animations. An element whose
+look changes over time by itself (a clock, an indeterminate animation, a timer) must ask for the next frame from
+`render()`: `frame.requestFrame()` for "as soon as possible", or `frame.requestFrameAfter(seconds)` for the next
+due time. The built-in `Timer` does the latter.
+
+## The low-level path: `registerElement`
+
+The typed API is built on the renderer's handler table, which is still available:
+
+```cpp
+engine.renderer().registerElement("Badge", [](imlui::Renderer& r, const imlui::luaui::Node& n) {
+    imlui::md::text(n.text(), imlui::TextStyle::LabelSmall, n.color("color"));
+}, /*visual=*/true);
+```
+
+A handler gets the element table as a `luaui::Node` every frame and reads props itself (`n.number("value", 0)`,
+`n.string("label")`, ...), writes two-way props back with `n.set` and emits with `n.emit`. It has no per-element
+C++ state (keep state in the element table or in ImGui storage), no methods and no singletons. Most built-in
+elements are written this way. It's the right tool for stateless drawing. For anything with state, methods or a
+C++ model behind it, use `registerType<T>()`.
+
+| | `registerType<T>` | `renderer().registerElement` |
+|---|---|---|
+| Per-element C++ state | an instance per element table | none |
+| Props | declared, synced into setters on change | read by hand every frame |
+| Write-back | `notify(name)` | `n.set(key, value)` |
+| Signals | `emit(name, args...)`, any `LuaConvert` arguments | `n.emit(name, {Value...})` |
+| Methods (`el:fn()`) | yes | no |
+| Listed by `ui.types()` | yes | no |
+
+## The example app
+
+`examples/custom_types/` builds the executable `imlui_custom_types`, which runs `examples/custom_types.lua`:
+
+```sh
+cmake --build build/clang-debug --target imlui_custom_types
+build/clang-debug/bin/imlui_custom_types
+```
+
+- `main.cpp` is an import-only translation unit (per CODE_STYLE). It registers the types and calls
+  `defaultConfig(argc, argv, IMLUI_SOURCE_DIR, "custom_types.lua")`, so the script hot-reloads from the source
+  tree in dev builds.
+- `gauge.cppm` (module `example.gauge`): **`Gauge`**, a Material arc gauge drawn with `md::strokeArc`,
+  `md::textTop` and `md::animate`. Properties `value`, `min`, `max`, `label`, `size`, signal `onPeak` (fired by the
+  setter when the value rises past `0.9 * max`), method `reset()`, default property `value`. Clicking a gauge
+  advances it by a tenth of the range and calls `notify("value")`: the first gauge is bound with
+  `bind(s, "level")`, so the click writes `s.level`, and the slider and the other two gauges follow.
+- `system_info.cppm` (module `example.system_info`): **`SystemInfo`**, the singleton `backend`. Read-only
+  `time`, `frame` and `load`, read/write `paused`, signal `onTick`, method `tick()`. A worker thread posts
+  `tick()` to the main thread twice a second with `Engine::post`.
+- The CMake target lists both module files in its own `CXX_MODULES` file set, links `imlui`, and copies `lua/`,
+  `examples/` and the fonts next to the binary, like `imlui_app`.
+
+## Reference
+
+| Module | Contents |
+|---|---|
+| `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations; the `LuaPushable` / `LuaReadable` concepts |
+| `imlui.types.object` | `Object`: `notify`, `emit`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
+| `imlui.types.frame` | `Frame`: the render-time context |
+| `imlui.types.element` | `Element`: `render`, `componentComplete`, `destroyed` |
+| `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty` |
+| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>`, `install`, `activate`, `sync`, `typeNames` |
+
+`Engine` forwards `registerType<T>(name)` and `registerSingleton(name, obj)` to its registry, which `types()`
+returns. All of these come with `import imlui;`.
+
+From Lua, `ui.types()` lists the registered element type names, and `require("imlui.types")` is the small native
+library the DSL uses (`names()`, `isType(name)`, `attach(element)`).
+
+**Limitations**
+
+- Properties are synced, not observed: a setter runs at the element's next render, not when the Lua value
+  changes. Elements that aren't rendered (on a hidden page, `visible = false`) aren't synced.
+- Setting a property back to `nil` keeps the last C++ value (except for `std::optional` properties).
+- Methods are member function pointers. Overloaded methods need a cast to pick one. Default arguments aren't
+  seen (pass all arguments, or wrap the method).
+- A method can't share a name with a property or signal of the same type.
+- Singleton handlers don't receive `self`. Element handlers do.

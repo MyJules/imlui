@@ -68,6 +68,9 @@ public:
     ///  * otherwise -> stored on the element itself
     void set(const char* key, const Value& v) const;
 
+    /// Like set(), with the value on top of the stack (any Lua value); pops it.
+    void setTop(const char* key) const;
+
     /// Calls handler `signal` (e.g. "onClicked") as handler(self, args...).
     bool emit(const char* signal, std::initializer_list<Value> args = {}) const;
 
@@ -195,32 +198,37 @@ std::vector<float> Node::floats(const char* key) const {
 }
 
 void Node::set(const char* key, const Value& v) const {
+    pushValue(m_state, v);
+    setTop(key);
+}
+
+void Node::setTop(const char* key) const {
+    const int value = lua::gettop(m_state);
     pushRaw(key);
     if (isBind(m_state, -1)) {
         lua::getfield(m_state, -1, "t");
         if (lua::istable(m_state, -1)) {
             lua::getfield(m_state, -2, "k");
-            pushValue(m_state, v);
+            lua::pushvalue(m_state, value);
             lua::settable(m_state, -3);
-            lua::pop(m_state, 2);
-            return;
-        }
-        lua::pop(m_state);
-        lua::getfield(m_state, -1, "set");
-        if (lua::isfunction(m_state, -1)) {
-            pushValue(m_state, v);
-            safeCall(m_state, 1, 0);
         } else {
             lua::pop(m_state);
+            lua::getfield(m_state, -1, "set");
+            if (lua::isfunction(m_state, -1)) {
+                lua::pushvalue(m_state, value);
+                safeCall(m_state, 1, 0);
+            }
         }
-        lua::pop(m_state);
+        lua::settop(m_state, value - 1);
         return;
     }
-    bool binding = lua::isfunction(m_state, -1);
+    const bool binding = lua::isfunction(m_state, -1);
     lua::pop(m_state);
-    if (binding) return;
-    pushValue(m_state, v);
-    lua::setfield(m_state, m_index, key);
+    if (binding) {
+        lua::pop(m_state); // the binding owns the value
+        return;
+    }
+    lua::setfield(m_state, m_index, key); // pops the value
 }
 
 bool Node::emit(const char* signal, std::initializer_list<Value> args) const {

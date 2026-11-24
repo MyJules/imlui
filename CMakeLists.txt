@@ -49,6 +49,28 @@ add_custom_command(TARGET imlui_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${IMLUI_FONTS_DIR} $<TARGET_FILE_DIR:imlui_app>/fonts
 )
 
+# ------------------------------------------------------------------ example: C++ types
+# Registers C++ element types and a singleton (examples/custom_types/*.cppm) and runs
+# examples/custom_types.lua. See docs/extending.md.
+add_executable(imlui_custom_types examples/custom_types/main.cpp)
+target_sources(imlui_custom_types
+    PRIVATE
+        FILE_SET CXX_MODULES
+        BASE_DIRS examples/custom_types
+        FILES examples/custom_types/gauge.cppm examples/custom_types/system_info.cppm
+)
+target_link_libraries(imlui_custom_types PRIVATE imlui ext::lua ext::imgui ext::spdlog)
+imlui_set_warnings(imlui_custom_types)
+imlui_set_hardening(imlui_custom_types)
+if(IMLUI_DEV_PATHS)
+    target_compile_definitions(imlui_custom_types PRIVATE IMLUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+endif()
+add_custom_command(TARGET imlui_custom_types POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lua $<TARGET_FILE_DIR:imlui_custom_types>/lua
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/examples $<TARGET_FILE_DIR:imlui_custom_types>/examples
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${IMLUI_FONTS_DIR} $<TARGET_FILE_DIR:imlui_custom_types>/fonts
+)
+
 # ------------------------------------------------------------------ tests
 option(IMLUI_BUILD_TESTS "Build unit tests" ON)
 if(IMLUI_BUILD_TESTS)

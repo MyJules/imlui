@@ -9,12 +9,17 @@ flowchart TD
     T --> R["Renderer + element handlers<br/>imlui.ui.renderer, imlui.ui.elements.*"]
     R --> N["Lua bridge<br/>imlui.lua.node / value / errors / painter / native"]
     R --> W["Material widgets<br/>imlui.widgets.* (namespace imlui::md)"]
+    R --> TY["C++ type system<br/>imlui.types.*: Element, Object, TypeBuilder, LuaConvert, TypeRegistry"]
+    TY --> N
+    TY --> W
+    C["App C++ types and singletons<br/>registerType / registerSingleton"] --> TY
     W --> TH["Theme<br/>imlui.theme.*, imlui.color.*"]
     W --> I["Dear ImGui 1.92<br/>(import imgui)"]
     I --> G["GLFW + OpenGL 3.3<br/>imlui.platform.window"]
     E["Engine<br/>imlui.app.engine"] -.owns.-> G
     E -.runs.-> S
     E -.drives.-> R
+    E -.installs into every Lua state.-> TY
 ```
 
 | Layer | Responsibility |
@@ -24,6 +29,7 @@ flowchart TD
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. A table's identity (its pointer) is its ImGui ID, so elements keep per-widget state such as animations and focus across frames. |
 | **Renderer** | Walks the tree on every rendered frame (immediate mode). It looks up a handler for each `__type` and applies the common props (`visible`, `enabled`, `tooltip`). |
 | **Element handlers** | One per element type, grouped by family in `imlui.ui.elements.*`. They read props through `luaui::Node`, call Material widgets, write two-way props back, and emit signals. |
+| **C++ type system** | `imlui.types.*`. C++ classes registered with `Engine::registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. The registry turns each type into a renderer element whose handler syncs the declared properties into the instance and calls `Element::render(Frame&)`. `ProgressBar` and `Timer` are built this way. See [Registering C++ types](extending.md). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
 | **ImGui / platform** | Dear ImGui with the GLFW and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. |
 
@@ -43,6 +49,7 @@ flowchart TD
      reload). While minimized it sleeps at least 100 ms.
    - `window.waitEvents(timeout)` (`glfwWaitEventsTimeout`). Input or window events start a **settle period** of
      0.3 s, during which every iteration renders, so transitions and hover layers finish.
+   - Runs the functions other threads queued with `Engine::post()`. They may `notify()` and so request a frame.
    - `renderFrame()`, but only if a frame is due. Otherwise the loop goes back to sleep without rendering.
 
 ### On-demand rendering
@@ -62,6 +69,7 @@ Who requests frames:
 | Indeterminate `ProgressBar`, `CircularProgress`, `BusyIndicator` | every frame |
 | `Canvas { animated = true }` | every frame |
 | `Timer` elements | a frame when the interval is due |
+| `Object::notify` / `Object::emit` (C++ types), `Engine::post` | a frame (waking the loop if it sleeps) |
 | Lua timers: `ui.__tick` returns the seconds until the next `setTimeout`/`setInterval` | a frame then |
 | `Snackbar` | every frame while it slides in or fades out, and a frame when the fade starts |
 | Tooltips | a frame every 100 ms while an item is hovered but the tooltip delay hasn't passed |
@@ -158,7 +166,8 @@ Layout notes:
 - Each **visual** element is wrapped in an ImGui group, so it counts as exactly one layout item (a label plus a
   field behaves as one item in a `Row`).
 - **Non-visual** elements (`ApplicationWindow`, `Window`, `Dialog`, `ModalNavigationDrawer`, `Snackbar`, `Timer`,
-  `ImGuiDemo`, and any registered with `visual = false`) take no layout space or spacing.
+  `ImGuiDemo`, any registered with `visual = false`, and typed elements declared `nonVisual()`) take no layout
+  space or spacing.
 - Immediate-mode layout uses *last frame's* sizes for `Row` alignment, `justify`, fill spacers, `Column { align }`
   and `TopAppBar` actions. A layout settles within one frame.
 
@@ -168,13 +177,16 @@ Layout notes:
 
 1. Clears recorded errors and resets the theme to `Theme{}` (seed `#6750A4`, dark).
 2. Creates a new `lua_State`, opens the standard libraries, registers `imlui.native` (a `package.preload`
-   entry) and the Canvas painter metatable.
+   entry) and the Canvas painter metatable, and installs the registered C++ types and singletons
+   (`TypeRegistry::install`: the `imlui.types` library the DSL constructors use, methods tables, singleton
+   globals).
 3. Sets `package.path` to `<luaPaths>/?.lua;<luaPaths>/?/init.lua;<scriptDir>/?.lua;` followed by the default.
 4. Runs a boot chunk: `require("imlui")`, `ui.__load(script)` (the script runs in `ui.env`), and returns the
    root, `ui.__tick` and `ui.__overlays`.
-5. On failure (syntax error, runtime error, or a non-table return), it closes the new state, restores the
-   previous theme and keeps the old UI. On success, it replaces the old state and applies the window title and
-   size (size only if it changed since the last load).
+5. On failure (syntax error, runtime error, or a non-table return), it closes the new state, points the
+   singletons back at the old one, restores the previous theme and keeps the old UI. On success, it replaces the
+   old state and applies the window title and size (size only if it changed since the last load). Closing a
+   state destroys the C++ instances of its elements and detaches the singletons from it.
 
 The file watcher scans the configured Lua paths and the script's directory recursively for `*.lua`.
 
@@ -187,7 +199,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `lua` | Lua 5.4 C API, with its macros turned into real functions; `lua::Type` enum, `lua::ok`, `registryIndex`, ... |
+| `lua` | Lua 5.4 C API, with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp` and `raise`); `lua::Type` enum, `lua::ok`, `registryIndex`, ... |
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on scope exit |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions); macros become `constexpr` functions |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink`, `setLevel` |
@@ -218,7 +230,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `safeCall` |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
-| `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set` (write-back), `emit` (signals) |
+| `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |
 | `imlui.lua.native` | `NativeHooks` (quit, reload, title, zoom, window size) and `registerNative`: the `imlui.native` Lua library |
@@ -265,17 +277,33 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.elements.content` | `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer` |
 | `imlui.ui.elements.controls` | `Button`, `IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem` |
 | `imlui.ui.elements.inputs` | `Slider`, `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker` |
-| `imlui.ui.elements.data` | `ProgressBar`, `CircularProgress`, `BusyIndicator`, `Plot`, `Table`, `Canvas` |
-| `imlui.ui.elements.system` | `Snackbar`, `Timer`, `ImGuiDemo` |
-| `imlui.ui.elements.builtin` | `registerBuiltinElements(Renderer&)`: calls all of the above |
+| `imlui.ui.elements.data` | `CircularProgress`, `BusyIndicator`, `Plot`, `Table`, `Canvas` |
+| `imlui.ui.elements.system` | `Snackbar`, `ImGuiDemo` |
+| `imlui.ui.elements.progress_bar` | `ProgressBar`, a typed element (`Element` + `TypeBuilder`) |
+| `imlui.ui.elements.timer` | `Timer`, a typed non-visual element |
+| `imlui.ui.elements.builtin` | `registerBuiltinElements(Renderer&)` (handler functions) and `registerBuiltinTypes(TypeRegistry&)` (typed elements) |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
+
+### C++ type system (`src/imlui/types/`)
+
+See [Registering C++ types](extending.md).
+
+| Module | Purpose |
+|---|---|
+| `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
+| `imlui.types.object` | `Object`: base of everything exposed to Lua; weak Lua link, `notify(property)`, `emit(signal, args...)` |
+| `imlui.types.frame` | `Frame`: render-time context (`renderChildren`, `forEachChild`, `dp`, `drawList`, `requestFrame`, theme, `node()`) |
+| `imlui.types.element` | `Element`: `render(Frame&)`, `componentComplete()`, `destroyed()` |
+| `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag) |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty` |
+| `imlui.types.registry` | `TypeRegistry`: registered types and singletons; `install` into each Lua state; the per-frame property sync |
 
 ### App (`src/imlui/app/`)
 
 | Module | Purpose |
 |---|---|
-| `imlui.app.config` | `EngineConfig` (script, Lua paths, font dir, window config, hot reload), `defaultConfig(argc, argv, sourceDir)` |
-| `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `renderer()`, `requestQuit`, `requestReload`, `window()`, `run()` |
+| `imlui.app.config` | `EngineConfig` (script, Lua paths, font dir, window config, hot reload), `defaultConfig(argc, argv, sourceDir, defaultScript)` |
+| `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `renderer()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
 | `imlui` | Umbrella for apps: `import imlui;` |
 
 `app/main.cpp` is the host. It has no `#include`, only `import imlui;`, and calls

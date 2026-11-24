@@ -7,14 +7,19 @@
 //  * keeps the UI scaled to the monitor DPI times the user zoom
 //  * hot-reloads when any .lua file next to the script changes
 //  * exposes `imlui.native` to Lua (theme, colors, time, quit, ...)
+//  * owns the TypeRegistry: C++ element types and singletons registered with registerType<T>() and
+//    registerSingleton(), installed into every new Lua state
 module;
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <concepts>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,6 +47,10 @@ import imlui.lua.painter;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.ui.elements;
+import imlui.types.object;
+import imlui.types.element;
+import imlui.types.type_info;
+import imlui.types.registry;
 import imlui.app.config;
 
 export namespace imlui {
@@ -53,8 +62,31 @@ public:
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
 
-    /// Register custom C++ elements here before run().
+    /// Registers element type T (derived from imlui::Element, with `static void declare(TypeBuilder<T>&)`)
+    /// as `name`, usable from Lua like a built-in: `name { prop = ..., onSignal = ... }`. Call before run().
+    template <class T>
+        requires std::derived_from<T, Element> && std::default_initializable<T>
+    TypeInfo& registerType(std::string name) {
+        return m_types.registerType<T>(std::move(name));
+    }
+
+    /// Exposes `object` (derived from imlui::Object) to Lua as the global `name`. Not owned: it must
+    /// outlive run(). Call before run().
+    template <class T>
+        requires std::derived_from<T, Object>
+    TypeInfo& registerSingleton(std::string name, T& object) {
+        return m_types.registerSingleton<T>(std::move(name), object);
+    }
+
+    /// The registered types and singletons.
+    TypeRegistry& types();
+
+    /// Low-level element registration: a handler function per element type. Prefer registerType<T>().
     Renderer& renderer();
+
+    /// Runs `fn` on the main thread at the next loop iteration and wakes the loop. The one Engine call
+    /// that is safe from any thread: hand results of worker threads to the UI through it.
+    void post(std::function<void()> fn);
 
     void requestQuit();
     void requestReload();
@@ -86,10 +118,13 @@ private:
     void applyRootWindowProps(lua::State* state, int rootRef);
     /// Applies a size requested with ui.setWindowSize().
     void applyPendingWindowSize();
+    /// Runs the functions queued with post().
+    void runPosted();
 
     EngineConfig m_config;
     platform::Window m_window;
     Renderer m_renderer;
+    TypeRegistry m_types{m_renderer};
     luaui::NativeHooks m_hooks;
     lua::State* m_state = nullptr;
     int m_rootRef = lua::noRef;
@@ -106,6 +141,9 @@ private:
     float m_wheelZoom = 0.0f; ///< Ctrl + wheel notches not yet turned into zoom steps
     FileSnapshot m_snapshot;
     std::chrono::steady_clock::time_point m_lastCheck;
+    std::mutex m_postMutex;
+    std::vector<std::function<void()>> m_posted;
+    bool m_looping = false; ///< guarded by m_postMutex: the loop runs, so post() may wake it
 };
 
 } // namespace imlui
@@ -135,6 +173,7 @@ void closeState(lua::State* state) {
 
 Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
     registerBuiltinElements(m_renderer);
+    registerBuiltinTypes(m_types);
     m_hooks.quit = [this] { requestQuit(); };
     m_hooks.reload = [this] { requestReload(); };
     m_hooks.setTitle = [this](const std::string& title) { m_renderer.setWindowTitle(title); };
@@ -154,6 +193,22 @@ Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
 Engine::~Engine() { closeState(m_state); }
 
 Renderer& Engine::renderer() { return m_renderer; }
+TypeRegistry& Engine::types() { return m_types; }
+
+void Engine::post(std::function<void()> fn) {
+    std::scoped_lock lock{m_postMutex};
+    m_posted.push_back(std::move(fn));
+    if (m_looping) platform::Window::postEmptyEvent();
+}
+
+void Engine::runPosted() {
+    std::vector<std::function<void()>> posted;
+    {
+        std::scoped_lock lock{m_postMutex};
+        posted.swap(m_posted);
+    }
+    for (auto& fn : posted) fn();
+}
 void Engine::requestQuit() { m_quit = true; }
 void Engine::requestReload() { m_reload = true; }
 platform::Window& Engine::window() { return m_window; }
@@ -191,7 +246,12 @@ int Engine::run() {
     // requested frame, Lua timer or file check is due, and render only then.
     setFrameWakeHandler([] { platform::Window::postEmptyEvent(); });
     requestFramesFor(settleSeconds);
+    {
+        std::scoped_lock lock{m_postMutex};
+        m_looping = true;
+    }
     while (!m_window.shouldClose() && !m_quit) {
+        runPosted();
         checkForChanges();
         if (m_reload) {
             m_reload = false;
@@ -204,7 +264,12 @@ int Engine::run() {
         const bool input = m_window.waitEvents(wait);
         setLoopAwake(true);
         if (input) requestFramesFor(settleSeconds);
+        runPosted(); // may notify() and so request a frame
         if (secondsUntilFrame() <= 0.0) renderFrame();
+    }
+    {
+        std::scoped_lock lock{m_postMutex};
+        m_looping = false;
     }
     setFrameWakeHandler({});
     clearFrameRequests();
@@ -384,6 +449,7 @@ void Engine::reloadNow() {
     lua::openlibs(state);
     luaui::registerNative(state, &m_hooks);
     luaui::registerPainter(state);
+    m_types.install(state); // before the DSL: its constructors look the registered types up
 
     // package.path: <luaPaths>/?.lua ; <scriptdir>/?.lua ; default
     std::string path;
@@ -411,7 +477,8 @@ void Engine::reloadNow() {
         ok = false;
     }
     if (!ok) {
-        lua::close(state);
+        lua::close(state); // destroys its instances and detaches the singletons from it
+        if (m_state) m_types.activate(m_state);
         setTheme(std::move(previous));
         return;
     }

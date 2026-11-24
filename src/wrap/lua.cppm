@@ -62,6 +62,7 @@ bool isboolean(State* state, int idx);
 bool isnumber(State* state, int idx);
 bool isinteger(State* state, int idx);
 bool isstring(State* state, int idx);
+bool isuserdata(State* state, int idx);
 
 // ---------------------------------------------------------------- read
 bool toboolean(State* state, int idx);
@@ -82,6 +83,8 @@ void pushstring(State* state, std::string_view s);
 void pushcfunction(State* state, CFunction f);
 void pushcclosure(State* state, CFunction f, int n);
 void pushlightuserdata(State* state, void* p);
+/// Pushes a new full userdata of `size` bytes with `nuvalue` user values; returns its memory.
+void* newuserdata(State* state, std::size_t size, int nuvalue = 0);
 
 // ---------------------------------------------------------------- tables
 void newtable(State* state);
@@ -99,6 +102,17 @@ Type getglobal(State* state, const char* name);
 void setglobal(State* state, const char* name);
 int getmetatable(State* state, int idx);
 int setmetatable(State* state, int idx);
+/// Pushes t[p] (raw) for the table at `idx`, keyed by the light userdata `p`.
+Type rawgetp(State* state, int idx, const void* p);
+/// t[p] = top (raw) for the table at `idx`; pops the value.
+void rawsetp(State* state, int idx, const void* p);
+/// t[k] = v (raw) with the key below the value on top; pops both.
+void rawset(State* state, int idx);
+bool rawequal(State* state, int idx1, int idx2);
+/// Pushes the n-th user value of the userdata at `idx`.
+Type getiuservalue(State* state, int idx, int n);
+/// Pops a value and sets it as the n-th user value of the userdata at `idx`.
+bool setiuservalue(State* state, int idx, int n);
 
 // ---------------------------------------------------------------- calls
 int pcall(State* state, int nargs, int nresults, int msgh);
@@ -108,6 +122,8 @@ int loadbuffer(State* state, std::string_view code, const char* name);
 void traceback(State* state, State* thread, const char* msg, int level);
 /// Raises a Lua error with `msg`. Never returns.
 [[noreturn]] void error(State* state, std::string_view msg);
+/// Raises the value on top of the stack as a Lua error. Never returns.
+[[noreturn]] void raise(State* state);
 
 // ---------------------------------------------------------------- refs
 int ref(State* state, int t = registryIndex);
@@ -164,6 +180,7 @@ bool isboolean(State* state, int idx) { return lua_isboolean(state, idx); }
 bool isnumber(State* state, int idx) { return lua_isnumber(state, idx) != 0; }
 bool isinteger(State* state, int idx) { return lua_isinteger(state, idx) != 0; }
 bool isstring(State* state, int idx) { return lua_isstring(state, idx) != 0; }
+bool isuserdata(State* state, int idx) { return lua_isuserdata(state, idx) != 0; }
 
 // ---------------------------------------------------------------- read
 bool toboolean(State* state, int idx) { return lua_toboolean(state, idx) != 0; }
@@ -193,6 +210,7 @@ void pushstring(State* state, std::string_view s) { lua_pushlstring(state, s.dat
 void pushcfunction(State* state, CFunction f) { lua_pushcfunction(state, f); }
 void pushcclosure(State* state, CFunction f, int n) { lua_pushcclosure(state, f, n); }
 void pushlightuserdata(State* state, void* p) { lua_pushlightuserdata(state, p); }
+void* newuserdata(State* state, std::size_t size, int nuvalue) { return lua_newuserdatauv(state, size, nuvalue); }
 
 // ---------------------------------------------------------------- tables
 void newtable(State* state) { lua_newtable(state); }
@@ -210,6 +228,12 @@ Type getglobal(State* state, const char* name) { return toType(lua_getglobal(sta
 void setglobal(State* state, const char* name) { lua_setglobal(state, name); }
 int getmetatable(State* state, int idx) { return lua_getmetatable(state, idx); }
 int setmetatable(State* state, int idx) { return lua_setmetatable(state, idx); }
+Type rawgetp(State* state, int idx, const void* p) { return toType(lua_rawgetp(state, idx, p)); }
+void rawsetp(State* state, int idx, const void* p) { lua_rawsetp(state, idx, p); }
+void rawset(State* state, int idx) { lua_rawset(state, idx); }
+bool rawequal(State* state, int idx1, int idx2) { return lua_rawequal(state, idx1, idx2) != 0; }
+Type getiuservalue(State* state, int idx, int n) { return toType(lua_getiuservalue(state, idx, n)); }
+bool setiuservalue(State* state, int idx, int n) { return lua_setiuservalue(state, idx, n) != 0; }
 
 // ---------------------------------------------------------------- calls
 int pcall(State* state, int nargs, int nresults, int msgh) { return lua_pcall(state, nargs, nresults, msgh); }
@@ -223,6 +247,10 @@ void error(State* state, std::string_view msg) {
     lua_pushlstring(state, msg.data(), msg.size());
     lua_error(state);
     // lua_error longjmps; this is unreachable.
+    for (;;) {}
+}
+void raise(State* state) {
+    lua_error(state);
     for (;;) {}
 }
 

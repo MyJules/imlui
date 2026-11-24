@@ -31,6 +31,10 @@
 
 local native = require("imlui.native")
 
+-- C++ types registered with Engine::registerType<T>() (absent when the library runs without an engine).
+local typesOk, types = pcall(require, "imlui.types")
+if not typesOk then types = nil end
+
 local ui = {}
 ui.native = native
 ui.ids = {}
@@ -43,13 +47,24 @@ ui.ids = {}
 --- turns that table into the element (no copy), so it keeps its identity
 --- for the whole lifetime of the UI — that identity is what ImGui IDs and
 --- per-element state hang off.
+--- For a type registered from C++ (ui.types()), the constructor also creates
+--- the C++ instance (stored as `__native`), and the element's methods become
+--- callable as `element:method(...)`.
 function ui.element(name)
+    local typed = types ~= nil and types.isType(name)
     return function(props)
         if type(props) ~= "table" then props = { props } end
         props.__type = name
+        if typed then types.attach(props) end
         if props.id ~= nil then ui.ids[props.id] = props end
         return props
     end
+end
+
+--- Names of the element types registered from C++ with Engine::registerType<T>(), sorted.
+function ui.types()
+    if types == nil then return {} end
+    return types.names()
 end
 
 local BUILTIN = {
@@ -441,9 +456,10 @@ ui.setWindowSize = native.setWindowSize     -- setWindowSize(w, h) in dp (times 
 -- Script environment & loading
 -------------------------------------------------------------------------------
 
--- Lookup order for free names inside UI scripts: ui.*, Lua globals, element
--- ids (QML style: `nameField.text`), then any Capitalized name becomes an
--- element constructor (so elements registered from C++ just work).
+-- Lookup order for free names inside UI scripts: ui.*, Lua globals (C++
+-- singletons are globals), element ids (QML style: `nameField.text`), then any
+-- Capitalized name becomes an element constructor (so elements registered
+-- from C++ just work; registered types get typed constructors).
 ui.env = setmetatable({ ui = ui }, {
     __index = function(_, k)
         local v = ui[k]

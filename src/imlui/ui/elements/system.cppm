@@ -1,4 +1,5 @@
-// Overlays and non-visual elements: Snackbar, Timer, ImGuiDemo.
+// Overlays and non-visual elements: Snackbar, ImGuiDemo.
+// (Timer is a typed element: imlui.ui.elements.timer.)
 module;
 
 #include <algorithm>
@@ -59,40 +60,6 @@ void snackbar(Renderer&, const Node& n) {
     }
 }
 
-void timer(Renderer&, const Node& n) {
-    lua::State* state = n.state();
-    if (!n.boolean("running", true)) {
-        lua::pushnil(state);
-        lua::setfield(state, n.index(), "__last");
-        return;
-    }
-    const double now = ImGui::GetTime();
-    lua::getfield(state, n.index(), "__last");
-    const bool started = lua::isnumber(state, -1);
-    double last = started ? lua::tonumber(state, -1) : now;
-    lua::pop(state);
-    const double interval = n.number("interval", 1000) / 1000.0;
-    if (!started) {
-        lua::pushnumber(state, now);
-        lua::setfield(state, n.index(), "__last");
-        requestFrameAfter(interval);
-        if (n.boolean("triggeredOnStart", false)) n.emit("onTriggered");
-        return;
-    }
-    if (now - last >= interval) {
-        lua::pushnumber(state, now);
-        lua::setfield(state, n.index(), "__last");
-        const bool repeat = n.boolean("repeat", true);
-        if (!repeat)
-            n.set("running", false);
-        else
-            requestFrameAfter(interval);
-        n.emit("onTriggered");
-        return;
-    }
-    requestFrameAfter(interval - (now - last));
-}
-
 void imguiDemo(Renderer&, const Node& n) {
     bool open = n.boolean("open", true);
     if (!open) return;
@@ -104,7 +71,6 @@ void imguiDemo(Renderer&, const Node& n) {
 
 void registerSystemElements(Renderer& renderer) {
     renderer.registerElement("Snackbar", snackbar, false);
-    renderer.registerElement("Timer", timer, false);
     renderer.registerElement("ImGuiDemo", imguiDemo, false);
 }
 

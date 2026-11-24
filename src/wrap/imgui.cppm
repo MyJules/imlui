@@ -297,6 +297,7 @@ export namespace ImGui {
 // context / frame
 using ImGui::CreateContext;
 using ImGui::DestroyContext;
+using ImGui::GetCurrentContext;
 using ImGui::GetIO;
 using ImGui::GetStyle;
 using ImGui::NewFrame;

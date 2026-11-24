@@ -29,6 +29,7 @@ Save the script while the app is running and it reloads immediately.
 | [Architecture](architecture.md) | Layers, the frame loop, property resolution, signals, inline containers, hot reload, the module map, third-party wrappers |
 | [Lua API](lua-api.md) | The script environment: `state`, `watch`, `bind`, `component`, `Repeater`/`ListView`/`If`/`Loader`, theme functions, timers, snackbar, logging, `native` |
 | [Elements](elements.md) | Every built-in element: props, defaults, signals, two-way props, common props, the Canvas painter |
+| [Registering C++ types](extending.md) | Extending imlui from C++, QML style: element types (`Element`, `TypeBuilder`, `Frame`), properties, signals, methods, singletons, `LuaConvert`, lifetime, threading, the low-level `registerElement`, the `imlui_custom_types` example |
 | [Theming](theming.md) | Material 3 scheme generation, color roles, the `theme{}` table, color specs, typography, icons, state layers |
 | [Development](development.md) | Code style, module conventions, adding elements and native functions, logging, clang-tidy, clice, tests, scripted UI tests |
 | [Status / changelog](changelog.md) | What exists today and what is in progress |

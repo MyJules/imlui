@@ -62,8 +62,11 @@ See [Architecture](architecture.md#module-map-target-layout) for the module map.
 
 ## Adding an element
 
-The paths below are the target layout. On `material-ui`, until phases B and C land, the widget goes in
-`src/imlui/widgets.cppm` and the handler goes in `Renderer::registerBuiltins()` in `src/imlui/renderer.cppm`.
+There are two ways to implement an element in C++. **Prefer a typed element** (`Element` + `TypeBuilder`): it has
+per-element C++ state, declared properties synced into setters, `notify`/`emit`, and methods callable from Lua.
+[Registering C++ types](extending.md) is the full guide. `ProgressBar` (`imlui.ui.elements.progress_bar`) and
+`Timer` (`imlui.ui.elements.timer`) are built-in examples. A **handler function** (`registerElement`) suits
+stateless drawing. Most older built-ins are written that way.
 
 **1. Widget (C++, `imlui::md`).** Add a Material widget in `src/imlui/widgets/<name>.cppm`
 (`export module imlui.widgets.<name>;`) and add it to the `imlui.widgets` umbrella. Draw it with ImGui primitives
@@ -88,11 +91,51 @@ using `imlui.widgets.common`:
 
 Return what happened (`bool` changed/clicked, or a result struct).
 
-**2. Element handler (C++).** Register it in the matching `imlui.ui.elements.<group>` module, inside its
-`register<Group>Elements(Renderer&)`:
+**2a. Typed element (recommended).** One class per module, `src/imlui/ui/elements/<name>.cppm`
+(`export module imlui.ui.elements.<name>;`), added to the `imlui.ui.elements` umbrella and registered in
+`registerBuiltinTypes(TypeRegistry&)` (`imlui.ui.elements.builtin`):
 
 ```cpp
 // Example: a hypothetical "Rating" element backed by a new md::rating() widget.
+class Rating final : public Element {
+public:
+    static void declare(TypeBuilder<Rating>& type) {
+        type.property("value", &Rating::value, &Rating::setValue)
+            .property("count", &Rating::count, &Rating::setCount)
+            .signal("onChanged");
+    }
+    void render(Frame& frame) override;
+    // value()/setValue(int), count()/setCount(int) ...
+private:
+    int m_value = 0;
+    int m_count = 5;
+};
+
+void Rating::render(Frame&) {
+    if (md::rating("##rating", &m_value, m_count)) {
+        notify("value"); // two-way write-back (honours bind/binding), then onValueChanged
+        emit("onChanged", m_value);
+    }
+}
+
+void registerBuiltinTypes(TypeRegistry& types) {
+    // ...
+    types.registerType<Rating>("Rating");
+}
+```
+
+- Declared properties arrive through the setters before each `render()`, only when they changed.
+- Use `frame.size("width")` for sizes (it handles `fillWidth` and fill-minus), `frame.dp()` and
+  `frame.drawList()`.
+- After changing a property in C++, call `notify(name)` **before** `emit`, so the handler sees the new state.
+- Containers call `frame.renderChildren()` or `frame.renderStack()`, or `frame.forEachChild(f)` with
+  `frame.render(child)` for custom layout. `frame.node()` and `frame.renderer()` reach everything else (menus).
+- `type.nonVisual()` for elements that take no layout space (timers).
+
+**2b. Handler function.** Register it in the matching `imlui.ui.elements.<group>` module, inside its
+`register<Group>Elements(Renderer&)`:
+
+```cpp
 r.registerElement("Rating", [](Renderer&, const luaui::Node& n) {
     int v = static_cast<int>(n.number("value", 0));
     if (md::rating("##rating", &v, static_cast<int>(n.number("count", 5)))) {
@@ -113,13 +156,15 @@ r.registerElement("Rating", [](Renderer&, const luaui::Node& n) {
 
 **3. Lua side.** Add the name to the `BUILTIN` list in `lua/imlui.lua`. Any Capitalized name already works as a
 constructor, but a `BUILTIN` entry makes it a real `ui.*` field, so an element id or a global with the same name
-can't shadow it.
+can't shadow it. The type registry is installed before the DSL loads, so `BUILTIN` constructors of typed
+elements create their C++ instances too.
 
 **4. Docs and gallery.** Add the element to [Elements](elements.md), the README element table, and a demo in
 `examples/gallery.lua`.
 
-Apps can also add elements without touching imlui:
-`engine.renderer().registerElement("MyThing", fn, visual)` before `engine.run()`.
+Apps add elements without touching imlui: `engine.registerType<MyThing>("MyThing")` (recommended), or
+`engine.renderer().registerElement("MyThing", fn, visual)`, before `engine.run()`. See
+[Registering C++ types](extending.md).
 
 ## Adding a native function
 
@@ -209,6 +254,9 @@ suppressions. Run `clang-asan` before merging larger changes.
 - Good candidates are the pure modules: `imlui.color*` (hex parsing, OKLCH round trips), `imlui.theme.scheme`
   (role lookup, generation), `imlui.theme.theme` (`resolveColor`), and `imlui.lua.*` against a bare `lua::State`
   (prop resolution, `bind` write-back, `themeFromTable`).
+- `types_test.cpp` covers the C++ type system without a window. It installs a `TypeRegistry` into a Lua state
+  that runs `lua/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `notify`/`emit`, `__gc`
+  lifetime, singletons and reinstalling into a new state.
 
 ## Scripted UI tests
 

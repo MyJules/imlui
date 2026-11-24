@@ -9,4 +9,6 @@ export import imlui.ui.elements.controls;
 export import imlui.ui.elements.inputs;
 export import imlui.ui.elements.data;
 export import imlui.ui.elements.system;
+export import imlui.ui.elements.progress_bar;
+export import imlui.ui.elements.timer;
 export import imlui.ui.elements.builtin;

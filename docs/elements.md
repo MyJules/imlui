@@ -593,7 +593,8 @@ Signals: `onColorChanged(self, hex)`.
 
 ### ProgressBar
 
-A Material 3 (2024) linear indicator with a gap and a stop indicator.
+A Material 3 (2024) linear indicator with a gap and a stop indicator. It's implemented as a typed C++ element
+(see [Registering C++ types](extending.md)).
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
@@ -703,6 +704,8 @@ end }
 
 A non-visual timer element. It only ticks while it's rendered: a `Timer` on a page that isn't shown, or with
 `visible = false`, doesn't run. For timers that run regardless, use [`setInterval`](lua-api.md#timers-and-frames).
+It's implemented as a typed C++ element, so a one-shot's `running = false` write-back also emits
+`onRunningChanged(self, false)`.
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
@@ -745,11 +748,24 @@ normally use it directly. Its props are `text`, `actionText`, `onAction`, `shown
 
 ## Custom elements from C++
 
+Register a C++ class (derived from `imlui::Element`, with a static `declare()`) and use it like a built-in:
+
+```cpp
+engine.registerType<Gauge>("Gauge");
+```
+
+```lua
+Gauge { id = "cpu", value = bind(s, "cpu"), label = "CPU", onPeak = function(self, v) ... end }
+Button { text = "Reset", onClicked = function() cpu:reset() end }
+```
+
+`ui.types()` lists the registered type names. The low-level alternative is a handler function:
+
 ```cpp
 engine.renderer().registerElement("Badge", [](imlui::Renderer& r, const imlui::luaui::Node& n) {
     imlui::md::text(n.text(), imlui::TextStyle::LabelSmall, n.color("color"));
 }, /*visual=*/true);
 ```
 
-Any Capitalized name in a script is a constructor, so `Badge { text = "3" }` works immediately. See
-[Development](development.md#adding-an-element).
+Any Capitalized name in a script is a constructor, so `Gauge {}` and `Badge { text = "3" }` work immediately. See
+[Registering C++ types](extending.md) and [Development](development.md#adding-an-element).

@@ -10,18 +10,19 @@ The engine reports an error if the script returns anything other than a table.
 A free name `x` in a script is looked up in this order:
 
 1. **`ui.x`**: everything on this page, plus the built-in element constructors. `ui` itself is also available.
-2. **Lua globals** (`_G`): `math`, `string`, `table`, `os`, `require`, ...
+2. **Lua globals** (`_G`): `math`, `string`, `table`, `os`, `io`, `require`, ..., and the
+   [C++ singletons](extending.md#singletons) the app registered (for example `backend`).
 3. **Element ids**: `TextField { id = "nameField" }` makes `nameField` refer to that element table, QML style.
 4. **Any other Capitalized name** becomes an element constructor (`ui.element(name)`), so elements registered
-   from C++ work without any Lua changes.
+   from C++ work without any Lua changes. For a [registered C++ type](extending.md) it's a typed constructor.
 
 ```lua
 TextField { id = "nameField", label = "Name", text = "" },
 Text { text = function() return "Hello, " .. nameField.text end },
 ```
 
-Ids are global to the loaded UI. Because they are looked up after `ui.*` and globals, an id such as `"table"` or
-`"state"` would be shadowed. The lookup is lazy, so a binding can refer to an id that is declared later in the
+Ids are global to the loaded UI. Because they are looked up after `ui.*` and globals, an id such as `"table"`,
+`"io"` or `"state"` would be shadowed. The lookup is lazy, so a binding can refer to an id that is declared later in the
 file.
 
 Indices (`currentIndex`, `currentRow`, delegate `index`) are **1-based**.
@@ -38,6 +39,15 @@ element's ImGui ID and holds its per-element state.
 Button { text = "OK", onClicked = function(self) print("clicked", self.text) end }
 Button "OK"      -- a non-table argument becomes the first positional value: { "OK" }
 ```
+
+For a type registered from C++ with `Engine::registerType<T>()`, the constructor also creates the C++ instance
+(stored in the table as `__native`) and gives the table a metatable through which the type's methods are
+callable: `gauge:reset()`. See [Registering C++ types](extending.md).
+
+### `types() -> { name, ... }`
+
+The element type names registered from C++ (typed elements, including the built-in `ProgressBar` and `Timer`),
+sorted. Handler-function elements (`renderer().registerElement`) aren't listed.
 
 Built-in constructors (the `BUILTIN` list): `ApplicationWindow`, `Window`, `Dialog`, `Column`, `Item`, `Row`,
 `Grid`, `ScrollView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `TopAppBar`, `NavigationItem`,
