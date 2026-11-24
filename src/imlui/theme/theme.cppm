@@ -62,7 +62,8 @@ void reapplyTheme();
 [[nodiscard]] int imguiColorIndex(std::string_view name);
 
 /// Resolves a color spec: a role name ("primary"), a hex string ("#ff0000")
-/// or a role with alpha ("onSurface/0.6"). Roles come from the current theme.
+/// or a role with alpha ("onSurface/0.6", the alpha a number in 0..1). Roles come from the current theme.
+/// nullopt when the spec is none of these (an unknown role, bad hex, an alpha that isn't a number in 0..1).
 [[nodiscard]] std::optional<Color> resolveColor(std::string_view spec);
 
 /// Like resolveColor(spec), but roles are looked up in `scheme`.
@@ -280,13 +281,17 @@ std::optional<Color> resolveColor(std::string_view spec) { return resolveColor(s
 std::optional<Color> resolveColor(std::string_view spec, const Scheme& scheme) {
     if (spec.empty()) return std::nullopt;
     if (spec.front() == '#') return parseHex(spec);
-    float alpha = -1.0f;
     if (auto slash = spec.find('/'); slash != std::string_view::npos) {
-        std::string a{spec.substr(slash + 1)};
-        alpha = static_cast<float>(std::atof(a.c_str()));
-        spec = spec.substr(0, slash);
+        // "role/alpha": the whole rest must be a number in 0..1 ("onSurface/O.6" or "primary/2" is no color).
+        const std::string_view text = spec.substr(slash + 1);
+        float alpha = 0.0f;
+        const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), alpha);
+        if (ec != std::errc{} || end != text.data() + text.size() || !(alpha >= 0.0f && alpha <= 1.0f))
+            return std::nullopt;
+        const Color* c = findRole(scheme, spec.substr(0, slash));
+        return c ? std::optional{c->withAlpha(alpha)} : std::nullopt;
     }
-    if (const Color* c = findRole(scheme, spec)) return alpha >= 0 ? c->withAlpha(alpha) : *c;
+    if (const Color* c = findRole(scheme, spec)) return *c;
     return parseHex(spec);
 }
 
