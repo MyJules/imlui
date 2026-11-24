@@ -1,6 +1,6 @@
 // Layout elements: Column, Item, Row, Grid, ScrollView, ListView, Card,
 // TabBar, Tab, Section, Expander, TreeNode and the inline containers
-// Repeater, If, Loader.
+// Repeater, If, Loader, Responsive.
 module;
 
 #include <algorithm>
@@ -263,7 +263,7 @@ void registerLayoutElements(Renderer& renderer) {
     renderer.registerElement("TreeNode", treeNode);
     // Inline containers are normally spliced into their parent by
     // forEachChild; these handlers only run when one is used as the root.
-    for (const char* name : {"Repeater", "If", "Loader"})
+    for (const char* name : {"Repeater", "If", "Loader", "Responsive"})
         renderer.registerElement(name, [](Renderer& r, const Node& n) { r.renderChildren(n); });
 }
 

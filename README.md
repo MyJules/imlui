@@ -78,9 +78,14 @@ tree, so you don't need to rebuild.
   - `ListView`, a scrolling repeater
   - `If { condition }`
   - `Loader { item }`
+  - `Responsive { compact = A, medium = B, expanded = C }`, which picks by window size class
 - **Components**: `require "StatCard"` loads `StatCard.lua` from the script's folder, the same way
   QML files work as components.
 - **Common props**: `visible`, `enabled`, `tooltip`, `width`/`height` (dp; `-1` or `fillWidth = true` to fill).
+- **Adaptive layouts**: `sizeClass()` returns the Material 3 window size class (`"compact"`, `"medium"`,
+  `"expanded"`, `"large"`, `"extraLarge"`) of `windowSize()` (dp). Read it in function props or use `Responsive`;
+  `NavigationBar`, `NavigationRail` and `ModalNavigationDrawer` cover phone and tablet navigation, and
+  `setWindowSize(w, h)` resizes the window.
 - **Scaling and zoom**: dp follow the monitor DPI times a user zoom: `setZoom(1.25)`, `zoom()`, or Ctrl + `=`/`-`/`0`
   and Ctrl + wheel. Frames are rendered on demand; `requestFrame()` asks for one.
 - **Icons**: any [Material Icons](https://fonts.google.com/icons) name, e.g. `icon = "add"` on `Button`,
@@ -102,7 +107,7 @@ tree, so you don't need to rebuild.
 |---|---|
 | Windows | `ApplicationWindow` (root; `title`, `width`, `height`, `menuBar`, `padding`, `color`, `scrollable`), `Window`, `Dialog` (`icon`, `width`) |
 | Layout | `Column`, `Row`, `Grid`, `ScrollView` (`color`, `rounding`, `padding`, `border`), `ListView`, `Card` (`variant` = elevated, filled, outlined; `width`, `height`, `padding`, `color`, `rounding`), `TabBar`/`Tab` (`icon`, `variant` = primary, secondary), `Expander`/`Section` (`expanded`, default true), `TreeNode` |
-| App bars & navigation | `TopAppBar` (`title`, `navigationIcon`, `variant` = small, center, medium, large; children are actions), `NavigationItem`, `MenuBar`, `Menu`, `MenuItem` (`icon`, `shortcut`, `checked`) |
+| App bars & navigation | `TopAppBar` (`title`, `navigationIcon`, `variant` = small, center, medium, large; children are actions), `NavigationItem`, `NavigationBar`, `NavigationRail` (`header`), `ModalNavigationDrawer` (`open`), `MenuBar`, `Menu`, `MenuItem` (`icon`, `shortcut`, `checked`) |
 | Text | `Text`/`Label` (`style` = Material type scale, `color`, `wrap`, `align`), `Icon`, `Link`, `Divider`, `Separator`, `Spacer` |
 | Controls | `Button` (`variant` = filled, tonal, outlined, text, elevated, fab; `icon`), `IconButton` (`variant` = standard, filled, tonal, outlined; `checked`/`checkedIcon` toggle), `Checkbox`, `Switch`, `RadioButton` (`group`), `RadioGroup`, `Chip` (`variant` = filter, assist, suggestion, input), `SegmentedButton`, `ListItem` (`icon`, `supportingText`, `trailingText`, `trailingIcon`) |
 | Inputs | `TextField`/`TextArea` (`variant` = filled, outlined; `label`, `placeholderText`, `leadingIcon`, `trailingIcon`, `supportingText`, `error`, `password`), `ComboBox` (Material dropdown), `Slider` (`onMoved`, `onReleased`), `SpinBox`, `ColorPicker` |

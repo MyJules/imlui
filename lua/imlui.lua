@@ -58,7 +58,8 @@ local BUILTIN = {
     -- layout
     "Column", "Item", "Row", "Grid", "ScrollView", "Card", "TabBar", "Tab", "Section", "Expander", "TreeNode",
     -- app bars, navigation & menus
-    "TopAppBar", "NavigationItem", "MenuBar", "Menu", "MenuItem",
+    "TopAppBar", "NavigationItem", "NavigationBar", "NavigationRail", "ModalNavigationDrawer",
+    "MenuBar", "Menu", "MenuItem",
     -- text & decoration
     "Text", "Label", "Icon", "Link", "Separator", "Divider", "Spacer",
     -- controls
@@ -242,6 +243,44 @@ function ui.Loader(p)
     return p
 end
 
+--- Material 3 window size classes, smallest first.
+ui.SIZE_CLASSES = { "compact", "medium", "expanded", "large", "extraLarge" }
+local SIZE_INDEX = {}
+for i, name in ipairs(ui.SIZE_CLASSES) do SIZE_INDEX[name] = i end
+
+--- The value `p` defines for size class `class`: p[class] if set, else the nearest
+--- smaller class that is set, else the smallest one that is set. `false` counts as
+--- set (it means "nothing" for that class). Returns nil when no class is set.
+function ui.pickSizeClass(p, class)
+    local i = SIZE_INDEX[class] or 1
+    for j = i, 1, -1 do
+        local v = p[ui.SIZE_CLASSES[j]]
+        if v ~= nil then return v end
+    end
+    for j = i + 1, #ui.SIZE_CLASSES do
+        local v = p[ui.SIZE_CLASSES[j]]
+        if v ~= nil then return v end
+    end
+    return nil
+end
+
+--- Responsive { compact = A, medium = B, expanded = C, large = D, extraLarge = E }
+--- shows the element for the current window size class (see ui.sizeClass), falling
+--- back to the nearest smaller class that is given. Inline, like Loader. The
+--- elements are built once, so their state survives switching between classes.
+function ui.Responsive(p)
+    p.__type = "Responsive"
+    p.__inline = true
+    local box = {}
+    p.__children = function(self)
+        local v = ui.pickSizeClass(self, ui.sizeClass())
+        if type(v) == "function" then v = v(self) end
+        box[1] = type(v) == "table" and v or nil
+        return box
+    end
+    return p
+end
+
 -------------------------------------------------------------------------------
 -- Theme (decided entirely on the Lua side)
 -------------------------------------------------------------------------------
@@ -391,6 +430,12 @@ ui.setZoom = native.setZoom                 -- setZoom(z), clamped to 0.5..3, ap
 ui.dpiScale = native.dpiScale               -- dpiScale() -> effective dp -> pixel factor
 ui.contentScale = native.contentScale       -- contentScale() -> monitor content scale
 ui.setZoomShortcuts = native.setZoomShortcuts -- setZoomShortcuts(false) turns off Ctrl +/-/0/wheel
+
+-- Window size (dp) and Material 3 window size classes.
+ui.windowSize = native.windowSize           -- windowSize() -> w, h of the window in dp (pixels / dpiScale())
+ui.sizeClass = native.sizeClass             -- sizeClass() -> "compact" | "medium" | "expanded" | "large" | "extraLarge"
+ui.sizeClassFor = native.sizeClassFor       -- sizeClassFor(widthDp) -> name
+ui.setWindowSize = native.setWindowSize     -- setWindowSize(w, h) in dp (times the content scale), after this frame
 
 -------------------------------------------------------------------------------
 -- Script environment & loading

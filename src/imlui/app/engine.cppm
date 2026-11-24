@@ -84,6 +84,8 @@ private:
     void reloadNow();
     /// Applies the root element's width/height/title to the native window.
     void applyRootWindowProps(lua::State* state, int rootRef);
+    /// Applies a size requested with ui.setWindowSize().
+    void applyPendingWindowSize();
 
     EngineConfig m_config;
     platform::Window m_window;
@@ -97,8 +99,9 @@ private:
     bool m_reload = false;
     int m_appliedWidth = 0;
     int m_appliedHeight = 0;
-    float m_themeScale = 0.0f;          ///< dpiScale() the ImGui style was last built for
-    std::optional<float> m_pendingZoom; ///< applied at the start of the next frame
+    float m_themeScale = 0.0f;                              ///< dpiScale() the ImGui style was last built for
+    std::optional<float> m_pendingZoom;                     ///< applied at the start of the next frame
+    std::optional<std::pair<int, int>> m_pendingWindowSize; ///< dp; applied after the current frame
     bool m_zoomShortcuts = true;
     float m_wheelZoom = 0.0f; ///< Ctrl + wheel notches not yet turned into zoom steps
     FileSnapshot m_snapshot;
@@ -141,6 +144,11 @@ Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
         requestFrame();
     };
     m_hooks.setZoomShortcuts = [this](bool on) { m_zoomShortcuts = on; };
+    // Deferred: resizing from inside a frame (a click handler) would change the viewport mid-frame.
+    m_hooks.setWindowSize = [this](int w, int h) {
+        m_pendingWindowSize = std::pair{w, h};
+        requestFrame();
+    };
 }
 
 Engine::~Engine() { closeState(m_state); }
@@ -173,6 +181,7 @@ int Engine::run() {
     m_themeScale = dpiScale();
 
     reloadNow();
+    applyPendingWindowSize(); // a script that calls setWindowSize() while loading wins over its root size
     m_window.center();
     m_window.show();
     m_snapshot = scanFiles();
@@ -222,6 +231,16 @@ void Engine::renderFrame() {
     ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
     m_window.endFrame(bg.x, bg.y, bg.z);
     if (!m_renderer.windowTitle().empty()) m_window.setTitle(m_renderer.windowTitle());
+    applyPendingWindowSize();
+}
+
+void Engine::applyPendingWindowSize() {
+    if (!m_pendingWindowSize) return;
+    const auto [w, h] = *m_pendingWindowSize;
+    m_pendingWindowSize.reset();
+    // dp, scaled by the monitor content scale like the root window's width/height.
+    m_window.setScaledSize(w, h);
+    requestFramesFor(settleSeconds);
 }
 
 void Engine::syncScale() {

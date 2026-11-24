@@ -35,6 +35,33 @@ watch(look, "*", applyTheme)
 applyTheme()
 
 -------------------------------------------------------------------------------
+-- Adaptive layout: Material 3 window size classes
+-------------------------------------------------------------------------------
+-- compact (< 600dp): top app bar with a menu button that opens a modal drawer
+-- medium (600-839dp): navigation rail
+-- expanded and up: standard navigation drawer
+local function compact() return sizeClass() == "compact" end
+local function pagePadding() return compact() and 16 or 24 end
+local function sideNavWidth()
+    local c = sizeClass()
+    return c == "compact" and 0 or c == "medium" and 80 or 296
+end
+
+-- Width available to a page, in dp: the window minus the side navigation and the page padding.
+local function contentWidth()
+    local w = windowSize()
+    return w - sideNavWidth() - 2 * pagePadding()
+end
+
+-- A `columns` binding: as many columns of at least `minWidth` dp as fit, up to `max`.
+local function columnsFor(minWidth, max, spacing)
+    return function()
+        local n = math.floor((contentWidth() + spacing) / (minWidth + spacing))
+        return math.max(1, math.min(max, n))
+    end
+end
+
+-------------------------------------------------------------------------------
 -- Building blocks
 -------------------------------------------------------------------------------
 -- The top app bar already shows the page title; pages open with a short intro.
@@ -49,7 +76,7 @@ end
 
 --- A titled card grouping one demo.
 local function section(title, description, content)
-    local card = Card { padding = 24, spacing = 16,
+    local card = Card { padding = pagePadding, spacing = 16,
         Column {
             spacing = 2,
             Text { text = title, style = "titleMedium" },
@@ -61,8 +88,9 @@ local function section(title, description, content)
     return card
 end
 
+-- Section cards side by side where they fit (each at least 360dp wide), else stacked.
 local function grid(...)
-    return Grid { columns = 2, spacing = 24, ... }
+    return Grid { columns = columnsFor(360, 2, 24), spacing = pagePadding, ... }
 end
 
 -------------------------------------------------------------------------------
@@ -181,6 +209,7 @@ local selectionPage = Column {
 local form = state { email = "", password = "", bio = "", search = "", volume = 0.4, stars = 3,
                      qty = 1, country = 1, size = 2, color = "#6750A4" }
 
+local function spinWidth() return compact() and 150 or 180 end
 local function emailInvalid() return form.email ~= "" and not form.email:match("^[^@%s]+@[^@%s]+%.[^@%s]+$") end
 
 local inputsPage = Column {
@@ -213,11 +242,11 @@ local inputsPage = Column {
                        currentIndex = bind(form, "size"), fillWidth = true },
         }),
         section("Sliders & spin boxes", nil, {
-            Row { spacing = 8, Icon { name = "volume_down" }, Slider { value = bind(form, "volume"), width = 300 }, Icon { name = "volume_up" } },
+            Row { spacing = 8, Icon { name = "volume_down" }, Slider { value = bind(form, "volume"), width = -32 }, Icon { name = "volume_up" } },
             Slider { value = bind(form, "stars"), from = 1, to = 5, stepSize = 1, fillWidth = true, format = "%.0f stars" },
             Row { spacing = 16,
-                SpinBox { label = "Quantity", value = bind(form, "qty"), from = 1, to = 99, width = 180 },
-                SpinBox { label = "Outlined", variant = "outlined", value = bind(form, "qty"), from = 1, to = 99, width = 180 },
+                SpinBox { label = "Quantity", value = bind(form, "qty"), from = 1, to = 99, width = spinWidth },
+                SpinBox { label = "Outlined", variant = "outlined", value = bind(form, "qty"), from = 1, to = 99, width = spinWidth },
             },
         }),
         section("Color", "A swatch that opens a picker.", {
@@ -297,11 +326,22 @@ local feedbackPage = Column {
 }
 
 -- Navigation -------------------------------------------------------------------
-local navDemo = state { tab = 1, tab2 = 1, adv = false, sort = "Name" }
+local navDemo = state { tab = 1, tab2 = 1, adv = false, sort = "Name", bar = 1, rail = 1 }
+local barDestinations = { { "Home", "home" }, { "Search", "search" }, { "Inbox", "inbox", "3" }, { "Profile", "person" } }
+
+-- Destinations for the bar and rail demos; `key` is the navDemo field holding the selection.
+local function demoDestinations(key)
+    return Repeater { model = barDestinations, delegate = function(d, i)
+        return NavigationItem { text = d[1], icon = d[2], badge = d[3],
+                                selected = function() return navDemo[key] == i end,
+                                onClicked = function() navDemo[key] = i end }
+    end }
+end
 
 local navigationPage = Column {
     spacing = 20,
-    pageHeader("Navigation", "Tabs, expanders and menus."),
+    pageHeader("Navigation", "Tabs, navigation bars and rails, expanders and menus. Resize the window to see the "
+        .. "gallery switch between a modal drawer, a rail and a standard drawer."),
     Card { padding = 0,
         TabBar {
             currentIndex = bind(navDemo, "tab"),
@@ -341,6 +381,20 @@ local navigationPage = Column {
                     } },
             },
         }),
+        section("Navigation bar", "Bottom navigation for compact windows. Destinations share the width.", {
+            NavigationBar { demoDestinations("bar") },
+            Text { text = function() return "Selected: " .. barDestinations[navDemo.bar][1] end,
+                   style = "bodySmall", color = "onSurfaceVariant" },
+        }),
+        section("Navigation rail", "Side navigation for medium windows, with an optional header.", {
+            Row { align = "top", spacing = 16,
+                NavigationRail { height = 340, color = "surfaceContainer",
+                                 header = Button { variant = "fab", icon = "edit", text = "", tooltip = "Compose" },
+                                 demoDestinations("rail") },
+                Text { text = function() return "Selected: " .. barDestinations[navDemo.rail][1] end,
+                       style = "bodySmall", color = "onSurfaceVariant" },
+            },
+        }),
         section("Expanders", nil, {
             Expander { title = "Advanced settings", supportingText = "Network, storage, developer options",
                        expanded = bind(navDemo, "adv"),
@@ -374,7 +428,8 @@ end
 local dataPage = Column {
     spacing = 20,
     pageHeader("Data", "Lists from models, charts, tables and components loaded from other files."),
-    Grid { columns = 3, spacing = 24,
+    -- Three stat cards in a row when each gets 160dp, else stacked.
+    Grid { columns = function() return contentWidth() >= 3 * 160 + 2 * 24 and 3 or 1 end, spacing = pagePadding,
         StatCard { title = "Items", icon = "checklist", value = function() return tostring(#todo.items) end, caption = "in the list below" },
         StatCard { title = "Frame rate", icon = "speed", value = function() return ("%.0f fps"):format(fps()) end,
                    color = "tertiary", caption = "rendered by Dear ImGui" },
@@ -384,7 +439,7 @@ local dataPage = Column {
     grid(
         section("To-do list", "A ListView driven by a model table.", {
             Row { spacing = 8,
-                TextField { label = "New item", text = bind(todo, "newItem"), width = 260, onAccepted = addTodo },
+                TextField { label = "New item", text = bind(todo, "newItem"), width = -92, onAccepted = addTodo },
                 Button { text = "Add", icon = "add", onClicked = addTodo, enabled = function() return todo.newItem ~= "" end },
             },
             ListView {
@@ -466,19 +521,22 @@ local roles = { "primary", "onPrimary", "primaryContainer", "onPrimaryContainer"
 local zoomDrag = {} -- .value: the zoom slider's value while it is being dragged
 local function zoomValue() return zoomDrag.value or zoom() end
 
+local function seedChip(s)
+    return Chip { text = s[1], variant = "suggestion",
+                  checked = function() return look.seed:upper() == s[2] end,
+                  onClicked = function() look.seed = s[2] end }
+end
+
+local function round(v) return math.floor(v + 0.5) end
+
 local themePage = Column {
     spacing = 20,
     pageHeader("Theme", "The theme is pure data built in Lua: a Material 3 scheme generated from a seed color, "
         .. "plus any role, ImGui color or style override you like."),
     grid(
         section("Seed color", "Everything is derived from this one color.", {
-            Row { spacing = 8,
-                Repeater { model = seeds, delegate = function(s)
-                    return Chip { text = s[1], variant = "suggestion",
-                                  checked = function() return look.seed:upper() == s[2] end,
-                                  onClicked = function() look.seed = s[2] end }
-                end },
-            },
+            Row { spacing = 8, Repeater { model = { table.unpack(seeds, 1, 3) }, delegate = seedChip } },
+            Row { spacing = 8, Repeater { model = { table.unpack(seeds, 4, 6) }, delegate = seedChip } },
             ColorPicker { label = "Custom seed", color = bind(look, "seed"), fillWidth = true },
         }),
         section("Mode & preset", nil, {
@@ -503,8 +561,17 @@ local themePage = Column {
                      fillWidth = true, format = "%.1fx",
                      onReleased = function(_, v) zoomDrag.value = nil; setZoom(v) end },
         }),
+        section("Layout", "Material 3 window size classes pick the gallery's navigation and grid columns.", {
+            Text { text = function()
+                       local w, h = windowSize()
+                       return ("%d × %d dp"):format(round(w), round(h))
+                   end, style = "headlineSmall" },
+            Text { text = function() return "Size class: " .. sizeClass() end, style = "bodyLarge", color = "primary" },
+            Text { text = function() return ("%.2f px per dp (content scale × zoom)"):format(dpiScale()) end,
+                   style = "bodySmall", color = "onSurfaceVariant" },
+        }),
         section("Scheme", "Generated color roles.", {
-            Grid { columns = 2, spacing = 8,
+            Grid { columns = function() return compact() and 1 or 2 end, spacing = 8,
                 Repeater { model = roles, delegate = function(role)
                     return Row { spacing = 12,
                         Canvas { width = 32, height = 32, onPaint = function(_, p)
@@ -520,7 +587,7 @@ local themePage = Column {
 }
 
 -------------------------------------------------------------------------------
--- Shell: navigation drawer + top app bar + page loader
+-- Shell: adaptive navigation + top app bar + page loader
 -------------------------------------------------------------------------------
 local pages = {
     { "Buttons", "smart_button", buttonsPage },
@@ -533,7 +600,7 @@ local pages = {
     { "Theme", "palette", themePage },
 }
 -- GALLERY_PAGE=n opens page n at startup (handy for screenshots / testing).
-local nav = state { page = tonumber(os.getenv("GALLERY_PAGE") or "") or 1, demo = false }
+local nav = state { page = tonumber(os.getenv("GALLERY_PAGE") or "") or 1, demo = false, drawer = false }
 
 -- Frames are rendered on demand, and a timer wakes the app at its rate. Run the
 -- live chart's sampler only while its page is visible, so other pages stay idle.
@@ -545,6 +612,49 @@ end
 watch(nav, "page", syncSampler)
 syncSampler()
 
+-- The destinations, as NavigationItems. Inside a NavigationRail they draw as rail destinations, in a
+-- drawer as drawer items. `closeDrawer` closes the modal drawer once one is chosen.
+local function destinations(closeDrawer)
+    return Repeater {
+        model = pages,
+        delegate = function(p, i)
+            return NavigationItem { icon = p[2], text = p[1],
+                                    selected = function() return nav.page == i end,
+                                    onClicked = function()
+                                        nav.page = i
+                                        if closeDrawer then nav.drawer = false end
+                                    end }
+        end,
+    }
+end
+
+-- Drawer contents, appended to `container`: shared by the standard drawer and the modal one.
+local function drawerContents(container, closeDrawer)
+    local items = {
+        Column { padding = 16, spacing = 2,
+            Text { text = "imlui", style = "headlineSmall", color = "primary" },
+            Text { text = "Lua + Dear ImGui + Material 3", style = "bodySmall", color = "onSurfaceVariant" },
+            Spacer { height = 4 },
+        },
+        destinations(closeDrawer),
+        Spacer { height = 12 },
+        Divider { inset = 16, insetEnd = 16 },
+        Spacer { height = 12 },
+        NavigationItem { icon = "code", text = "ImGui demo window",
+                         selected = function() return nav.demo end,
+                         onClicked = function()
+                             nav.demo = not nav.demo
+                             if closeDrawer then nav.drawer = false end
+                         end },
+    }
+    for _, item in ipairs(items) do container[#container + 1] = item end
+    return container
+end
+
+local function togglePhonePreview()
+    if compact() then setWindowSize(1280, 860) else setWindowSize(412, 915) end
+end
+
 return ApplicationWindow {
     title = function() return "imlui gallery — " .. pages[nav.page][1] end,
     width = 1280, height = 860,
@@ -554,28 +664,18 @@ return ApplicationWindow {
     Row {
         align = "top", spacing = 0,
 
-        -- Navigation drawer
-        ScrollView {
-            width = 296, padding = 12, spacing = 0, color = "surfaceContainerLow", rounding = 0,
-            Column { padding = 16, spacing = 2,
-                Text { text = "imlui", style = "headlineSmall", color = "primary" },
-                Text { text = "Lua + Dear ImGui + Material 3", style = "bodySmall", color = "onSurfaceVariant" },
-                Spacer { height = 4 },
+        -- Side navigation for the current window size class: none on compact windows, a rail on medium
+        -- ones, the standard drawer from expanded up.
+        Responsive {
+            compact = false,
+            medium = NavigationRail {
+                color = "surfaceContainerLow",
+                header = IconButton { icon = "menu", tooltip = "All destinations",
+                                      onClicked = function() nav.drawer = true end },
+                destinations(false),
             },
-            Repeater {
-                model = pages,
-                delegate = function(p, i)
-                    return NavigationItem { icon = p[2], text = p[1],
-                                            selected = function() return nav.page == i end,
-                                            onClicked = function() nav.page = i end }
-                end,
-            },
-            Spacer { height = 12 },
-            Divider { inset = 16, insetEnd = 16 },
-            Spacer { height = 12 },
-            NavigationItem { icon = "code", text = "ImGui demo window",
-                             selected = function() return nav.demo end,
-                             onClicked = function() nav.demo = not nav.demo end },
+            expanded = drawerContents(
+                ScrollView { width = 296, padding = 12, spacing = 0, color = "surfaceContainerLow", rounding = 0 }),
         },
 
         -- Content
@@ -583,6 +683,8 @@ return ApplicationWindow {
             spacing = 0,
             TopAppBar {
                 title = function() return pages[nav.page][1] end,
+                navigationIcon = function() return compact() and "menu" or "" end,
+                onNavigation = function() nav.drawer = true end,
                 IconButton { icon = function() return look.dark and "light_mode" or "dark_mode" end,
                              tooltip = "Toggle dark mode", onClicked = function() look.dark = not look.dark end },
                 IconButton { icon = "palette", tooltip = "Seed color",
@@ -597,16 +699,22 @@ return ApplicationWindow {
                     menu = Menu {
                         MenuItem { text = "Reload script", icon = "refresh", shortcut = "on save", onTriggered = reload },
                         MenuItem { text = "ImGui demo window", checked = bind(nav, "demo") },
+                        MenuItem { text = function() return compact() and "Desktop" or "Phone preview" end,
+                                   icon = function() return compact() and "computer" or "smartphone" end,
+                                   onTriggered = togglePhonePreview },
                         Divider {},
                         MenuItem { text = "Quit", icon = "logout", onTriggered = quit },
                     } },
             },
             ScrollView {
-                padding = 24, rounding = 0,
+                padding = pagePadding, rounding = 0,
                 Loader { item = function() return pages[nav.page][3] end },
             },
         },
     },
+
+    -- Compact and medium windows: every destination, with its label, in a modal drawer.
+    drawerContents(ModalNavigationDrawer { open = bind(nav, "drawer"), spacing = 0 }, true),
 
     ImGuiDemo { open = bind(nav, "demo"), visible = function() return nav.demo end },
 }

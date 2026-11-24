@@ -105,3 +105,37 @@ TEST_F(LuaLibraryTest, NativeWrappersAreExposed) {
         assert(ui.imguiVersion == native.imguiVersion)
     )");
 }
+
+TEST_F(LuaLibraryTest, PickSizeClassFallsBackToTheNearestSmallerClass) {
+    run(R"(
+        local p = { medium = "M", large = "L" }
+        assert(ui.pickSizeClass(p, "compact") == "M", "no smaller class: the smallest defined one")
+        assert(ui.pickSizeClass(p, "medium") == "M")
+        assert(ui.pickSizeClass(p, "expanded") == "M", "expanded falls back to medium")
+        assert(ui.pickSizeClass(p, "large") == "L")
+        assert(ui.pickSizeClass(p, "extraLarge") == "L")
+        assert(ui.pickSizeClass(p, "bogus") == "M", "unknown names count as compact")
+        assert(ui.pickSizeClass({}, "large") == nil)
+        local q = { compact = false, expanded = "E" }
+        assert(ui.pickSizeClass(q, "compact") == false, "false is a defined class")
+        assert(ui.pickSizeClass(q, "medium") == false)
+        assert(ui.pickSizeClass(q, "extraLarge") == "E")
+    )");
+}
+
+TEST_F(LuaLibraryTest, ResponsiveShowsTheElementForTheCurrentSizeClass) {
+    run(R"(
+        local class = "compact"
+        ui.sizeClass = function() return class end
+        local phone, tablet, desktop = ui.Column {}, ui.Column {}, ui.Row {}
+        local r = ui.Responsive { compact = phone, medium = tablet, expanded = desktop, large = false }
+        assert(r.__type == "Responsive" and r.__inline)
+        local function shown() return r:__children()[1] end
+        assert(shown() == phone)
+        class = "medium"; assert(shown() == tablet)
+        class = "expanded"; assert(shown() == desktop)
+        class = "large"; assert(shown() == nil, "false shows nothing")
+        class = "extraLarge"; assert(shown() == nil)
+        class = "compact"; assert(shown() == phone, "the same element instance comes back")
+    )");
+}

@@ -25,7 +25,7 @@ The first positional string works as `text`: `Button { "OK" }` is `Button { text
 currently applied in pixels, not dp.
 
 Elements that hold children stack them (`Column`, `Card`, `ScrollView`, `Tab`, `Dialog`, `Window`,
-`ApplicationWindow`, ...). They also accept:
+`ModalNavigationDrawer`, `ApplicationWindow`, ...). They also accept:
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
@@ -193,9 +193,10 @@ An ImGui tree node (`bodyLarge`) whose children render inside it.
 | `text` | string | `""` | Label. |
 | `expanded` | bool | `false` | Initially open. Not written back. |
 
-### Repeater, If, Loader
+### Repeater, If, Loader, Responsive
 
 Inline containers that produce children dynamically. See [dynamic children](lua-api.md#dynamic-children).
+`Responsive` picks its child by the window size class ([adaptive layouts](lua-api.md#window-size-and-adaptive-layouts)).
 
 ---
 
@@ -217,17 +218,100 @@ Signals: `onNavigation(self)` when the navigation icon is clicked.
 
 ### NavigationItem
 
-A navigation drawer item: a 56dp pill with an icon, a label and an optional badge.
+A navigation destination. It takes the look of the navigation container it's rendered in:
+
+- **by default** (a `ScrollView` used as a standard drawer, a `ModalNavigationDrawer`, anywhere else): a drawer
+  item, a 56dp pill with a leading icon, a `labelLarge` label and an optional trailing badge;
+- **in a `NavigationBar`**: a bar destination, an 80dp tall cell with a 24dp icon in a 64x32dp pill indicator and a
+  `labelMedium` label below;
+- **in a `NavigationRail`**: a rail destination, 56dp tall, with a 56x32dp indicator and the label below.
+
+In a bar or rail the indicator is `secondaryContainer` when selected, the icon `onSecondaryContainer` (selected) or
+`onSurfaceVariant`, the label `onSurface` (selected) or `onSurfaceVariant`, and the hover and press layer sits on
+the indicator.
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
 | `text` | string | `""` | Label. |
-| `icon` | string | `""` | Leading icon. |
+| `icon` | string | `""` | Icon. |
 | `selected` | bool | `false` | Selected look (`secondaryContainer`). |
-| `badge` | string | `""` | Trailing badge text. |
-| `width` | number | fill | |
+| `badge` | string | `""` | Drawer: trailing text. Bar and rail: a small `error` badge on the icon with this text, or a 6dp dot for `"."`. |
+| `width` | number | fill | Drawer items only. In a bar or rail the container sets the width. |
 
 Signals: `onClicked(self)`.
+
+How it works: while a `NavigationBar` or `NavigationRail` renders its children, it sets a *navigation context*
+(style and destination width) in `imlui.ui.elements.navigation`, and `NavigationItem` reads it. The context is
+scoped, so it covers everything the container renders, including `Repeater` delegates, and the outer context comes
+back afterwards. A rail's `header` and a `ModalNavigationDrawer`'s sheet reset it to the drawer style.
+
+### NavigationBar
+
+The Material 3 bottom navigation bar, for compact windows: 80dp tall, `surfaceContainer`, as wide as the available
+width. Its children are `NavigationItem`s (directly or from a `Repeater` with `model`/`delegate`), and they share
+the width equally.
+
+| Prop | Type | Default | Meaning |
+|---|---|---|---|
+| `color` | color | `surfaceContainer` | Background. |
+| `width` | number | fill | |
+
+```lua
+NavigationBar {
+    Repeater { model = tabs, delegate = function(t, i)
+        return NavigationItem { text = t.name, icon = t.icon, selected = function() return s.tab == i end,
+                                onClicked = function() s.tab = i end }
+    end },
+}
+```
+
+### NavigationRail
+
+The Material 3 navigation rail, for medium windows: 80dp wide and as tall as the available height, with the
+destinations stacked below an optional header.
+
+| Prop | Type | Default | Meaning |
+|---|---|---|---|
+| `header` | element | — | Rendered centered at the top, e.g. a menu `IconButton` or a FAB (`Button { variant = "fab" }`). |
+| `color` | color | `surface` | Background. |
+| `height` | number | fill | |
+| `spacing` | number | `12` | Gap between destinations. |
+| `align` | `"top"` \| `"center"` \| `"bottom"` | `"top"` | Vertical position of the destination group below the header. |
+
+```lua
+NavigationRail {
+    header = IconButton { icon = "menu", onClicked = function() nav.drawer = true end },
+    Repeater { model = pages, delegate = destination },
+}
+```
+
+### ModalNavigationDrawer
+
+A modal navigation drawer: a scrim (`scrim` at 32 %) over the whole window and a `surfaceContainerLow` sheet that
+slides in from the left, with `large` rounded corners on its right edge. It draws in its own ImGui window above the
+app content. Its children are stacked in a scrolling region with 12dp padding, so `NavigationItem`s render as drawer
+items. Like `Dialog`, it takes no layout space; put it anywhere, for example as a child of the `ApplicationWindow`.
+
+| Prop | Type | Default | Meaning |
+|---|---|---|---|
+| `open` | bool, **two-way** | `false` | Shown while true. Clicking the scrim or pressing Escape writes `false`. |
+| `width` | number | `360` | Sheet width, at most 80 % of the window. |
+
+Signals: `onClosed(self)` when the scrim or Escape closes it.
+
+```lua
+local nav = state { drawer = false, page = 1 }
+TopAppBar { title = "Inbox", navigationIcon = "menu", onNavigation = function() nav.drawer = true end }
+ModalNavigationDrawer { open = bind(nav, "drawer"), spacing = 0,
+    Repeater { model = pages, delegate = function(p, i)
+        return NavigationItem { text = p.name, icon = p.icon, selected = function() return nav.page == i end,
+                                onClicked = function() nav.page = i; nav.drawer = false end }
+    end },
+}
+```
+
+Close it from a destination's `onClicked` as above. With a plain function as `open` (not `bind`), the drawer can't
+write `false` back and stays open.
 
 ### MenuBar, Menu, MenuItem
 

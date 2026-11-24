@@ -132,7 +132,7 @@ StatCard { title = "Frame rate", value = function() return ("%.0f fps"):format(f
 
 ## Dynamic children
 
-`Repeater`, `If` and `Loader` are **inline**: their children are laid out as if they were direct children of the
+`Repeater`, `If`, `Loader` and [`Responsive`](#responsive-compact-medium-expanded-large-extralarge) are **inline**: their children are laid out as if they were direct children of the
 parent. A `Repeater` in a `Row` flows horizontally, and in a `Column` it stacks vertically. `visible = false` on
 one of them hides all of its children.
 
@@ -183,6 +183,58 @@ Shows exactly one element: `item`, or the result of calling `item`. Useful for p
 ```lua
 Loader { item = function() return pages[nav.page] end }
 ```
+
+## Window size and adaptive layouts
+
+The UI can adapt to the window with the Material 3 **window size classes**, picked by the window width in dp:
+
+| Class | Width |
+|---|---|
+| `"compact"` | < 600dp (phones) |
+| `"medium"` | 600–839dp (tablets in portrait, foldables) |
+| `"expanded"` | 840–1199dp |
+| `"large"` | 1200–1599dp |
+| `"extraLarge"` | ≥ 1600dp |
+
+| Function | Description |
+|---|---|
+| `windowSize() -> w, h` | The window's size in dp: pixels / `dpiScale()`, so zooming in makes it smaller. It's the last rendered frame's size (the display size before the first frame). |
+| `sizeClass() -> name` | The size class of `windowSize()`'s width. |
+| `sizeClassFor(w) -> name` | The size class of any width in dp. |
+| `setWindowSize(w, h)` | Resizes the native window to `w` x `h` dp, scaled by the monitor content scale (not by the zoom), like the root `ApplicationWindow`'s `width`/`height`. Applied after the current frame. |
+| `pickSizeClass(t, class) -> value` | `t[class]`, else the value for the nearest smaller class that `t` has, else the smallest one it has. `false` counts as a value. `Responsive` uses it. |
+| `SIZE_CLASSES` | `{ "compact", "medium", "expanded", "large", "extraLarge" }`. |
+
+Bindings are re-evaluated on every rendered frame, and resizing the window renders frames, so function props that
+read `sizeClass()` or `windowSize()` adapt by themselves:
+
+```lua
+local function compact() return sizeClass() == "compact" end
+ScrollView { padding = function() return compact() and 16 or 24 end, ... }
+Grid { columns = function() return compact() and 1 or 2 end, ... }
+TopAppBar { navigationIcon = function() return compact() and "menu" or "" end, ... }
+```
+
+### `Responsive { compact, medium, expanded, large, extraLarge }`
+
+An inline container (like `Loader`) that shows the element given for the current size class. A class that isn't
+given falls back to the nearest smaller class that is, or else to the smallest one given. `false` shows nothing.
+Build each element once, as below: switching classes then keeps their state (scroll positions inside them reset,
+since they're laid out in another place).
+
+```lua
+Row { align = "top", spacing = 0,
+    Responsive {
+        compact = false,                                     -- no side navigation on phones
+        medium = NavigationRail { header = menuButton, destinations },
+        expanded = ScrollView { width = 296, destinations }, -- also used for large and extraLarge
+    },
+    content,
+}
+```
+
+The gallery (`examples/gallery.lua`) shows the full pattern: a modal drawer opened from the top app bar on compact
+windows, a rail on medium ones, the standard drawer from expanded up, and grids whose `columns` follow the width.
 
 ## Theme
 
@@ -345,6 +397,10 @@ it. The ones not wrapped are marked **native only**.
 | `native.zoom() -> number` | Backs `zoom()`. |
 | `native.setZoom(z)` | Backs `setZoom()`. |
 | `native.setZoomShortcuts(on)` | Backs `setZoomShortcuts()`. |
+| `native.windowSize() -> w, h` | Backs `windowSize()`. |
+| `native.sizeClass() -> name` | Backs `sizeClass()`. |
+| `native.sizeClassFor(w) -> name` | Backs `sizeClassFor()`. |
+| `native.setWindowSize(w, h)` | Backs `setWindowSize()`. |
 | `native.requestFrame(seconds?)` | Backs `requestFrame()`. Note: **seconds**, where `requestFrame` takes ms. |
 | `native.textSize(text, style?) -> w, h` | Backs `textSize()`. |
 | `native.setTitle(title)` | Backs `setTitle()`. |

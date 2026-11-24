@@ -18,6 +18,7 @@ export import imlui.widgets.spin_box;
 export import imlui.widgets.color_field;
 export import imlui.widgets.tabs;
 export import imlui.widgets.navigation;
+export import imlui.widgets.navigation_drawer;
 export import imlui.widgets.list;
 export import imlui.widgets.card;
 export import imlui.widgets.dialog;

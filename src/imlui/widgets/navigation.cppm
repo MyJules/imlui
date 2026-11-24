@@ -1,6 +1,7 @@
-// Navigation drawer item.
+// Navigation destinations: drawer items, navigation bar items and navigation rail items.
 module;
 
+#include <algorithm>
 #include <string_view>
 
 export module imlui.widgets.navigation;
@@ -18,6 +19,16 @@ export namespace imlui::md {
 /// Navigation drawer item: 56dp pill with icon, label and optional badge text. Returns true when clicked.
 bool navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                     std::string_view badge = {}, float width = -1.0f);
+
+/// Navigation bar destination, `width` x 80dp: a 24dp icon in a 64x32dp pill indicator (secondaryContainer when
+/// selected) above a labelMedium label. `badge` puts a small badge on the icon. Returns true when clicked.
+bool navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                       std::string_view badge, float width);
+
+/// Navigation rail destination, `width` x 56dp: a 24dp icon in a 56x32dp pill indicator with the label below.
+/// Returns true when clicked.
+bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                        std::string_view badge, float width);
 
 } // namespace imlui::md
 
@@ -61,6 +72,85 @@ bool navigationItem(const char* id, std::string_view iconName, std::string_view 
         drawTextV(dl, TextStyle::LabelLarge, p.x + w - dp(24) - bw, cy, fg, badge);
     }
     return clicked;
+}
+
+namespace {
+
+/// Geometry of a bar or rail destination, in dp relative to the item's top-left corner.
+struct DestinationLayout {
+    float height;         ///< whole item (the click target)
+    float indicatorWidth; ///< the pill behind the icon; 32dp tall
+    float indicatorTop;
+    float labelCenter; ///< vertical center of the label
+};
+
+/// Small M3 badge on the icon's top-right: a 6dp dot for "•", else a 16dp pill with labelSmall text.
+void drawBadge(ImDrawList* dl, ImVec2 iconCenter, std::string_view badge) {
+    const Scheme& s = scheme();
+    if (badge == "\xE2\x80\xA2" || badge == ".") {
+        fillCircle(dl, {iconCenter.x + dp(9), iconCenter.y - dp(9)}, dp(3), s.error);
+        return;
+    }
+    const float tw = measure(TextStyle::LabelSmall, badge).x;
+    const float bw = std::max(dp(16), tw + dp(8)), x0 = iconCenter.x + dp(4), y0 = iconCenter.y - dp(14);
+    fillRoundRect(dl, {x0, y0}, {x0 + bw, y0 + dp(16)}, dp(8), s.error);
+    drawTextV(dl, TextStyle::LabelSmall, x0 + (bw - tw) * 0.5f, y0 + dp(8), s.onError, badge);
+}
+
+bool destination(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                 std::string_view badge, float width, const DestinationLayout& l) {
+    const Scheme& s = scheme();
+    const float w = std::max(1.0f, width), h = dp(l.height);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton(id, {w, h});
+    const bool dis = itemDisabled();
+    const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const ImGuiID iid = ImGui::GetItemID();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const float cx = p.x + w * 0.5f, iw = dp(l.indicatorWidth), ih = dp(32);
+    const ImVec2 ia{cx - iw * 0.5f, p.y + dp(l.indicatorTop)}, ib{cx + iw * 0.5f, p.y + dp(l.indicatorTop) + ih};
+    // The indicator grows out from its center when the destination becomes selected.
+    const float t = animate(iid + 3, selected ? 1.0f : 0.0f, 18.0f);
+    if (t > 0.01f) {
+        const float half = iw * 0.5f * (0.5f + 0.5f * t);
+        fillRoundRect(dl, {cx - half, ia.y}, {cx + half, ib.y}, ih * 0.5f,
+                      (dis ? disabledContainer() : s.secondaryContainer).withAlpha(t));
+    }
+    // M3 puts the hover / press layer on the indicator, not on the whole target.
+    const float layer = dis ? 0.0f : stateLayer(iid, hov, act);
+    if (layer > 0)
+        fillRoundRect(dl, ia, ib, ih * 0.5f, (selected ? s.onSecondaryContainer : s.onSurface).withAlpha(layer));
+
+    const ImVec2 ic{cx, (ia.y + ib.y) * 0.5f};
+    const Color iconColor = dis ? disabledContent() : (selected ? s.onSecondaryContainer : s.onSurfaceVariant);
+    drawIcon(dl, iconName, ic, 24.0f, iconColor);
+    if (!badge.empty()) drawBadge(dl, ic, badge);
+
+    if (!label.empty()) {
+        const Color labelColor = dis ? disabledContent() : (selected ? s.onSurface : s.onSurfaceVariant);
+        const float lw = measure(TextStyle::LabelMedium, label).x;
+        // Long labels are clipped to the destination rather than running into the next one.
+        dl->PushClipRect({p.x, p.y}, {p.x + w, p.y + h}, true);
+        drawTextV(dl, TextStyle::LabelMedium, std::max(p.x + dp(2), cx - lw * 0.5f), p.y + dp(l.labelCenter),
+                  labelColor, label);
+        dl->PopClipRect();
+    }
+    return clicked;
+}
+
+} // namespace
+
+bool navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                       std::string_view badge, float width) {
+    return destination(id, iconName, label, selected, badge, width,
+                       {.height = 80, .indicatorWidth = 64, .indicatorTop = 12, .labelCenter = 56});
+}
+
+bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                        std::string_view badge, float width) {
+    return destination(id, iconName, label, selected, badge, width,
+                       {.height = 56, .indicatorWidth = 56, .indicatorTop = 0, .labelCenter = 44});
 }
 
 } // namespace imlui::md

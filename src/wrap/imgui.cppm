@@ -226,6 +226,13 @@ export using ::ImGuiDataType_Double;
 
 export using ::ImGuiPopupFlags_;
 export using ::ImGuiPopupFlags_None;
+export using ::ImGuiPopupFlags_AnyPopupId;
+export using ::ImGuiPopupFlags_AnyPopupLevel;
+export using ::ImGuiPopupFlags_AnyPopup;
+
+export using ::ImGuiFocusedFlags;
+export using ::ImGuiFocusedFlags_;
+export using ::ImGuiFocusedFlags_RootAndChildWindows;
 
 export using ::ImGuiItemFlags_;
 export using ::ImGuiItemFlags_Disabled;
@@ -345,6 +352,7 @@ using ImGui::IsWindowHovered;
 using ImGui::PushClipRect;
 using ImGui::PopClipRect;
 using ImGui::SetNextWindowFocus;
+using ImGui::IsWindowFocused;
 // layout
 using ImGui::GetContentRegionAvail;
 using ImGui::GetCursorScreenPos;

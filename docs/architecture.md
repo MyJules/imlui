@@ -146,9 +146,9 @@ so the handler already sees the new state.
 
 - the array part of the table, or
 - the result of `self.__children(self)` if that function exists. The prelude sets it for `Repeater`, `ListView`,
-  `If` and `Loader`.
+  `If`, `Loader` and `Responsive`.
 
-Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`) are **spliced into the parent**: their
+Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
 own children are laid out as direct children of the parent. That's why a `Repeater` inside a `Row` flows
 horizontally. `visible = false` on an inline container hides all of its children. `ListView` isn't inline. It's
 a scrolling `ScrollView` whose children come from `model`/`delegate`.
@@ -157,8 +157,8 @@ Layout notes:
 
 - Each **visual** element is wrapped in an ImGui group, so it counts as exactly one layout item (a label plus a
   field behaves as one item in a `Row`).
-- **Non-visual** elements (`ApplicationWindow`, `Window`, `Dialog`, `Snackbar`, `Timer`, `ImGuiDemo`, and any
-  registered with `visual = false`) take no layout space or spacing.
+- **Non-visual** elements (`ApplicationWindow`, `Window`, `Dialog`, `ModalNavigationDrawer`, `Snackbar`, `Timer`,
+  `ImGuiDemo`, and any registered with `visual = false`) take no layout space or spacing.
 - Immediate-mode layout uses *last frame's* sizes for `Row` alignment, `justify`, fill spacers, `Column { align }`
   and `TopAppBar` actions. A layout settles within one frame.
 
@@ -221,7 +221,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set` (write-back), `emit` (signals) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |
-| `imlui.lua.native` | `NativeHooks` and `registerNative`: the `imlui.native` Lua library |
+| `imlui.lua.native` | `NativeHooks` (quit, reload, title, zoom, window size) and `registerNative`: the `imlui.native` Lua library |
 
 ### Widgets (`src/imlui/widgets/`, namespace `imlui::md`)
 
@@ -241,7 +241,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.spin_box` | `spinBox` |
 | `imlui.widgets.color_field` | `colorField` (swatch and picker popup) |
 | `imlui.widgets.tabs` | `tabs` (+ `TabInfo`) |
-| `imlui.widgets.navigation` | `navigationItem` |
+| `imlui.widgets.navigation` | Navigation destinations: `navigationItem` (drawer), `navigationBarItem`, `navigationRailItem` |
+| `imlui.widgets.navigation_drawer` | `beginModalDrawer`/`endModalDrawer`: scrim and sliding sheet in a window above the app |
 | `imlui.widgets.list` | `listItem` (+ `ListItemOptions`), `expander` |
 | `imlui.widgets.card` | `beginCard`/`endCard` (+ `CardVariant`) |
 | `imlui.widgets.dialog` | `beginDialog`/`endDialog` |
@@ -256,10 +257,11 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, wake handler |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
+| `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `registerElement`, `render`, `forEachChild`, `renderChildren`, `renderStack`, `attachMenu`, window title |
 | `imlui.ui.elements.windows` | `ApplicationWindow`, `Window`, `Dialog` |
-| `imlui.ui.elements.layout` | `Column`, `Item`, `Row`, `Grid`, `ScrollView`, `ListView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `Repeater`, `If`, `Loader` |
-| `imlui.ui.elements.navigation` | `TopAppBar`, `NavigationItem`, `MenuBar`, `Menu`, `MenuItem` |
+| `imlui.ui.elements.layout` | `Column`, `Item`, `Row`, `Grid`, `ScrollView`, `ListView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `Repeater`, `If`, `Loader`, `Responsive` |
+| `imlui.ui.elements.navigation` | `TopAppBar`, `NavigationItem`, `NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem`; the scoped navigation context that styles `NavigationItem` |
 | `imlui.ui.elements.content` | `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer` |
 | `imlui.ui.elements.controls` | `Button`, `IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem` |
 | `imlui.ui.elements.inputs` | `Slider`, `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker` |

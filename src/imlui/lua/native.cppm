@@ -1,5 +1,5 @@
-// The `imlui.native` Lua library: theme, colors, time, text metrics, logging
-// and app control (quit / reload / title, through NativeHooks).
+// The `imlui.native` Lua library: theme, colors, time, text metrics, window size classes, logging
+// and app control (quit / reload / title / window size, through NativeHooks).
 module;
 
 #include <functional>
@@ -22,6 +22,7 @@ import imlui.theme.theme;
 import imlui.lua.node;
 import imlui.lua.theme_table;
 import imlui.ui.frame_request;
+import imlui.ui.size_class;
 
 export namespace imlui::luaui {
 
@@ -33,6 +34,8 @@ struct NativeHooks {
     std::function<float()> zoom;        ///< current or pending zoom
     std::function<void(float)> setZoom; ///< schedules a zoom change for the next frame
     std::function<void(bool)> setZoomShortcuts;
+    /// Resizes the native window to w x h dp (times the monitor content scale, not the zoom).
+    std::function<void(int, int)> setWindowSize;
 };
 
 /// Makes `require("imlui.native")` available in `state`. `hooks` is stored in
@@ -55,6 +58,14 @@ NativeHooks& hostHooks(lua::State* state) {
     lua::pop(state);
     if (!h) lua::error(state, "imlui.native: no host hooks registered");
     return *h;
+}
+
+/// Main viewport size in dp (pixels / dpiScale()): last frame's size, or the display size before the first frame.
+ImVec2 windowSizeDp() {
+    ImVec2 px = ImGui::GetIO().DisplaySize;
+    if (const ImGuiViewport* vp = ImGui::GetMainViewport(); vp && vp->Size.x > 0.0f) px = vp->Size;
+    const float scale = dpiScale();
+    return {px.x / scale, px.y / scale};
 }
 
 Color argColor(lua::State* state, int idx) {
@@ -162,6 +173,38 @@ constexpr NativeFn nativeFns[] = {
     {"setZoomShortcuts",
      [](lua::State* state) -> int {
          if (auto& fn = hostHooks(state).setZoomShortcuts) fn(lua::toboolean(state, 1));
+         return 0;
+     }},
+    // windowSize() -> w, h: the main viewport in dp.
+    {"windowSize",
+     [](lua::State* state) -> int {
+         const ImVec2 sz = windowSizeDp();
+         lua::pushnumber(state, static_cast<double>(sz.x));
+         lua::pushnumber(state, static_cast<double>(sz.y));
+         return 2;
+     }},
+    // sizeClass() -> "compact" | "medium" | "expanded" | "large" | "extraLarge", from windowSize()'s width.
+    {"sizeClass",
+     [](lua::State* state) -> int {
+         lua::pushstring(state, sizeClassName(sizeClassForWidth(windowSizeDp().x)));
+         return 1;
+     }},
+    // sizeClassFor(widthDp) -> name: the size class of any width.
+    {"sizeClassFor",
+     [](lua::State* state) -> int {
+         if (!lua::isnumber(state, 1)) lua::error(state, "sizeClassFor expects a width in dp");
+         lua::pushstring(state, sizeClassName(sizeClassForWidth(static_cast<float>(lua::tonumber(state, 1)))));
+         return 1;
+     }},
+    // setWindowSize(w, h): native window size in dp, applied after the current frame.
+    {"setWindowSize",
+     [](lua::State* state) -> int {
+         if (!lua::isnumber(state, 1) || !lua::isnumber(state, 2))
+             lua::error(state, "setWindowSize expects a width and a height in dp");
+         const double w = lua::tonumber(state, 1), h = lua::tonumber(state, 2);
+         if (!(w >= 1.0 && h >= 1.0 && w <= 100000.0 && h <= 100000.0))
+             lua::error(state, "setWindowSize: width and height must be between 1 and 100000 dp");
+         if (auto& fn = hostHooks(state).setWindowSize) fn(static_cast<int>(w + 0.5), static_cast<int>(h + 0.5));
          return 0;
      }},
     // requestFrame([seconds]): render a frame now, or after `seconds`.
