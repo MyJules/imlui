@@ -95,8 +95,9 @@ Ship an app as one executable with its Lua scripts, fonts, images and data. Deci
 - **Fonts:** the library embeds Roboto, Material Icons and the codepoints, and loads them with
   `AddFontFromMemoryTTF`. Apps can declare their own fonts from Lua (`theme { fonts = { ... } }`).
 - **Images:** an `Image { source = "app:/logo.png" }` element for PNG and JPG, decoded with stb_image (vendored)
-  and uploaded as GL textures. Each image is decoded once and cached per resource name. It is drawn at its
-  natural size × the DPI scale unless `width`/`height` are set, and stays sharp only up to its pixel size.
+  and uploaded as textures through ImGui's texture list (the OpenGL backend creates them). Each image is decoded
+  once and cached per resource name. It is drawn at its natural size × the DPI scale unless `width`/`height` are
+  set, and stays sharp only up to its pixel size.
 
 Order, one commit per step:
 
@@ -105,7 +106,7 @@ Order, one commit per step:
 3. Self-contained examples, and a test that runs a release build without the source tree.
 4. `.pak` mounts and the `imlui_pack` tool.
 5. Fonts declared from Lua.
-6. The PNG/JPG `Image` element.
+6. *(done)* The PNG/JPG `Image` element.
 
 ## Next
 

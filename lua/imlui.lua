@@ -101,7 +101,7 @@ local BUILTIN = {
     "TopAppBar", "NavigationItem", "NavigationBar", "NavigationRail", "ModalNavigationDrawer",
     "MenuBar", "Menu", "MenuItem",
     -- text & decoration
-    "Text", "Label", "Icon", "Link", "Separator", "Divider", "Spacer",
+    "Text", "Label", "Icon", "Image", "Link", "Separator", "Divider", "Spacer",
     -- controls
     "Button", "IconButton", "Checkbox", "Switch", "RadioButton", "RadioGroup", "Chip", "SegmentedButton", "ListItem",
     "Slider", "SpinBox", "TextField", "TextArea", "ComboBox", "ColorPicker",
@@ -538,6 +538,22 @@ local function resolve(name)
     local full, err = resource.resolve(base, name)
     if not full then error(err, 3) end
     return full
+end
+
+--- Image { source = "logo.png" }: `source` is a resource name; a relative one is resolved (in C++, at every render,
+--- so bindings work too) against the folder of the script that created the Image, stored as `__base`.
+local image = ui.Image
+function ui.Image(props)
+    if type(props) ~= "table" then props = { props } end
+    local base = ui.__script or "app:/"
+    local self = debug.getinfo(1, "t")
+    if not (self and self.istailcall) then -- `return Image { ... }` hides the creating script
+        local caller = debug.getinfo(2, "S")
+        local source = caller and caller.source
+        if source and source:match("^@%l[%w_%-]+:/") then base = source:sub(2) end
+    end
+    props.__base = base
+    return image(props)
 end
 
 --- ui.resource: files from the app's resources. Names are full (`app:/data/items.json`, `imlui:/...`) or

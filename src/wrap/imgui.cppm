@@ -7,6 +7,7 @@
 module;
 
 #include "imgui.h"
+#include "imgui_internal.h" // RegisterUserTexture / UnregisterUserTexture (images)
 
 export module imgui;
 
@@ -21,6 +22,11 @@ export using ::ImFont;
 export using ::ImFontBaked;
 export using ::ImFontGlyph;
 export using ::ImTextureRef;
+export using ::ImTextureData;
+export using ::ImTextureStatus;
+export using ::ImTextureFormat;
+export using ::ImGuiPlatformIO;
+export using ::ImDrawCallback;
 export using ::ImFontAtlas;
 export using ::ImFontConfig;
 export using ::ImDrawList;
@@ -289,6 +295,13 @@ export using ::ImGuiConfigFlags_NavEnableKeyboard;
 export using ::ImGuiBackendFlags_;
 export using ::ImGuiBackendFlags_RendererHasTextures; // headless frames in tests: no prebuilt font atlas needed
 
+export using ::ImTextureStatus_OK;
+export using ::ImTextureStatus_Destroyed;
+export using ::ImTextureStatus_WantCreate;
+export using ::ImTextureStatus_WantUpdates;
+export using ::ImTextureStatus_WantDestroy;
+export using ::ImTextureFormat_RGBA32;
+
 export using ::ImGuiMouseButton_;
 export using ::ImGuiMouseButton_Left;
 
@@ -314,6 +327,10 @@ using ImGui::CreateContext;
 using ImGui::DestroyContext;
 using ImGui::GetCurrentContext;
 using ImGui::GetIO;
+using ImGui::GetPlatformIO;
+// user textures (images): ImGui's texture list, uploaded and destroyed by the renderer backend
+using ImGui::RegisterUserTexture;
+using ImGui::UnregisterUserTexture;
 using ImGui::GetStyle;
 using ImGui::NewFrame;
 using ImGui::Render;
@@ -522,6 +539,9 @@ constexpr ImU32 col32(unsigned r, unsigned g, unsigned b, unsigned a = 255) {
 
 /// ImGui's `-FLT_MIN` idiom: "fill the remaining width" for item widths.
 inline constexpr float fillWidth = -1.175494351e-38f;
+
+/// ImTextureID_Invalid: the TexID of a texture the backend hasn't created (or has destroyed).
+inline constexpr ImTextureID invalidTextureId = ImTextureID_Invalid;
 
 /// IM_ARRAYSIZE replacement.
 template <class T, unsigned N>

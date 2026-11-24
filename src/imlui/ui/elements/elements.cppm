@@ -17,6 +17,7 @@ export import imlui.ui.elements.divider;
 export import imlui.ui.elements.grid;
 export import imlui.ui.elements.icon;
 export import imlui.ui.elements.icon_button;
+export import imlui.ui.elements.image;
 export import imlui.ui.elements.imgui_demo;
 export import imlui.ui.elements.inline_container;
 export import imlui.ui.elements.link;

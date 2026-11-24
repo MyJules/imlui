@@ -22,6 +22,7 @@ import imgui;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
 import imlui.theme.theme;
+import imlui.image.image_cache;
 import imlui.lua.node;
 import imlui.types.script_object;
 import imlui.ui.frame_request;
@@ -165,6 +166,9 @@ public:
     [[nodiscard]] const Theme& theme() const;
     [[nodiscard]] const Scheme& scheme() const;
 
+    /// The image cache that Image elements draw from (Renderer::images()); null when the host set none.
+    [[nodiscard]] ImageCache* images() const;
+
     /// Sets the native window title (ApplicationWindow's `title`).
     void setWindowTitle(std::string title);
 
@@ -264,5 +268,6 @@ void Frame::setWindowTitle(std::string title) { m_renderer.setWindowTitle(std::m
 
 const luaui::Node& Frame::node() const { return m_node; }
 Renderer& Frame::renderer() const { return m_renderer; }
+ImageCache* Frame::images() const { return m_renderer.images(); }
 
 } // namespace imlui

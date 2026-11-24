@@ -38,6 +38,7 @@ import imlui.lua.painter;
 import imlui.lua.resources;
 import imlui.resources;
 import imlui.resources.directory_mount;
+import imlui.image.image_cache;
 import imlui.theme.icons;
 import imlui.theme.typography;
 import imlui.ui.frame_request;
@@ -82,6 +83,8 @@ public:
     [[nodiscard]] Resources& resources();
     /// Resources the Lua state read or loaded, like the Engine watches for hot reload.
     [[nodiscard]] const std::set<std::string>& loadedResources() const;
+    /// The image cache the Image elements draw from (decoding from resources()), like the Engine's.
+    [[nodiscard]] ImageCache& images();
 
     /// Creates the Lua state, once (run() calls it). Types registered later need a new harness.
     void start();
@@ -124,6 +127,7 @@ private:
     ImGuiContext* m_context = nullptr;
     TypeRegistry m_types;
     Renderer m_renderer{m_types};
+    ImageCache m_images{m_resources};
     luaui::NativeHooks m_hooks;
     lua::State* m_state = nullptr;
     int m_runRef = lua::noRef;
@@ -157,6 +161,7 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     // them, so the font pointers never outlive their context into the next harness.
     loadFonts(m_resources);
     loadIcons(m_resources);
+    m_renderer.setImages(&m_images);
     if (m_options.builtins) {
         registerBuiltinTypes(m_types);
     }
@@ -175,6 +180,7 @@ TypeRegistry& HeadlessFrame::types() { return m_types; }
 Resources& HeadlessFrame::resources() { return m_resources; }
 const std::set<std::string>& HeadlessFrame::loadedResources() const { return m_loaded; }
 int HeadlessFrame::frames() const { return m_frames; }
+ImageCache& HeadlessFrame::images() { return m_images; }
 
 void HeadlessFrame::start() {
     if (m_state) return;

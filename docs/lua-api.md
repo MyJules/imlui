@@ -57,7 +57,7 @@ The registered element type names, sorted: every built-in (`Button`, `Column`, .
 
 Built-in constructors (the `BUILTIN` list): `ApplicationWindow`, `Window`, `Dialog`, `Column`, `Item`, `Row`,
 `Grid`, `ScrollView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `TopAppBar`, `NavigationItem`,
-`NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem`, `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer`, `Button`,
+`NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem`, `Text`, `Label`, `Icon`, `Image`, `Link`, `Separator`, `Divider`, `Spacer`, `Button`,
 `IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem`, `Slider`,
 `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker`, `ProgressBar`, `CircularProgress`, `BusyIndicator`,
 `Plot`, `Table`, `Canvas`, `Timer`, `ImGuiDemo`. `Repeater`, `ListView`, `If`, `Loader` and `Responsive` have
@@ -175,6 +175,10 @@ The calling script is found from the caller's chunk name, which Lua drops in a *
 (`local text = ui.resource.read("x"); return text`), or parentheses (`return (ui.resource.read("x"))`).
 
 Every resource a script reads or loads is watched for hot reload when it comes from a folder on disk.
+
+[`Image`](elements.md#image) takes a resource name as its `source`, resolved the same way against the script that
+creates the `Image`: `Image { source = "img/logo.png" }`. An image file that changes on disk is decoded again
+without a script reload.
 
 ## Dynamic children
 

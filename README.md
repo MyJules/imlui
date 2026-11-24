@@ -35,7 +35,7 @@ build/clang-debug/bin/imlui_app examples/counter/main.lua
 build/clang-debug/bin/imlui_custom_types             # C++ element types and a singleton (docs/extending.md)
 ```
 
-Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3) and are
+Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3, stb_image 2.34) and are
 built as plain libraries. Project code only uses them through module wrappers.
 
 `external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0).
@@ -114,7 +114,7 @@ tree, so you don't need to rebuild.
 | Windows | `ApplicationWindow` (root; `title`, `width`, `height`, `menuBar`, `padding`, `color`, `scrollable`), `Window`, `Dialog` (`icon`, `width`) |
 | Layout | `Column`, `Row`, `Grid`, `ScrollView` (`color`, `rounding`, `padding`, `border`), `ListView`, `Card` (`variant` = elevated, filled, outlined; `width`, `height`, `padding`, `color`, `rounding`), `TabBar`/`Tab` (`icon`, `variant` = primary, secondary), `Expander`/`Section` (`expanded`, default true), `TreeNode` |
 | App bars & navigation | `TopAppBar` (`title`, `navigationIcon`, `variant` = small, center, medium, large; children are actions), `NavigationItem`, `NavigationBar`, `NavigationRail` (`header`), `ModalNavigationDrawer` (`open`), `MenuBar`, `Menu`, `MenuItem` (`icon`, `shortcut`, `checked`) |
-| Text | `Text`/`Label` (`style` = Material type scale, `color`, `wrap`, `align`), `Icon`, `Link`, `Divider`, `Separator`, `Spacer` |
+| Text | `Text`/`Label` (`style` = Material type scale, `color`, `wrap`, `align`), `Icon`, `Image` (PNG/JPEG resources; `fillMode`, `radius`, `tint`), `Link`, `Divider`, `Separator`, `Spacer` |
 | Controls | `Button` (`variant` = filled, tonal, outlined, text, elevated, fab; `icon`), `IconButton` (`variant` = standard, filled, tonal, outlined; `checked`/`checkedIcon` toggle), `Checkbox`, `Switch`, `RadioButton` (`group`), `RadioGroup`, `Chip` (`variant` = filter, assist, suggestion, input), `SegmentedButton`, `ListItem` (`icon`, `supportingText`, `trailingText`, `trailingIcon`) |
 | Inputs | `TextField`/`TextArea` (`variant` = filled, outlined; `label`, `placeholderText`, `leadingIcon`, `trailingIcon`, `supportingText`, `error`, `password`), `ComboBox` (Material dropdown), `Slider` (`onMoved`, `onReleased`), `SpinBox`, `ColorPicker` |
 | Feedback & data | `ProgressBar`, `CircularProgress`, `BusyIndicator`, `Plot` (`kind` = lines, bars), `Table`, `Canvas` (draw from Lua with `onPaint(self, p)`; `p:line/rect/circle/text/icon/polyline`) |

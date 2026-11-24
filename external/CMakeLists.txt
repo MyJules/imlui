@@ -74,3 +74,13 @@ if(IMLUI_HAS_WNO_CHARACTER_CONVERSION)
     target_compile_options(gtest PRIVATE -Wno-character-conversion)
     target_compile_options(gtest_main PRIVATE -Wno-character-conversion)
 endif()
+
+# ---------------------------------------------------------------- stb_image 2.34 (C)
+# Only the PNG and JPEG decoders, decoding from memory (resources), with a size limit. The definitions are PUBLIC so
+# the wrapper module (src/wrap/stb_image.cppm) sees the same declarations.
+add_library(stb_image_static STATIC ${CMAKE_CURRENT_SOURCE_DIR}/imlui_stb_image.c)
+target_include_directories(stb_image_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/stb)
+target_compile_definitions(stb_image_static PUBLIC
+    STBI_ONLY_PNG STBI_ONLY_JPEG STBI_NO_STDIO STBI_NO_LINEAR STBI_MAX_DIMENSIONS=16384)
+set_target_properties(stb_image_static PROPERTIES LINKER_LANGUAGE C SYSTEM ON)
+add_library(ext::stb_image ALIAS stb_image_static)

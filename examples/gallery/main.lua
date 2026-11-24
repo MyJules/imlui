@@ -482,9 +482,14 @@ local dataPage = Column {
 -- Canvas -----------------------------------------------------------------------
 local paint = state { dots = {} }
 
+-- An image with a caption under it.
+local function imageDemo(caption, image)
+    return Column { spacing = 8, image, Text { text = caption, style = "bodySmall", color = "onSurfaceVariant" } }
+end
+
 local canvasPage = Column {
     spacing = 20,
-    pageHeader("Canvas", "Custom drawing from Lua through a painter object. Click to drop stars."),
+    pageHeader("Canvas", "Custom drawing from Lua through a painter object (click to drop stars), and images."),
     Card { padding = 0, variant = "filled",
         Canvas {
             height = 360,
@@ -511,6 +516,17 @@ local canvasPage = Column {
         },
     },
     Button { text = "Clear", icon = "clear_all", variant = "outlined", onClicked = function() paint.dots = {} end },
+    section("Images", "A PNG next to this script (landscape.png), decoded once and drawn as a texture. " ..
+                      "Edit the file and it reloads.", {
+        Grid { columns = columnsFor(150, 4, 16), spacing = 16,
+            imageDemo("radius = 12", Image { source = "landscape.png", width = 150, radius = 12 }),
+            imageDemo('fillMode = "crop", radius = 48',
+                      Image { source = "landscape.png", width = 96, height = 96, fillMode = "crop", radius = 48 }),
+            imageDemo('tint = "primaryContainer"',
+                      Image { source = "landscape.png", width = 150, radius = 12, tint = "primaryContainer" }),
+            imageDemo("opacity = 0.5", Image { source = "landscape.png", width = 150, radius = 12, opacity = 0.5 }),
+        },
+    }),
 }
 
 -- Theme ------------------------------------------------------------------------
