@@ -29,6 +29,7 @@ import imlui.lua.errors;
 import imlui.lua.native;
 import imlui.lua.node;
 import imlui.lua.painter;
+import imlui.theme.typography;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
@@ -129,6 +130,9 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     io.DeltaTime = m_options.deltaTime;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // like the platform window
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // no backend: fonts needn't be prebuilt
+    // Roboto in this context's atlas, like the Engine: the Material widgets measure text with it. Every harness
+    // loads them, so the font pointers never outlive their context into the next harness.
+    loadFonts(IMLUI_FONT_DIR);
     if (m_options.builtins) {
         registerBuiltinElements(m_renderer);
         registerBuiltinTypes(m_types);
