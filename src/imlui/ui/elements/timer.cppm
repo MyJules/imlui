@@ -1,4 +1,4 @@
-// Timer: a non-visual element that emits onTriggered every `interval` ms, as a typed element (TypeBuilder).
+// Timer: a non-visual element that emits onTriggered every `interval` ms, as a typed element.
 // It ticks from its creation, whether or not it's rendered (a Timer on a hidden page or an unselected
 // Loader page keeps firing): Element::setTicking runs tick() at the start of every frame, with the
 // properties synced first, so binding changes take effect even while it isn't rendered. It asks for a frame
@@ -14,7 +14,12 @@ import imlui.ui.frame_request;
 
 export namespace imlui {
 
-/// Timer { interval = 1000, running = true, repeat = true, triggeredOnStart = false, onTriggered = fn }
+/// A timer. It ticks (Element::setTicking) whether or not it is rendered, so it fires on a hidden page too.
+/// Non-visual.
+///
+/// Props:   interval = 1000 (ms), running = true, repeat = true, triggeredOnStart = false
+/// Signals: onTriggered(self)
+/// Two-way: running (a one-shot writes false when it fires)
 class Timer final : public Element {
 public:
     static void declare(TypeBuilder<Timer>& type);

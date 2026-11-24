@@ -1,4 +1,4 @@
-// ColorPicker: a Material color field (swatch + hex, opening a picker popup), as a typed element (TypeBuilder).
+// ColorPicker: a Material color field (swatch + hex, opening a picker popup), as a typed element.
 module;
 
 #include <optional>
@@ -15,8 +15,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ColorPicker { color (two-way; any color spec, written back as "#RRGGBB[AA]", default white), label,
-/// alpha = false, width / fillWidth, onColorChanged(hex) }
+/// A color swatch with its hex value that opens a picker popup.
+///
+/// Props:   color = unset (shows white; any color spec), label = "", alpha = false
+/// Raw:     width
+/// Signals: onColorChanged(self, hex)
+/// Two-way: color (written back as "#RRGGBB[AA]")
 class ColorPicker final : public Element {
 public:
     static void declare(TypeBuilder<ColorPicker>& type);
@@ -54,8 +58,8 @@ void ColorPicker::render(Frame& frame) {
     Color c = m_color.value_or(Color{1, 1, 1, 1});
     if (md::colorField("##cf", &c, m_label, m_alpha, frame.size("width"))) {
         m_color = c;
-        notify("color"); // LuaConvert<Color> writes "#RRGGBB[AA]"
-        emit("onColorChanged", toHex(c));
+        // Writes the color back as "#RRGGBB[AA]" (LuaConvert<Color>) and emits onColorChanged(hex) with it.
+        notify("color");
     }
 }
 

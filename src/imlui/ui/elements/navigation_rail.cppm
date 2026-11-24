@@ -18,10 +18,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// NavigationRail { header, color = "surface", height, spacing = 12, align = "top"|"center"|"bottom",
-/// <NavigationItems> }: 80dp wide, full height by default. The optional header element sits fixed at the top;
+/// The Material 3 navigation rail: 80dp wide, full height by default. The optional header sits fixed at the top;
 /// the destinations stack below it, aligned in the rest of the height. When they don't fit they scroll
 /// vertically (mouse wheel, and a thin themed scrollbar shown only then).
+///
+/// Props:   color = unset (surface), spacing = 12, align = "top" ("center", "bottom")
+/// Raw:     header (an element), height
 class NavigationRail final : public Element {
 public:
     static void declare(TypeBuilder<NavigationRail>& type);

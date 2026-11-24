@@ -89,15 +89,7 @@ protected:
     void check(std::string_view expr) { EXPECT_EQ(m_h.run("assert(" + std::string{expr} + ")"), "") << expr; }
     void frames(int n = 1) { m_h.renderFrames("root", n); }
     /// A left click at (x, y): move, press, release, one frame each.
-    void click(ImVec2 at) {
-        const std::string pos = std::to_string(at.x) + ", " + std::to_string(at.y);
-        run("ui.native.injectMouse(" + pos + ")");
-        frames();
-        run("ui.native.injectMouse(" + pos + ", true)");
-        frames();
-        run("ui.native.injectMouse(" + pos + ", false)");
-        frames();
-    }
+    void click(ImVec2 at) { m_h.click("root", at.x, at.y); }
     void pressEscape() {
         run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
         frames(3);

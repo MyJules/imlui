@@ -1,4 +1,4 @@
-// ScrollView (alias ListView): a scrolling child window, as a typed element (TypeBuilder). ListView's children
+// ScrollView (alias ListView): a scrolling child window, as a typed element. ListView's children
 // come from its model/delegate through the Lua-side `__children` function, which every child iteration uses.
 //
 // The scroll position belongs to the element, not to the ImGui window: ImGui keys a child window by its ID
@@ -22,8 +22,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ScrollView { width = 0, height = 0, padding = 0, color = nil, rounding = theme medium, border = false,
-///              spacing = nil, align = "start", children... }
+/// A scrolling child region that stacks its children (also registered as ListView, whose children come from
+/// model / delegate on the Lua side). It keeps its scroll position when it is rendered somewhere else.
+///
+/// Props:   padding = 0, color = unset (transparent), rounding = unset (theme shape.medium), border = false,
+///          spacing = unset, align = "start"
+/// Raw:     width, height
 class ScrollView final : public Element {
 public:
     static void declare(TypeBuilder<ScrollView>& type);

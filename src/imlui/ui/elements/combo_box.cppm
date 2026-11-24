@@ -1,4 +1,4 @@
-// ComboBox: the Material 3 exposed dropdown menu, as a typed element (TypeBuilder).
+// ComboBox: the Material 3 exposed dropdown menu, as a typed element.
 module;
 
 #include <cstddef>
@@ -15,8 +15,13 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ComboBox { model = {"a", ...}, icons = {...}, currentIndex (two-way, 1-based, default 1), label, leadingIcon,
-/// supportingText, variant = "filled" | "outlined", error, width / fillWidth, onActivated(index, text) }
+/// A Material exposed dropdown menu.
+///
+/// Props:   model = {}, icons = {}, currentIndex = 1 (1-based), label = "", leadingIcon = "", supportingText = "",
+///          variant = "filled" ("outlined"), error = false
+/// Raw:     width
+/// Signals: onActivated(self, index, text)
+/// Two-way: currentIndex
 class ComboBox final : public Element {
 public:
     static void declare(TypeBuilder<ComboBox>& type);

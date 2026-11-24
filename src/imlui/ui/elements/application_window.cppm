@@ -1,4 +1,4 @@
-// ApplicationWindow: the root window that fills the main viewport, as a typed element (TypeBuilder).
+// ApplicationWindow: the root window that fills the main viewport, as a typed element.
 module;
 
 #include <optional>
@@ -15,9 +15,13 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ApplicationWindow { title, menuBar = MenuBar { ... }, color, padding = 24, scrollable = true, children... }
-/// `title`, when the prop exists, sets the native window title every frame; without it, ui.setTitle() (or the
-/// default) sticks. `width`/`height` (the initial window size) are read by the engine.
+/// The root element: fills the native window without decoration and stacks its children. Non-visual.
+///
+/// Props:   title = unset (the native window title, applied every frame while the prop exists),
+///          color = unset (surface), padding = 24, scrollable = true
+/// Raw:     menuBar (a MenuBar), spacing, align; width, height (the initial window size, read by the engine)
+///
+/// Without a `title` prop, the last ui.setTitle() (or "imlui") sticks.
 class ApplicationWindow final : public Element {
 public:
     static void declare(TypeBuilder<ApplicationWindow>& type);

@@ -65,15 +65,7 @@ protected:
         return p ? *p : none;
     }
     /// A left click at (x, y): move, press, release, one frame each.
-    void click(std::string_view root, float x, float y) {
-        const std::string at = std::to_string(x) + ", " + std::to_string(y);
-        run("native.injectMouse(" + at + ")");
-        m_h.renderFrame(root);
-        run("native.injectMouse(" + at + ", true)");
-        m_h.renderFrame(root);
-        run("native.injectMouse(" + at + ", false)");
-        m_h.renderFrame(root);
-    }
+    void click(std::string_view root, float x, float y) { m_h.click(root, x, y); }
 
     test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true}};
 };

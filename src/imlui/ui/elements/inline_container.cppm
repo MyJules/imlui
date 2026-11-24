@@ -1,4 +1,4 @@
-// InlineContainer: Repeater, If and Loader when one is the root element, as a typed element (TypeBuilder).
+// InlineContainer: Repeater, If, Loader and Responsive when one is the root element, as a typed element.
 //
 // These containers are implemented in Lua (lua/imlui.lua): they are `__inline` and give their children
 // through `__children(self)` (the delegates, the branch that holds, the loaded item). A parent splices
@@ -14,8 +14,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Registered as "Repeater", "If" and "Loader". Their props (model, delegate, condition, otherwise, item)
-/// are read by their Lua `__children` functions.
+/// The C++ side of the inline containers Repeater, If, Loader and Responsive. They are implemented in Lua
+/// (`__inline`, `__children`): parents splice their children in, so this only renders as the root element.
+///
+/// Raw:     model, delegate, condition, otherwise, item and the size-class props (read on the Lua side)
 class InlineContainer final : public Element {
 public:
     static void declare(TypeBuilder<InlineContainer>& type);

@@ -1,4 +1,4 @@
-// Canvas: custom drawing from Lua, as a typed element (TypeBuilder). Every frame it calls the `onPaint`
+// Canvas: custom drawing from Lua, as a typed element. Every frame it calls the `onPaint`
 // handler with the painter object (imlui.lua.painter, registry "imlui.painter"), which draws into the canvas
 // area in dp relative to its top-left corner.
 module;
@@ -19,10 +19,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Canvas { width / fillWidth (default fill), height (default 200 dp), animated = false, onClicked(x, y),
-/// onPaint(p) }. `p` is the painter: p.width, p.height, p.mouseX, p.mouseY, p.hovered, p.pressed, p.time and
-/// p:line / rect / circle / text / icon / polyline. `animated = true` renders continuously (onPaint is
-/// time-dependent).
+/// Custom drawing from Lua: onPaint(self, p) draws with the painter (imlui.lua.painter) on every rendered frame.
+///
+/// Props:   animated = false (render continuously, for time-dependent painting)
+/// Raw:     width (default fill), height (default 200dp)
+/// Signals: onPaint(self, p), onClicked(self, x, y)
 class Canvas final : public Element {
 public:
     static void declare(TypeBuilder<Canvas>& type);

@@ -1,4 +1,4 @@
-// CircularProgress: the Material 3 circular progress indicator, as a typed element (TypeBuilder).
+// CircularProgress: the Material 3 circular progress indicator, as a typed element.
 module;
 
 export module imlui.ui.elements.circular_progress;
@@ -10,7 +10,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// CircularProgress { value = 0..1, indeterminate = false, size (diameter, default 48 dp), thickness = 4 }
+/// A Material 3 circular progress indicator.
+///
+/// Props:   value = 0 (0..1), indeterminate = false, thickness = 4 (dp)
+/// Raw:     size (the diameter, default 48dp)
 class CircularProgress final : public Element {
 public:
     static void declare(TypeBuilder<CircularProgress>& type);

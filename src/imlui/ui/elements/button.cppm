@@ -1,4 +1,4 @@
-// Button: the Material 3 common button, as a typed element (TypeBuilder).
+// Button: the Material 3 common button, as a typed element.
 module;
 
 #include <string>
@@ -12,7 +12,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Button { "text" | text = ..., variant = "filled", icon = "", width, height, menu = Menu { ... }, onClicked }
+/// The Material 3 common button.
+///
+/// Props:   text = "" (positional), variant = "filled" ("tonal", "outlined", "text", "elevated", "fab"), icon = ""
+/// Raw:     width, height, menu (a Menu opened on click)
+/// Signals: onClicked(self)
 class Button final : public Element {
 public:
     static void declare(TypeBuilder<Button>& type);

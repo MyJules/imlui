@@ -1,4 +1,4 @@
-// RadioButton: the Material 3 radio button with an optional label, as a typed element (TypeBuilder).
+// RadioButton: the Material 3 radio button with an optional label, as a typed element.
 // Buttons sharing a `group` value act as one group: lua/imlui.lua wraps the constructor and puts the group's
 // member set in `__radioGroup`; a click unchecks the other members through their bindings.
 module;
@@ -16,7 +16,13 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// RadioButton { "label" | text = ..., checked = false (two-way), group = any, onClicked }
+/// A Material radio button with a label. Clicking it sets `checked`; RadioButtons with the same Lua-side `group`
+/// uncheck each other.
+///
+/// Props:   text = "" (positional), checked = false
+/// Raw:     group (read by the Lua constructor)
+/// Signals: onClicked(self)
+/// Two-way: checked
 class RadioButton final : public Element {
 public:
     static void declare(TypeBuilder<RadioButton>& type);

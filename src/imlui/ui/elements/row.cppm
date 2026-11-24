@@ -1,4 +1,4 @@
-// Row: children side by side, as a typed element (TypeBuilder).
+// Row: children side by side, as a typed element.
 //
 // Sizes are measured on the previous frame (immediate mode), so a layout settles within one frame.
 module;
@@ -17,11 +17,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Row { spacing = nil, align = "center", justify = "start", width = 0, children... }
-///   spacing  gap between children (dp); unset uses ImGui's item spacing
-///   align    vertical: "center" | "top" | "bottom"
-///   justify  horizontal: "start" | "center" | "end" | "spaceBetween" (no effect while there are fills)
-///   Spacer { fill = true } children share the remaining width.
+/// Children side by side, measured on the previous frame.
+///
+/// Props:   spacing = unset (ImGui item spacing), align = "center" ("top", "bottom"),
+///          justify = "start" ("center", "end", "spaceBetween"; ignored while there are fills)
+/// Raw:     width; the children's `fill` (Spacer { fill = true } children share the remaining width)
 class Row final : public Element {
 public:
     static void declare(TypeBuilder<Row>& type);

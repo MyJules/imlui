@@ -1,4 +1,4 @@
-// Tab: one page of a TabBar, as a typed element (TypeBuilder). The TabBar reads its title and icon and
+// Tab: one page of a TabBar, as a typed element. The TabBar reads its title and icon and
 // renders the content of the current tab; a Tab outside a TabBar renders its content inline.
 module;
 
@@ -13,7 +13,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Tab { title = "Tab", icon = "", spacing = nil, align = "start", children... }
+/// One tab of a TabBar; a Tab outside a TabBar renders its content inline.
+///
+/// Props:   title = "Tab", icon = ""
+/// Raw:     spacing, align (the TabBar stacks the content with them)
 class Tab final : public Element {
 public:
     static void declare(TypeBuilder<Tab>& type);

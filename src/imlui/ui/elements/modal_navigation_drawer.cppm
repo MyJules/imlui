@@ -1,4 +1,4 @@
-// ModalNavigationDrawer: the Material 3 modal navigation drawer, as a typed (non-visual) element.
+// ModalNavigationDrawer: the Material 3 modal navigation drawer, as a typed element (non-visual).
 module;
 
 export module imlui.ui.elements.modal_navigation_drawer;
@@ -13,9 +13,13 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ModalNavigationDrawer { open (two-way) = false, width = 360 (dp), spacing, align, onClosed, <children> }: a
-/// sheet over a scrim, above everything, with its children stacked in a scrolling region. Clicking the scrim or
-/// pressing Escape closes it: `open` becomes false, then `onClosed` fires.
+/// A sheet over a scrim, above everything, with its children stacked in a scrolling region. Clicking the scrim
+/// or pressing Escape closes it: `open` becomes false, then `onClosed` fires. Non-visual.
+///
+/// Props:   open = false, width = 360 (dp)
+/// Raw:     spacing, align
+/// Signals: onClosed(self)
+/// Two-way: open
 ///
 /// `open` may be a plain value (`open = false`, opened with `drawer.open = true`: closing writes false back to
 /// the element), a `bind(...)` (closing writes the bound state) or a function binding. A function owns the value,

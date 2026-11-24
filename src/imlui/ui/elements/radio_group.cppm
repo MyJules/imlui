@@ -1,5 +1,5 @@
 // RadioGroup: a column (or row) of Material 3 radio buttons for a list of strings, as a typed element
-// (TypeBuilder).
+//.
 module;
 
 #include <cstddef>
@@ -16,8 +16,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// RadioGroup { model = {"A", "B"}, currentIndex = 1 (1-based, two-way), horizontal = false,
-/// onActivated(index, text) }
+/// A list of radio buttons from a model.
+///
+/// Props:   model = {}, currentIndex = 1 (1-based), horizontal = false
+/// Signals: onActivated(self, index, text)
+/// Two-way: currentIndex
 class RadioGroup final : public Element {
 public:
     static void declare(TypeBuilder<RadioGroup>& type);

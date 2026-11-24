@@ -1,4 +1,4 @@
-// Chip: the Material 3 chip (filter, assist, suggestion, input), as a typed element (TypeBuilder).
+// Chip: the Material 3 chip (filter, assist, suggestion, input), as a typed element.
 module;
 
 #include <string>
@@ -12,8 +12,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Chip { "label" | text = ..., checked = false, checkable = true, variant = "filter", icon = "",
-/// onClicked(!checked) }. A checkable filter chip toggles `checked` (two-way) when clicked.
+/// A 32dp Material chip. A checkable filter chip toggles `checked` when clicked.
+///
+/// Props:   text = "" (positional), checked = false, checkable = true,
+///          variant = "filter" ("assist", "suggestion", "input"), icon = ""
+/// Signals: onClicked(self, checked) (`checked` is the negated state before the click)
+/// Two-way: checked (checkable filter chips)
 class Chip final : public Element {
 public:
     static void declare(TypeBuilder<Chip>& type);

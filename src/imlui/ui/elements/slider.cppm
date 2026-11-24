@@ -1,4 +1,4 @@
-// Slider: the Material 3 slider, as a typed element (TypeBuilder).
+// Slider: the Material 3 slider, as a typed element.
 module;
 
 #include <optional>
@@ -15,9 +15,15 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Slider { value (two-way), from = 0, to = 1, stepSize = 0, format, width / fillWidth, onMoved(v),
-/// onReleased(v) }. `format` defaults to "%.0f" for stepSize >= 1, else "%.2f"; an invalid format is reported
-/// once and replaced (md::slider).
+/// A Material slider with a value label while dragging.
+///
+/// Props:   value = 0, from = 0, to = 1, stepSize = 0 (continuous), format = unset
+/// Raw:     width
+/// Signals: onMoved(self, value), onReleased(self, value)
+/// Two-way: value
+///
+/// `format` defaults to "%.0f" for stepSize >= 1, else "%.2f"; an invalid format is reported once and replaced
+/// (md::slider).
 class Slider final : public Element {
 public:
     static void declare(TypeBuilder<Slider>& type);

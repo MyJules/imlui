@@ -10,7 +10,9 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Divider { inset = 0, insetEnd = 0 (dp) }: a full-width horizontal rule, inset from the start / end.
+/// A full-width 1dp outlineVariant rule, inset from the start / end.
+///
+/// Props:   inset = 0, insetEnd = 0 (dp)
 class Divider : public Element {
 public:
     static void declare(TypeBuilder<Divider>& type);

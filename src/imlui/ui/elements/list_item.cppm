@@ -1,4 +1,4 @@
-// ListItem: the Material 3 one- or two-line list item, as a typed element (TypeBuilder).
+// ListItem: the Material 3 one- or two-line list item, as a typed element.
 module;
 
 #include <string>
@@ -12,8 +12,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ListItem { "headline" | text = ..., supportingText, icon, trailingText, trailingIcon, selected = false,
-/// width (fills by default), onClicked }
+/// A one-line (56dp) or two-line (72dp) Material list item.
+///
+/// Props:   text = "" (positional; the headline), supportingText = "", icon = "", trailingText = "",
+///          trailingIcon = "", selected = false
+/// Raw:     width (fills by default)
+/// Signals: onClicked(self)
 class ListItem final : public Element {
 public:
     static void declare(TypeBuilder<ListItem>& type);

@@ -12,7 +12,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// MenuItem { text | positional string, icon, shortcut, checked (two-way), onTriggered }.
+/// One item of a Menu.
+///
+/// Props:   text = "" (positional), icon = "", shortcut = "", checked = false
+/// Signals: onTriggered(self)
+/// Two-way: checked (checkable items)
 ///
 /// An item that has a `checked` prop at all (a value, a binding or a bind()) is checkable: it shows a check
 /// mark in the icon slot while checked (instead of `icon`), toggles `checked` when chosen and keeps the menu

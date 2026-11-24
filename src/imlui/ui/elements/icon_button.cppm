@@ -1,4 +1,4 @@
-// IconButton: the Material 3 icon button (optionally a toggle), as a typed element (TypeBuilder).
+// IconButton: the Material 3 icon button (optionally a toggle), as a typed element.
 module;
 
 #include <optional>
@@ -14,8 +14,13 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// IconButton { icon = "name" (or text / "name"), checkedIcon, variant = "standard", checked, color, menu,
-/// onClicked }. It's a toggle only when `checked` is present in the element table; a click then flips it.
+/// A 40dp icon button. It is a toggle only when `checked` is present in the element table; a click then flips it.
+///
+/// Props:   text = "" (positional; the icon when `icon` is unset), icon = unset, checkedIcon = unset,
+///          variant = "standard" ("filled", "tonal", "outlined"), checked = false, color = unset
+/// Raw:     menu (a Menu opened on click)
+/// Signals: onClicked(self)
+/// Two-way: checked (toggles)
 class IconButton final : public Element {
 public:
     static void declare(TypeBuilder<IconButton>& type);

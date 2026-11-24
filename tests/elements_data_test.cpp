@@ -6,7 +6,6 @@
 import imgui;
 import imlui.color;
 import imlui.lua.errors;
-import imlui.theme.typography;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -16,52 +15,26 @@ import imlui.ui.elements.plot;
 import imlui.ui.elements.table;
 import imlui.ui.elements.canvas;
 import imlui.test.headless_frame;
+import imlui.test.last_item_probe;
 
 using namespace imlui;
 
 namespace {
 
-/// Renders its children and remembers the screen rect of the last visual one, so tests know where to click.
-class Probe final : public Element {
-public:
-    static void declare(TypeBuilder<Probe>&) {}
-    void render(Frame& frame) override {
-        frame.forEachChild([&](Frame::Child& child) {
-            child.render();
-            if (!child.isVisual()) return;
-            m_min = ImGui::GetItemRectMin();
-            m_max = ImGui::GetItemRectMax();
-        });
-    }
-    [[nodiscard]] ImVec2 min() const { return m_min; }
-    [[nodiscard]] ImVec2 max() const { return m_max; }
-
-private:
-    ImVec2 m_min{};
-    ImVec2 m_max{};
-};
+using Probe = test::LastItemProbe;
 
 class DataTest : public ::testing::Test {
 protected:
     void SetUp() override {
         m_h.registerType<Probe>("Probe");
-        loadFonts(IMLUI_LUA_DIR "/../external/fonts"); // the widgets draw text with the Roboto fonts
     }
 
     void run(const std::string& code) { ASSERT_EQ(m_h.run(code), ""); }
     void frames(int n = 1) { m_h.renderFrames("root", n); }
     /// Moves the mouse to (x, y) and clicks there, a frame for each step.
-    void click(float x, float y) {
-        const std::string at = std::to_string(x) + ", " + std::to_string(y);
-        run("ui.native.injectMouse(" + at + ")");
-        frames();
-        run("ui.native.injectMouse(" + at + ", true)");
-        frames();
-        run("ui.native.injectMouse(" + at + ", false)");
-        frames();
-    }
+    void click(float x, float y) { m_h.click("root", x, y); }
     [[nodiscard]] Probe& probe() { return *m_h.instance<Probe>("root"); }
-    [[nodiscard]] ImVec2 probeSize() { return {probe().max().x - probe().min().x, probe().max().y - probe().min().y}; }
+    [[nodiscard]] ImVec2 probeSize() { return probe().size(); }
 
     test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true}};
 };

@@ -1,8 +1,9 @@
 // HeadlessFrame: a test harness that renders imlui elements in real ImGui frames without a window, a GPU or
 // an ImGui backend. Test-only (built into imlui_tests).
 //
-// It owns an ImGui context, a Renderer, a TypeRegistry and, once started, a Lua state set up like the
-// Engine's: the registered types installed, the real `imlui.native` (with empty host hooks) and painter
+// It owns an ImGui context (with the Roboto text fonts and the Material icon font loaded from IMLUI_FONT_DIR, as
+// the Material widgets measure and draw with them), a TypeRegistry, a Renderer and, once started, a Lua state set up
+// like the Engine's: the registered types installed, the real `imlui.native` (with empty host hooks) and painter
 // libraries, and lua/imlui.lua loaded. Lua code runs in the UI script environment (ui.env), so element
 // constructors, `state`, `bind`, ids and the registered types are free names, as in a UI script:
 //
@@ -17,6 +18,7 @@
 module;
 
 #include <concepts>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,6 +31,7 @@ import imlui.lua.errors;
 import imlui.lua.native;
 import imlui.lua.node;
 import imlui.lua.painter;
+import imlui.theme.icons;
 import imlui.theme.typography;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
@@ -83,6 +86,10 @@ public:
     /// Key and mouse events queued before (native.injectKey / injectMouse, or ImGui::GetIO()) are seen.
     void renderFrame(std::string_view root);
     void renderFrames(std::string_view root, int count);
+    /// A left click at (x, y) in screen pixels, rendering `root`: move, press and release (native.injectMouse),
+    /// each followed by one frame, then `framesAfter - 1` more frames to react. The window exists only after the
+    /// first frame, so render one before a click on a fresh tree.
+    void click(std::string_view root, float x, float y, int framesAfter = 1);
     /// Frames rendered so far.
     [[nodiscard]] int frames() const;
 
@@ -130,9 +137,11 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     io.DeltaTime = m_options.deltaTime;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // like the platform window
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // no backend: fonts needn't be prebuilt
-    // Roboto in this context's atlas, like the Engine: the Material widgets measure text with it. Every harness
-    // loads them, so the font pointers never outlive their context into the next harness.
+    // Roboto and the icon font in this context's atlas, like the Engine: the Material widgets measure text with
+    // them, and icon names (hasIcon) decide whether, e.g., a text field has a trailing button. Every harness loads
+    // them, so the font pointers never outlive their context into the next harness.
     loadFonts(IMLUI_FONT_DIR);
+    loadIcons(IMLUI_FONT_DIR);
     if (m_options.builtins) {
         registerBuiltinTypes(m_types);
     }
@@ -232,6 +241,16 @@ void HeadlessFrame::renderFrame(std::string_view root) {
 void HeadlessFrame::renderFrames(std::string_view root, int count) {
     for (int i = 0; i < count; ++i)
         renderFrame(root);
+}
+
+void HeadlessFrame::click(std::string_view root, float x, float y, int framesAfter) {
+    const std::string at = std::to_string(x) + ", " + std::to_string(y);
+    for (const char* step : {")", ", true)", ", false)"}) {
+        const std::string error = run("ui.native.injectMouse(" + at + step);
+        if (!error.empty()) luaui::reportError("HeadlessFrame::click: " + error);
+        renderFrame(root);
+    }
+    renderFrames(root, framesAfter - 1);
 }
 
 Element* HeadlessFrame::syncElement(std::string_view name) {

@@ -1,5 +1,5 @@
 // Section (alias Expander): a Material list header that shows or hides its children, as a typed element
-// (TypeBuilder).
+//.
 module;
 
 #include <optional>
@@ -16,9 +16,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Section { title = text, supportingText = "", expanded = true (two-way), width = fill,
-///           onToggled = function(self, expanded), children... }
-/// `Section { "Title", ... }` sets `text`, the title when `title` isn't set.
+/// A collapsible header whose children are indented while expanded (also registered as Expander).
+///
+/// Props:   title = unset (the text), text = "" (positional), supportingText = "", expanded = true
+/// Raw:     width
+/// Signals: onToggled(self, expanded)
+/// Two-way: expanded
 class Section final : public Element {
 public:
     static void declare(TypeBuilder<Section>& type);

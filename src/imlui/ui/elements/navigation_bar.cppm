@@ -16,8 +16,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// NavigationBar { color = "surfaceContainer", width, <NavigationItems> }: 80dp tall; the visible destinations
-/// share the width equally and draw as bar destinations.
+/// The Material 3 bottom navigation bar: 80dp tall; the visible destinations share the width equally.
+///
+/// Props:   color = unset (surfaceContainer)
+/// Raw:     width
 class NavigationBar final : public Element {
 public:
     static void declare(TypeBuilder<NavigationBar>& type);

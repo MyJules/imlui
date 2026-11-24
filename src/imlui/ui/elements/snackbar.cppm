@@ -1,4 +1,4 @@
-// Snackbar: the Material 3 snackbar, as a typed element (TypeBuilder). Normally there is one, driven by
+// Snackbar: the Material 3 snackbar, as a typed element. Normally there is one, driven by
 // ui.snackbar() and rendered by the engine as an overlay above everything (ui.__overlays).
 module;
 
@@ -16,10 +16,15 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Snackbar { text, actionText, onAction = fn, shownAt (ImGui time, s; < 0 hidden), duration = 4000 (ms),
-///            closable = false }
-/// It slides in at `shownAt`, fades out after `duration` and then writes shownAt = -1. Clicking the action
-/// emits onAction; the action or the close icon start the fade-out (they move `shownAt` back).
+/// The Material snackbar: the app-wide overlay behind ui.snackbar(). Non-visual.
+///
+/// Props:   text = "", actionText = "", shownAt = -1 (ImGui time in s; < 0 hidden), duration = 4000 (ms),
+///          closable = false
+/// Signals: onAction(self)
+/// Two-way: shownAt
+///
+/// It slides in at `shownAt`, fades out after `duration` and then writes shownAt = -1. The action or the close
+/// icon start the fade-out (they move `shownAt` back).
 class Snackbar final : public Element {
 public:
     static void declare(TypeBuilder<Snackbar>& type);

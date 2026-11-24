@@ -1,4 +1,4 @@
-// TabBar: Material 3 tabs over the content of the current Tab child, as a typed element (TypeBuilder).
+// TabBar: Material 3 tabs over the content of the current Tab child, as a typed element.
 module;
 
 #include <algorithm>
@@ -17,8 +17,12 @@ import imlui.ui.elements.tab;
 
 export namespace imlui {
 
-/// TabBar { currentIndex = 1 (two-way), variant = "primary" | "secondary", width = fill,
-///          onCurrentChanged = function(self, index), Tab { ... }, ... }
+/// Material tabs: the visible children are the tabs, and only the selected one's content renders.
+///
+/// Props:   currentIndex = 1 (1-based), variant = "primary" ("secondary")
+/// Raw:     width; the `title` and `icon` of a child that isn't a Tab
+/// Signals: onCurrentChanged(self, index)
+/// Two-way: currentIndex
 class TabBar final : public Element {
 public:
     static void declare(TypeBuilder<TabBar>& type);

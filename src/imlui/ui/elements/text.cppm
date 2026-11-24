@@ -15,8 +15,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Text { text | positional string, style = "bodyLarge", color, wrap = false, align = "start" }. Registered as
-/// Text and Label.
+/// A line or paragraph of text (also registered as Label).
+///
+/// Props:   text = "" (positional), style = "bodyLarge", color = unset (the theme's text color), wrap = false,
+///          align = "start" ("center", "end"; ignored while wrapping)
 class Text final : public Element {
 public:
     static void declare(TypeBuilder<Text>& type);

@@ -1,4 +1,4 @@
-// Card: a Material 3 card container (md::beginCard), as a typed element (TypeBuilder).
+// Card: a Material 3 card container (md::beginCard), as a typed element.
 module;
 
 #include <optional>
@@ -15,8 +15,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Card { variant = "elevated", padding = 16, width = 0, height = 0, color = nil, rounding = nil,
-///        spacing = nil, align = "start", children... }
+/// A Material card that stacks its children.
+///
+/// Props:   variant = "elevated" ("filled", "outlined"), padding = 16, color = unset (the variant's),
+///          rounding = unset (shape.medium), spacing = unset, align = "start"
+/// Raw:     width, height
 class Card final : public Element {
 public:
     static void declare(TypeBuilder<Card>& type);

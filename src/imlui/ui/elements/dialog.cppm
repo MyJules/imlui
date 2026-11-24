@@ -1,4 +1,4 @@
-// Dialog: the Material 3 basic dialog (a modal popup), as a typed element (TypeBuilder).
+// Dialog: the Material 3 basic dialog (a modal popup), as a typed element.
 module;
 
 #include <string>
@@ -13,9 +13,14 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Dialog { title = "", icon = "", open = false, width, onClosed = fn, children... }
-/// `open` is two-way: Escape (or anything else that closes the popup) writes open = false, then emits
-/// onClosed.
+/// The Material basic dialog: modal and centered over a scrim; it stacks its children. Non-visual.
+///
+/// Props:   open = false, title = "", icon = ""
+/// Raw:     width (unset: 280-560dp, fitting the content), spacing, align
+/// Signals: onClosed(self)
+/// Two-way: open
+///
+/// Escape (or anything else that closes the popup) writes open = false, then emits onClosed.
 class Dialog final : public Element {
 public:
     static void declare(TypeBuilder<Dialog>& type);

@@ -6,8 +6,6 @@
 import imgui;
 import imlui.lua.errors;
 import imlui.color;
-import imlui.theme.icons;
-import imlui.theme.typography;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -18,56 +16,24 @@ import imlui.ui.elements.text_area;
 import imlui.ui.elements.combo_box;
 import imlui.ui.elements.color_picker;
 import imlui.test.headless_frame;
+import imlui.test.last_item_probe;
 
 using namespace imlui;
 
 namespace {
 
-/// Renders its children and remembers the screen rect of the last visual one, so tests know where to click.
-class Probe final : public Element {
-public:
-    static void declare(TypeBuilder<Probe>&) {}
-    void render(Frame& frame) override {
-        frame.forEachChild([&](Frame::Child& child) {
-            child.render();
-            if (!child.isVisual()) return;
-            m_min = ImGui::GetItemRectMin();
-            m_max = ImGui::GetItemRectMax();
-        });
-    }
-    [[nodiscard]] ImVec2 min() const { return m_min; }
-    [[nodiscard]] ImVec2 max() const { return m_max; }
-
-private:
-    ImVec2 m_min{};
-    ImVec2 m_max{};
-};
+using Probe = test::LastItemProbe;
 
 class InputsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         m_h.registerType<Probe>("Probe");
-        // The widgets draw text with the Roboto fonts, and icon names (hasIcon) decide whether a text field has a
-        // trailing button.
-        loadFonts(IMLUI_LUA_DIR "/../external/fonts");
-        loadIcons(IMLUI_LUA_DIR "/../external/fonts");
     }
-    // The icon font dies with this harness' ImGui context: without it, icons aren't drawn (the text fonts have no
-    // such reset; a later harness loads its own).
-    void TearDown() override { loadIcons(IMLUI_LUA_DIR "/../no-such-dir"); }
 
     void run(const std::string& code) { ASSERT_EQ(m_h.run(code), ""); }
     void frames(int n = 1) { m_h.renderFrames("root", n); }
     /// Moves the mouse to (x, y) and clicks there, a frame for each step.
-    void click(float x, float y) {
-        const std::string at = std::to_string(x) + ", " + std::to_string(y);
-        run("ui.native.injectMouse(" + at + ")");
-        frames();
-        run("ui.native.injectMouse(" + at + ", true)");
-        frames();
-        run("ui.native.injectMouse(" + at + ", false)");
-        frames();
-    }
+    void click(float x, float y) { m_h.click("root", x, y); }
     [[nodiscard]] Probe& probe() { return *m_h.instance<Probe>("root"); }
 
     test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true}};
@@ -204,6 +170,7 @@ TEST_F(InputsTest, TextFieldTypingWritesBackAndEmitsChangedAndAccepted) {
     frames(3);
     run(R"(assert(s.t == "hi", s.t))");
     run(R"(assert(log[#log] == "changed hi", tostring(log[#log])))");
+    run(R"(assert(#log == 1, table.concat(log, ",")))"); // both characters arrived in one frame: one call
     run(R"(ui.native.injectKey("Enter", true); ui.native.injectKey("Enter", false))");
     frames(3);
     run(R"(assert(log[#log] == "accepted hi", tostring(log[#log])))");
@@ -298,7 +265,7 @@ TEST_F(InputsTest, ColorPickerPickingWritesBackHexAndEmitsColorChanged) {
     run(R"(
         s = state { c = "#FFFFFF" }
         got = nil
-        root = Probe { ColorPicker { color = bind(s, "c"), onColorChanged = function(_, hex) got = hex end } })");
+        root = Probe { ColorPicker { color = bind(s, "c"), onColorChanged = function(_, hex) got = hex; calls = (calls or 0) + 1 end } })");
     frames(2);
     const ImVec2 a = probe().min(), b = probe().max();
     click((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f); // opens the picker
@@ -307,4 +274,5 @@ TEST_F(InputsTest, ColorPickerPickingWritesBackHexAndEmitsColorChanged) {
     click(a.x + 16.0f + 100.0f, b.y + 4.0f + 16.0f + 100.0f);
     run(R"(assert(type(s.c) == "string" and s.c:match("^#%x%x%x%x%x%x$") and s.c ~= "#FFFFFF", tostring(s.c)))");
     run(R"(assert(got == s.c, tostring(got)))");
+    run(R"(assert(calls == 1, calls))"); // once per pick
 }

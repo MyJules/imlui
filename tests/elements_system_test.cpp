@@ -15,24 +15,13 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
+import imlui.test.render_counter;
 
 using namespace imlui;
 
 namespace {
 
-/// A visual element that counts its renders.
-class Probe final : public Element {
-public:
-    static void declare(TypeBuilder<Probe>&) {}
-    void render(Frame& frame) override {
-        ++m_renders;
-        ImGui::Dummy({frame.dp(10), frame.dp(10)});
-    }
-    [[nodiscard]] int renders() const { return m_renders; }
-
-private:
-    int m_renders = 0;
-};
+using Probe = test::RenderCounter; // a visual element that counts its renders
 
 class SystemTest : public ::testing::Test {
 protected:

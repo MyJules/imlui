@@ -1,4 +1,4 @@
-// Table: a Material data table with a header row and selectable rows, as a typed element (TypeBuilder). The
+// Table: a Material data table with a header row and selectable rows, as a typed element. The
 // rows are Lua data (a sequence of sequences of cell values), read through frame.node() every frame.
 module;
 
@@ -22,8 +22,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Table { columns = {"Name", ...}, rows = {{...}, ...}, rowHeight = 52, outlined = true, width / fillWidth,
-/// currentRow (two-way, 1-based, 0 = none), onRowClicked(row) }
+/// A Material data table with selectable rows.
+///
+/// Props:   columns = {}, rowHeight = 52, outlined = true, currentRow = 0 (1-based; 0 = none)
+/// Raw:     rows (a list of lists), width
+/// Signals: onRowClicked(self, row)
+/// Two-way: currentRow
 class Table final : public Element {
 public:
     static void declare(TypeBuilder<Table>& type);

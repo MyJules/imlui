@@ -17,9 +17,13 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// TopAppBar { title, navigationIcon, onNavigation, variant = "small"|"center"|"medium"|"large", color, width,
-/// <actions...> }. The action children sit right-aligned in the 64dp top row, each centered vertically by its
-/// height on the last frame. `onNavigation` fires when the navigation icon is clicked.
+/// The Material top app bar. The children are actions, right-aligned in the 64dp top row, each centered
+/// vertically by its height on the last frame.
+///
+/// Props:   title = "", navigationIcon = "", variant = "small" ("center", "medium", "large"),
+///          color = unset (the current surface)
+/// Raw:     width
+/// Signals: onNavigation(self) (the navigation icon was clicked)
 class TopAppBar final : public Element {
 public:
     static void declare(TypeBuilder<TopAppBar>& type);

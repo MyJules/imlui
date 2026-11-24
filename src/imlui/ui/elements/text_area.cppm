@@ -8,7 +8,9 @@ import imlui.ui.elements.text_field;
 
 export namespace imlui {
 
-/// TextArea { ... }: every TextField property and signal, multi-line.
+/// A multi-line TextField: every TextField prop and signal.
+///
+/// Raw:     height (default 120dp)
 class TextArea final : public TextField {
 public:
     static void declare(TypeBuilder<TextArea>& type);

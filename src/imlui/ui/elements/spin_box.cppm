@@ -1,4 +1,4 @@
-// SpinBox: a Material numeric field with decrement / increment buttons, as a typed element (TypeBuilder).
+// SpinBox: a Material numeric field with decrement / increment buttons, as a typed element.
 module;
 
 #include <string>
@@ -13,8 +13,13 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// SpinBox { value (two-way), from = -1e9, to = 1e9, stepSize = 1, decimals = 0, label, variant = "filled" |
-/// "outlined", width / fillWidth, onValueModified(v) }
+/// A numeric field with decrement and increment buttons.
+///
+/// Props:   value = 0, from = -1e9, to = 1e9, stepSize = 1, decimals = 0, label = "",
+///          variant = "filled" ("outlined")
+/// Raw:     width
+/// Signals: onValueModified(self, value)
+/// Two-way: value
 class SpinBox final : public Element {
 public:
     static void declare(TypeBuilder<SpinBox>& type);

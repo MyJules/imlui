@@ -1,4 +1,4 @@
-// TextField: the Material 3 text field (filled or outlined), as a typed element (TypeBuilder). TextArea
+// TextField: the Material 3 text field (filled or outlined), as a typed element. TextArea
 // (imlui.ui.elements.text_area) is the multi-line subclass.
 module;
 
@@ -14,9 +14,14 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// TextField { text (two-way), label, placeholderText, leadingIcon, trailingIcon, supportingText,
-/// variant = "filled" | "outlined", password / echoMode = "password", readOnly, error, width / fillWidth,
-/// height, onTextChanged(text), onAccepted(text), onTrailingClicked() }
+/// A Material text field with a floating label (TextArea extends it, multi-line).
+///
+/// Props:   text = "", label = "", placeholderText = "", leadingIcon = "", trailingIcon = "", supportingText = "",
+///          variant = "filled" ("outlined"), password = false, echoMode = "" ("password"), readOnly = false,
+///          error = false
+/// Raw:     width, height (TextArea only)
+/// Signals: onTextChanged(self, text), onAccepted(self, text), onTrailingClicked(self)
+/// Two-way: text
 class TextField : public Element {
 public:
     static void declare(TypeBuilder<TextField>& type);
@@ -106,8 +111,7 @@ void TextField::render(Frame& frame) {
     const md::TextFieldResult res = md::textField("##tf", text, o);
     if (res.changed) {
         m_text = std::move(text);
-        notify("text");
-        emit("onTextChanged", m_text);
+        notify("text"); // writes the text back and emits onTextChanged(text)
     }
     if (res.accepted) emit("onAccepted", m_text);
     if (res.trailingClicked) emit("onTrailingClicked");

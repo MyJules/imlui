@@ -1,4 +1,4 @@
-// Switch: the Material 3 switch with an optional label, as a typed element (TypeBuilder).
+// Switch: the Material 3 switch with an optional label, as a typed element.
 module;
 
 #include <string>
@@ -12,8 +12,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Switch { "label" | text = ..., checked = false (two-way), icons = true, onToggled(checked) }
-/// (`switch` is a C++ keyword and can't be a module name segment, hence the module name.)
+/// A Material switch with a label. (`switch` is a C++ keyword and can't be a module name segment, hence the
+/// module name switch_toggle.)
+///
+/// Props:   text = "" (positional), checked = false, icons = true
+/// Signals: onToggled(self, checked)
+/// Two-way: checked
 class Switch final : public Element {
 public:
     static void declare(TypeBuilder<Switch>& type);

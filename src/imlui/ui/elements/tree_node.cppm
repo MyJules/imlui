@@ -1,4 +1,4 @@
-// TreeNode: a collapsible ImGui tree node, as a typed element (TypeBuilder).
+// TreeNode: a collapsible ImGui tree node, as a typed element.
 module;
 
 #include <string>
@@ -15,7 +15,9 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// TreeNode { text = "", expanded = false (initially open), children... }; `TreeNode { "Label", ... }`.
+/// An ImGui tree node whose children render inside it.
+///
+/// Props:   text = "" (positional), expanded = false (open when it first appears; not written back)
 class TreeNode final : public Element {
 public:
     static void declare(TypeBuilder<TreeNode>& type);

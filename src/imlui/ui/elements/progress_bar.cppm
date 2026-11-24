@@ -1,4 +1,4 @@
-// ProgressBar: the Material 3 linear progress indicator, as a typed element (TypeBuilder).
+// ProgressBar: the Material 3 linear progress indicator, as a typed element.
 module;
 
 export module imlui.ui.elements.progress_bar;
@@ -10,7 +10,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ProgressBar { value = 0..1, indeterminate = false, width / fillWidth }
+/// A Material 3 linear progress indicator.
+///
+/// Props:   value = 0 (0..1), indeterminate = false
+/// Raw:     width
 class ProgressBar final : public Element {
 public:
     static void declare(TypeBuilder<ProgressBar>& type);

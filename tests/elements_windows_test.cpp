@@ -14,24 +14,13 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
+import imlui.test.render_counter;
 
 using namespace imlui;
 
 namespace {
 
-/// A visual element that counts its renders.
-class Probe final : public Element {
-public:
-    static void declare(TypeBuilder<Probe>&) {}
-    void render(Frame& frame) override {
-        ++m_renders;
-        ImGui::Dummy({frame.dp(10), frame.dp(10)});
-    }
-    [[nodiscard]] int renders() const { return m_renders; }
-
-private:
-    int m_renders = 0;
-};
+using Probe = test::RenderCounter; // a visual element that counts its renders
 
 class WindowsTest : public ::testing::Test {
 protected:
@@ -39,15 +28,7 @@ protected:
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
     int renders(const char* name) { return m_h.instance<Probe>(name)->renders(); }
     /// A press and a release at (x, y), over two frames, then a frame to react.
-    void click(const char* root, float x, float y) {
-        const std::string pos = std::to_string(x) + ", " + std::to_string(y);
-        run("ui.native.injectMouse(" + pos + ")");
-        m_h.renderFrame(root);
-        run("ui.native.injectMouse(" + pos + ", true)");
-        m_h.renderFrame(root);
-        run("ui.native.injectMouse(" + pos + ", false)");
-        m_h.renderFrames(root, 2);
-    }
+    void click(const char* root, float x, float y) { m_h.click(root, x, y, 2); }
 
     test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true}};
 };

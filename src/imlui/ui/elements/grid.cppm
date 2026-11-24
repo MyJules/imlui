@@ -1,4 +1,4 @@
-// Grid: children in a table with `columns` cells per row, as a typed element (TypeBuilder).
+// Grid: children in a table with `columns` cells per row, as a typed element.
 module;
 
 #include <algorithm>
@@ -15,7 +15,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Grid { columns = 2, spacing = 8, border = false, width = 0, children... }
+/// A table-based grid: the children fill `columns` equal-width cells per row. A hidden child keeps its empty
+/// cell; non-visual children take none.
+///
+/// Props:   columns = 2, spacing = 8, border = false
+/// Raw:     width
 class Grid final : public Element {
 public:
     static void declare(TypeBuilder<Grid>& type);

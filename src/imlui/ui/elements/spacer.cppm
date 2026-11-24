@@ -12,8 +12,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Spacer { width, height (dp, at least 1px), fill = false }. In a Row, `fill = true` spacers share the
-/// remaining width (the Row reads it).
+/// Empty space.
+///
+/// Props:   fill = false (in a Row, fill spacers share the remaining width; the Row reads it)
+/// Raw:     width, height (dp, at least 1px)
 class Spacer final : public Element {
 public:
     static void declare(TypeBuilder<Spacer>& type);

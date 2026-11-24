@@ -1,5 +1,5 @@
 // BusyIndicator: an indeterminate circular progress indicator that can be paused, as a typed element
-// (TypeBuilder).
+//.
 module;
 
 export module imlui.ui.elements.busy_indicator;
@@ -12,8 +12,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// BusyIndicator { running = true, size (diameter, default 48 dp), thickness = 4 }. While not running it keeps
-/// its space.
+/// An indeterminate circular indicator. While not running it keeps its space.
+///
+/// Props:   running = true, thickness = 4 (dp)
+/// Raw:     size (the diameter, default 48dp)
 class BusyIndicator final : public Element {
 public:
     static void declare(TypeBuilder<BusyIndicator>& type);

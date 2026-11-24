@@ -15,7 +15,9 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Link { text | positional string, url = text }: bodyLarge link text; clicking opens `url` in the browser.
+/// bodyLarge link text; clicking it opens `url` in the browser.
+///
+/// Props:   text = "" (positional), url = unset (the text)
 class Link final : public Element {
 public:
     static void declare(TypeBuilder<Link>& type);

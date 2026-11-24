@@ -1,4 +1,4 @@
-// ImGuiDemo: Dear ImGui's demo window (debugging), as a typed element (TypeBuilder).
+// ImGuiDemo: Dear ImGui's demo window (debugging), as a typed element.
 module;
 
 export module imlui.ui.elements.imgui_demo;
@@ -10,7 +10,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// ImGuiDemo { open = true }. `open` is two-way: closing the window writes open = false.
+/// Dear ImGui's demo window, for debugging. Non-visual.
+///
+/// Props:   open = true
+/// Two-way: open (closing the window writes false)
 class ImGuiDemo final : public Element {
 public:
     static void declare(TypeBuilder<ImGuiDemo>& type);

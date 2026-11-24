@@ -1,4 +1,4 @@
-// Window: a floating ImGui window (movable, resizable, closable), as a typed element (TypeBuilder).
+// Window: a floating ImGui window (movable, resizable, closable), as a typed element.
 module;
 
 #include <optional>
@@ -16,11 +16,17 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Window { title = "Window", open = true, x = 60, y = 60, width, height, autoResize, titleBar = true,
-///          resizable = true, movable = true, menuBar = MenuBar { ... }, onClosed = fn, children... }
-/// It has a close button when the `open` prop exists (two-way: closing writes open = false, then emits
-/// onClosed). x, y, width and height (dp) apply when the window first appears. `autoResize` defaults to
-/// true when neither width nor height is set.
+/// A floating ImGui window with Material surface colors that stacks its children. Non-visual.
+///
+/// Props:   title = "Window", open = true, x = 60, y = 60, width = 0, height = 0, autoResize = unset,
+///          titleBar = true, resizable = true, movable = true
+/// Raw:     menuBar (a MenuBar), spacing, align
+/// Signals: onClosed(self)
+/// Two-way: open
+///
+/// It has a close button when the `open` prop exists (closing writes open = false, then emits onClosed). x, y,
+/// width and height (dp) apply when the window first appears; `autoResize` defaults to true when neither width
+/// nor height is set.
 class Window final : public Element {
 public:
     static void declare(TypeBuilder<Window>& type);

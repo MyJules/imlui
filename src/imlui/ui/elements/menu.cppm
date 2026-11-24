@@ -14,7 +14,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Menu { title, <MenuItems, Dividers, Menus> }: in a MenuBar, a title that opens the items as a Material menu.
+/// In a MenuBar, a title that opens the children (MenuItems, Dividers, Menus) as a Material menu; inside a menu,
+/// a submenu. As a Button's or IconButton's `menu`, the button opens its children (Frame::attachMenu).
+///
+/// Props:   title = ""
 class Menu final : public Element {
 public:
     static void declare(TypeBuilder<Menu>& type);

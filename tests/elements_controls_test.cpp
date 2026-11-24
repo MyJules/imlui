@@ -4,8 +4,6 @@
 #include <gtest/gtest.h>
 
 import imlui.lua.errors;
-import imlui.theme.icons;
-import imlui.theme.typography;
 import imlui.ui.elements.button;
 import imlui.ui.elements.icon_button;
 import imlui.ui.elements.checkbox;
@@ -23,27 +21,13 @@ namespace {
 
 class ControlsTest : public ::testing::Test {
 protected:
-    // The md widgets measure text, so they need the fonts (the harness loads none). The font pointers are
-    // global, so every test reloads them into its own ImGui context.
-    void SetUp() override {
-        const std::string fonts = std::string{IMLUI_LUA_DIR} + "/../external/fonts";
-        loadFonts(fonts);
-        loadIcons(fonts);
-    }
-
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
 
     /// Moves the mouse to (x, y), presses and releases the left button, one frame each. The root renders at
     /// the window padding (8, 8), so a single control's first pixels are around there.
     void click(float x, float y) {
-        const std::string at = std::to_string(x) + ", " + std::to_string(y);
         m_h.renderFrame("root"); // the window exists, so it can be hovered
-        run("native.injectMouse(" + at + ")");
-        m_h.renderFrame("root");
-        run("native.injectMouse(" + at + ", true)");
-        m_h.renderFrame("root");
-        run("native.injectMouse(" + at + ", false)");
-        m_h.renderFrame("root");
+        m_h.click("root", x, y);
     }
 
     void expectNoErrors() {

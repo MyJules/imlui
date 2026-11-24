@@ -1,4 +1,4 @@
-// Checkbox: the Material 3 checkbox with an optional label, as a typed element (TypeBuilder).
+// Checkbox: the Material 3 checkbox with an optional label, as a typed element.
 module;
 
 #include <string>
@@ -12,7 +12,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Checkbox { "label" | text = ..., checked = false (two-way), onToggled(checked) }
+/// A Material checkbox with a label.
+///
+/// Props:   text = "" (positional), checked = false
+/// Signals: onToggled(self, checked)
+/// Two-way: checked
 class Checkbox final : public Element {
 public:
     static void declare(TypeBuilder<Checkbox>& type);

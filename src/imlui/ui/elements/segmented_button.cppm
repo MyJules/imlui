@@ -1,4 +1,4 @@
-// SegmentedButton: the Material 3 single-select segmented button, as a typed element (TypeBuilder).
+// SegmentedButton: the Material 3 single-select segmented button, as a typed element.
 module;
 
 #include <cstddef>
@@ -14,8 +14,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// SegmentedButton { model = {"Day", "Week"}, icons = {...}, currentIndex = 1 (1-based, two-way), width,
-/// onActivated(index, text) }
+/// A Material segmented button from a model.
+///
+/// Props:   model = {}, icons = {}, currentIndex = 1 (1-based)
+/// Raw:     width
+/// Signals: onActivated(self, index, text)
+/// Two-way: currentIndex
 class SegmentedButton final : public Element {
 public:
     static void declare(TypeBuilder<SegmentedButton>& type);

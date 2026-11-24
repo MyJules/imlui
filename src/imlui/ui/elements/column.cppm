@@ -1,4 +1,4 @@
-// Column (alias Item): children stacked top to bottom, as a typed element (TypeBuilder).
+// Column (alias Item): children stacked top to bottom, as a typed element.
 module;
 
 #include <optional>
@@ -14,7 +14,10 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Column { padding = 0, width = 0, spacing = nil, align = "start", children... }
+/// A vertical stack (also registered as Item).
+///
+/// Props:   padding = 0, spacing = unset (ImGui item spacing), align = "start" ("center", "end")
+/// Raw:     width
 class Column final : public Element {
 public:
     static void declare(TypeBuilder<Column>& type);

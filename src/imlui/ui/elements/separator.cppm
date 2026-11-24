@@ -15,8 +15,9 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Separator { text | positional string, inset, insetEnd }: without text, a Divider; with text, the text in
-/// titleSmall onSurfaceVariant followed by a rule (the insets apply to the plain rule only).
+/// A Divider with an optional label: with text, the text in titleSmall onSurfaceVariant followed by a rule.
+///
+/// Props:   Divider's, and text = "" (positional; the insets apply to the plain rule only)
 class Separator final : public Divider {
 public:
     static void declare(TypeBuilder<Separator>& type);

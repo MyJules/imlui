@@ -14,8 +14,9 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Icon { name | icon | text | positional string, size = 24 (dp), color }. The first of `name`, `icon` and
-/// `text` (or the positional string) that is set names the glyph.
+/// A Material icon glyph, named by the first of `name`, `icon` and `text` that is set.
+///
+/// Props:   name = unset, icon = unset, text = "" (positional), size = 24 (dp), color = unset (onSurfaceVariant)
 class Icon final : public Element {
 public:
     static void declare(TypeBuilder<Icon>& type);

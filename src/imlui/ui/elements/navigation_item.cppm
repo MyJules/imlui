@@ -15,8 +15,12 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// NavigationItem { icon, text | positional string, selected = false, badge, width, onClicked }. `width` applies
-/// to the drawer style (default: fill); bar and rail destinations take the width their container gives them.
+/// A navigation destination. It draws in the style of the innermost NavigationScope: a drawer item by default,
+/// a bar destination in a NavigationBar, a rail destination in a NavigationRail.
+///
+/// Props:   text = "" (positional), icon = "", selected = false, badge = ""
+/// Raw:     width (drawer style only, default fill; bar and rail destinations get their container's width)
+/// Signals: onClicked(self)
 class NavigationItem final : public Element {
 public:
     static void declare(TypeBuilder<NavigationItem>& type);

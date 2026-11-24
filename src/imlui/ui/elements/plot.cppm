@@ -1,4 +1,4 @@
-// Plot: a Material line / bar chart, as a typed element (TypeBuilder).
+// Plot: a Material line / bar chart, as a typed element.
 module;
 
 #include <optional>
@@ -16,8 +16,11 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// Plot { values = {...}, kind = "lines" | "bars" | "histogram", fill = true, title (or label), color,
-/// min / max (either one turns off the automatic range), width / fillWidth (default fill), height }
+/// A line or bar chart with a hover readout.
+///
+/// Props:   values = {}, kind = "lines" ("bars", "histogram"), fill = true, title = unset (the label), label = "",
+///          color = unset (primary), min = unset, max = unset (either one turns off the automatic range)
+/// Raw:     width, height
 class Plot final : public Element {
 public:
     static void declare(TypeBuilder<Plot>& type);

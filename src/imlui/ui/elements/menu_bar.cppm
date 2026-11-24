@@ -10,7 +10,7 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// MenuBar { <Menus> }: the current window's ImGui menu bar with its children (Menus) in it.
+/// The current window's ImGui menu bar, with its children (Menus) in it. No props of its own.
 class MenuBar final : public Element {
 public:
     static void declare(TypeBuilder<MenuBar>& type);
