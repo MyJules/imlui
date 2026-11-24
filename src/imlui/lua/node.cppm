@@ -98,6 +98,14 @@ int bindSet(lua::State* state) {
     return 0;
 }
 
+/// Pushes t[key] of the table at `idx`, raw: a bind object's fields are read without metamethods, so a table with
+/// an __index (one that raises, too) isn't taken for a bind object.
+lua::Type pushRawField(lua::State* state, int idx, const char* key) {
+    idx = lua::absindex(state, idx);
+    lua::pushstring(state, key);
+    return lua::rawget(state, idx);
+}
+
 } // namespace
 
 Node::Node(lua::State* state, int idx) : m_state{state}, m_index{lua::absindex(state, idx)} {}
@@ -151,9 +159,10 @@ bool Node::boolean(const char* key, bool def) const {
 
 std::string Node::string(const char* key, std::string_view def) const {
     lua::Type t = push(key);
+    // Anything else converts like tostring(); a __tostring that raises is reported (toDisplayString).
     std::string r = t == lua::Type::Nil                                  ? std::string{def}
                     : (t == lua::Type::String || t == lua::Type::Number) ? std::string{lua::tostring(m_state, -1)}
-                                                                         : lua::toStringAny(m_state, -1);
+                                                                         : toDisplayString(m_state, -1);
     lua::pop(m_state);
     return r;
 }
@@ -183,7 +192,7 @@ std::vector<std::string> Node::strings(const char* key) const {
         lua::Integer n = lua::rawlen(m_state, -1);
         for (lua::Integer i = 1; i <= n; ++i) {
             lua::rawgeti(m_state, -1, i);
-            out.push_back(lua::toStringAny(m_state, -1));
+            out.push_back(toDisplayString(m_state, -1)); // a __tostring that raises is reported
             lua::pop(m_state);
         }
     }
@@ -215,17 +224,17 @@ void Node::setTop(const char* key) const {
     const int value = lua::gettop(m_state);
     pushRaw(key);
     if (isBind(m_state, -1)) {
-        lua::getfield(m_state, -1, "t");
+        pushRawField(m_state, -1, "t");
         if (lua::toboolean(m_state, -1)) {
             // t[k] = v may run a metamethod (a ui.state proxy's __newindex runs its watchers), so it runs protected.
             lua::pushcfunction(m_state, &bindSet);
             lua::insert(m_state, -2);
-            lua::getfield(m_state, -3, "k");
+            pushRawField(m_state, -3, "k");
             lua::pushvalue(m_state, value);
             safeCall(m_state, 3, 0);
         } else {
             lua::pop(m_state);
-            lua::getfield(m_state, -1, "set");
+            pushRawField(m_state, -1, "set");
             if (lua::isfunction(m_state, -1)) {
                 lua::pushvalue(m_state, value);
                 safeCall(m_state, 1, 0);
@@ -269,16 +278,16 @@ std::optional<Color> Node::colorFromTable(lua::State* state, int idx) {
 
 void Node::resolveBind(int idx) const {
     int b = lua::absindex(m_state, idx);
-    lua::getfield(m_state, b, "t");
+    pushRawField(m_state, b, "t");
     if (lua::toboolean(m_state, -1)) {
         // t[k] may run an __index metamethod, so it runs protected (like Lua's resolve, any truthy t is a source).
         lua::pushcfunction(m_state, &bindGet);
         lua::insert(m_state, -2);
-        lua::getfield(m_state, b, "k");
+        pushRawField(m_state, b, "k");
         if (!safeCall(m_state, 2, 1)) lua::pushnil(m_state);
     } else {
         lua::pop(m_state);
-        lua::getfield(m_state, b, "get");
+        pushRawField(m_state, b, "get");
         if (!lua::isfunction(m_state, -1) || !safeCall(m_state, 0, 1)) {
             if (lua::gettop(m_state) > b) lua::settop(m_state, b);
             lua::pushnil(m_state);

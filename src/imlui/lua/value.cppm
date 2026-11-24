@@ -12,7 +12,7 @@ using Value = std::variant<std::monostate, bool, double, std::string>;
 /// Pushes `v` (nil, boolean, integer when integral, number or string).
 void pushValue(lua::State* state, const Value& v);
 
-/// Is the value at `idx` a binding object created by ui.bind()?
+/// Is the value at `idx` a binding object created by ui.bind()? Read raw: a table's __index doesn't run.
 [[nodiscard]] bool isBind(lua::State* state, int idx);
 
 } // namespace imlui::luaui
@@ -41,7 +41,9 @@ void pushValue(lua::State* state, const Value& v) {
 
 bool isBind(lua::State* state, int idx) {
     if (!lua::istable(state, idx)) return false;
-    lua::getfield(state, idx, "__bind");
+    idx = lua::absindex(state, idx);
+    lua::pushstring(state, "__bind");
+    lua::rawget(state, idx);
     bool b = lua::toboolean(state, -1);
     lua::pop(state);
     return b;

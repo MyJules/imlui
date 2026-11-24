@@ -345,7 +345,7 @@ its rate even with no input. Callbacks may add or clear timers. A callback that 
 | Function | Description |
 |---|---|
 | `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds. |
-| `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. |
+| `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. `ms` must be a positive, finite number: `nil`, `0`, a negative or a non-finite interval raises an error (it would fire every frame and keep the app rendering). |
 | `clearTimer(id)` | Cancels a timeout or interval. |
 | `onFrame(fn) -> stop` | Calls `fn(time)` at the start of every **rendered** frame, after the timers. Call the returned `stop()` to remove it (also from inside `fn`). |
 | `requestFrame(ms?)` | Asks for a frame now, or after `ms` milliseconds (a finite number; `math.huge` or NaN raise an error). Call it from `onFrame` (or a binding) while something you draw keeps changing on its own. |
@@ -438,7 +438,7 @@ Script errors are logged at error level automatically.
 | `quit()` | Ends the frame loop and exits. |
 | `reload()` | Reloads the script before the next frame (like saving a file). |
 | `setTitle(title)` | Sets the native window title, unless the `ApplicationWindow` has a `title` prop. See the note below. |
-| `textSize(text, style?, font?) -> w, h` | Size of `text` in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`), in a [named font](theming.md#fonts) when `font` is given. Uses the fonts in effect: right after `theme{}` the old ones until the next frame. |
+| `textSize(text, style?, font?) -> w, h` | Size of `text` (a string or number; anything else raises an error) in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`), in a [named font](theming.md#fonts) when `font` is given. Uses the fonts in effect: right after `theme{}` the old ones until the next frame. |
 
 > **Note.** The native title comes from, in order: the root `ApplicationWindow`'s `title` prop (re-read every
 > frame, so it can be a binding), the last `setTitle()` call, and then the default `"imlui"`. A script that calls

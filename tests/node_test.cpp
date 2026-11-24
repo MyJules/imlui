@@ -385,3 +385,29 @@ TEST_F(NodeTest, PushValueKeepsNonIntegralNumbersFloat) {
     EXPECT_EQ(lua::tointeger(m_state, -1), 42);
     lua::pop(m_state);
 }
+
+// A __tostring that raises is reported for that value; the read returns "" instead of raising.
+TEST_F(NodeTest, ARaisingToStringIsReportedNotRaised) {
+    Node n = element(R"(
+        local bad = setmetatable({}, { __tostring = function() error("tostring exploded") end })
+        local named = setmetatable({}, { __tostring = function() return "named" end })
+        return { __type = "List", label = bad, title = named, items = { "a", bad, named, 4 } })");
+    EXPECT_EQ(n.string("label", "def"), "");
+    EXPECT_EQ(n.string("title"), "named");
+    EXPECT_EQ(n.strings("items"), (std::vector<std::string>{"a", "", "named", "4"}));
+    expectBalanced();
+    ASSERT_FALSE(luaui::errors().empty());
+    EXPECT_TRUE(contains(luaui::errors().front(), "tostring exploded"));
+}
+
+// A bind object is recognized by its raw fields: a table whose __index raises is a plain value.
+TEST_F(NodeTest, BindDetectionDoesntRunIndexMetamethods) {
+    Node n = element(R"(
+        local raising = setmetatable({}, { __index = function() error("index exploded") end })
+        return { __type = "Text", value = raising })");
+    EXPECT_EQ(n.push("value"), lua::Type::Table);
+    lua::pop(m_state);
+    n.set("value", Value{2.0});
+    expectBalanced();
+    EXPECT_TRUE(luaui::errors().empty());
+}

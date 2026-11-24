@@ -47,7 +47,8 @@ public:
 
     /// Registers element type T as `name` (replacing an earlier type of that name). T derives from
     /// Element, is default-constructible, and may have `static void declare(TypeBuilder<T>&)`.
-    /// Takes effect for Lua states installed afterwards (the next hot reload, or the first load).
+    /// Takes effect right away, in installed Lua states too: elements created from then on get the new type
+    /// (an element that already has an instance keeps it, with the type it was created as).
     template <class T>
         requires std::derived_from<T, Element> && std::default_initializable<T>
     TypeInfo& registerType(std::string name) {
@@ -220,10 +221,16 @@ int instanceGc(lua::State* state) {
     Box* b = boxAt(state, 1);
     if (!b) return 0;
     Element* e = b->owned ? b->element : nullptr;
+    const TypeInfo* type = b->type;
     clearBox(b);
     if (!e) return 0;
-    e->detach();
-    e->destroyed();
+    // A finalizer must not raise: an exception from destroyed() is reported, and the instance is deleted anyway.
+    luaui::reportCxx(
+        [e] {
+            e->detach();
+            e->destroyed();
+        },
+        type ? std::string_view{type->name()} : std::string_view{"element"}, ".destroyed()");
     delete e;
     return 0;
 }
@@ -233,31 +240,14 @@ int singletonGc(lua::State* state) {
     return 0;
 }
 
-/// Clears a `syncing` flag when it goes out of scope.
-class SyncingGuard {
-public:
-    explicit SyncingGuard(bool& flag) : m_flag{flag} {}
-    ~SyncingGuard() { m_flag = false; }
-    SyncingGuard(const SyncingGuard&) = delete;
-    SyncingGuard& operator=(const SyncingGuard&) = delete;
-
-private:
-    bool& m_flag;
-};
-
 /// Resets property `index` of the object in `b` to its default. Unchanged when it has none.
 void resetProperty(const Box& b, std::size_t index) {
     const TypeInfo::Property& p = b.type->properties()[index];
     if (p.reset && index < b.defaults.size() && b.defaults[index]) p.reset(b.defaults[index].get(), *b.object);
 }
 
-/// Syncs the declared properties of the element table at `tbl` into its instance, then calls
-/// componentComplete() if this was the first sync. Skipped while a sync of the same element runs.
-void syncInstance(lua::State* state, int tbl, Box& b) {
-    if (b.syncing || !b.element) return;
-    b.syncing = true;
-    // Reset on every path: a setter or componentComplete() that throws must not leave the element unsyncable.
-    const SyncingGuard syncingGuard{b.syncing};
+/// The property loop of syncInstance: writes the declared properties of the element table at `tbl` into b's object.
+void syncProperties(lua::State* state, int tbl, Box& b) {
     const Node node{state, tbl};
     const TypeInfo& info = *b.type;
     const auto& properties = info.properties();
@@ -283,10 +273,43 @@ void syncInstance(lua::State* state, int tbl, Box& b) {
                                lua::typeName(state, -1));
         lua::pop(state);
     }
+}
+
+/// Arg 1: the Box (light userdata), arg 2: the element table. syncProperties in a Lua function, so that it runs
+/// protected; a C++ exception it throws becomes a Lua error.
+int syncPropertiesFn(lua::State* state) {
+    Box& b = *static_cast<Box*>(lua::touserdata(state, 1));
+    const int n = luaui::catchCxx(
+        state,
+        [&] {
+            syncProperties(state, 2, b);
+            return 0;
+        },
+        b.type->name(), " property sync");
+    if (n < 0) lua::raise(state);
+    return 0;
+}
+
+/// Syncs the declared properties of the element table at `tbl` into its instance, then calls
+/// componentComplete() if this was the first sync. Skipped while a sync of the same element runs.
+/// Never raises: an error in the sync (a metamethod of the table, a binding's source, ...) or an exception
+/// from componentComplete() is reported.
+void syncInstance(lua::State* state, int tbl, Box& b) {
+    if (b.syncing || !b.element) return;
+    tbl = lua::absindex(state, tbl);
+    b.syncing = true;
+    // Protected, so a Lua error in the loop can't longjmp past the reset below: `syncing` left set would skip
+    // every later sync of the element. (The table at `tbl` keeps `b` alive meanwhile.)
+    lua::checkstack(state, 4);
+    lua::pushcfunction(state, &syncPropertiesFn);
+    lua::pushlightuserdata(state, &b);
+    lua::pushvalue(state, tbl);
+    luaui::safeCall(state, 2, 0);
     b.syncing = false;
-    if (!b.complete) {
+    if (!b.complete && b.element) {
         b.complete = true;
-        b.element->componentComplete();
+        Element* e = b.element;
+        luaui::reportCxx([e] { e->componentComplete(); }, b.type->name(), ".componentComplete()");
     }
 }
 
@@ -315,10 +338,19 @@ int methodTrampoline(lua::State* state) {
     const auto index = static_cast<std::size_t>(lua::tointeger(state, lua::upvalueindex(2)));
     Box* b = selfBox(state, 1);
     if (!b || b->type != info || !b->object) lua::error(state, "method called without its object (use obj:method())");
-    // An element that hasn't rendered yet (or not since its props changed) gets its current values first.
-    if (b->element && lua::istable(state, 1)) syncInstance(state, 1, *b);
-    if (!b->object) lua::error(state, "method called on a destroyed object");
-    const int n = info->methods()[index].call(state, *b->object, 2);
+    const TypeInfo::Method& method = info->methods()[index];
+    const int n = luaui::catchCxx(
+        state,
+        [&] {
+            // An element that hasn't rendered yet (or not since its props changed) gets its current values first.
+            if (b->element && lua::istable(state, 1)) syncInstance(state, 1, *b);
+            if (!b->object) {
+                luaui::pushMessage(state, "method called on a destroyed object");
+                return -1;
+            }
+            return method.call(state, *b->object, 2);
+        },
+        info->name(), " method"); // (TypeBuilder methods report their own exceptions, with the method name)
     if (n < 0) lua::raise(state);
     return n;
 }
@@ -398,6 +430,37 @@ int sentinelGc(lua::State* state) {
 
 // ------------------------------------------------------------ instances
 
+/// Pushes a methods table { name = closure } for `info`.
+void pushMethodsTable(lua::State* state, const TypeInfo& info) {
+    lua::createtable(state, 0, static_cast<int>(info.methods().size()));
+    for (std::size_t i = 0; i < info.methods().size(); ++i) {
+        lua::pushlightuserdata(state, asVoid(&info));
+        lua::pushinteger(state, static_cast<lua::Integer>(i));
+        lua::pushcclosure(state, &methodTrampoline, 2);
+        lua::setfield(state, -2, info.methods()[i].name.c_str());
+    }
+}
+
+/// Pushes the metatable of `info`'s element tables ({ __index = methods table }). Made on first use and kept in
+/// the registry (with the methods table), so a type registered after the state was installed works too.
+void pushTypeMeta(lua::State* state, const TypeInfo& info) {
+    pushPerType(state, typeMetaKey, &info);
+    if (!lua::isnil(state, -1)) return;
+    lua::pop(state);
+    pushMethodsTable(state, info);        // methods
+    pushRegistryTable(state, methodsKey); // methods, M
+    lua::pushvalue(state, -2);
+    lua::rawsetp(state, -2, &info);      // M[info] = methods
+    lua::pop(state);                     // methods
+    lua::createtable(state, 0, 1);       // methods, meta
+    lua::insert(state, -2);              // meta, methods
+    lua::setfield(state, -2, "__index"); // meta
+    pushRegistryTable(state, typeMetaKey);
+    lua::pushvalue(state, -2);
+    lua::rawsetp(state, -2, &info); // registry[typeMetaKey][info] = meta
+    lua::pop(state);                // meta
+}
+
 /// Creates the instance for the element table at `tbl`. Returns its box (nullptr on failure).
 Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     tbl = lua::absindex(state, tbl);
@@ -431,7 +494,7 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     lua::pushvalue(state, ud);
     lua::rawset(state, tbl);
     if (lua::getmetatable(state, tbl) == 0) {
-        pushPerType(state, typeMetaKey, &info);
+        pushTypeMeta(state, info);
         lua::setmetatable(state, tbl);
     } else {
         lua::pop(state); // the table has its own metatable: keep it (methods unreachable via `:`)
@@ -439,17 +502,6 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     b->element->attach(state, tbl, false);
     lua::pop(state); // ud
     return b;
-}
-
-/// Pushes a methods table { name = closure } for `info`.
-void pushMethodsTable(lua::State* state, const TypeInfo& info) {
-    lua::createtable(state, 0, static_cast<int>(info.methods().size()));
-    for (std::size_t i = 0; i < info.methods().size(); ++i) {
-        lua::pushlightuserdata(state, asVoid(&info));
-        lua::pushinteger(state, static_cast<lua::Integer>(i));
-        lua::pushcclosure(state, &methodTrampoline, 2);
-        lua::setfield(state, -2, info.methods()[i].name.c_str());
-    }
 }
 
 TypeRegistry* upvalueRegistry(lua::State* state) {
@@ -487,8 +539,8 @@ int libAttach(lua::State* state) {
 /// tick(now): calls Element::tick(now) on the ticking elements of this state, each synced first, so a Timer
 /// on a page that isn't rendered still fires and sees its current property values. ui.__tick calls it at
 /// the start of every frame.
-int libTick(lua::State* state) {
-    const double now = lua::tonumber(state, 1);
+/// The loop of libTick. An exception from a tick() is reported, and the other elements still tick.
+void tickElements(lua::State* state, double now) {
     for (Element* e : Element::tickingElements()) {
         // A handler that ran in this loop may have destroyed this element (or a GC step collected it).
         if (!Element::isTicking(e) || e->luaState() != state) continue;
@@ -498,10 +550,23 @@ int libTick(lua::State* state) {
         Box* b = selfBox(state, top + 1);
         if (b && b->element == e) {
             syncInstance(state, top + 1, *b);
-            if (b->element == e && Element::isTicking(e)) e->tick(now);
+            if (b->element == e && Element::isTicking(e))
+                luaui::reportCxx([e, now] { e->tick(now); }, b->type->name(), ".tick()");
         }
         lua::settop(state, top);
     }
+}
+
+int libTick(lua::State* state) {
+    const double now = lua::tonumber(state, 1);
+    const int n = luaui::catchCxx(
+        state,
+        [&] {
+            tickElements(state, now);
+            return 0;
+        },
+        "imlui.types.tick");
+    if (n < 0) lua::raise(state);
     return 0;
 }
 
@@ -520,7 +585,8 @@ Box* syncBox(const Node& node, const TypeInfo& info) {
     Box* b = selfBox(state, node.index());
     if (!b) b = attachInstance(state, node.index(), info);
     if (!b || !b->element) return nullptr;
-    if (b->type != &info) {
+    // An instance created before its type's name was registered again keeps the type it was created as.
+    if (b->type != &info && b->type->name() != info.name()) {
         luaui::reportError("element of type '" + info.name() + "' carries an instance of '" + b->type->name() + "'");
         return nullptr;
     }
@@ -614,18 +680,13 @@ void TypeRegistry::install(lua::State* state) {
     lua::setfield(state, -2, markerKey);
     lua::setfield(state, lua::registryIndex, singletonMetaKey);
 
-    // Per-type methods tables, and element-table metatables that fall back to them.
-    pushRegistryTable(state, methodsKey);
-    pushRegistryTable(state, typeMetaKey);
+    // Per-type methods tables, and element-table metatables that fall back to them. (A type registered later
+    // gets them on first use.)
     for (const auto& [name, t] : m_types) {
-        pushMethodsTable(state, *t);
-        lua::pushvalue(state, -1);
-        lua::rawsetp(state, top + 1, t);
-        lua::createtable(state, 0, 1);
-        lua::insert(state, -2);
-        lua::setfield(state, -2, "__index");
-        lua::rawsetp(state, top + 2, t);
+        pushTypeMeta(state, *t);
+        lua::pop(state);
     }
+    pushRegistryTable(state, methodsKey);
     for (const Singleton& s : m_singletons) {
         pushMethodsTable(state, *s.type);
         lua::rawsetp(state, top + 1, s.type);
