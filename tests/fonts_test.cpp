@@ -379,6 +379,36 @@ TEST(FontCheck, RejectsDamagedFonts) {
     writeU16(font, readU32(font, recordOf(font, "head") + 8) + 50, 7); // indexToLocFormat
     EXPECT_EQ(problem(font), "table 'head' is broken");
 
+    font = roboto;
+    const std::size_t hhea = readU32(font, recordOf(font, "hhea") + 8);
+    font.replace(hhea + 6, 2, font.substr(hhea + 4, 2)); // descender = ascender: ImGui would scale by 1 / 0
+    EXPECT_EQ(problem(font), "table 'hhea' gives the font no height");
+    // A negative height (found by the `font` fuzz target): the rasterizer's edges come out upside down, and it asserts.
+    writeU16(font, hhea + 4, 0x8101); // ascender -32511, descender 0
+    writeU16(font, hhea + 6, 0);
+    EXPECT_EQ(problem(font), "table 'hhea' gives the font no height");
+    // A height of 1 unit: ImGui would make every glyph thousands of times the font size (TrueType boxes from the
+    // glyph headers, CFF ones from the charstrings).
+    writeU16(font, hhea + 4, 1);
+    EXPECT_NE(problem(font).find("is far larger than the font"), std::string::npos) << problem(font);
+    font = icons;
+    const std::size_t iconsHhea = readU32(font, recordOf(font, "hhea") + 8);
+    writeU16(font, iconsHhea + 4, 1);
+    writeU16(font, iconsHhea + 6, 0);
+    EXPECT_NE(problem(font).find("is far larger than the font"), std::string::npos) << problem(font);
+
+    // A TrueType outline (glyph 0, .notdef) whose contour count sends stb_truetype past its end.
+    {
+        const std::size_t head = readU32(roboto, recordOf(roboto, "head") + 8);
+        ASSERT_EQ(static_cast<unsigned char>(roboto[head + 51]), 1); // long loca offsets
+        const std::size_t loca = readU32(roboto, recordOf(roboto, "loca") + 8);
+        const std::size_t glyf = readU32(roboto, recordOf(roboto, "glyf") + 8);
+        ASSERT_LT(readU32(roboto, loca), readU32(roboto, loca + 4));
+        font = roboto;
+        writeU16(font, glyf + readU32(roboto, loca), 0x7FFF);
+        EXPECT_EQ(problem(font), "the outline of glyph 0 is broken");
+    }
+
     // CFF outlines (the icon font): stb_truetype asserts on an INDEX offset size outside 1-4.
     const std::size_t cff = readU32(icons, recordOf(icons, "CFF ") + 8);
     font = icons;
@@ -486,6 +516,10 @@ struct Bytes {
         return *this;
     }
     Bytes& u32(std::uint32_t v) { return u16(v >> 16).u16(v & 0xFFFF); }
+    Bytes& u8(std::uint32_t v) {
+        s += static_cast<char>(v & 0xFF);
+        return *this;
+    }
 };
 
 /// A format 4 segment: code points first..last map to (code point + delta) mod 65536, or, with `rangeOffset`, to the
@@ -528,19 +562,29 @@ struct Format4 {
     }
 };
 
-/// A minimal TrueType font with `glyphs` empty glyphs and `subtable` as its (Windows Unicode) character map.
-std::string minimalFont(const std::string& subtable, std::uint32_t glyphs) {
+/// A minimal TrueType font with `glyphs` glyphs and `subtable` as its (Windows Unicode) character map. Glyph i's
+/// outline is outlines[i] (padded to an even size), empty past the end of `outlines`.
+std::string minimalFont(const std::string& subtable, std::uint32_t glyphs,
+                        const std::vector<std::string>& outlines = {}) {
     std::vector<std::pair<std::string, std::string>> tables;
     tables.emplace_back("cmap", Bytes{}.u16(0).u16(1).u16(3).u16(1).u32(12).s + subtable);
     std::string head(54, '\0'); // indexToLocFormat (at 50) 0: short offsets
     tables.emplace_back("head", head);
     std::string hhea(36, '\0');
+    writeU16(hhea, 4, 800);     // ascender
+    writeU16(hhea, 6, 0xFF38);  // descender: -200
     writeU16(hhea, 34, glyphs); // numberOfHMetrics
     tables.emplace_back("hhea", hhea);
     tables.emplace_back("hmtx", std::string(4 * std::size_t{glyphs}, '\0'));
     tables.emplace_back("maxp", Bytes{}.u32(0x00005000).u16(glyphs).s);
-    tables.emplace_back("loca", std::string(2 * (std::size_t{glyphs} + 1), '\0')); // every glyph empty
-    tables.emplace_back("glyf", std::string(4, '\0'));
+    Bytes loca;
+    std::string glyf;
+    for (std::size_t i = 0; i <= glyphs; ++i) {
+        loca.u16(static_cast<std::uint32_t>(glyf.size() / 2));
+        if (i < outlines.size() && i < glyphs) glyf += outlines[i] + std::string(outlines[i].size() % 2, '\0');
+    }
+    tables.emplace_back("loca", loca.s);
+    tables.emplace_back("glyf", glyf.empty() ? std::string(4, '\0') : glyf);
     Bytes font;
     font.u32(0x00010000).u16(static_cast<std::uint32_t>(tables.size())).u16(0).u16(0).u16(0);
     std::size_t offset = 12 + 16 * tables.size();
@@ -632,6 +676,169 @@ TEST(FontCheck, CharacterMapsMapOnlyToGlyphsTheFontHas) {
     EXPECT_EQ(check(format12(12, 'D', 'A', 9)), "(accepted)");     // first > last: never matched
     EXPECT_EQ(check(format12(13, 'A', 0x10FFFF, 3)), "(accepted)");
     EXPECT_EQ(check(format12(13, 'A', 'A', glyphs)), missing);
+}
+
+namespace {
+
+/// A glyph's box: xMin, yMin, xMax, yMax.
+using Box = std::array<std::int32_t, 4>;
+
+/// A glyph's header: its number of contours (negative: a composite glyph) and its box.
+Bytes glyphHeader(std::int32_t contours, Box box = {0, 0, 100, 100}) {
+    Bytes b;
+    b.u16(static_cast<std::uint32_t>(contours) & 0xFFFF);
+    for (const auto v : box)
+        b.u16(static_cast<std::uint32_t>(v) & 0xFFFF);
+    return b;
+}
+
+/// A simple glyph of one contour through `points` (x, y, on the curve), with word coordinates.
+std::string contourGlyph(const std::vector<std::tuple<std::int32_t, std::int32_t, bool>>& points, Box box) {
+    Bytes b = glyphHeader(1, box);
+    b.u16(static_cast<std::uint32_t>(points.size() - 1)).u16(0);
+    for (const auto& [x, y, on] : points)
+        b.u8(on ? 0x01 : 0x00);
+    std::int32_t last = 0;
+    for (const auto& point : points) {
+        b.u16(static_cast<std::uint32_t>(std::get<0>(point) - last) & 0xFFFF);
+        last = std::get<0>(point);
+    }
+    last = 0;
+    for (const auto& point : points) {
+        b.u16(static_cast<std::uint32_t>(std::get<1>(point) - last) & 0xFFFF);
+        last = std::get<1>(point);
+    }
+    return b.s;
+}
+
+/// A simple glyph whose contours end at `endPts`, its points (as many as the last end point says) on the curve
+/// unless `on` says otherwise, each 10 units right of and above the one before (word coordinates).
+std::string simpleGlyph(const std::vector<std::uint32_t>& endPts, const std::vector<bool>& on = {}) {
+    Bytes b = glyphHeader(static_cast<std::int32_t>(endPts.size()));
+    for (const auto end : endPts)
+        b.u16(end);
+    b.u16(0); // no instructions
+    const std::size_t points = std::size_t{endPts.back()} + 1;
+    for (std::size_t i = 0; i < points; ++i)
+        b.u8(i < on.size() && !on[i] ? 0x00 : 0x01);
+    for (std::size_t i = 0; i < 2 * points; ++i)
+        b.u16(10);
+    return b.s;
+}
+
+/// A composite glyph of `parts`, each placed by a word offset (dx, 0) and given extra `flags`, and `scale` (the
+/// words of its scale, if the flags ask for one).
+std::string compositeGlyph(const std::vector<std::uint32_t>& parts, std::uint32_t flags = 0,
+                           const std::vector<std::uint32_t>& scale = {}, std::uint32_t dx = 0) {
+    Bytes b = glyphHeader(-1);
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const std::uint32_t more = i + 1 < parts.size() ? 0x20 : 0;
+        b.u16(0x0003 | flags | more).u16(parts[i]).u16(dx).u16(0); // ARG_1_AND_2_ARE_WORDS, ARGS_ARE_XY_VALUES
+        for (const auto word : scale)
+            b.u16(word);
+    }
+    return b.s;
+}
+
+} // namespace
+
+TEST(FontCheck, GlyphOutlinesAreReadLikeStbTruetype) {
+    // stb_truetype decodes a glyph's outline when ImGui rasterizes it, trusting every count and offset, and fetches
+    // the parts of a composite glyph by recursion.
+    const std::string cmap = Bytes{}.u16(6).u16(12).u16(0).u16('A').u16(1).u16(1).s; // 'A' -> glyph 1
+    const auto problem = [&](const std::vector<std::string>& outlines) {
+        const auto glyphs = static_cast<std::uint32_t>(std::max<std::size_t>(outlines.size(), 2));
+        return checkFont(bytesOf(minimalFont(cmap, glyphs, outlines))).value_or("(accepted)");
+    };
+    const std::string accepted = "(accepted)", broken = "the outline of glyph 1 is broken";
+    const std::string triangle = simpleGlyph({2});
+    EXPECT_EQ(problem({"", triangle}), accepted);
+
+    // Simple glyphs: the flags (with repeat counts) and the coordinates they announce must lie inside the glyph.
+    EXPECT_EQ(problem({"", glyphHeader(1).u16(2).u16(0).u8(0x3F).u8(2).u8(1).u8(2).u8(3).u8(1).u8(2).u8(3).s}),
+              accepted); // one flag repeated: byte coordinates, positive
+    EXPECT_EQ(problem({"", triangle.substr(0, triangle.size() - 2)}), broken);              // a y coordinate short
+    EXPECT_EQ(problem({"", glyphHeader(1).u16(0).u16(1).u8(0).u8(0x08).s}), broken);        // the repeat count missing
+    EXPECT_EQ(problem({"", glyphHeader(1).u16(0).u16(100).u8(1).u16(0).u16(0).s}), broken); // instructions
+    EXPECT_EQ(problem({"", glyphHeader(100).u16(0).u16(0).s}), broken);                     // end points
+    EXPECT_EQ(problem({"", glyphHeader(1).u16(0xFFFF).u16(0).u8(1).u16(0).u16(0).s}), broken); // 65536 points
+    // A contour that starts off the curve also reads the next point: in a glyph that is drawn, the last contour
+    // can't be a lone point off the curve. Fonts have such glyphs with an empty box as placeholders (Calibri,
+    // Consolas): ImGui never draws those, nor decodes them, unless a drawn composite glyph uses one.
+    const std::string lone = simpleGlyph({2, 3}, {true, true, true, false});
+    const std::string placeholder = glyphHeader(1, {0, 0, 0, 0}).s + simpleGlyph({0}, {false}).substr(10);
+    EXPECT_EQ(problem({"", lone}), broken);
+    EXPECT_EQ(problem({"", placeholder}), accepted);
+    EXPECT_EQ(problem({"", placeholder, compositeGlyph({1})}), "the outline of glyph 2 is broken");
+    EXPECT_EQ(problem({"", simpleGlyph({0, 3}, {false, true, true, true})}), accepted);
+    // End points out of order: stb_truetype takes the points from the last one and copes with the rest.
+    EXPECT_EQ(problem({"", simpleGlyph({5, 2})}), accepted);
+
+    // Composite glyphs: every part, with its offset and scale, inside the glyph; parts past the font are empty.
+    EXPECT_EQ(problem({"", triangle, compositeGlyph({1, 1})}), accepted);
+    EXPECT_EQ(problem({"", triangle, compositeGlyph({7})}), accepted);
+    EXPECT_EQ(problem({"", triangle, compositeGlyph({1}, 0x08, {0x2000})}), accepted);                    // a scale
+    EXPECT_EQ(problem({"", triangle, compositeGlyph({1}, 0x40, {0x2000, 0x4000})}), accepted);            // x and y
+    EXPECT_EQ(problem({"", triangle, compositeGlyph({1}, 0x80, {0x4000, 0, 0x1000, 0x4000})}), accepted); // 2x2
+    EXPECT_EQ(problem({"", triangle, compositeGlyph({1}, 0x80, {0x4000, 0})}),
+              "the outline of glyph 2 is broken"); // the matrix cut short
+    EXPECT_EQ(problem({"", triangle, glyphHeader(-1).u16(0x23).u16(1).u16(0).u16(0).s}),
+              "the outline of glyph 2 is broken"); // another part announced, none there
+    EXPECT_EQ(problem({"", triangle, glyphHeader(-1).u16(0x0000).u16(1).u8(0).u8(0).s}),
+              "the outline of glyph 2 places a part by its points"); // stb_truetype asserts
+
+    // Parts that contain the glyph itself: stb_truetype would recurse until the stack overflows.
+    EXPECT_EQ(problem({"", compositeGlyph({1})}), "the outline of glyph 1 contains itself");
+    EXPECT_EQ(problem({"", compositeGlyph({2}), compositeGlyph({1})}), "the outline of glyph 1 contains itself");
+    EXPECT_EQ(problem({compositeGlyph({0})}), "the outline of glyph 0 contains itself");
+
+    // Composite glyphs inside composite glyphs: at most 16 levels.
+    const auto chain = [&](std::uint32_t last) {
+        std::vector<std::string> outlines{"", triangle};
+        for (std::uint32_t k = 2; k <= last; ++k)
+            outlines.push_back(compositeGlyph({k - 1}));
+        return outlines;
+    };
+    EXPECT_EQ(problem(chain(17)), accepted);
+    EXPECT_EQ(problem(chain(18)), "the outline of glyph 17 is nested too deeply");
+
+    // Each level using the one below three times: the vertices (and stb_truetype's copying) grow by 3 per level.
+    std::vector<std::string> tree{"", triangle};
+    for (std::uint32_t k = 2; k <= 14; ++k)
+        tree.push_back(compositeGlyph({k - 1, k - 1, k - 1}));
+    EXPECT_NE(problem(tree).find("is too complex"), std::string::npos) << problem(tree);
+
+    // A part moved where its coordinates don't fit stb_truetype's 16-bit vertices (a float-to-int conversion out
+    // of range): the point at x = 30000 moved right by 2000 fits, by 3000 doesn't, nor scaled by 2.
+    const std::string far = glyphHeader(1).u16(0).u16(0).u8(0x01).u16(30000).u16(0).s;
+    EXPECT_EQ(problem({"", far, compositeGlyph({1}, 0, {}, 2000)}), accepted);
+    EXPECT_EQ(problem({"", far, compositeGlyph({1}, 0, {}, 3000)}), "the outline of glyph 2 moves a part out of range");
+    EXPECT_EQ(problem({"", far, compositeGlyph({1}, 0x08, {0x7FFF})}),
+              "the outline of glyph 2 moves a part out of range");
+
+    // The box ImGui sizes a glyph's bitmap by: not inverted, nor more than 16 times the font's height (1000 here).
+    EXPECT_EQ(problem({"", glyphHeader(1, {100, 0, 0, 100}).s + triangle.substr(10)}),
+              "the outline of glyph 1 has an inverted box");
+    EXPECT_EQ(problem({"", glyphHeader(1, {0, 0, 100, -100}).s + triangle.substr(10)}),
+              "the outline of glyph 1 has an inverted box");
+    EXPECT_EQ(problem({"", glyphHeader(1, {-8000, 0, 8000, 100}).s + triangle.substr(10)}), accepted);
+    EXPECT_EQ(problem({"", glyphHeader(1, {-8000, 0, 8001, 100}).s + triangle.substr(10)}),
+              "the outline of glyph 1 is far larger than the font");
+
+    // A glyph whose box ends at or below the baseline (found by the `font` fuzz target): its bitmap can start at the
+    // baseline, and stb_truetype's rasterizer asserts on an edge wholly above a bitmap's first row there. Its
+    // outline may stray from its box (real fonts' do) but not above the baseline, curves included.
+    const Box below{0, -300, 300, 0};
+    EXPECT_EQ(problem({"", contourGlyph({{0, -100, true}, {100, -300, true}, {200, 0, true}}, below)}), accepted);
+    EXPECT_EQ(problem({"", contourGlyph({{0, -100, true}, {100, -300, true}, {200, 10, true}}, below)}),
+              "the outline of glyph 1 rises above its box");
+    EXPECT_EQ(problem({"", contourGlyph({{0, -40, true}, {50, 0, false}, {100, -40, true}}, below)}), accepted);
+    EXPECT_EQ(problem({"", contourGlyph({{0, 0, true}, {50, 40, false}, {100, 0, true}}, below)}),
+              "the outline of glyph 1 rises above its box"); // the curve peaks at 20
+    const std::string riser = contourGlyph({{0, -100, true}, {100, -300, true}, {200, 10, true}}, {0, 0, 300, 300});
+    EXPECT_EQ(problem({"", riser}), accepted); // its box doesn't end below the baseline
+    EXPECT_EQ(problem({"", riser, glyphHeader(-1, below).s + compositeGlyph({1}).substr(10)}),
+              "the outline of glyph 2 rises above its box");
 }
 
 TEST_F(FontsTest, DamagedFontsAreReportedInsteadOfAborting) {
