@@ -10,6 +10,8 @@ export import imlui.theme.typography;
 export import imlui.theme.icons;
 export import imlui.theme.theme;
 export import imlui.theme.font_scope;
+export import imlui.theme.font_library;
+export import imlui.theme.font_face_scope;
 export import imlui.widgets;
 export import imlui.lua.errors;
 export import imlui.lua.value;
