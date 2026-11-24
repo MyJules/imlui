@@ -24,7 +24,10 @@ double toLinear(double c) {
 }
 
 /// WCAG 2 relative luminance.
-double luminance(Color c) { return 0.2126 * toLinear(c.r) + 0.7152 * toLinear(c.g) + 0.0722 * toLinear(c.b); }
+double luminance(Color c) {
+    return 0.2126 * toLinear(static_cast<double>(c.r)) + 0.7152 * toLinear(static_cast<double>(c.g)) +
+           0.0722 * toLinear(static_cast<double>(c.b));
+}
 
 /// WCAG 2 contrast ratio, 1..21.
 double contrast(Color a, Color b) {

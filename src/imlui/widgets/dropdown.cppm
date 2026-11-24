@@ -64,15 +64,16 @@ bool dropdown(const char* id, const std::vector<std::string>& items, int* curren
         const Scheme& s = scheme();
         float y = (o.label.empty() || o.outlined) ? f.p.y + h * 0.5f : f.p.y + dp(24) + dp(12);
         dl->PushClipRect({f.inputX, f.p.y}, {f.inputX + f.inputW, f.p.y + h}, true);
-        drawTextV(dl, TextStyle::BodyLarge, f.inputX, y, dis ? disabledContent() : s.onSurface, items[*current]);
+        drawTextV(dl, TextStyle::BodyLarge, f.inputX, y, dis ? disabledContent() : s.onSurface, items[static_cast<std::size_t>(*current)]);
         dl->PopClipRect();
     }
     bool changed = false;
     if (beginAnchoredMenu("##menu", f.p, {f.p.x + w, f.p.y + h}, w)) {
         for (int i = 0; i < static_cast<int>(items.size()); ++i) {
             ImGui::PushID(i);
-            std::string_view ic = i < static_cast<int>(icons.size()) ? std::string_view{icons[i]} : std::string_view{};
-            if (menuItem("##it", items[i], ic, {}, i == *current) && i != *current) { *current = i; changed = true; }
+            const auto idx = static_cast<std::size_t>(i);
+            std::string_view ic = idx < icons.size() ? std::string_view{icons[idx]} : std::string_view{};
+            if (menuItem("##it", items[idx], ic, {}, i == *current) && i != *current) { *current = i; changed = true; }
             if (i == *current && ImGui::IsWindowAppearing()) ImGui::SetScrollHereY();
             ImGui::PopID();
         }

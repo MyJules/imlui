@@ -151,21 +151,53 @@ Apps can also add elements without touching imlui:
   `build/clang-debug`'s compile commands. Its cache lives in `.clice/`, which is git-ignored.
 - Format with `clang-format -i <files>` (`.clang-format` at the repo root).
 
+## Building and testing
+
+Presets (`CMakePresets.json`), all clang + Ninja, build into `build/<preset>/`:
+
+| Preset | What |
+|---|---|
+| `clang-debug` | Debug, `/MDd` (STL checked iterators), `-ftrapv` on our targets. The everyday build. |
+| `clang-release` | Release. Build it too before merging: optimization can surface other warnings. |
+| `clang-asan` | Debug code with AddressSanitizer + UndefinedBehaviorSanitizer on every target, vendored ones included. |
+
+```sh
+cmake --preset clang-debug
+cmake --build --preset clang-debug
+ctest --preset clang-debug
+
+cmake --preset clang-release
+cmake --build --preset clang-release
+
+cmake --preset clang-asan
+cmake --build --preset clang-asan
+ctest --preset clang-asan
+build/clang-asan/bin/imlui_app      # run the gallery once under the sanitizers
+```
+
+Our targets build with a strict warning set and `-Werror`, so any warning fails the build. See
+[Warnings and compiler checks](../CODE_STYLE.md#warnings-and-compiler-checks) for the flags and the rules for
+suppressions. Run `clang-asan` before merging larger changes.
+
+**Sanitizers on Windows (`x86_64-pc-windows-msvc`).** `IMLUI_SANITIZERS` (`cmake/ImluiSanitizers.cmake`) adds
+`-fsanitize=address,undefined -fno-sanitize-recover=undefined` to every target. On this target:
+
+- ASan needs the release dynamic CRT, so the preset sets `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`. The code
+  is still `-O0 -g`, but the STL's debug iterators are off in this preset, since they need `/MDd`. Use
+  `clang-debug` for those.
+- The ASan runtime DLL (`clang_rt.asan_dynamic-x86_64.dll`) is copied to `build/clang-asan/bin` at configure
+  time, so the tests and the app run without changing `PATH`.
+- Covered: ASan (heap, stack and global buffer overflows, use-after-free, double free), and the UBSan `undefined`
+  group (signed overflow, shifts, null, alignment, bounds, enum/bool loads, float-cast overflow, unreachable,
+  `function`, and more). UB aborts the process, so a test with UB fails.
+- Not covered: LeakSanitizer (not available on Windows), UBSan `vptr` (not supported for the MSVC ABI), and
+  ThreadSanitizer/MemorySanitizer (not available for this target).
+
 ## Testing
 
-> **In progress.** GoogleTest unit tests are being added on a separate branch. Until they land, `tests/` and the
-> test preset don't exist on `material-ui`.
-
 - Tests live in `tests/` and are ordinary (non-module) `.cpp` files. They may `#include <gtest/gtest.h>` and
-  nothing else, and `import` the modules they test.
-- Run them with:
-
-  ```sh
-  cmake --preset clang-debug
-  cmake --build --preset clang-debug
-  ctest --preset clang-debug
-  ```
-
+  nothing else, and `import` the modules they test. Run them with `ctest --preset clang-debug` (and
+  `ctest --preset clang-asan`).
 - Good candidates are the pure modules: `imlui.color*` (hex parsing, OKLCH round trips), `imlui.theme.scheme`
   (role lookup, generation), `imlui.theme.theme` (`resolveColor`), and `imlui.lua.*` against a bare `lua::State`
   (prop resolution, `bind` write-back, `themeFromTable`).

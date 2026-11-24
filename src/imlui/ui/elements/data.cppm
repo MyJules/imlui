@@ -154,13 +154,13 @@ void canvas(Renderer&, const Node& n) {
     }
     lua::pushvalue(state, n.index());
     lua::createtable(state, 0, 8);
-    lua::pushnumber(state, w / s);
+    lua::pushnumber(state, static_cast<double>(w / s));
     lua::setfield(state, -2, "width");
-    lua::pushnumber(state, h / s);
+    lua::pushnumber(state, static_cast<double>(h / s));
     lua::setfield(state, -2, "height");
-    lua::pushnumber(state, (m.x - p.x) / s);
+    lua::pushnumber(state, static_cast<double>((m.x - p.x) / s));
     lua::setfield(state, -2, "mouseX");
-    lua::pushnumber(state, (m.y - p.y) / s);
+    lua::pushnumber(state, static_cast<double>((m.y - p.y) / s));
     lua::setfield(state, -2, "mouseY");
     lua::pushboolean(state, hovered);
     lua::setfield(state, -2, "hovered");

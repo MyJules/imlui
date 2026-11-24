@@ -103,14 +103,14 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
         float bw = std::max(dp(2), (x1 - x0) / static_cast<float>(n) * 0.6f);
         for (int i = 0; i < n; ++i) {
             float x = px(i);
-            float y = py(values[i]), y0 = py(std::max(mn, 0.0f));
+            float y = py(values[static_cast<std::size_t>(i)]), y0 = py(std::max(mn, 0.0f));
             Color bc = i == hoverIdx ? mix(c, s.onSurface, 0.15f) : c;
             dl->AddRectFilled({x - bw * 0.5f, std::min(y, y0)}, {x + bw * 0.5f, std::max(y, y0)}, col(bc),
                               std::min(bw * 0.5f, dp(6)), ImDrawFlags_RoundCornersTop);
         }
     } else {
         std::vector<ImVec2> pts(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i) pts[static_cast<std::size_t>(i)] = {px(i), py(values[i])};
+        for (int i = 0; i < n; ++i) pts[static_cast<std::size_t>(i)] = {px(i), py(values[static_cast<std::size_t>(i)])};
         if (o.fill && n >= 2) {
             // Vertical gradient under the line.
             const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();

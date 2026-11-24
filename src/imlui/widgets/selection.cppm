@@ -217,14 +217,15 @@ bool segmented(const char* id, const std::vector<std::string>& items, int* curre
             dl->AddRectFilled(a, b, col((dis ? disabledContainer() : s.secondaryContainer).withAlpha(selT)), h * 0.5f, corners);
         float layer = dis ? 0.0f : stateLayer(sid, hov, act);
         if (layer > 0) dl->AddRectFilled(a, b, col(fg.withAlpha(layer)), h * 0.5f, corners);
-        ImVec2 ts = measure(TextStyle::LabelLarge, items[i]);
+        const auto idx = static_cast<std::size_t>(i);
+        ImVec2 ts = measure(TextStyle::LabelLarge, items[idx]);
         const std::string_view ic = sel ? std::string_view{"check"}
-                                        : (i < static_cast<int>(icons.size()) ? std::string_view{icons[i]} : std::string_view{});
+                                        : (idx < icons.size() ? std::string_view{icons[idx]} : std::string_view{});
         const bool showIcon = hasIcon(ic);
         float iconW = showIcon ? dp(18) + dp(8) : 0.0f;
         float x = a.x + (segW - ts.x - iconW) * 0.5f;
         if (showIcon) drawIcon(dl, ic, {x + dp(9), p.y + h * 0.5f}, 18.0f, fg);
-        drawText(dl, TextStyle::LabelLarge, {x + iconW, p.y + (h - ts.y) * 0.5f}, fg, items[i]);
+        drawText(dl, TextStyle::LabelLarge, {x + iconW, p.y + (h - ts.y) * 0.5f}, fg, items[idx]);
         if (i > 0) dl->AddLine({a.x, a.y}, {a.x, b.y}, col(anyDisabled ? disabledContainer() : s.outline), dp(1));
     }
     dl->AddRect(p, {p.x + w, p.y + h}, col(anyDisabled ? disabledContainer() : s.outline), h * 0.5f, dp(1));

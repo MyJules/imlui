@@ -128,7 +128,7 @@ std::optional<double> Node::number(const char* key) const {
 }
 
 double Node::number(const char* key, double def) const { return number(key).value_or(def); }
-float Node::numf(const char* key, float def) const { return static_cast<float>(number(key, def)); }
+float Node::numf(const char* key, float def) const { return static_cast<float>(number(key, static_cast<double>(def))); }
 
 bool Node::boolean(const char* key, bool def) const {
     lua::Type t = push(key);

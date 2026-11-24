@@ -12,6 +12,10 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+include(ImluiWarnings)
+include(ImluiSanitizers)
+
 add_subdirectory(external)
 
 # ------------------------------------------------------------------ library
@@ -25,13 +29,14 @@ target_sources(imlui
 )
 target_link_libraries(imlui PRIVATE ext::lua ext::imgui ext::spdlog)
 target_compile_features(imlui PUBLIC cxx_std_20)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(imlui PRIVATE -Wall -Wextra -Wno-unused-parameter)
-endif()
+imlui_set_warnings(imlui)
+imlui_set_hardening(imlui)
 
 # ------------------------------------------------------------------ app
 add_executable(imlui_app app/main.cpp)
 target_link_libraries(imlui_app PRIVATE imlui ext::lua ext::imgui ext::spdlog)
+imlui_set_warnings(imlui_app)
+imlui_set_hardening(imlui_app)
 option(IMLUI_DEV_PATHS "Load lua/ and examples/ from the source tree (hot reload while editing)" ON)
 if(IMLUI_DEV_PATHS)
     target_compile_definitions(imlui_app PRIVATE IMLUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

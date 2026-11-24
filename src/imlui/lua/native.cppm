@@ -125,28 +125,28 @@ constexpr NativeFn nativeFns[] = {
      }},
     {"deltaTime",
      [](lua::State* state) -> int {
-         lua::pushnumber(state, ImGui::GetIO().DeltaTime);
+         lua::pushnumber(state, static_cast<double>(ImGui::GetIO().DeltaTime));
          return 1;
      }},
     {"fps",
      [](lua::State* state) -> int {
-         lua::pushnumber(state, ImGui::GetIO().Framerate);
+         lua::pushnumber(state, static_cast<double>(ImGui::GetIO().Framerate));
          return 1;
      }},
     {"dpiScale",
      [](lua::State* state) -> int {
-         lua::pushnumber(state, dpiScale());
+         lua::pushnumber(state, static_cast<double>(dpiScale()));
          return 1;
      }},
     {"contentScale",
      [](lua::State* state) -> int {
-         lua::pushnumber(state, contentScale());
+         lua::pushnumber(state, static_cast<double>(contentScale()));
          return 1;
      }},
     {"zoom",
      [](lua::State* state) -> int {
          auto& fn = hostHooks(state).zoom;
-         lua::pushnumber(state, fn ? fn() : zoom());
+         lua::pushnumber(state, static_cast<double>(fn ? fn() : zoom()));
          return 1;
      }},
     {"setZoom",
@@ -177,8 +177,8 @@ constexpr NativeFn nativeFns[] = {
          if (lua::type(state, 2) == lua::Type::String)
              if (auto t = textStyleFromName(lua::tostring(state, 2))) st = *t;
          ImVec2 sz = font(st)->CalcTextSizeA(fontPixels(st), 3.4e38f, 0.0f, s.data(), s.data() + s.size());
-         lua::pushnumber(state, sz.x / dpiScale());
-         lua::pushnumber(state, sz.y / dpiScale());
+         lua::pushnumber(state, static_cast<double>(sz.x / dpiScale()));
+         lua::pushnumber(state, static_cast<double>(sz.y / dpiScale()));
          return 2;
      }},
     {"setTitle",

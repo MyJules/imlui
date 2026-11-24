@@ -7,7 +7,9 @@ file(GLOB LUA_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/lua/*.c)
 list(FILTER LUA_SOURCES EXCLUDE REGEX ".*/(lua|luac|onelua|ltests)\\.c$")
 add_library(lua_static STATIC ${LUA_SOURCES})
 target_include_directories(lua_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lua)
-set_target_properties(lua_static PROPERTIES LINKER_LANGUAGE C)
+# SYSTEM: our targets see the vendored headers as system headers, so our warning flags
+# (cmake/ImluiWarnings.cmake) don't fire inside them. Same for every ext target below.
+set_target_properties(lua_static PROPERTIES LINKER_LANGUAGE C SYSTEM ON)
 if(WIN32)
     target_compile_definitions(lua_static PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
@@ -19,6 +21,7 @@ set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 add_subdirectory(glfw EXCLUDE_FROM_ALL)
+set_target_properties(glfw PROPERTIES SYSTEM ON)
 
 # ---------------------------------------------------------------- Dear ImGui
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
@@ -40,7 +43,7 @@ target_link_libraries(imgui_static PUBLIC glfw)
 find_package(OpenGL REQUIRED)
 target_link_libraries(imgui_static PUBLIC OpenGL::GL)
 # Third-party code is not ours to scan for modules.
-set_target_properties(imgui_static PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+set_target_properties(imgui_static PROPERTIES CXX_SCAN_FOR_MODULES OFF SYSTEM ON)
 add_library(ext::imgui ALIAS imgui_static)
 
 set(IMLUI_FONTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fonts PARENT_SCOPE)
@@ -51,7 +54,7 @@ set(SPDLOG_BUILD_TESTS   OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_BENCH   OFF CACHE BOOL "" FORCE)
 set(SPDLOG_INSTALL       OFF CACHE BOOL "" FORCE)
 add_subdirectory(spdlog EXCLUDE_FROM_ALL)
-set_target_properties(spdlog PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+set_target_properties(spdlog PROPERTIES CXX_SCAN_FOR_MODULES OFF SYSTEM ON)
 add_library(ext::spdlog ALIAS spdlog)
 
 # ---------------------------------------------------------------- GoogleTest 1.17.0

@@ -58,7 +58,7 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
         float layer = dis ? 0.0f : stateLayer(tid, hov, act);
         if (layer > 0)
             dl->AddRectFilled(a, {a.x + tw, a.y + h}, col((sel ? s.primary : s.onSurface).withAlpha(layer)));
-        const auto& t = items[i];
+        const auto& t = items[static_cast<std::size_t>(i)];
         ImVec2 ts = measure(TextStyle::TitleSmall, t.label);
         const bool ic = hasIcon(t.icon);
         float contentW = ts.x;

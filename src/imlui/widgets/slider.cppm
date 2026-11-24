@@ -69,7 +69,12 @@ bool slider(const char* id, float* v, float vmin, float vmax, float step, float 
 
     if (act && valueFormat && *valueFormat) {
         char buf[64];
+        // The format is the Slider's `format` prop: a printf format chosen by the script, the same contract as
+        // ImGui::SliderFloat's `format`. It can't be a literal, so -Wformat-nonliteral is off for this call only.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
         std::snprintf(buf, sizeof buf, valueFormat, static_cast<double>(*v));
+#pragma clang diagnostic pop
         ImVec2 ts = measure(TextStyle::LabelMedium, buf);
         ImDrawList* fg = ImGui::GetForegroundDrawList();
         float bw = std::max(ts.x + dp(16), dp(28)), bh = dp(28);

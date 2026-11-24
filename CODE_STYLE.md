@@ -96,3 +96,49 @@ const std::string& Example::name() const { return m_name; }
 - Prefer `[[nodiscard]]` on queries, `explicit` on single-argument constructors, and `std::string_view` for
   read-only string parameters.
 - Comments explain *why*. Public declarations get a one-line `///` summary when the name isn't enough.
+
+## Warnings and compiler checks
+
+**Zero warnings.** Our targets (`imlui`, `imlui_app`, `imlui_tests`) build with `-Werror` and the
+`COMPILE_WARNING_AS_ERROR` property, so any warning fails the build, in every configuration. Release can surface
+warnings Debug doesn't, so build both. The flags live in `cmake/ImluiWarnings.cmake` (`imlui_set_warnings`):
+
+| Flag | Why |
+|---|---|
+| `-Wall -Wextra -Wpedantic` | The baseline, plus standard conformance (no compiler extensions). |
+| `-Werror` | Warnings don't pile up. |
+| `-Wshadow` | A local that hides another name is a classic source of wrong-variable bugs. Rename it. |
+| `-Wconversion -Wsign-conversion` | Narrowing and signed/unsigned mixups are silent value changes. Write `static_cast` where the conversion is intended, or use the right type (`std::size_t` for indices). |
+| `-Wdouble-promotion` | `float` to `double` is usually accidental. `lua::pushnumber(static_cast<double>(f))` says it isn't. |
+| `-Wold-style-cast` | C casts can do any of `static_cast`/`const_cast`/`reinterpret_cast` without saying which. |
+| `-Wcast-align` | Casts that increase alignment are UB on access. |
+| `-Wnon-virtual-dtor -Woverloaded-virtual` | Polymorphic classes need a virtual destructor, and overloads mustn't hide base virtuals. |
+| `-Wnull-dereference` | Paths the compiler can prove dereference null. |
+| `-Wformat=2` | printf-style formats must be literals that match their arguments. |
+| `-Wimplicit-fallthrough` | A `switch` case that falls through needs `[[fallthrough]]`. |
+| `-Wunused -Wextra-semi` | Dead variables and stray `;`. Unused parameters are unnamed or `[[maybe_unused]]`, never silenced globally. |
+| `-Wmissing-declarations` | A non-exported function belongs in an anonymous namespace (see above); otherwise it's exported. |
+
+Rules:
+
+- **Fix the code, don't silence the warning.** There's no `-Wno-*` for our targets.
+- **Suppressions only at the narrowest scope**, with a comment that says why the code is right and the warning
+  can't be avoided:
+
+  ```cpp
+  // The format is the Slider's `format` prop: a printf format chosen by the script, ...
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wformat-nonliteral"
+  std::snprintf(buf, sizeof buf, valueFormat, static_cast<double>(*v));
+  #pragma clang diagnostic pop
+  ```
+
+- **Third-party headers are SYSTEM.** Every target in `external/CMakeLists.txt` has the `SYSTEM` property, so
+  its include directories reach us as `-isystem` and our flags don't fire inside vendored headers or their
+  macros. Vendored code keeps its own flags.
+- **Debug hardening** (`imlui_set_hardening`): our targets build with `-ftrapv` in Debug, so signed overflow
+  traps. Debug uses `/MDd`, which turns on the MSVC STL's checked iterators (`_ITERATOR_DEBUG_LEVEL=2`).
+  Vendored Lua doesn't get `-ftrapv`, because it relies on wrapping integer arithmetic.
+- **Run the sanitizer preset before merging larger changes** (`cmake --preset clang-asan`, then build and
+  `ctest --preset clang-asan`, and start the app once). It builds everything, vendored libraries included, with
+  AddressSanitizer and UndefinedBehaviorSanitizer. See [Development](docs/development.md#building-and-testing).

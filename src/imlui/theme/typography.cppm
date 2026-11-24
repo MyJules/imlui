@@ -71,10 +71,10 @@ ImFont* mediumFont = nullptr;
 
 } // namespace
 
-const TextStyleInfo& textStyleInfo(TextStyle s) { return textStyles[static_cast<int>(s)]; }
+const TextStyleInfo& textStyleInfo(TextStyle s) { return textStyles[static_cast<std::size_t>(s)]; }
 
 std::optional<TextStyle> textStyleFromName(std::string_view name) {
-    for (int i = 0; i < static_cast<int>(TextStyle::Count); ++i)
+    for (std::size_t i = 0; i < static_cast<std::size_t>(TextStyle::Count); ++i)
         if (textStyles[i].name == name) return static_cast<TextStyle>(i);
     return std::nullopt;
 }
