@@ -6,13 +6,13 @@
 flowchart TD
     S["Lua script<br/>(returns the root element)"] --> P["DSL prelude<br/>lua/imlui.lua: constructors, state, bind, Repeater, theme, timers"]
     P --> T["Element tree<br/>plain Lua tables { __type = 'Button', ... }"]
-    T --> R["Renderer + element handlers<br/>imlui.ui.renderer, imlui.ui.elements.*"]
-    R --> N["Lua bridge<br/>imlui.lua.node / value / errors / painter / native"]
-    R --> W["Material widgets<br/>imlui.widgets.* (namespace imlui::md)"]
-    R --> TY["C++ type system<br/>imlui.types.*: Element, ScriptObject, TypeBuilder, LuaConvert, TypeRegistry"]
-    TY --> N
-    TY --> W
+    T --> R["Renderer<br/>imlui.ui.renderer"]
+    R -->|"every element, by __type"| TY["C++ type system<br/>imlui.types.*: TypeRegistry, Element, Frame, TypeBuilder, LuaConvert"]
+    TY --> EL["Built-in elements<br/>imlui.ui.elements.*: one Element class each"]
     C["App C++ types and singletons<br/>registerType / registerSingleton"] --> TY
+    EL --> W["Material widgets<br/>imlui.widgets.* (namespace imlui::md)"]
+    TY --> N["Lua bridge<br/>imlui.lua.node / value / errors / painter / native"]
+    C --> W
     W --> TH["Theme<br/>imlui.theme.*, imlui.color.*"]
     W --> I["Dear ImGui 1.92<br/>(import imgui)"]
     I --> G["GLFW + OpenGL 3.3<br/>imlui.platform.window"]
@@ -27,9 +27,9 @@ flowchart TD
 | **Lua script** | Builds the element tree and returns the root. It owns all state and all decisions, including theme, window title and size. |
 | **DSL prelude** (`lua/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment and the `require` searcher for components. |
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. A table's identity (its pointer) is its ImGui ID, so elements keep per-widget state such as animations and focus across frames. |
-| **Renderer** | Walks the tree on every rendered frame (immediate mode). It looks up a handler for each `__type` and applies the common props (`visible`, `enabled`, `tooltip`). |
-| **Element handlers** | One per element type, grouped by family in `imlui.ui.elements.*`. They read props through `luaui::Node`, call Material widgets, write two-way props back, and emit signals. |
-| **C++ type system** | `imlui.types.*`. C++ classes registered with `Engine::registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. The registry turns each type into a renderer element whose handler syncs the declared properties into the instance and calls `Element::render(Frame&)`. `ProgressBar` and `Timer` are built this way. See [Registering C++ types](extending.md). |
+| **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type". |
+| **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
+| **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They call Material widgets, write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
 | **ImGui / platform** | Dear ImGui with the GLFW and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. |
 
@@ -99,8 +99,9 @@ theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself wh
    theme in the middle of a frame without breaking that frame's ImGui style stack. If only the scale changed, the
    current theme is re-applied.
 2. `window.beginFrame()`, which starts a new ImGui frame. Then the zoom shortcuts are handled.
-3. `ui.__tick(now)`: runs due `setTimeout`/`setInterval` timers, then the `onFrame` callbacks, and returns the
-   seconds until the next timer.
+3. `ui.__tick(now)`: runs due `setTimeout`/`setInterval` timers, then ticks the C++ ticking elements (`Timer`;
+   `require("imlui.types").tick(now)`, synced first, rendered or not), then the `onFrame` callbacks, and returns
+   the seconds until the next timer.
 4. Renders the root element.
 5. Renders **overlays**: the children of `ui.__overlays`. Today that's the app-wide `Snackbar` element driven by
    `snackbar()`. Overlays draw above everything else.
@@ -271,18 +272,9 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
-| `imlui.ui.renderer` | `Renderer`: `registerElement`, `render`, `forEachChild`, `renderChildren`, `renderStack`, `attachMenu`, window title |
-| `imlui.ui.elements.windows` | `ApplicationWindow`, `Window`, `Dialog` |
-| `imlui.ui.elements.layout` | `Column`, `Item`, `Row`, `Grid`, `ScrollView`, `ListView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `Repeater`, `If`, `Loader`, `Responsive` |
-| `imlui.ui.elements.navigation` | `TopAppBar`, `NavigationItem`, `NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem` (styled through `imlui.ui.navigation_scope`) |
-| `imlui.ui.elements.content` | `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer` |
-| `imlui.ui.elements.controls` | `Button`, `IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem` |
-| `imlui.ui.elements.inputs` | `Slider`, `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker` |
-| `imlui.ui.elements.data` | `CircularProgress`, `BusyIndicator`, `Plot`, `Table`, `Canvas` |
-| `imlui.ui.elements.system` | `Snackbar`, `ImGuiDemo` |
-| `imlui.ui.elements.progress_bar` | `ProgressBar`, a typed element (`Element` + `TypeBuilder`) |
-| `imlui.ui.elements.timer` | `Timer`, a typed non-visual element |
-| `imlui.ui.elements.builtin` | `registerBuiltinElements(Renderer&)` (handler functions) and `registerBuiltinTypes(TypeRegistry&)` (typed elements). Each group module has both a `register<Group>Elements(Renderer&)` and a `register<Group>Types(TypeRegistry&)` (`ProgressBar` in `registerDataTypes`, `Timer` in `registerSystemTypes`); builtin calls them all, types after handlers, so a type replaces a handler of the same name |
+| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `isVisual`, `attachMenu`, window title |
+| `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view` (also `ListView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer` |
+| `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: registers every built-in class under its Lua name and aliases |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
 
 ### C++ type system (`src/imlui/types/`)
@@ -294,17 +286,17 @@ See [Registering C++ types](extending.md).
 | `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
 | `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; weak Lua link, `notify(property)`, `emit(signal, args...)` |
 | `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `isVisual`, `node`, `type`, `id`, `lastWidth`/`lastHeight`, `as<T>()`), element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `setWindowTitle`, `node()` |
-| `imlui.types.element` | `Element`: `render(Frame&)`, `componentComplete()`, `destroyed()` |
+| `imlui.types.element` | `Element`: `render(Frame&)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag) |
 | `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `extends<Base>` (a subclass's declaration extends its base's) |
-| `imlui.types.registry` | `TypeRegistry`: registered types and singletons; `install` into each Lua state; the per-frame property sync |
+| `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state; the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`), so the renderer renders every element through it |
 
 ### App (`src/imlui/app/`)
 
 | Module | Purpose |
 |---|---|
 | `imlui.app.config` | `EngineConfig` (script, Lua paths, font dir, window config, hot reload), `defaultConfig(argc, argv, sourceDir, defaultScript)` |
-| `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `renderer()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
+| `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
 | `imlui` | Umbrella for apps: `import imlui;` |
 
 `app/main.cpp` is the host. It has no `#include`, only `import imlui;`, and calls

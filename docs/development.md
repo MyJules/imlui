@@ -62,11 +62,11 @@ See [Architecture](architecture.md#module-map-target-layout) for the module map.
 
 ## Adding an element
 
-There are two ways to implement an element in C++. **Prefer a typed element** (`Element` + `TypeBuilder`): it has
-per-element C++ state, declared properties synced into setters, `notify`/`emit`, and methods callable from Lua.
-[Registering C++ types](extending.md) is the full guide. `ProgressBar` (`imlui.ui.elements.progress_bar`) and
-`Timer` (`imlui.ui.elements.timer`) are built-in examples. A **handler function** (`registerElement`) suits
-stateless drawing. Most older built-ins are written that way.
+Every element is a **typed element**: an `Element` class whose `declare(TypeBuilder<T>&)` lists its properties,
+signals and methods, registered under a Lua name. It has per-element C++ state, declared properties synced into
+setters, `notify`/`emit`, and methods callable from Lua. [Registering C++ types](extending.md) is the full guide;
+the built-ins in `src/imlui/ui/elements/` are the examples (see
+[the built-ins as examples](extending.md#the-built-ins-as-examples)).
 
 **1. Widget (C++, `imlui::md`).** Add a Material widget in `src/imlui/widgets/<name>.cppm`
 (`export module imlui.widgets.<name>;`) and add it to the `imlui.widgets` umbrella. Draw it with ImGui primitives
@@ -91,26 +91,36 @@ using `imlui.widgets.common`:
 
 Return what happened (`bool` changed/clicked, or a result struct).
 
-**2a. Typed element (recommended).** One class per module, `src/imlui/ui/elements/<name>.cppm`
-(`export module imlui.ui.elements.<name>;`), added to the `imlui.ui.elements` umbrella and registered in its
-group's `register<Group>Types(TypeRegistry&)` (e.g. `registerControlTypes` in `imlui.ui.elements.controls`), which
-`registerBuiltinTypes` (`imlui.ui.elements.builtin`) calls:
+**2. Element (C++).** One class per module, `src/imlui/ui/elements/<snake_name>.cppm`
+(`export module imlui.ui.elements.<snake_name>;`), added to the `imlui.ui.elements` umbrella (`elements.cppm`) and
+registered in `registerBuiltinTypes` (`builtin.cppm`). See [Writing a built-in element](#writing-a-built-in-element)
+for the conventions.
 
 ```cpp
 // Example: a hypothetical "Rating" element backed by a new md::rating() widget.
+
+/// A row of stars.
+///
+/// Props:   value = 0, count = 5
+/// Signals: onChanged(self, value)
+/// Two-way: value
 class Rating final : public Element {
 public:
-    static void declare(TypeBuilder<Rating>& type) {
-        type.property("value", &Rating::value, &Rating::setValue)
-            .property("count", &Rating::count, &Rating::setCount)
-            .signal("onChanged");
-    }
+    static void declare(TypeBuilder<Rating>& type);
     void render(Frame& frame) override;
     // value()/setValue(int), count()/setCount(int) ...
 private:
     int m_value = 0;
     int m_count = 5;
 };
+
+module :private;
+
+void Rating::declare(TypeBuilder<Rating>& type) {
+    type.property("value", &Rating::value, &Rating::setValue)
+        .property("count", &Rating::count, &Rating::setCount)
+        .signal("onChanged");
+}
 
 void Rating::render(Frame&) {
     if (md::rating("##rating", &m_value, m_count)) {
@@ -119,10 +129,8 @@ void Rating::render(Frame&) {
     }
 }
 
-void registerControlTypes(TypeRegistry& types) {
-    // ...
-    types.registerType<Rating>("Rating");
-}
+// builtin.cppm
+types.registerType<Rating>("Rating");
 ```
 
 - Declared properties arrive through the setters before each `render()`, only when they changed.
@@ -133,29 +141,8 @@ void registerControlTypes(TypeRegistry& types) {
   `Frame::Child` handles (`child.render()`, `child.lastWidth()`, `child.as<T>()`) for custom layout.
   `frame.attachMenu(clicked)` supports a `menu` prop. `frame.node()` reaches raw Lua. See
   [Registering C++ types](extending.md#element-types) for the whole `Frame`.
-- `type.nonVisual()` for elements that take no layout space (timers).
-
-**2b. Handler function.** Register it in the matching `imlui.ui.elements.<group>` module, inside its
-`register<Group>Elements(Renderer&)`:
-
-```cpp
-r.registerElement("Rating", [](Renderer&, const luaui::Node& n) {
-    int v = static_cast<int>(n.number("value", 0));
-    if (md::rating("##rating", &v, static_cast<int>(n.number("count", 5)))) {
-        n.set("value", static_cast<double>(v));   // two-way write-back (honours bind/binding)
-        n.emit("onChanged", {static_cast<double>(v)});
-    }
-});
-```
-
-- Read props through `Node` (`string`, `number`, `numf`, `boolean`, `color`, `text`, `strings`, `floats`). It
-  resolves plain values, bindings and `bind()`.
-- Use `sizeProp(n, "width")` from `imlui.ui.props` for sizes, and `labelId(text, "id")` for ImGui labels whose
-  visible text changes.
-- Write two-way props with `n.set` **before** `n.emit`.
-- Containers call `r.renderStack(n)` (stacked children with `spacing`/`align`) or `r.renderChildren(n)`. Use
-  `r.forEachChild(n, fn)` for custom layout, and `r.attachMenu(n, clicked)` to support a `menu` prop.
-- Pass `visual = false` to `registerElement` for elements that take no layout space (windows, timers).
+- `type.nonVisual()` for elements that take no layout space (windows, timers); `setTicking(true)` for elements
+  that act while they aren't rendered ([ticking elements](extending.md#ticking-elements)).
 
 **3. Lua side.** Add the name to the `BUILTIN` list in `lua/imlui.lua`. Any Capitalized name already works as a
 constructor, but a `BUILTIN` entry makes it a real `ui.*` field, so an element id or a global with the same name
@@ -165,58 +152,42 @@ elements create their C++ instances too.
 **4. Docs and gallery.** Add the element to [Elements](elements.md), the README element table, and a demo in
 `examples/gallery/main.lua`.
 
-Apps add elements without touching imlui: `engine.registerType<MyThing>("MyThing")` (recommended), or
-`engine.renderer().registerElement("MyThing", fn, visual)`, before `engine.run()`. See
-[Registering C++ types](extending.md).
+**5. Tests.** A test file `tests/elements_<family>_test.cpp` renders it through the
+[headless frame harness](#the-headless-frame-harness): defaults, props reaching the instance, `nil` resets, two-way
+write-back and signal arguments (with `h.click(...)` or `native.injectKey`).
 
-## Porting a built-in to the typed API
+Apps add elements the same way without touching imlui: `engine.registerType<MyThing>("MyThing")` before
+`engine.run()`. See [Registering C++ types](extending.md).
 
-The built-in elements are moving from handler functions to typed elements, one group at a time. The shared
-pieces are in place, so porting a group touches only that group's files:
+## Writing a built-in element
 
-1. **One module per element**, `src/imlui/ui/elements/<snake_name>.cppm`, `export module
-   imlui.ui.elements.<snake_name>;`, one class (`progress_bar.cppm` and `timer.cppm` are the models). The group
-   module imports it to register it. Add an `export import` for it to the `imlui.ui.elements` umbrella
-   (`elements.cppm`) so apps can use the class. That line is the only edit outside the group; when several groups
-   are ported in parallel, leave the umbrella lines to the merge.
-2. **Register it in the group module**, in `register<Group>Types(TypeRegistry&)` (`registerWindowTypes`,
-   `registerLayoutTypes`, `registerNavigationTypes`, `registerContentTypes`, `registerControlTypes`,
-   `registerInputTypes`, `registerDataTypes`, `registerSystemTypes`), and **remove the handler** from
-   `register<Group>Elements`. `registerBuiltinTypes` already calls every group, after the handlers.
-3. **Keep the Lua contract**: the same prop names, defaults, signals and argument order. Write-back that the
-   handler did with `n.set(k, v)` becomes the setter's member plus `notify("k")`, before `emit(...)`. `notify` also
-   emits `on<K>Changed`, which handler elements didn't.
-4. **Compare the gallery** with screenshots taken before the port (every page, plus a phone-sized window): it must
-   look the same. Animated content (progress, canvas, chart) and timer texts differ by nature.
+The built-ins were ported from handler functions to typed elements in five groups at once; these are the
+conventions they share, and new built-ins follow them:
 
-During the transition:
-
-- **Same name, both registered:** a type replaces a handler of the same name (the last registration renders, and
-  types register after handlers). Forgetting to delete the handler is harmless, but delete it.
-- **Aliases:** register one class under each name (`registerType<Column>("Column")`, then `("Item")`). Lua sees
-  separate types.
-- **Subclasses:** `TextArea::declare(TypeBuilder<TextArea>& type)` calls `type.extends<TextField>()`, then adds
-  its own members. A subclass without its own `declare` doesn't compile.
-- **Props that are not declared** are still readable through `frame.node()` (`n.has("checked")` for "is it
-  checkable", a `__children` function, the `rows` table, a painter callback). Declared `std::optional<T>`
-  properties distinguish "unset" from a value, too. Props that only the renderer reads (`visible`, `enabled`,
-  `tooltip`, `id`) need nothing.
-- **What the handlers used, and the Frame replacement:**
-
-  | Handler code | Typed element |
-  |---|---|
-  | `r.renderChildren(n)`, `r.renderStack(n)` | `frame.renderChildren()`, `frame.renderStack()` |
-  | `r.renderStack(t)` for a child `t` (TabBar) | `frame.renderStack(child.node())` |
-  | `r.forEachChild(n, ...)` + `isVisual` + `visible` check + `r.render(...)` | `frame.forEachChild([&](Frame::Child& c) { ... c.render(); })` (hidden children are already skipped) |
-  | `st->GetFloat(ImGui::GetID(c.ptr()), d)` / `SetFloat(... GetItemRectSize())` | `c.lastWidth(d)`, `c.lastHeight(d)`; `c.render()` stores both |
-  | `c.type() == "Spacer"`, `Node{state, idx}.string("title")` | `c.type()`, `c.node().string("title")`, or `c.as<Tab>()->title()` |
-  | `n.push("menuBar")` / `n.push("header")` + `r.render(...)` | `frame.renderElementProp("menuBar")`, `frame.withElementProp("header", f)` |
-  | `r.attachMenu(n, clicked)` | `frame.attachMenu(clicked)` |
-  | `r.setWindowTitle(...)` | `frame.setWindowTitle(...)` |
-  | `sizeProp(n, k)`, `sizeProp(n, k) == 0 ? -1 : sizeProp(n, k)` | `frame.size(k)`, `frame.size(k, -1.0f)` |
-  | `labelId(t, id)`, `alignFactor(a)` | `Frame::labelId(t, id)`, `Frame::alignFactor(a)` |
-  | `NavigationScope scope{{...}}` (navigation) | the same: `imlui.ui.navigation_scope` exports `NavigationScope` with `Style`, `Context` and `current()` |
-  | `md::pushSurface` / `popSurface`, `theme()`, `requestFrame()` | unchanged (`imlui.widgets`), or `frame.scheme()`, `frame.requestFrame()` |
+1. **One module per element**, `src/imlui/ui/elements/<snake_name>.cppm`, one class. The file starts with a
+   one-line `// Name: what it is, as a typed element.` comment. Keep `declare()` and every body in the private
+   module fragment.
+2. **The class doc comment** lists the Lua interface in one format: a summary, then `Props:` (declared, with
+   defaults; `unset` for an empty `std::optional`; `(positional)` for the default property), `Raw:` (props read
+   from the element table in `render()`: sizes, element-valued props, presence checks), `Signals:` with their
+   arguments (`self` first) and `Two-way:`, each line left out when empty, then notes. [Elements](elements.md)
+   is the reference built from these; keep both in step.
+3. **Register it** in `registerBuiltinTypes` (`builtin.cppm`) under its family comment, aliases on the next line
+   (`registerType<Column>("Column")`, then `("Item")`: Lua sees separate types).
+4. **Two-way props**: set the member, `notify("prop")`, then `emit(...)`. `notify` writes the value back and emits
+   `on<Prop>Changed`; don't also `emit` a declared signal of that same name (`onTextChanged` for `text`), or the
+   handler runs twice.
+5. **Props that are not declared** are readable through `frame.node()` (`node().has("checked")` for "is it
+   checkable", a `__children` function, the `rows` table, a painter callback). Declared `std::optional<T>`
+   properties distinguish "unset" from a value. Props that only the renderer reads (`visible`, `enabled`,
+   `tooltip`, `id`) need nothing.
+6. **Subclasses**: `TextArea::declare(TypeBuilder<TextArea>& type)` calls `type.extends<TextField>()`, then adds
+   its own members. A subclass without its own `declare` doesn't compile.
+7. **Shared state between elements** goes through a small module of its own, like `imlui.ui.navigation_scope`
+   (`NavigationScope`: the navigation containers tell `NavigationItem` which style to draw in).
+8. **Test it** with the harness (`tests/elements_<family>_test.cpp`) and **compare the gallery** with the
+   screenshots from before the change, every page and a phone-sized window. Animated content (progress, canvas,
+   chart) and timer texts differ by nature.
 
 ## Adding a native function
 
@@ -245,13 +216,27 @@ During the transition:
 ## clang-tidy and clice
 
 - `.clang-tidy` turns on only `readability-identifier-naming`, configured for the naming rules above, and filters
-  out vendored headers. It works with modules here:
+  out vendored headers. Run it on every module (`src/**/*.cppm`) and `app/main.cpp` with the `tidy` target:
 
   ```sh
-  clang-tidy -p build/clang-debug src/imlui/theme/scheme.cppm src/imlui/lua/node.cppm
+  cmake --build build/clang-debug --target tidy
   ```
 
-  Configure a build first, because it needs `build/clang-debug/compile_commands.json`.
+  It builds `imlui` and `imlui_app` first, then runs `clang-tidy -p build/clang-debug --warnings-as-errors=*` on
+  each file, one Ninja command per file (so in parallel), and fails on any finding. A file is checked again when it
+  or any module changed. `cmake/ImluiTidy.cmake` defines it; it's skipped when `clang-tidy` isn't found. A single
+  file: `clang-tidy -p build/clang-debug src/imlui/theme/scheme.cppm`.
+- **Module BMIs must be current.** clang-tidy parses the file itself but loads every imported module from the
+  BMIs that the build's compile commands reference (the `.modmap` files). Earlier, clang-tidy 22.1.7 crashed with
+  an access violation in `readability-identifier-naming` on many modules that import `imlui.widgets` or another
+  umbrella (`progress_bar.cppm`, `button.cppm`, `link.cppm`, ...), so the naming checks didn't cover them. With
+  freshly built BMIs it doesn't reproduce: all 114 modules pass, run one by one, all in one process and in
+  parallel, with the default options and with `--header-filter=.*`, `--system-headers`, `--fix`, against
+  `clang-debug` both at this commit and at the commit before the cleanup. It also doesn't reproduce with a stale
+  BMI (a changed imported module, not rebuilt). If it comes back, rebuild (`cmake --build build/clang-debug`) and run
+  the `tidy` target, which builds first. Running it while another build rewrites the BMIs is the most likely way to
+  hit it, so don't. The `clang-release` and `clang-asan` builds work too after a build; before one, their compile
+  commands lack the new modules and clang-tidy falls back to a guessed command (errors about `module;`).
 - **clice** (a C++ language server with modules support) is configured by `clice.toml` to use
   `build/clang-debug`'s compile commands. Its cache lives in `.clice/`, which is git-ignored.
 - Format with `clang-format -i <files>` (`.clang-format` at the repo root).
@@ -320,17 +305,29 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 
 | Member | What |
 |---|---|
-| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `Renderer` and a `TypeRegistry`. `builtins` registers the built-in elements and types first, like the engine. |
-| `registerType<T>(name)`, `renderer()`, `types()` | Register element types and handlers before the Lua state starts. |
+| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It loads the Roboto text fonts and the icon font from `IMLUI_FONT_DIR` (`external/fonts`) into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. |
+| `registerType<T>(name)`, `renderer()`, `types()` | Register element types before the Lua state starts; the renderer (window title) and the registry. |
 | `run(code) -> std::string` | Runs Lua in the UI script environment (`ui.env`: constructors, `state`, `bind`, ids, `ui`), starting the state on first use: the registered types, the real `imlui.native` with empty host hooks, the painter library and `lua/imlui.lua`. Returns the error message, `""` on success: `ASSERT_EQ(h.run("..."), "")`. Assignments to free names stay in the environment. |
 | `renderFrame(name)`, `renderFrames(name, n)` | One ImGui frame each (time advances by `deltaTime`): runs `ui.__tick` (timers, `onFrame`), then renders the element held by `name` in a full-display window. Events queued before (`native.injectKey`, `native.injectMouse`, `ImGui::GetIO()`) are seen. |
+| `click(root, x, y, framesAfter = 1)` | A left click at `(x, y)` (screen pixels) while rendering `root`: move, press and release through `native.injectMouse`, a frame after each, then `framesAfter - 1` more. Render one frame first on a fresh tree, so the window exists to be hovered. |
 | `instance<T>(name)` | The C++ instance of the element held by `name`, synced like a parent's `Frame::Child::as<T>()`. |
 | `state()`, `frames()` | The Lua state and the number of frames rendered. |
 
 Script errors go to `luaui::errors()`, which the harness clears when it's created and destroyed. One harness at a
-time (ImGui's context and the error list are global). `frame_test.cpp` (Frame, child handles) and
-`element_test.cpp` (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a
-`Dialog` and a `ModalNavigationDrawer` through `native.injectKey`) use it.
+time (ImGui's context, the font pointers and the error list are global; every harness loads its own fonts).
+
+Two test elements in `tests/support/` are shared by the element tests; register them under any name
+(`h.registerType<test::LastItemProbe>("Probe")`):
+
+| Module | Class | What |
+|---|---|---|
+| `imlui.test.last_item_probe` | `test::LastItemProbe` | Renders its children and remembers the rect of the last visual one (`min()`, `max()`, `size()`, `center()`), so a test knows where to click. |
+| `imlui.test.render_counter` | `test::RenderCounter` | A 10 x 10 dp box that counts its renders (`renders()`). |
+
+`frame_test.cpp` (Frame, child handles, re-registration, unknown types), `element_test.cpp`
+(`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a `Dialog` and a
+`ModalNavigationDrawer` through `native.injectKey`) and one `elements_<family>_test.cpp` per element family
+(windows, layout, navigation, controls, inputs, data, system) use it.
 
 ## Scripted UI tests
 

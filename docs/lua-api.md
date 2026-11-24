@@ -52,16 +52,16 @@ callable: `gauge:reset()`. See [Registering C++ types](extending.md).
 
 ### `types() -> { name, ... }`
 
-The element type names registered from C++ (typed elements, including the built-in `ProgressBar` and `Timer`),
-sorted. Handler-function elements (`renderer().registerElement`) aren't listed.
+The registered element type names, sorted: every built-in (`Button`, `Column`, ..., aliases such as `Item` and
+`Label` included, and `Repeater`, `If`, `Loader`, `Responsive`) and the app's own types.
 
 Built-in constructors (the `BUILTIN` list): `ApplicationWindow`, `Window`, `Dialog`, `Column`, `Item`, `Row`,
 `Grid`, `ScrollView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `TopAppBar`, `NavigationItem`,
-`MenuBar`, `Menu`, `MenuItem`, `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer`, `Button`,
+`NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem`, `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer`, `Button`,
 `IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem`, `Slider`,
 `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker`, `ProgressBar`, `CircularProgress`, `BusyIndicator`,
-`Plot`, `Table`, `Canvas`, `Timer`, `ImGuiDemo`. `Repeater`, `ListView`, `If` and `Loader` have their own
-constructors ([below](#dynamic-children)). Props and signals are in [Elements](elements.md).
+`Plot`, `Table`, `Canvas`, `Timer`, `ImGuiDemo`. `Repeater`, `ListView`, `If`, `Loader` and `Responsive` have
+their own constructors ([below](#dynamic-children)). Props and signals are in [Elements](elements.md).
 
 ### Property values
 
@@ -235,8 +235,8 @@ TopAppBar { navigationIcon = function() return compact() and "menu" or "" end, .
 
 An inline container (like `Loader`) that shows the element given for the current size class. A class that isn't
 given falls back to the nearest smaller class that is, or else to the smallest one given. `false` shows nothing.
-Build each element once, as below: switching classes then keeps their state (scroll positions inside them reset,
-since they're laid out in another place).
+Build each element once, as below: switching classes then keeps their state, scroll positions included (a
+`ScrollView` restores its offset when it's rendered in another place).
 
 ```lua
 Row { align = "top", spacing = 0,

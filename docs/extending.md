@@ -76,8 +76,8 @@ A complete, runnable version is the [`imlui_custom_types` example](#the-example-
 - [Value conversion](#value-conversion): `LuaConvert<T>` and your own types
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
 - [Testing elements](#testing-elements): the headless frame harness
-- [Threading and frame requests](#threading-and-frame-requests)
-- [The low-level path: `registerElement`](#the-low-level-path-registerelement)
+- [Threading and frame requests](#threading-and-frame-requests), [ticking elements](#ticking-elements)
+- [The built-ins as examples](#the-built-ins-as-examples)
 - [The example app](#the-example-app)
 - [Reference](#reference): modules and classes
 
@@ -93,8 +93,15 @@ public:
     virtual void render(Frame& frame) = 0; // every rendered frame the element is visible
     virtual void componentComplete();      // once: right after the first property sync (before the first render)
     virtual void destroyed();              // right before the instance is deleted (no Lua access any more)
+    virtual void tick(double now);         // every frame while ticking, rendered or not (see Ticking elements)
+
+protected:
+    void setTicking(bool on);              // turns tick() on or off
 };
 ```
+
+Every built-in element is written this way, so the built-ins are the reference examples: see
+[the built-ins as examples](#the-built-ins-as-examples).
 
 `render()` draws the element at the ImGui cursor. Everything the built-in elements can do is available through the
 `Frame` (module `imlui.types.frame`):
@@ -115,7 +122,7 @@ public:
 | `theme()`, `scheme()` | The current theme and Material color scheme. The md surface stack (`md::pushSurface`/`popSurface`/`surfaceColor`, `imlui.widgets`) works as in the widgets. |
 | `setWindowTitle(title)` | The native window title (what `ApplicationWindow`'s `title` sets). |
 | `node()` | The element table as a `luaui::Node`: an escape hatch to raw Lua (`node().pushRaw("__children")`, a painter callback, a table of rows). |
-| `renderer()` | The `Renderer`. The members above cover what the built-in elements need; prefer them. |
+| `renderer()` | The `Renderer`, for the rare layout the members above don't cover (`Grid` walks every child, hidden ones too, with `renderer().forEachChild`). Prefer the members. |
 
 ### Child handles
 
@@ -472,8 +479,12 @@ TEST(GaugeTest, RendersAndSyncs) {
 }
 ```
 
-`render()`, `componentComplete()` and children rendering through `Frame` run exactly as in the app. Errors that
-scripts report land in `luaui::errors()`. See `tests/element_test.cpp` and `tests/frame_test.cpp`, and
+`render()`, `componentComplete()` and children rendering through `Frame` run exactly as in the app. The harness
+loads the Roboto text fonts and the icon font, so the Material widgets measure as in the app. `h.click(root, x, y)`
+injects a left click (move, press, release, a frame each). Errors that scripts report land in `luaui::errors()`.
+`tests/support/` also has two small test elements to register under any name: `test::LastItemProbe` (renders its
+children and remembers the last one's rect, to know where to click) and `test::RenderCounter`. See
+`tests/element_test.cpp`, `tests/frame_test.cpp` and the `tests/elements_*_test.cpp` files, and
 [Development](development.md#testing) for more.
 
 ## Hot reload
@@ -503,35 +514,61 @@ look changes over time by itself (a clock, an indeterminate animation, a timer) 
 `render()`: `frame.requestFrame()` for "as soon as possible", or `frame.requestFrameAfter(seconds)` for the next
 due time. The built-in `Timer` does the latter.
 
-## The low-level path: `registerElement`
+## Ticking elements
 
-The typed API is built on the renderer's handler table, which is still available:
+`render()` only runs while the element is rendered. An element that must act on its own, also when its page isn't
+shown (a timer, a poller), turns on **ticking** with `setTicking(true)` (protected; typically in the constructor or
+in a setter). While it's on, `tick(now)` runs at the start of every frame, before the tree renders, whether the
+element is rendered or not, with its properties synced first. `now` is the ImGui time in seconds. Frames are
+rendered on demand, so ask for the frame you need with `requestFrameAfter(seconds)` (module
+`imlui.ui.frame_request`). `setTicking(false)` stops it, and so does the destructor.
 
 ```cpp
-engine.renderer().registerElement("Badge", [](imlui::Renderer& r, const imlui::luaui::Node& n) {
-    imlui::md::text(n.text(), imlui::TextStyle::LabelSmall, n.color("color"));
-}, /*visual=*/true);
+class Poller final : public imlui::Element {
+public:
+    static void declare(imlui::TypeBuilder<Poller>& type) {
+        type.property("interval", &Poller::interval, &Poller::setInterval).signal("onPoll").nonVisual();
+    }
+    Poller() { setTicking(true); }
+    void render(imlui::Frame&) override {}
+    void tick(double now) override {
+        if (now - m_last >= m_interval) {
+            m_last = now;
+            emit("onPoll");
+        }
+        imlui::requestFrameAfter(m_interval - (now - m_last));
+    }
+    // interval() / setInterval() ...
+
+private:
+    double m_interval = 1.0;
+    double m_last = 0.0;
+};
 ```
 
-A handler gets the element table as a `luaui::Node` every frame and reads props itself (`n.number("value", 0)`,
-`n.string("label")`, ...), writes two-way props back with `n.set` and emits with `n.emit`. It has no per-element
-C++ state (keep state in the element table or in ImGui storage), no methods and no singletons. Most built-in
-elements are written this way. It's the right tool for stateless drawing. For anything with state, methods or a
-C++ model behind it, use `registerType<T>()`.
+An element ticks until ticking is turned off or the element is destroyed, that is until Lua collects its element
+table: an element that's merely no longer referenced keeps ticking until the next garbage collection. Give it a
+`running` property (like the built-in `Timer`) when scripts need to stop it. `timer.cppm` is the complete example.
 
-A type and a handler with the same name don't coexist: registering either one **replaces** the other in the
-renderer, and the last registration renders. The engine registers the built-in handlers first and the built-in and
-app types after them, so a type always wins over a built-in handler of the same name. (The DSL constructor creates
-the C++ instance whenever the name is a registered type.)
+## The built-ins as examples
 
-| | `registerType<T>` | `renderer().registerElement` |
-|---|---|---|
-| Per-element C++ state | an instance per element table | none |
-| Props | declared, synced into setters on change | read by hand every frame |
-| Write-back | `notify(name)` | `n.set(key, value)` |
-| Signals | `emit(name, args...)`, any `LuaConvert` arguments | `n.emit(name, {Value...})` |
-| Methods (`el:fn()`) | yes | no |
-| Listed by `ui.types()` | yes | no |
+Every built-in element (`Button`, `Column`, `TabBar`, ...) is an `Element` class in its own module in
+`src/imlui/ui/elements/`, registered under its Lua name(s) by `registerBuiltinTypes()` (`builtin.cppm`). The class
+doc comment lists its props with defaults, the *raw* props it reads from the element table, its signals and its
+two-way props. Good places to start:
+
+| Module | Shows |
+|---|---|
+| `button.cppm` | A plain control: declared props, a default property (`Button { "OK" }`), a signal, raw `width`/`height` through `frame.size()`, the `menu` popup (`frame.attachMenu`). |
+| `checkbox.cppm` | A two-way prop: after a user change, the new value, `notify("checked")` and `emit("onToggled", ...)`. |
+| `row.cppm` | A custom layout with `Frame::Child` handles: last-frame sizes, fill spacers, `justify`, non-visual children. |
+| `tab_bar.cppm` | Typed children (`child.as<Tab>()`), rendering only one child's content (`frame.renderStack(child.node())`). |
+| `text_area.cppm` | A subclass: `TextArea` extends `TextField` with `type.extends<TextField>()` and one constructor line. |
+| `navigation_rail.cppm` | An element-valued prop (`withElementProp("header")`) and a scrolling child region. |
+| `modal_navigation_drawer.cppm` | A non-visual overlay, and a two-way prop that also works under a function binding. |
+| `timer.cppm` | A [ticking element](#ticking-elements). |
+
+Registering a type under a built-in's name replaces the built-in: the last registration of a name wins.
 
 ## The example app
 
@@ -568,17 +605,18 @@ build/clang-debug/bin/imlui_custom_types
 | `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations; the `LuaPushable` / `LuaReadable` concepts |
 | `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
-| `imlui.types.element` | `Element`: `render`, `componentComplete`, `destroyed` |
+| `imlui.types.element` | `Element`: `render`, `componentComplete`, `destroyed`, `tick` / `setTicking` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in |
 | `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal`, `method`, `nonVisual`, `defaultProperty`, `extends` |
 | `imlui.types.overload` | `overload<Args...>(&T::fn)`, `constOverload<Args...>(&T::fn)`: pick one of overloaded members |
-| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`), `install`, `activate`, `sync`, `typeNames` |
+| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`), `install`, `activate`, `sync`, `typeNames`; it is the `Renderer::Types` the renderer dispatches every element to |
+| `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: every built-in element |
 
 `Engine` forwards `registerType<T>(name)` and both `registerSingleton(name, obj)` overloads to its registry, which
 `types()` returns. All of these come with `import imlui;`.
 
 From Lua, `ui.types()` lists the registered element type names, and `require("imlui.types")` is the small native
-library the DSL uses (`names()`, `isType(name)`, `attach(element)`).
+library the DSL uses (`names()`, `isType(name)`, `attach(element)`, `tick(now)`).
 
 **Limitations**
 

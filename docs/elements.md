@@ -1,84 +1,239 @@
 # Elements
 
-Every built-in element, grouped like the root README. Defaults come from the element handlers
-(`src/imlui/ui/elements/*.cppm`). Sizes are in **dp**. Colors are [color specs](theming.md#color-specs). Any prop
-can be a plain value, a binding function or a `bind(...)` ([property values](lua-api.md#property-values)).
-**Two-way** props are written back when the user changes them.
+The reference for every built-in element: props with their defaults, signals with their arguments, two-way
+props, positional strings and non-visual elements. The Lua side (`state`, `bind`, components, dynamic children,
+timers, snackbar) is in the [Lua API](lua-api.md).
 
-Signal handlers get `self` first: `onToggled(self, checked)`.
+Every built-in element is a typed C++ class (`imlui::Element`), one module per element in
+`src/imlui/ui/elements/<name>.cppm`, registered under its Lua name and aliases by `registerBuiltinTypes()`
+(`src/imlui/ui/elements/builtin.cppm`). Your own elements are written the same way: see
+[Registering C++ types](extending.md). [`ui.types()`](lua-api.md#types---name-) lists every registered type name,
+built-in and your own.
+
+- [Reading this page](#reading-this-page)
+- [Common props](#common-props): `id`, `visible`, `enabled`, `tooltip`, sizes, `menu`, stacking
+- [Values that come back from C++](#values-that-come-back-from-c)
+- [Positional strings](#positional-strings)
+- [Windows and overlays](#windows-and-overlays): [ApplicationWindow](#applicationwindow), [Window](#window),
+  [Dialog](#dialog), [Snackbar](#snackbar), [ImGuiDemo](#imguidemo)
+- [Layout](#layout): [Column / Item](#column--item), [Row](#row), [Grid](#grid), [ScrollView](#scrollview),
+  [ListView](#listview), [Card](#card), [TabBar / Tab](#tabbar--tab), [Section / Expander](#section--expander),
+  [TreeNode](#treenode)
+- [Inline containers](#inline-containers): Repeater, If, Loader, Responsive
+- [App bars, navigation and menus](#app-bars-navigation-and-menus): [TopAppBar](#topappbar),
+  [NavigationItem](#navigationitem), [NavigationBar](#navigationbar), [NavigationRail](#navigationrail),
+  [ModalNavigationDrawer](#modalnavigationdrawer), [MenuBar, Menu, MenuItem](#menubar-menu-menuitem)
+- [Text and decoration](#text-and-decoration): [Text / Label](#text--label), [Icon](#icon), [Link](#link),
+  [Divider / Separator](#divider--separator), [Spacer](#spacer)
+- [Buttons and selection controls](#buttons-and-selection-controls): [Button](#button),
+  [IconButton](#iconbutton), [Checkbox](#checkbox), [Switch](#switch), [RadioButton](#radiobutton),
+  [RadioGroup](#radiogroup), [Chip](#chip), [SegmentedButton](#segmentedbutton), [ListItem](#listitem)
+- [Value inputs](#value-inputs): [Slider](#slider), [SpinBox](#spinbox), [TextField / TextArea](#textfield--textarea),
+  [ComboBox](#combobox), [ColorPicker](#colorpicker)
+- [Progress, data and drawing](#progress-data-and-drawing): [ProgressBar](#progressbar),
+  [CircularProgress](#circularprogress), [BusyIndicator](#busyindicator), [Plot](#plot), [Table](#table),
+  [Canvas](#canvas)
+- [Non-visual](#non-visual): [Timer](#timer)
+- [At a glance](#at-a-glance): two-way props, signals, non-visual elements
+- [Custom elements](#custom-elements)
+
+## Reading this page
+
+Each element has a short description, a props table, then **Signals** and **Two-way** lines.
+
+| Column | Meaning |
+|---|---|
+| Prop | The key in the element table. |
+| Type | `string`, `number`, `integer`, `bool`, `color` (a [color spec](theming.md#color-specs)), `icon` (a [Material icon name](theming.md#icons)), `style` (a [text style](theming.md#typography)), `list`, `element` (another element as the value), or `size` (see [sizes](#sizes)). |
+| Default | The value used when the prop is unset or is `nil`. `—` means unset: the element picks (it's described in Notes). |
+| Notes | What it does. **two-way** marks a prop the element writes back. |
+
+- Sizes and positions are in **dp**.
+- Any prop can be a plain value, a binding function or a `bind(...)`
+  ([property values](lua-api.md#property-values)). A binding that returns `nil` resets the prop to its default.
+- Props marked *raw* aren't C++ properties: the element reads them straight from its table while rendering
+  (sizes, element-valued props, a few presence checks). They take the same three forms.
+- Signal handlers get `self` first: `onToggled = function(self, checked) ... end`. A handler runs after the prop
+  it reports on has been written back.
+- Indices (`currentIndex`, `currentRow`, ...) are 1-based.
+- **Non-visual** elements take no layout space and aren't a layout item: put them anywhere among the children,
+  for example a `Dialog` or a `Timer` inside a `Row`.
 
 ## Common props
 
-These apply to every element.
+These are handled by the renderer (`Renderer::render`) for every element.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `id` | string | — | Makes the element reachable by name from the script (`nameField.text`). |
-| `visible` | bool | `true` | `false` skips the element entirely. It takes no space, and for an inline container all of its children are skipped. |
-| `enabled` | bool | — | `false` disables the element and everything inside it. Widgets switch to Material disabled colors. |
-| `tooltip` | string | — | Plain tooltip (inverse surface colors, `bodySmall`) shown on hover, also while disabled. |
-| `width` | number | element default | `> 0`: fixed width in dp. `-1`: fill the available width. `< -1`: fill minus that amount. `0`: element default (see each element). |
-| `height` | number | element default | Same rules, for elements that read it. |
-| `fillWidth` | bool | `false` | Shorthand for `width = -1`. |
+| `id` | string | — | Makes the element reachable by name from the script: `nameField.text`. An id that collides with a `ui` member or a Lua global is reported, since the name would resolve to that instead. Registered by the `ui.element` constructors, so not for `Repeater`, `ListView`, `If`, `Loader` or `Responsive`. |
+| `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) |
+| `enabled` | bool | `true` | `false` disables the element and everything inside it, with the Material disabled colors. |
+| `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. |
 
-The first positional string works as `text`: `Button { "OK" }` is `Button { text = "OK" }`. Negative sizes are
-currently applied in pixels, not dp.
+### Sizes
 
-Elements that hold children stack them (`Column`, `Card`, `ScrollView`, `Tab`, `Dialog`, `Window`,
-`ModalNavigationDrawer`, `ApplicationWindow`, ...). They also accept:
+Props of type `size` (mostly `width` and `height`, read *raw*) share one set of rules:
 
-| Prop | Type | Default | Meaning |
+| Value | Meaning |
+|---|---|
+| `> 0` | A fixed size in dp. |
+| `-1` | Fill the available space. |
+| `< -1` | Fill minus `|v|` dp (`width = -16` leaves 16dp). |
+| `0` (or unset) | Automatic: the element's own default, given in its table. |
+| `fillWidth = true` | Counts as `width = -1`. |
+
+Only the elements whose table lists `width` / `height` read them. `Window`'s `width`/`height` and
+`ModalNavigationDrawer`'s `width` are plain dp numbers instead (no fill values, no `fillWidth`).
+
+### `menu`
+
+`Button` and `IconButton` take `menu = Menu { ... }` (*raw*): clicking the button opens the menu's children as an
+anchored Material dropdown (at least 112dp wide) under the button. See [Menu](#menubar-menu-menuitem).
+
+### Stacking containers
+
+Elements that stack their children top to bottom (`ApplicationWindow`, `Window`, `Dialog`, `Column`,
+`ScrollView`, `ListView`, `Card`, `Tab`, `ModalNavigationDrawer`) also take:
+
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `spacing` | number | theme `spacing` | Vertical gap between visible children (dp). |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child. |
+| `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView` and `Card`; *raw* on the others. |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child (by its width on the last frame). |
+
+Non-visual children are rendered in place and don't count for the spacing.
+
+## Values that come back from C++
+
+Whole numbers reach Lua as **integers**: `math.type(v) == "integer"`, and `tostring(v)` is `"5"`, not `"5.0"`.
+`LuaConvert` (`src/imlui/types/lua_convert.cppm`) pushes a floating-point value that is a whole number as a Lua
+integer, and integer-typed props as integers. That covers every value the element hands to Lua: two-way
+write-backs, `on<Prop>Changed` values and signal arguments. So `TabBar.currentIndex`, a `Slider` value with an
+integral `stepSize`, `onActivated(self, index, text)`'s `index` and `Canvas.onClicked`'s whole `x`, `y` are
+integers. Fractional values stay floats. The Canvas painter's fields (`p.width`, `p.mouseX`, ...) are pushed as
+plain numbers (floats).
+
+Every write-back also emits **`on<Prop>Changed(self, value)`** if the element table has that handler (for example
+`onCheckedChanged`, `onCurrentIndexChanged`, `onOpenChanged`), besides the element's own signals. For
+`TextField.text` and `ColorPicker.color` the generated name is the declared signal (`onTextChanged`,
+`onColorChanged`): it runs once per edit.
+
+A two-way prop is written back the way it was given ([property values](lua-api.md#property-values)): a plain value
+is replaced in the element table, a `bind(...)` writes its source, and a function binding is left alone (it owns
+the value, so the element's change only lasts until the next frame's sync).
+
+## Positional strings
+
+These elements take a positional string as their `text` (their default property): `Button { "OK" }` is
+`Button { text = "OK" }`, and `Button "OK"` works too. An explicit `text` wins.
+
+| Element | The positional string is |
+|---|---|
+| `Text` / `Label` | the text |
+| `Icon` | the glyph name (after `name` and `icon`) |
+| `Link` | the label, and the URL unless `url` is set |
+| `Separator` | the label |
+| `Section` / `Expander` | the title, unless `title` is set |
+| `TreeNode` | the label |
+| `NavigationItem` | the label |
+| `MenuItem` | the label |
+| `Button` | the label |
+| `IconButton` | the icon name, unless `icon` is set |
+| `Checkbox`, `Switch`, `RadioButton` | the label |
+| `Chip` | the label |
+| `ListItem` | the headline |
+
+Other elements ignore a positional string. Tables in the array part are always children.
 
 ---
 
-## Windows
+## Windows and overlays
 
 ### ApplicationWindow
 
-The root element. It fills the native window, with no decoration, and the engine reads its native window props.
-It's non-visual. Its children are stacked.
+The root element. It fills the native window, with no decoration, and stacks its children. Non-visual.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `title` | string | — | Native window title, re-read every frame (so it can be a binding). Without it, the last `setTitle()` call sticks, else `"imlui"`. |
-| `width`, `height` | number | — | Native window size, applied at load if both are `> 0`. On hot reload it's applied again only if it changed. |
+| `title` | string | — | Native window title, applied every frame while the prop exists (so it can be a binding). Without it, the last `ui.setTitle()` sticks, else `"imlui"`. |
+| `width`, `height` | number | — | *Raw, read by the engine.* Native window size in dp (times the monitor content scale), applied at load when both are `> 0`. On hot reload it's applied again only if it changed. |
 | `padding` | number | `24` | Content padding. |
-| `color` | color | `surface` | Background. |
+| `color` | color | — | Background. Unset: the theme's window background (`surface`). |
 | `scrollable` | bool | `true` | `false` hides the scrollbar. |
-| `menuBar` | `MenuBar` | — | Menu bar at the top. |
+| `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem) at the top. |
+| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 
 ### Window
 
-A floating ImGui window with Material surface colors. It's non-visual. Its children are stacked.
+A floating ImGui window with Material surface colors (`surfaceContainerLow`, an `outlineVariant` border). It
+stacks its children. Non-visual.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `title` | string | `"Window"` | Title bar text. |
-| `open` | bool, **two-way** | `true` | If the prop is present, the window gets a close button that sets `open = false`. |
-| `x`, `y` | number | `60`, `60` | Initial position. |
-| `width`, `height` | number | `0` | Initial size. |
-| `autoResize` | bool | `true` if no size is given | Fits the window to its content. |
+| `open` | bool | `true` | **two-way.** `false` hides the window. When the prop is present the window has a close button, which writes `open = false`. |
+| `x`, `y` | number | `60`, `60` | Position, applied when the window first appears. |
+| `width`, `height` | number | `0` | Size, applied when the window first appears (if either is `> 0`). |
+| `autoResize` | bool | — | Fits the window to its content. Unset: `true` when neither `width` nor `height` is set. |
 | `titleBar`, `resizable`, `movable` | bool | `true` | Window chrome. |
-| `menuBar` | `MenuBar` | — | Menu bar. |
+| `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem). |
+| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 
-Signals: `onClosed(self)`.
+**Signals:** `onClosed(self)` after the close button wrote `open = false`.
+**Two-way:** `open`.
 
 ### Dialog
 
-A Material modal dialog: centered, with a scrim behind it, `extraLarge` corners and a `headlineSmall` title.
-`Esc` closes it. It's non-visual. Its children are stacked.
+A Material basic dialog: modal, centered over a scrim, `extraLarge` corners, a `headlineSmall` title. Escape
+closes it. It stacks its children. Non-visual.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `open` | bool, **two-way** | `false` | Shows the dialog. It's set to `false` when the dialog is dismissed. |
+| `open` | bool | `false` | **two-way.** Shows the dialog. Closing it (Escape) writes `false`. |
 | `title` | string | `""` | Headline. |
-| `icon` | string | `""` | Hero icon above the title, which is then centered. |
-| `width` | number | 280–560 | Fixed width. |
+| `icon` | icon | `""` | Hero icon above the title, which is then centered. |
+| `width` | size | — | *Raw.* A fixed width. Unset: 280–560dp, fitting the content. |
+| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 
-Signals: `onClosed(self)`.
+**Signals:** `onClosed(self)` when the dialog closes.
+**Two-way:** `open`.
+
+```lua
+local s = state { confirm = false }
+Button { "Delete", onClicked = function() s.confirm = true end }
+Dialog { title = "Delete file?", icon = "delete", open = bind(s, "confirm"),
+    Text { "This can't be undone.", wrap = true },
+    Row { Spacer { fill = true },
+          Button { "Cancel", variant = "text", onClicked = function() s.confirm = false end },
+          Button { "Delete", variant = "text", onClicked = function() remove(); s.confirm = false end } },
+}
+```
+
+### Snackbar
+
+The Material snackbar. There is one app-wide instance, created by the prelude and rendered by the engine as an
+overlay above everything; you show it with [`ui.snackbar(text, opts)`](lua-api.md#snackbar) and don't normally
+create one. Non-visual.
+
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `text` | string | `""` | Message. |
+| `actionText` | string | `""` | Action button label; empty for none. |
+| `shownAt` | number | `-1` | Time it was shown (`ui.time()`, seconds); `< 0` hides it. Written back as `-1` once it has faded out; the action and the close icon move it back to start the fade. |
+| `duration` | number | `4000` | Visible time in ms, after a 0.18s slide-in and before a 0.15s fade. |
+| `closable` | bool | `false` | Shows a close icon. |
+
+**Signals:** `onAction(self)` when the action is clicked (the snackbar then fades out).
+**Two-way:** `shownAt`.
+
+### ImGuiDemo
+
+Dear ImGui's demo window, for debugging. Non-visual.
+
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `open` | bool | `true` | **two-way.** Closing the window writes `false`. |
+
+**Two-way:** `open`.
 
 ---
 
@@ -86,142 +241,196 @@ Signals: `onClosed(self)`.
 
 ### Column / Item
 
-Vertical stack. `Item` is an alias.
+A vertical stack. `Item` is an alias.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `spacing`, `align` | | | See [common props](#common-props). |
-| `padding` | number | `0` | Inset at the top, bottom and left. |
-| `width` | number | `0` (auto) | A fixed width that children can fill (`fillWidth`) and `align` within. |
+| `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child. |
+| `padding` | number | `0` | Inset at the top, bottom and start. |
+| `width` | size | `0` (auto) | *Raw.* A fixed or fill width that the children can fill (`fillWidth`) and `align` within. |
 
 ### Row
 
-Horizontal layout. Sizes are measured on the previous frame, so the layout settles in one frame.
+Children side by side. Sizes are measured on the previous frame, so a layout settles within one frame.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `spacing` | number | theme `spacing` | Horizontal gap. |
+| `spacing` | number | ImGui item spacing | Horizontal gap (dp). |
 | `align` | `"center"` \| `"top"` \| `"bottom"` | `"center"` | Vertical alignment of the children. |
 | `justify` | `"start"` \| `"center"` \| `"end"` \| `"spaceBetween"` | `"start"` | Horizontal distribution. Ignored while the row has fill spacers. |
-| `width` | number | available width | Width used for `justify` and fills. |
+| `width` | size | `0` (available width) | *Raw.* The width used for `justify` and fills. |
 
-`Spacer { fill = true }` children share the remaining width: `Row { Spacer { fill = true }, Button {...} }`
-right-aligns the button.
+`Spacer { fill = true }` children share the remaining width: `Row { Spacer { fill = true }, Button { "OK" } }`
+right-aligns the button. Non-visual children take no place in the row.
 
 ### Grid
 
-Table-based grid. Children fill the cells left to right.
+A table-based grid. The children fill the cells left to right, `columns` per row, and the columns stretch
+equally. A hidden child (`visible = false`) keeps its empty cell, so the others don't move when it toggles;
+non-visual children take no cell.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `columns` | number | `2` | Column count. Columns stretch equally. |
-| `spacing` | number | `8` | Cell gap. |
+| `columns` | integer | `2` | Column count (at least 1). |
+| `spacing` | number | `8` | Gap between cells (dp). |
 | `border` | bool | `false` | Cell borders. |
-| `width` | number | fill | |
+| `width` | size | `0` (fill) | *Raw.* |
 
 ### ScrollView
 
-A scrolling child region. Its children are stacked.
+A scrolling child region that stacks its children.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `width`, `height` | number | `0` (fill remaining) | Size. |
-| `padding` | number | `0` | Inner padding. |
-| `color` | color | transparent | Background. It's also the surface color for the children. |
-| `rounding` | number | theme `shape.medium` | Corner radius. |
+| `width`, `height` | size | `0` (fill the remaining space) | *Raw.* |
+| `padding` | number | `0` | Inner padding (dp). |
+| `color` | color | — | Background, also the surface color the children draw on. Unset: transparent. |
+| `rounding` | number | theme `shape.medium` | Corner radius (dp). |
 | `border` | bool | `false` | Border. |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers). |
+
+A ScrollView **keeps its scroll position when it moves**. When the same element is rendered somewhere else (under
+another parent, for example after a [`Responsive`](lua-api.md#responsive--compact-medium-expanded-large-extralarge-)
+or size-class layout switch), its ImGui window is a new one; the element then restores the last horizontal and
+vertical scroll offset into it, retrying for a few frames until it sticks (a new window learns its content size
+on its first frame, and a content now too short for the offset clamps it). If one element is rendered twice in a
+frame, only the first place is tracked.
 
 ### ListView
 
-A `ScrollView` whose children come from `model`/`delegate`. It takes every `ScrollView` prop. See
+A `ScrollView` whose children come from `model` / `delegate` (built on the Lua side, cached per index like a
+`Repeater`). Without `delegate`, its own array children are used. It takes every `ScrollView` prop. See
 [ListView](lua-api.md#listview).
+
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `model` | list, number, function or `bind` | — | Items; a number `n` means `1..n`. |
+| `delegate` | `function(item, index) -> element` | — | Builds one item's element. |
+
+```lua
+ListView { height = 240, spacing = 4, model = function() return todo.items end,
+    delegate = function(item) return ListItem { item.title, supportingText = item.note } end }
+```
 
 ### Card
 
-Material card. Its children are stacked.
+A Material card that stacks its children.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `variant` | `"elevated"` \| `"filled"` \| `"outlined"` | `"elevated"` | `elevated`: `surfaceContainerLow` with a shadow. `filled`: `surfaceContainerHighest`. `outlined`: `surface` with an `outlineVariant` border. |
-| `width` | number | fill | |
-| `height` | number | auto | Fixed height. If it isn't set, the card fits its content. |
-| `padding` | number | `16` | Inner padding. |
-| `color` | color | per variant | Background. |
-| `rounding` | number | theme `shape.medium` | Corner radius. |
+| `padding` | number | `16` | Inner padding (dp). |
+| `color` | color | — | Container color. Unset: the variant's. |
+| `rounding` | number | — | Corner radius (dp). Unset: the card shape (`shape.medium`). |
+| `width` | size | `0` (fill) | *Raw.* |
+| `height` | size | `0` (fit the content) | *Raw.* A fixed height. |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers). |
 
 ### TabBar / Tab
 
-Material tabs. A `TabBar` collects its visible `Tab` children as headers and renders only the selected tab's
-content, stacked.
+Material tabs. A `TabBar` collects its visible children as tab headers and renders only the selected one's
+content, stacked with that child's `spacing` / `align`. Its children are normally `Tab`s; another element used
+as a tab gives its header through *raw* `title` (default `"Tab"`) and `icon` props.
 
-| `TabBar` prop | Type | Default | Meaning |
+| `TabBar` prop | Type | Default | Notes |
 |---|---|---|---|
-| `currentIndex` | number, **two-way** | `1` | Selected tab, 1-based. |
+| `currentIndex` | integer | `1` | **two-way.** The selected tab among the visible ones. Out-of-range values show the nearest tab. |
 | `variant` | `"primary"` \| `"secondary"` | `"primary"` | Primary tabs with icons stack the icon over the label (64dp). Secondary tabs use a full-width indicator. |
-| `width` | number | fill | |
+| `width` | size | `0` (fill) | *Raw.* |
 
-Signals: `onCurrentChanged(self, index)`.
+**Signals:** `onCurrentChanged(self, index)` when the user picks a tab.
+**Two-way:** `currentIndex`.
 
-| `Tab` prop | Type | Default | Meaning |
+| `Tab` prop | Type | Default | Notes |
 |---|---|---|---|
 | `title` | string | `"Tab"` | Header label. |
-| `icon` | string | `""` | Header icon. |
-| `visible` | bool | `true` | Hides the tab and its header. |
+| `icon` | icon | `""` | Header icon. |
+| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 
-A `Tab` outside a `TabBar` renders its content inline.
+`visible = false` on a `Tab` hides the tab and its header. A `Tab` outside a `TabBar` renders its content inline.
 
-### Expander / Section
+```lua
+TabBar { currentIndex = bind(s, "tab"),
+    Tab { title = "Music", icon = "music_note", Text { "Songs" } },
+    Tab { title = "Videos", icon = "movie", Text { "Clips" } },
+}
+```
 
-A collapsible header (48dp, or 64dp with supporting text). The children are indented 16dp when expanded.
-`Section` is an alias.
+### Section / Expander
 
-| Prop | Type | Default | Meaning |
+A collapsible header (48dp, or 64dp with supporting text). The children are indented 16dp while expanded.
+`Expander` is an alias.
+
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `title` | string | `text` | Header text (`titleMedium`). |
+| `title` | string | — | Header text (`titleMedium`). Unset: `text`. |
+| `text` | string | `""` | Positional. The title when `title` isn't set. |
 | `supportingText` | string | `""` | Second line. |
-| `expanded` | bool, **two-way** | `true` | Open state. |
-| `width` | number | fill | |
+| `expanded` | bool | `true` | **two-way.** Open state. |
+| `width` | size | `0` (fill) | *Raw.* |
 
-Signals: `onToggled(self, expanded)`.
+**Signals:** `onToggled(self, expanded)`.
+**Two-way:** `expanded`.
 
 ### TreeNode
 
-An ImGui tree node (`bodyLarge`) whose children render inside it.
+An ImGui tree node (`bodyLarge`) whose children render inside it (not stacked: no `spacing` / `align`).
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | `""` | Label. |
-| `expanded` | bool | `false` | Initially open. Not written back. |
-
-### Repeater, If, Loader, Responsive
-
-Inline containers that produce children dynamically. See [dynamic children](lua-api.md#dynamic-children).
-`Responsive` picks its child by the window size class ([adaptive layouts](lua-api.md#window-size-and-adaptive-layouts)).
+| `text` | string | `""` | Positional. Label. |
+| `expanded` | bool | `false` | Open when the node first appears. ImGui keeps the open state afterwards; it isn't written back. |
 
 ---
 
-## App bars & navigation
+## Inline containers
+
+`Repeater`, `If`, `Loader` and `Responsive` produce children on the Lua side (`__children`), and they're
+**inline**: their parent lays the children out as its own, so a `Repeater` in a `Row` flows horizontally. On the
+C++ side they're one class (`InlineContainer`) with no props of its own; it only renders when one of them is the
+root. `visible = false` hides all of their children.
+
+| Element | Props (Lua side) |
+|---|---|
+| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
+| `If` | `condition`, array children, `otherwise` (one element). See [If](lua-api.md#if--condition-children-otherwise--element-). |
+| `Loader` | `item` (an element, or a function returning one). See [Loader](lua-api.md#loader--item-). |
+| `Responsive` | `compact`, `medium`, `expanded`, `large`, `extraLarge`: the element (or a function returning one, or `false`) for each window size class. See [Responsive](lua-api.md#responsive--compact-medium-expanded-large-extralarge-). |
+
+---
+
+## App bars, navigation and menus
 
 ### TopAppBar
 
-Material top app bar. Its children are **actions**, right-aligned and vertically centered in the 64dp bar.
+The Material top app bar. Its children are **actions**, right-aligned in the 64dp top row and each vertically
+centered by its height on the last frame.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `title` | string | `""` | `titleLarge` for `small` and `center`, `headlineSmall` for `medium`, `headlineMedium` for `large`. |
-| `variant` | `"small"` \| `"center"` \| `"medium"` \| `"large"` | `"small"` | Height 64, 64, 112 or 152dp. `center` centers the title. `medium` and `large` put the title below the bar row. |
-| `navigationIcon` | string | `""` | Leading icon button. |
-| `color` | color | current surface | Background. |
-| `width` | number | fill | |
+| `variant` | `"small"` \| `"center"` \| `"medium"` \| `"large"` | `"small"` | Height 64, 64, 112 or 152dp. `center` centers the title; `medium` and `large` put it below the top row. |
+| `navigationIcon` | icon | `""` | A leading icon button; empty for none. |
+| `color` | color | — | Container color. Unset: the current surface. |
+| `width` | size | `0` (available width) | *Raw.* |
 
-Signals: `onNavigation(self)` when the navigation icon is clicked.
+**Signals:** `onNavigation(self)` when the navigation icon is clicked.
+
+```lua
+TopAppBar { title = "Inbox", navigationIcon = "menu", onNavigation = function() nav.drawer = true end,
+    IconButton { "search" },
+    IconButton { "more_vert", menu = Menu { MenuItem { "Settings" }, MenuItem { "About" } } },
+}
+```
 
 ### NavigationItem
 
 A navigation destination. It takes the look of the navigation container it's rendered in:
 
-- **by default** (a `ScrollView` used as a standard drawer, a `ModalNavigationDrawer`, anywhere else): a drawer
-  item, a 56dp pill with a leading icon, a `labelLarge` label and an optional trailing badge;
+- **by default** (a `ScrollView` used as a standard drawer, a `ModalNavigationDrawer`, a rail's `header`,
+  anywhere else): a drawer item, a 56dp pill with a leading icon, a `labelLarge` label and an optional trailing
+  badge text;
 - **in a `NavigationBar`**: a bar destination, an 80dp tall cell with a 24dp icon in a 64x32dp pill indicator and a
   `labelMedium` label below;
 - **in a `NavigationRail`**: a rail destination, 56dp tall, with a 56x32dp indicator and the label below.
@@ -230,36 +439,35 @@ In a bar or rail the indicator is `secondaryContainer` when selected, the icon `
 `onSurfaceVariant`, the label `onSurface` (selected) or `onSurfaceVariant`, and the hover and press layer sits on
 the indicator.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | `""` | Label. |
-| `icon` | string | `""` | Icon. |
-| `selected` | bool | `false` | Selected look (`secondaryContainer`). |
-| `badge` | string | `""` | Drawer: trailing text. Bar and rail: a small `error` badge on the icon with this text, or a 6dp dot for `"."`. |
-| `width` | number | fill | Drawer items only. In a bar or rail the container sets the width. |
+| `text` | string | `""` | Positional. Label. |
+| `icon` | icon | `""` | Icon. |
+| `selected` | bool | `false` | Selected look. |
+| `badge` | string | `""` | Drawer: trailing text. Bar and rail: a small `error` badge on the icon with this text, or a 6dp dot for `"."` (or `"•"`). |
+| `width` | size | `0` (fill) | *Raw.* Drawer items only; in a bar or rail the container sets the width. |
 
-Signals: `onClicked(self)`.
+**Signals:** `onClicked(self)`.
 
-How it works: while a `NavigationBar` or `NavigationRail` renders its children, it sets a *navigation context*
-(style and destination width) in `imlui.ui.elements.navigation`, and `NavigationItem` reads it. The context is
-scoped, so it covers everything the container renders, including `Repeater` delegates, and the outer context comes
-back afterwards. A rail's `header` and a `ModalNavigationDrawer`'s sheet reset it to the drawer style.
+How it works: while a `NavigationBar` or `NavigationRail` renders its destinations it opens a `NavigationScope`
+(`src/imlui/ui/navigation_scope.cppm`: the style and the destination width), and `NavigationItem` reads the
+innermost one. The scope covers everything the container renders, including `Repeater` delegates, and the outer
+scope comes back afterwards. A rail's `header` and a `ModalNavigationDrawer`'s sheet open a default (drawer) scope.
 
 ### NavigationBar
 
-The Material 3 bottom navigation bar, for compact windows: 80dp tall, `surfaceContainer`, as wide as the available
-width. Its children are `NavigationItem`s (directly or from a `Repeater` with `model`/`delegate`), and they share
-the width equally.
+The Material 3 bottom navigation bar, for compact windows: 80dp tall, as wide as the available width. Its visible
+children are `NavigationItem`s (directly or from a `Repeater`) and share the width equally.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `color` | color | `surfaceContainer` | Background. |
-| `width` | number | fill | |
+| `color` | color | — | Container color. Unset: `surfaceContainer`. |
+| `width` | size | `0` (available width) | *Raw.* |
 
 ```lua
 NavigationBar {
     Repeater { model = tabs, delegate = function(t, i)
-        return NavigationItem { text = t.name, icon = t.icon, selected = function() return s.tab == i end,
+        return NavigationItem { t.name, icon = t.icon, selected = function() return s.tab == i end,
                                 onClicked = function() s.tab = i end }
     end },
 }
@@ -267,421 +475,504 @@ NavigationBar {
 
 ### NavigationRail
 
-The Material 3 navigation rail, for medium windows: 80dp wide and as tall as the available height, with the
-destinations stacked below an optional header.
+The Material 3 navigation rail, for medium windows: 80dp wide and as tall as the available height (at least
+80dp). An optional `header` element sits **fixed at the top**, centered, and the destinations stack below it
+(28dp under the header, or 12dp from the top without one).
 
-| Prop | Type | Default | Meaning |
+When the destinations don't fit, they **scroll** vertically (mouse wheel) and a thin themed scrollbar appears in
+the rail's right gutter, **only then**; the destinations keep their place and width, and a 12dp bottom margin
+scrolls with them. While they fit there's no scrollbar, and `align` places the group in the height left below the
+header.
+
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `header` | element | — | Rendered centered at the top, e.g. a menu `IconButton` or a FAB (`Button { variant = "fab" }`). |
-| `color` | color | `surface` | Background. |
-| `height` | number | fill | |
-| `spacing` | number | `12` | Gap between destinations. |
-| `align` | `"top"` \| `"center"` \| `"bottom"` | `"top"` | Vertical position of the destination group below the header. |
+| `header` | element | — | *Raw.* Rendered centered at the top and not scrolled, e.g. a menu `IconButton` or a FAB (`Button { variant = "fab" }`). It's in drawer style, not a rail destination. |
+| `color` | color | — | Container color. Unset: `surface`. |
+| `spacing` | number | `12` | Gap between destinations (dp). |
+| `align` | `"top"` \| `"center"` \| `"bottom"` | `"top"` | Vertical position of the destinations below the header, while they fit. |
+| `height` | size | `0` (available height) | *Raw.* |
 
 ```lua
 NavigationRail {
-    header = IconButton { icon = "menu", onClicked = function() nav.drawer = true end },
+    header = IconButton { "menu", onClicked = function() nav.drawer = true end },
     Repeater { model = pages, delegate = destination },
 }
 ```
 
 ### ModalNavigationDrawer
 
-A modal navigation drawer: a scrim (`scrim` at 32 %) over the whole window and a `surfaceContainerLow` sheet that
-slides in from the left, with `large` rounded corners on its right edge. It draws in its own ImGui window above the
-app content. Its children are stacked in a scrolling region with 12dp padding, so `NavigationItem`s render as drawer
-items. Like `Dialog`, it takes no layout space; put it anywhere, for example as a child of the `ApplicationWindow`.
+A modal navigation drawer: a scrim (`scrim` at 32%) over the whole window and a `surfaceContainerLow` sheet that
+slides in from the left, with `large` rounded corners on its right edge. It draws above the app content. Its
+children are stacked in a scrolling region with 12dp padding, in drawer style, so `NavigationItem`s render as
+drawer items. Clicking the scrim or pressing Escape closes it (Escape is left to a menu or popup opened from the
+drawer first). Non-visual: put it anywhere, for example as a child of the `ApplicationWindow`.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `open` | bool, **two-way** | `false` | Shown while true. Clicking the scrim or pressing Escape writes `false`. |
-| `width` | number | `360` | Sheet width, at most 80 % of the window. |
+| `open` | bool | `false` | **two-way** (see below). Shown while true. |
+| `width` | number | `360` | Sheet width in dp, at most 80% of the window. |
+| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 
-Signals: `onClosed(self)` when the scrim or Escape closes it.
+**Signals:** `onClosed(self)` when the scrim or Escape closes it, after `open` was updated.
+**Two-way:** `open`, in three forms:
+
+- **A plain value** (`open = false`, opened with `drawer.open = true` through its `id`): closing writes `false`
+  back to the element.
+- **`bind(...)`**: closing writes `false` to the bound state.
+- **A function binding** (`open = function() return nav.drawer end`): the function owns the value, so the drawer
+  can't write it. Closing hides the sheet locally and fires `onClosed`; the drawer then stays hidden until the
+  function has returned `false` (the handler, or anything else, updated the state it reads) and then `true` again.
 
 ```lua
 local nav = state { drawer = false, page = 1 }
 TopAppBar { title = "Inbox", navigationIcon = "menu", onNavigation = function() nav.drawer = true end }
 ModalNavigationDrawer { open = bind(nav, "drawer"), spacing = 0,
     Repeater { model = pages, delegate = function(p, i)
-        return NavigationItem { text = p.name, icon = p.icon, selected = function() return nav.page == i end,
+        return NavigationItem { p.name, icon = p.icon, selected = function() return nav.page == i end,
                                 onClicked = function() nav.page = i; nav.drawer = false end }
     end },
 }
 ```
 
-Close it from a destination's `onClicked` as above. With a plain function as `open` (not `bind`), the drawer can't
-write `false` back and stays open.
+Close it from a destination's `onClicked` as above.
 
 ### MenuBar, Menu, MenuItem
 
-Use a `MenuBar` in `ApplicationWindow.menuBar` or `Window.menuBar`, with `Menu` children. You can also give
-**any `Button` or `IconButton`** a `menu = Menu { ... }`. It then opens as an anchored dropdown (min width 112dp)
-when the button is clicked.
+A `MenuBar` goes in `ApplicationWindow.menuBar` or `Window.menuBar` and holds `Menu`s. A `Menu` in a menu bar is
+a title that opens its children as a Material menu; a `Menu` inside a menu is a submenu; and a `Menu` given as a
+`Button`'s or `IconButton`'s [`menu`](#menu) opens as an anchored dropdown. Menu children: `MenuItem`, `Divider`,
+`Repeater`, nested `Menu`, ...
 
-| `Menu` prop | Type | Default | Meaning |
+`MenuBar` has no props of its own.
+
+| `Menu` prop | Type | Default | Notes |
 |---|---|---|---|
-| `title` | string | `""` | Menu title (in a `MenuBar`). |
+| `title` | string | `""` | Title in a menu bar, or the submenu's label. |
 
-Children: `MenuItem`, `Divider`, `Repeater`, nested `Menu`, ...
-
-| `MenuItem` prop | Type | Default | Meaning |
+| `MenuItem` prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | `""` | Label (`bodyLarge`). |
-| `icon` | string | `""` | Leading icon. |
-| `shortcut` | string | `""` | Trailing text. Display only. |
-| `checked` | bool, **two-way** | — | If present, the item is checkable: it shows a check, toggles on click, and the menu stays open. |
+| `text` | string | `""` | Positional. Label (`bodyLarge`). |
+| `icon` | icon | `""` | Leading icon. Having the prop at all reserves the icon slot, so labels line up. |
+| `shortcut` | string | `""` | Trailing text, e.g. `"Ctrl+S"`. Display only. |
+| `checked` | bool | `false` | **two-way.** If the prop is present at all (a value, a binding or a `bind`), the item is checkable: it shows a check in the icon slot while checked (instead of `icon`), toggles on click and keeps the menu open. Other items close the menu. |
 
-Signals: `onTriggered(self)`.
+**Signals:** `onTriggered(self)` when the item is chosen (after a checkable item toggled).
+**Two-way:** `checked` (checkable items).
+
+```lua
+ApplicationWindow { menuBar = MenuBar {
+    Menu { title = "File",
+        MenuItem { "Open", icon = "folder_open", shortcut = "Ctrl+O", onTriggered = open },
+        Divider {},
+        MenuItem { "Word wrap", checked = bind(settings, "wrap") },
+    },
+}, ... }
+```
 
 ---
 
-## Text
+## Text and decoration
 
 ### Text / Label
 
-| Prop | Type | Default | Meaning |
+`Label` is an alias.
+
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | positional | Content. |
-| `style` | string | `"bodyLarge"` | [Text style](theming.md#typography). |
-| `color` | color | `onSurface` | Text color. |
+| `text` | string | `""` | Positional. Content. |
+| `style` | style | `"bodyLarge"` | Type-scale role. Unknown names draw as `bodyLarge`. |
+| `color` | color | — | Text color. Unset: the theme's text color (`onSurface`). |
 | `wrap` | bool | `false` | Wraps at the available width. |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal alignment. Ignored when `wrap` is on. |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. |
 
 ### Icon
 
-| Prop | Type | Default | Meaning |
+A Material icon glyph.
+
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `name` | string | `icon`, or positional | Material icon name. |
-| `size` | number | `24` | Size in dp. |
-| `color` | color | `onSurfaceVariant` | Tint. |
+| `name` | icon | — | The glyph. |
+| `icon` | icon | — | The glyph, when `name` isn't set. |
+| `text` | string | `""` | Positional. The glyph, when neither `name` nor `icon` is set. |
+| `size` | number | `24` | Size (dp). |
+| `color` | color | — | Tint. Unset: `onSurfaceVariant`. |
 
 ### Link
 
-A clickable text link (`bodyLarge`, `primary` color) that opens a URL.
+A clickable text link (`bodyLarge`) that opens a URL in the browser.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | positional | Label. |
-| `url` | string | `text` | URL to open. |
+| `text` | string | `""` | Positional. Label. |
+| `url` | string | — | URL to open. Unset: `text`. |
 
 ### Divider / Separator
 
-A 1dp `outlineVariant` line across the available width.
+A 1dp `outlineVariant` line across the available width. `Separator` extends `Divider` with an optional label.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `inset`, `insetEnd` | number | `0` | Start and end insets. |
-| `text` | string | — | **`Separator` only:** a labeled separator (`titleSmall`, `onSurfaceVariant`). |
+| `inset`, `insetEnd` | number | `0`, `0` | Start and end insets (dp), on the plain rule. |
+| `text` | string | `""` | **`Separator` only.** Positional. With text, a labeled separator: the text in `titleSmall` `onSurfaceVariant` followed by a rule (the insets don't apply). |
 
 ### Spacer
 
-| Prop | Type | Default | Meaning |
+Empty space.
+
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `width`, `height` | number | `0` | Fixed empty space. |
-| `fill` | bool | `false` | In a `Row`, takes a share of the remaining width. |
+| `width`, `height` | size | `0` | *Raw.* Fixed space; each is at least 1px. Fill values don't apply here. |
+| `fill` | bool | `false` | In a `Row`, takes a share of the remaining width (the `Row` reads it). |
 
 ---
 
-## Controls
+## Buttons and selection controls
 
 ### Button
 
-| Prop | Type | Default | Meaning |
-|---|---|---|---|
-| `text` | string | positional | Label (`labelLarge`). |
-| `variant` | `"filled"` \| `"tonal"` \| `"outlined"` \| `"text"` \| `"elevated"` \| `"fab"` | `"filled"` | Material emphasis. `fab` is a `primaryContainer` FAB: with empty `text` it's a 56dp square, otherwise an extended FAB. |
-| `icon` | string | `""` | Leading icon (18dp, or 24dp on a FAB). |
-| `width` | number | natural, min 48dp | |
-| `height` | number | `40` (FAB `56`) | |
-| `menu` | `Menu` | — | Dropdown opened on click. |
+A Material button.
 
-Signals: `onClicked(self)`.
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `text` | string | `""` | Positional. Label (`labelLarge`). |
+| `variant` | `"filled"` \| `"tonal"` \| `"outlined"` \| `"text"` \| `"elevated"` \| `"fab"` | `"filled"` | Material emphasis. `fab` is a `primaryContainer` FAB: with empty `text` a 56dp square, otherwise an extended FAB. |
+| `icon` | icon | `""` | Leading icon (18dp, or 24dp on a FAB). |
+| `width` | size | `0` (natural, at least 48dp) | *Raw.* |
+| `height` | size | `0` (40dp, FAB 56dp) | *Raw.* |
+| `menu` | element | — | *Raw.* A [`Menu`](#menu) opened on click. |
+
+**Signals:** `onClicked(self)`.
 
 ### IconButton
 
 A 40dp icon container with a 48dp touch target.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `icon` | string | positional | Icon name. |
+| `text` | string | `""` | Positional. The icon name when `icon` isn't set: `IconButton { "menu" }`. |
+| `icon` | icon | — | Icon name. Unset: `text`. |
+| `checkedIcon` | icon | — | Icon while checked. Unset: the normal icon. |
 | `variant` | `"standard"` \| `"filled"` \| `"tonal"` \| `"outlined"` | `"standard"` | |
-| `checked` | bool, **two-way** | — | If present, the button is a toggle with selected and unselected looks. |
-| `checkedIcon` | string | `icon` | Icon while checked. |
-| `color` | color | per variant | Icon tint. |
-| `menu` | `Menu` | — | Dropdown opened on click. |
+| `checked` | bool | `false` | **two-way.** If the prop is present at all, the button is a toggle with selected and unselected looks, and a click flips it. |
+| `color` | color | — | Icon tint. Unset: the variant's. |
+| `menu` | element | — | *Raw.* A [`Menu`](#menu) opened on click. |
 
-Signals: `onClicked(self)`.
+**Signals:** `onClicked(self)` (after a toggle flipped `checked`).
+**Two-way:** `checked` (toggles).
 
 ### Checkbox
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | `""` | Label. |
-| `checked` | bool, **two-way** | `false` | |
+| `text` | string | `""` | Positional. Label. |
+| `checked` | bool | `false` | **two-way.** |
 
-Signals: `onToggled(self, checked)`.
+**Signals:** `onToggled(self, checked)`.
+**Two-way:** `checked`.
 
 ### Switch
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | `""` | Label. |
-| `checked` | bool, **two-way** | `false` | |
-| `icons` | bool | `true` | Shows a check icon in the thumb when on. |
+| `text` | string | `""` | Positional. Label. |
+| `checked` | bool | `false` | **two-way.** |
+| `icons` | bool | `true` | The check / close icons in the handle. |
 
-Signals: `onToggled(self, checked)`.
+**Signals:** `onToggled(self, checked)`.
+**Two-way:** `checked`.
 
 ### RadioButton
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | `""` | Label. |
-| `checked` | bool, **two-way** | `false` | Set to `true` when clicked. Without a `group` it's never set back to `false`. |
-| `group` | any value | — | RadioButtons with the same `group` act as one group: clicking one sets the others' `checked` to `false` (through their bindings). |
+| `text` | string | `""` | Positional. Label. |
+| `checked` | bool | `false` | **two-way.** Set to `true` when clicked. Without a `group` it's never set back to `false`. |
+| `group` | any value | — | *Lua side, read when the element is created.* RadioButtons with the same `group` act as one group: clicking one writes `checked = false` to the others (through their `bind`s; a function binding is left alone). |
 
-Signals: `onClicked(self)`.
+**Signals:** `onClicked(self)` (after `checked` and the group were updated).
+**Two-way:** `checked`.
 
 ```lua
+-- The group keeps plain `checked` values exclusive:
+RadioButton { "Small", group = "size" }
+RadioButton { "Medium", group = "size", checked = true }
+
+-- Or derive `checked` from state (no group needed):
 local s = state { size = "m" }
-Row {
-    RadioButton { text = "Small", group = "size", checked = s.size == "s", onClicked = function() s.size = "s" end },
-    RadioButton { text = "Medium", group = "size", checked = s.size == "m", onClicked = function() s.size = "m" end },
-}
+RadioButton { "Small", checked = function() return s.size == "s" end, onClicked = function() s.size = "s" end }
+RadioButton { "Medium", checked = function() return s.size == "m" end, onClicked = function() s.size = "m" end }
 ```
 
 ### RadioGroup
 
-| Prop | Type | Default | Meaning |
+A list of radio buttons from a model.
+
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `model` | list of strings | `{}` | Option labels. |
-| `currentIndex` | number, **two-way** | `1` | Selected option, 1-based. |
-| `horizontal` | bool | `false` | Lays the options out in a row. |
+| `currentIndex` | number | `1` | **two-way.** The selected option. |
+| `horizontal` | bool | `false` | Lays the options out in a row (16dp apart). |
 
-Signals: `onActivated(self, index, text)`.
+**Signals:** `onActivated(self, index, text)` when another option is picked.
+**Two-way:** `currentIndex`.
 
 ### Chip
 
-A 32dp chip.
+A 32dp Material chip.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | positional | Label. |
+| `text` | string | `""` | Positional. Label. |
 | `variant` | `"filter"` \| `"assist"` \| `"suggestion"` \| `"input"` | `"filter"` | A `filter` chip toggles and shows a check while selected. The other variants only report clicks. |
-| `checked` | bool, **two-way** for `filter` | `false` | Selected state. |
-| `checkable` | bool | `true` | `false` stops a filter chip from toggling itself. |
-| `icon` | string | `""` | Leading icon. |
+| `checked` | bool | `false` | **two-way** for a checkable `filter` chip. Selected state. |
+| `checkable` | bool | `true` | `false` stops a filter chip from toggling itself (it still reports clicks). |
+| `icon` | icon | `""` | Leading icon. |
 
-Signals: `onClicked(self, checked)`, where `checked` is `not` the previous state.
+**Signals:** `onClicked(self, checked)`, where `checked` is `not` the state before the click (for every variant).
+**Two-way:** `checked` (checkable filter chips).
+
+```lua
+Row { spacing = 8,
+    Repeater { model = { "lua", "cpp" }, delegate = function(tag)
+        return Chip { tag, checked = bind(sel.tags, tag) }
+    end },
+}
+```
 
 ### SegmentedButton
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `model` | list of strings | `{}` | Segment labels. |
-| `icons` | list of strings | `{}` | Per-segment icons. The selected segment shows a check instead. |
-| `currentIndex` | number, **two-way** | `1` | Selected segment, 1-based. |
-| `width` | number | natural | |
+| `icons` | list of strings | `{}` | Per-segment icons, shown on unselected segments. The selected segment shows a check instead. |
+| `currentIndex` | number | `1` | **two-way.** The selected segment. |
+| `width` | size | `0` (natural) | *Raw.* |
 
-Signals: `onActivated(self, index, text)`.
+**Signals:** `onActivated(self, index, text)`.
+**Two-way:** `currentIndex`.
 
 ### ListItem
 
 A one-line (56dp) or two-line (72dp) list item.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string | positional | Headline (`bodyLarge`). |
-| `supportingText` | string | `""` | Second line. Makes the item two-line. |
-| `icon` | string | `""` | Leading icon. |
+| `text` | string | `""` | Positional. Headline (`bodyLarge`). |
+| `supportingText` | string | `""` | Second line; makes the item two-line. |
+| `icon` | icon | `""` | Leading icon. |
 | `trailingText` | string | `""` | Trailing label (`labelSmall`). |
-| `trailingIcon` | string | `""` | Trailing icon. |
+| `trailingIcon` | icon | `""` | Trailing icon. |
 | `selected` | bool | `false` | Selected look. |
-| `width` | number | fill | |
+| `width` | size | `0` (fill) | *Raw.* |
 
-Signals: `onClicked(self)`.
+**Signals:** `onClicked(self)`.
 
 ---
 
-## Inputs
+## Value inputs
 
 ### Slider
 
 A 44dp-tall Material slider. A value label appears above the handle while you drag.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number, **two-way** | `0` | |
+| `value` | number | `0` | **two-way.** With an integral `stepSize` the written-back value is an integer. |
 | `from`, `to` | number | `0`, `1` | Range. |
 | `stepSize` | number | `0` | `0` means continuous. Tick marks are drawn when there are at most 40 steps. |
-| `format` | printf string | `"%.0f"` if `stepSize >= 1`, else `"%.2f"` | Value label. Exactly one `%f`, `%e` or `%g` conversion (flags, width and precision allowed), plus any `%%`. Anything else logs a warning and uses `"%.2f"`. |
-| `width` | number | fill | |
+| `format` | printf string | — | Value label. Unset: `"%.0f"` if `stepSize >= 1`, else `"%.2f"`. Exactly one `%f`, `%e` or `%g` conversion (flags, width and precision allowed), plus any `%%`. Anything else is reported once and replaced by `"%.2f"`. |
+| `width` | size | `0` (fill) | *Raw.* |
 
-Signals: `onMoved(self, value)` while dragging, `onReleased(self, value)` when the handle is released.
+**Signals:** `onMoved(self, value)` while the value changes, `onReleased(self, value)` when the handle is
+released.
+**Two-way:** `value`.
 
 ### SpinBox
 
 A numeric field (56dp) with decrement and increment icon buttons.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number, **two-way** | `0` | Clamped to the range. |
+| `value` | number | `0` | **two-way.** Clamped to the range. |
 | `from`, `to` | number | `-1e9`, `1e9` | Range. |
 | `stepSize` | number | `1` | Button step. |
-| `decimals` | number | `0` | Shown decimals. |
+| `decimals` | integer | `0` | Shown decimals. |
 | `label` | string | `""` | Floating label. |
 | `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
-| `width` | number | `200` | |
+| `width` | size | `0` (200dp) | *Raw.* |
 
-Signals: `onValueModified(self, value)`.
+**Signals:** `onValueModified(self, value)`.
+**Two-way:** `value`.
 
 ### TextField / TextArea
 
-A Material text field (56dp) with a floating label. `TextArea` is the multi-line version.
+A Material text field (56dp) with a floating label. `TextArea` extends `TextField`: the same props and signals,
+multi-line.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `text` | string, **two-way** | `""` | Content. |
+| `text` | string | `""` | **two-way.** Content. |
 | `label` | string | `""` | Floating label. |
 | `placeholderText` | string | `""` | Hint, shown while focused (or always if there's no label). Single-line only. |
 | `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
-| `leadingIcon`, `trailingIcon` | string | `""` | Icons. The trailing icon is clickable. |
+| `leadingIcon`, `trailingIcon` | icon | `""` | Icons. The trailing icon is clickable. |
 | `supportingText` | string | `""` | Helper text below. Error-colored while `error` is set. |
 | `error` | bool | `false` | Error colors. |
-| `password` | bool | `false` | Masks input and adds a visibility toggle, unless `trailingIcon` is set. `echoMode = "password"` does the same. |
+| `password` | bool | `false` | Masks the input and adds a visibility toggle, unless `trailingIcon` is set. |
+| `echoMode` | string | `""` | `"password"` does the same as `password = true`. |
 | `readOnly` | bool | `false` | |
-| `width` | number | fill | |
-| `height` | number | `120` | **`TextArea` only.** |
+| `width` | size | `0` (fill) | *Raw.* |
+| `height` | size | `0` (`TextArea`: 120dp) | *Raw.* **`TextArea` only;** a single-line field is always 56dp. |
 
-Signals: `onTextChanged(self, text)`, `onAccepted(self, text)` (Enter, single-line only),
+**Signals:** `onTextChanged(self, text)` on every edit, `onAccepted(self, text)` on Enter (single-line only),
 `onTrailingClicked(self)`.
+**Two-way:** `text`.
+
+```lua
+TextField { id = "nameField", label = "Name", leadingIcon = "person", text = bind(form, "name"),
+            onAccepted = function(_, text) submit(text) end }
+TextArea { label = "Notes", height = 160, text = bind(form, "notes") }
+```
 
 ### ComboBox
 
-A Material exposed dropdown menu: text-field look, with the menu anchored below.
+A Material exposed dropdown menu: a text-field look, with the menu anchored below.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `model` | list of strings | `{}` | Options. |
 | `icons` | list of strings | `{}` | Per-option menu icons. |
-| `currentIndex` | number, **two-way** | `1` | Selected option, 1-based. |
+| `currentIndex` | integer | `1` | **two-way.** The selected option. |
 | `label` | string | `""` | Floating label. |
-| `leadingIcon` | string | `""` | |
+| `leadingIcon` | icon | `""` | |
 | `supportingText` | string | `""` | |
 | `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
 | `error` | bool | `false` | |
-| `width` | number | `240` | |
+| `width` | size | `0` (240dp) | *Raw.* |
 
-Signals: `onActivated(self, index, text)`.
+**Signals:** `onActivated(self, index, text)`.
+**Two-way:** `currentIndex`.
 
 ### ColorPicker
 
 A swatch with the hex value. Clicking it opens a picker popup with a hue bar and a hex field.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `color` | color, **two-way** | white | Written back as `"#RRGGBB"` (`"#RRGGBBAA"` with alpha). |
+| `color` | color | — | **two-way.** Any color spec; written back as `"#RRGGBB"` (`"#RRGGBBAA"` with alpha). Unset shows white. |
 | `label` | string | `""` | |
 | `alpha` | bool | `false` | Adds an alpha bar. |
-| `width` | number | natural | |
+| `width` | size | `0` (natural) | *Raw.* |
 
-Signals: `onColorChanged(self, hex)`.
+**Signals:** `onColorChanged(self, hex)`.
+**Two-way:** `color`.
 
 ---
 
-## Feedback & data
+## Progress, data and drawing
 
 ### ProgressBar
 
-A Material 3 (2024) linear indicator with a gap and a stop indicator. It's implemented as a typed C++ element
-(see [Registering C++ types](extending.md)).
+A Material 3 (2024) linear indicator, with a gap and a stop indicator.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `value` | number | `0` | 0..1. |
 | `indeterminate` | bool | `false` | Animated. |
-| `width` | number | `240` | |
+| `width` | size | `0` (240dp) | *Raw.* |
 
 ### CircularProgress
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `value` | number | `0` | 0..1. |
 | `indeterminate` | bool | `false` | Spinning. |
-| `size` | number | `48` | Diameter. |
-| `thickness` | number | `4` | Stroke width. |
+| `size` | size | `0` (48dp) | *Raw.* Diameter. |
+| `thickness` | number | `4` | Stroke width (dp). |
 
 ### BusyIndicator
 
 An indeterminate circular indicator.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `running` | bool | `true` | When it's `false`, the space is still reserved. |
-| `size`, `thickness` | number | `48`, `4` | |
+| `running` | bool | `true` | While `false`, the space is still reserved. |
+| `size` | size | `0` (48dp) | *Raw.* Diameter. |
+| `thickness` | number | `4` | Stroke width (dp). |
 
 ### Plot
 
 A line or bar chart with a grid, a gradient area and a hover readout.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `values` | list of numbers | `{}` | Data. |
 | `kind` | `"lines"` \| `"bars"` \| `"histogram"` | `"lines"` | `histogram` is the same as `bars`. |
 | `fill` | bool | `true` | Gradient area under lines. |
-| `title` | string | `label` | Chart title. |
-| `color` | color | `primary` | Series color. |
-| `min`, `max` | number | auto | Setting either one fixes the range (defaults 0 and 1). Auto range includes 0 for bars. |
-| `width` | number | fill | |
-| `height` | number | `160` | |
+| `title` | string | — | Chart title. Unset: `label`. |
+| `label` | string | `""` | Chart title when `title` isn't set. |
+| `color` | color | — | Series color. Unset: `primary`. |
+| `min`, `max` | number | — | Setting either one fixes the range (the other defaults to 0 or 1). Unset: an automatic range, which includes 0 for bars. |
+| `width` | size | `0` (fill) | *Raw.* |
+| `height` | size | `0` (160dp) | *Raw.* |
 
 ### Table
 
-A Material data table: a 56dp header, rows with selection, inside an outlined card.
+A Material data table: a 56dp header and selectable rows, inside an outlined card.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `columns` | list of strings | — | **Required.** Header labels. Sets the column count. |
-| `rows` | list of lists | `{}` | Cell values, converted with `tostring`. |
-| `currentRow` | number, **two-way** | `0` | Selected row, 1-based. `0` means none. |
-| `rowHeight` | number | `52` | |
+| `columns` | list of strings | `{}` | Header labels; sets the column count. Nothing is drawn without columns. |
+| `rows` | list of lists | — | *Raw.* Cell values, converted to strings (`nil` is empty). |
+| `currentRow` | integer | `0` | **two-way.** The selected row; `0` means none. |
+| `rowHeight` | number | `52` | Row height (dp). |
 | `outlined` | bool | `true` | Wraps the table in an outlined card. |
-| `width` | number | fill | |
+| `width` | size | `0` (fill) | *Raw.* |
 
-Signals: `onRowClicked(self, row)`.
+**Signals:** `onRowClicked(self, row)`.
+**Two-way:** `currentRow`.
+
+```lua
+Table { columns = { "Name", "Size" }, rows = function() return files end, currentRow = bind(s, "file"),
+        onRowClicked = function(_, row) open(files[row]) end }
+```
 
 ### Canvas
 
-Custom drawing from Lua. The canvas is an invisible button, and `onPaint` draws on it every rendered frame,
-clipped to its rectangle. Frames are [rendered on demand](architecture.md#frame-loop), so a canvas that animates
-(its drawing depends on `p.time`) needs `animated = true`.
+Custom drawing from Lua. The canvas is an invisible button, and `onPaint` draws on it on every rendered frame,
+clipped to its rectangle. Frames are [rendered on demand](architecture.md#frame-loop), so a canvas whose drawing
+changes over time (it reads `p.time`) needs `animated = true`.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
-| `width` | number | fill | |
-| `height` | number | `200` | |
-| `onPaint` | `function(self, p)` | — | Draws with the painter `p`. |
-| `animated` | bool | `false` | Requests a frame every frame while the canvas is shown, so time-based drawing keeps moving. |
+| `width` | size | `0` (fill) | *Raw.* |
+| `height` | size | `0` (200dp) | *Raw.* |
+| `animated` | bool | `false` | Requests a frame every frame while the canvas is rendered, so time-based drawing keeps moving. |
 
-Signals: `onClicked(self, x, y)`, with the position in dp relative to the canvas.
+**Signals:** `onPaint(self, p)` draws with the painter `p`; `onClicked(self, x, y)`, with the position in dp
+relative to the canvas.
 
-**Painter fields:**
+**Painter fields** (dp, plain numbers):
 
 | Field | Meaning |
 |---|---|
-| `p.width`, `p.height` | Canvas size (dp). |
-| `p.mouseX`, `p.mouseY` | Mouse position relative to the canvas (dp). |
+| `p.width`, `p.height` | Canvas size. |
+| `p.mouseX`, `p.mouseY` | Mouse position relative to the canvas. |
 | `p.hovered`, `p.pressed` | Mouse state over the canvas. |
 | `p.time` | Seconds since start. |
 
-**Painter methods.** Coordinates are in dp from the canvas's top-left corner. Colors are color specs.
+**Painter methods** (`src/imlui/lua/painter.cppm`). Coordinates are in dp from the canvas's top-left corner;
+colors are color spec strings or `{r, g, b, a}` tables (anything else uses the default). Rectangles and circles
+are drawn with the crisp Material shape helpers: true corner radii, smooth arcs and pixel-snapped strokes.
+Horizontal and vertical lines are pixel-snapped bands a whole number of pixels thick; diagonal lines and polylines
+use ImGui's anti-aliased lines.
 
 | Method | Defaults |
 |---|---|
 | `p:line(x1, y1, x2, y2, color, thickness)` | `color = "onSurface"`, `thickness = 1` |
 | `p:rect(x, y, w, h, color, rounding, outline, thickness)` | `color = "primary"`, `rounding = 0`, `outline = false` (filled), `thickness = 1` |
-| `p:circle(cx, cy, r, color, outline, thickness)` | `color = "primary"`, `outline = false`, `thickness = 1` |
-| `p:text(x, y, text, color, style)` | `color = "onSurface"`, `style = "bodyMedium"` |
+| `p:circle(cx, cy, r, color, outline, thickness)` | `color = "primary"`, `outline = false` (filled), `thickness = 1` |
+| `p:text(x, y, text, color, style)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"` |
 | `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"` |
 | `p:polyline({x1, y1, x2, y2, ...}, color, thickness, closed)` | `color = "primary"`, `thickness = 1`, `closed = false` |
 
@@ -698,57 +989,89 @@ end }
 
 ---
 
-## Other
+## Non-visual
+
+`ApplicationWindow`, `Window`, `Dialog`, `Snackbar`, `ImGuiDemo` and `ModalNavigationDrawer` are non-visual too;
+they're described with their families above.
 
 ### Timer
 
-A non-visual timer element. It only ticks while it's rendered: a `Timer` on a page that isn't shown, or with
-`visible = false`, doesn't run. For timers that run regardless, use [`setInterval`](lua-api.md#timers-and-frames).
-It's implemented as a typed C++ element, so a one-shot's `running = false` write-back also emits
-`onRunningChanged(self, false)`.
+A timer element. It **ticks even when it isn't rendered**: a `Timer` on a page that isn't shown, inside a
+`visible = false` parent or in a `Loader` that shows something else still fires. It's a ticking element
+(`Element::setTicking`): its `tick()` runs at the start of every frame, rendered or not, with its props synced
+first, so it also sees `running` turn true through a binding. It ticks from the moment the element is created
+until it's collected (or the script reloads). Use `running = false` to stop it. The engine wakes up for the next
+trigger, so it keeps its rate without input.
 
-| Prop | Type | Default | Meaning |
+| Prop | Type | Default | Notes |
 |---|---|---|---|
 | `interval` | number | `1000` | Period in ms. |
-| `running` | bool, **two-way** | `true` | Set to `false` after a one-shot fires. |
+| `running` | bool | `true` | **two-way.** Starting it (again) restarts the period. A one-shot writes `false` back when it fires. |
 | `repeat` | bool | `true` | `false` fires once. |
 | `triggeredOnStart` | bool | `false` | Also fires when it starts running. |
 
-Signals: `onTriggered(self)`.
+**Signals:** `onTriggered(self)`; `onRunningChanged(self, false)` when a one-shot stops itself.
+**Two-way:** `running`.
 
-### ImGuiDemo
+```lua
+local fb = state { seconds = 0 }
+Timer { interval = 1000, onTriggered = function() fb.seconds = fb.seconds + 1 end }
+Timer { interval = 3000, repeat = false, running = bind(s, "toast"), onTriggered = hideToast }
+```
 
-Shows the Dear ImGui demo window. It's non-visual.
-
-| Prop | Type | Default | Meaning |
-|---|---|---|---|
-| `open` | bool, **two-way** | `true` | Closing the window sets it to `false`. |
-
-### Snackbar (internal)
-
-The app-wide overlay behind [`snackbar()`](lua-api.md#snackbar). It's created by the prelude, and you don't
-normally use it directly. Its props are `text`, `actionText`, `onAction`, `shownAt`, `duration` (ms) and
-`closable`.
+For timers without an element, see [`setInterval` / `setTimeout`](lua-api.md#timers-and-frames).
 
 ---
 
-## Two-way props at a glance
+## At a glance
+
+### Two-way props
 
 | Element | Two-way props |
 |---|---|
-| `Window`, `Dialog`, `ImGuiDemo` | `open` |
+| `Window`, `Dialog`, `ImGuiDemo`, `ModalNavigationDrawer` | `open` |
 | `TabBar`, `RadioGroup`, `SegmentedButton`, `ComboBox` | `currentIndex` |
-| `Expander` / `Section` | `expanded` |
-| `Checkbox`, `Switch`, `RadioButton`, `Chip` (filter), `IconButton` (toggle), `MenuItem` (checkable) | `checked` |
+| `Section` / `Expander` | `expanded` |
+| `Checkbox`, `Switch`, `RadioButton`, `Chip` (checkable filter), `IconButton` (toggle), `MenuItem` (checkable) | `checked` |
 | `Slider`, `SpinBox` | `value` |
 | `TextField`, `TextArea` | `text` |
 | `ColorPicker` | `color` |
 | `Table` | `currentRow` |
 | `Timer` | `running` |
+| `Snackbar` (internal) | `shownAt` |
 
-## Custom elements from C++
+Each also emits `on<Prop>Changed(self, value)` when written back ([above](#values-that-come-back-from-c)).
 
-Register a C++ class (derived from `imlui::Element`, with a static `declare()`) and use it like a built-in:
+### Signals
+
+| Element | Signals |
+|---|---|
+| `Window`, `Dialog`, `ModalNavigationDrawer` | `onClosed(self)` |
+| `Snackbar` | `onAction(self)` |
+| `TabBar` | `onCurrentChanged(self, index)` |
+| `Section` / `Expander` | `onToggled(self, expanded)` |
+| `TopAppBar` | `onNavigation(self)` |
+| `NavigationItem`, `Button`, `IconButton`, `RadioButton`, `ListItem` | `onClicked(self)` |
+| `MenuItem`, `Timer` | `onTriggered(self)` |
+| `Checkbox`, `Switch` | `onToggled(self, checked)` |
+| `Chip` | `onClicked(self, checked)` |
+| `RadioGroup`, `SegmentedButton`, `ComboBox` | `onActivated(self, index, text)` |
+| `Slider` | `onMoved(self, value)`, `onReleased(self, value)` |
+| `SpinBox` | `onValueModified(self, value)` |
+| `TextField`, `TextArea` | `onTextChanged(self, text)`, `onAccepted(self, text)`, `onTrailingClicked(self)` |
+| `ColorPicker` | `onColorChanged(self, hex)` |
+| `Table` | `onRowClicked(self, row)` |
+| `Canvas` | `onPaint(self, p)`, `onClicked(self, x, y)` |
+
+### Non-visual elements
+
+`ApplicationWindow`, `Window`, `Dialog`, `Snackbar`, `ImGuiDemo`, `ModalNavigationDrawer`, `Timer`.
+
+## Custom elements
+
+Every element above is a C++ class derived from `imlui::Element`, with a static `declare(TypeBuilder<T>&)` that
+lists its properties, signals, default property and so on. Register your own the same way and use it like a
+built-in (registering under a built-in's name replaces it):
 
 ```cpp
 engine.registerType<Gauge>("Gauge");
@@ -756,16 +1079,8 @@ engine.registerType<Gauge>("Gauge");
 
 ```lua
 Gauge { id = "cpu", value = bind(s, "cpu"), label = "CPU", onPeak = function(self, v) ... end }
-Button { text = "Reset", onClicked = function() cpu:reset() end }
+Button { "Reset", onClicked = function() cpu:reset() end }
 ```
 
-`ui.types()` lists the registered type names. The low-level alternative is a handler function:
-
-```cpp
-engine.renderer().registerElement("Badge", [](imlui::Renderer& r, const imlui::luaui::Node& n) {
-    imlui::md::text(n.text(), imlui::TextStyle::LabelSmall, n.color("color"));
-}, /*visual=*/true);
-```
-
-Any Capitalized name in a script is a constructor, so `Gauge {}` and `Badge { text = "3" }` work immediately. See
-[Registering C++ types](extending.md) and [Development](development.md#adding-an-element).
+`ui.types()` lists the registered names. See [Registering C++ types](extending.md) for the whole API, and the
+element modules in `src/imlui/ui/elements/` for real examples.

@@ -388,7 +388,7 @@ local navigationPage = Column {
         }),
         section("Navigation rail", "Side navigation for medium windows, with an optional header.", {
             Row { align = "top", spacing = 16,
-                NavigationRail { height = 340, color = "surfaceContainer",
+                NavigationRail { height = 380, color = "surfaceContainer",
                                  header = Button { variant = "fab", icon = "edit", text = "", tooltip = "Compose" },
                                  demoDestinations("rail") },
                 Text { text = function() return "Selected: " .. barDestinations[navDemo.rail][1] end,

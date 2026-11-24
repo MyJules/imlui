@@ -55,8 +55,8 @@ tree, so you don't need to rebuild.
 | `src/imlui/theme/` | `imlui.theme.*`: Material 3 scheme from a seed, typography, icons, DPI, mapping onto ImGuiStyle |
 | `src/imlui/lua/` | `imlui.lua.*`: Lua bridge (`Node` bindings and signals, values, errors, theme tables, Canvas painter, `imlui.native`) |
 | `src/imlui/widgets/` | `imlui.widgets.*`: Material widgets drawn with ImGui (buttons, selection, slider, fields, menus, ...) |
-| `src/imlui/ui/` | `imlui.ui.renderer` (walks the Lua element tree every frame) and `imlui.ui.props` |
-| `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in element handlers, by family, the typed `ProgressBar` and `Timer`, a `register<Group>Elements` / `register<Group>Types` pair per family, and `registerBuiltinElements` / `registerBuiltinTypes` |
+| `src/imlui/ui/` | `imlui.ui.renderer` (walks the Lua element tree every frame and renders each element through the type registry), `imlui.ui.props`, `imlui.ui.frame_request`, `imlui.ui.navigation_scope`, `imlui.ui.size_class` |
+| `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in elements, one typed `Element` class per module (`button.cppm`, `row.cppm`, ...), and `registerBuiltinTypes` (`builtin.cppm`) |
 | `src/imlui/types/` | `imlui.types.*`: the C++ type system: `ScriptObject`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
@@ -133,8 +133,9 @@ engine.registerType<Gauge>("Gauge");          // Gauge { value = bind(s, "cpu"),
 engine.registerSingleton("backend", backend); // backend.load, backend:tick(), backend.onTick = fn
 ```
 
-The low-level path, `engine.renderer().registerElement("MyThing", fn)`, still works. Any Capitalized name in a
-script is a constructor, so `MyThing {}` works immediately.
+Every built-in element is written the same way (`src/imlui/ui/elements/`), and a registered type under a
+built-in's name replaces it. Any Capitalized name in a script is a constructor, so `Gauge {}` works as soon as the
+type is registered.
 
 ### Theme (decided in Lua)
 
