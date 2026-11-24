@@ -1,0 +1,1 @@
+On disk next to data/notes.txt but not in the manifest: no mode may serve it.

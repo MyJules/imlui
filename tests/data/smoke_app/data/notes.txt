@@ -1,0 +1,1 @@
+Notes for the smoke app: listed in the manifest with `files`, so every mode serves it.

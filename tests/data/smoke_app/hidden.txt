@@ -1,0 +1,1 @@
+On disk in the smoke app folder but not in the manifest: no mode may serve it.

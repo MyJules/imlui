@@ -545,13 +545,18 @@ TEST(ResourceManifest, NotEmbeddedNamesTheSourceFolders) {
     embedded::smoke_sources::mount(res);
     EXPECT_TRUE(res.exists("app:/main.lua"));
     EXPECT_TRUE(res.exists("app:/images/rgba_4x2.png"));
-    // The folders serve what the manifest selects, as embedded: no pattern matches the manifest, and the image
+    // The folders serve what the manifest selects, as embedded: no pattern matches the manifest (it's served because
+    // its `files` list it), the excluded and unlisted files next to the selected ones aren't served, and the image
     // group's folder (tests/data) shows only its one listed file, not the rest of the folder.
     ASSERT_TRUE(packages[0].selection && packages[1].selection);
     EXPECT_EQ(packages[0].selection->unmatched, std::vector<std::string>{"resources.lua"});
     EXPECT_EQ(packages[1].selection->unmatched, std::vector<std::string>{"smoke_app/resources.lua"});
     EXPECT_EQ(packages[1].selection->files, std::vector<std::string>{"rgba_4x2.png"});
-    EXPECT_FALSE(res.exists("app:/resources.lua"));
+    EXPECT_TRUE(res.exists("app:/resources.lua"));
+    EXPECT_TRUE(res.exists("app:/data/notes.txt"));
+    EXPECT_FALSE(res.exists("app:/data/unlisted.txt"));
+    EXPECT_FALSE(res.exists("app:/hidden.txt"));
+    EXPECT_FALSE(res.exists("app:/scratch/draft.lua"));
     EXPECT_FALSE(res.read("app:/images/smoke_app/resources.lua"));
     EXPECT_FALSE(res.exists("app:/images/smoke_app/main.lua"));
     EXPECT_FALSE(res.exists("app:/images/orange_8x8.jpg"));
