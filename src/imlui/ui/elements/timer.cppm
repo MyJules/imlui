@@ -1,14 +1,16 @@
-// Timer: a non-visual element that emits onTriggered every `interval` ms while it's rendered,
-// as a typed element (TypeBuilder). It asks for a frame at its next due time, so it keeps ticking
-// while the app otherwise sleeps.
+// Timer: a non-visual element that emits onTriggered every `interval` ms, as a typed element (TypeBuilder).
+// It ticks from its creation, whether or not it's rendered (a Timer on a hidden page or an unselected
+// Loader page keeps firing): Element::setTicking runs tick() at the start of every frame, with the
+// properties synced first, so binding changes take effect even while it isn't rendered. It asks for a frame
+// at its next due time, so it keeps ticking while the app otherwise sleeps.
 module;
 
 export module imlui.ui.elements.timer;
 
-import imgui;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.frame_request;
 
 export namespace imlui {
 
@@ -17,7 +19,11 @@ class Timer final : public Element {
 public:
     static void declare(TypeBuilder<Timer>& type);
 
+    Timer();
+
     void render(Frame& frame) override;
+    void tick(double now) override;
+    void destroyed() override;
 
     [[nodiscard]] double interval() const; ///< ms
     void setInterval(double ms);
@@ -52,17 +58,25 @@ void Timer::declare(TypeBuilder<Timer>& type) {
         .nonVisual();
 }
 
-void Timer::render(Frame& frame) {
+// Ticks for its whole life, also while stopped: a stopped timer still syncs every frame, so it sees
+// `running` turn true (a binding) on a page that isn't rendered.
+Timer::Timer() { setTicking(true); }
+
+void Timer::destroyed() { setTicking(false); }
+
+// Everything happens in tick(), which runs every frame before the tree renders.
+void Timer::render(Frame&) {}
+
+void Timer::tick(double now) {
     if (!m_running) {
         m_started = false;
         return;
     }
-    const double now = ImGui::GetTime();
     const double interval = m_interval / 1000.0;
     if (!m_started) {
         m_started = true;
         m_last = now;
-        frame.requestFrameAfter(interval);
+        requestFrameAfter(interval);
         if (m_triggeredOnStart) emit("onTriggered");
         return;
     }
@@ -72,12 +86,12 @@ void Timer::render(Frame& frame) {
             m_running = false;
             notify("running"); // two-way: a one-shot writes running = false back
         } else {
-            frame.requestFrameAfter(interval);
+            requestFrameAfter(interval);
         }
         emit("onTriggered");
         return;
     }
-    frame.requestFrameAfter(interval - (now - m_last));
+    requestFrameAfter(interval - (now - m_last));
 }
 
 double Timer::interval() const { return m_interval; }

@@ -2,9 +2,9 @@
 //
 // install(state) runs for every new Lua state (each hot reload) before the DSL loads, and sets up:
 //
-//  * `require("imlui.types")`: { names(), isType(name), attach(element) }. The DSL's constructors call
-//    attach() for registered types, which creates the C++ instance right away and stores it in the
-//    element table as `__native`, a full userdata whose __gc deletes the instance. The table gets a
+//  * `require("imlui.types")`: { names(), isType(name), attach(element), tick(now) }. The DSL's
+//    constructors call attach() for registered types, which creates the C++ instance right away and stores
+//    it in the element table as `__native`, a full userdata whose __gc deletes the instance. The table gets a
 //    metatable whose __index is the type's methods table, so `element:reset()` works. The instance
 //    holds only a weak link back to the table, so collecting the table destroys the instance.
 //  * one global per singleton: a userdata whose __index reads properties (getters) and methods, and
@@ -19,7 +19,9 @@
 // properties from the element table into the instance (setters run only on a changed value; nil resets a
 // property to its default), and then calls Element::render(). Elements that aren't rendered are synced
 // lazily: before a method called from Lua runs on them, and when a parent or another element asks for them
-// (sync(), Frame::Child::as<T>()). componentComplete() runs once, right after the first sync.
+// (sync(), Frame::Child::as<T>()). componentComplete() runs once, right after the first sync. Ticking
+// elements (Element::setTicking) are synced and ticked at the start of every frame by tick(now), which
+// ui.__tick calls, rendered or not.
 // Main thread only.
 module;
 
@@ -478,6 +480,27 @@ int libAttach(lua::State* state) {
     return 1;
 }
 
+/// tick(now): calls Element::tick(now) on the ticking elements of this state, each synced first, so a Timer
+/// on a page that isn't rendered still fires and sees its current property values. ui.__tick calls it at
+/// the start of every frame.
+int libTick(lua::State* state) {
+    const double now = lua::tonumber(state, 1);
+    for (Element* e : Element::tickingElements()) {
+        // A handler that ran in this loop may have destroyed this element (or a GC step collected it).
+        if (!Element::isTicking(e) || e->luaState() != state) continue;
+        const int top = lua::gettop(state);
+        if (!e->pushSelf()) continue; // the element table is being collected
+        // The table is on the stack now, so the element can't be collected while it syncs and ticks.
+        Box* b = selfBox(state, top + 1);
+        if (b && b->element == e) {
+            syncInstance(state, top + 1, *b);
+            if (b->element == e && Element::isTicking(e)) e->tick(now);
+        }
+        lua::settop(state, top);
+    }
+    return 0;
+}
+
 Box* syncBox(const Node& node, const TypeInfo& info) {
     lua::State* state = node.state();
     Box* b = selfBox(state, node.index());
@@ -596,9 +619,9 @@ void TypeRegistry::install(lua::State* state) {
     lua::settop(state, top);
 
     // require("imlui.types")
-    lua::createtable(state, 0, 3);
-    const lua::CFunction lib[] = {&libNames, &libIsType, &libAttach};
-    const char* libNamesList[] = {"names", "isType", "attach"};
+    lua::createtable(state, 0, 4);
+    const lua::CFunction lib[] = {&libNames, &libIsType, &libAttach, &libTick};
+    const char* libNamesList[] = {"names", "isType", "attach", "tick"};
     for (std::size_t i = 0; i < std::size(lib); ++i) {
         lua::pushlightuserdata(state, this);
         lua::pushcclosure(state, lib[i], 1);

@@ -412,6 +412,8 @@ function ui.__tick(now)
             t.fn()
         end
     end
+    -- C++ elements that tick every frame, rendered or not (Timer).
+    if types ~= nil and types.tick then types.tick(now) end
     -- Iterate a copy: a callback may remove itself while running.
     for _, fn in ipairs({ table.unpack(frameCallbacks) }) do fn(now) end
     local nextDue
