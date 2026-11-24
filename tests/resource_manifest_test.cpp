@@ -17,7 +17,7 @@ import imlui.embedded.smoke_embedded;
 import imlui.embedded.smoke_sources;
 #endif
 import imlui.tools.depfile;
-import imlui.tools.glob;
+import imlui.resources.glob;
 import imlui.tools.pack;
 import imlui.tools.resource_encoding;
 import imlui.tools.resource_manifest;
@@ -63,7 +63,6 @@ std::string repeated(std::string_view seed, int times) {
 // ------------------------------------------------------------------ glob patterns
 
 TEST(Glob, MatchesStarQuestionMarkAndDoubleStar) {
-    using tools::globMatch;
     EXPECT_TRUE(globMatch("*.lua", "main.lua"));
     EXPECT_FALSE(globMatch("*.lua", "ui/Card.lua")); // `*` stays in one folder
     EXPECT_FALSE(globMatch("*.lua", "main.luac"));
@@ -82,13 +81,13 @@ TEST(Glob, MatchesStarQuestionMarkAndDoubleStar) {
 }
 
 TEST(Glob, RootsAndProblems) {
-    EXPECT_EQ(tools::globRoot("ui/icons/*.png"), "ui/icons");
-    EXPECT_EQ(tools::globRoot("ui/main.lua"), "ui");
-    EXPECT_EQ(tools::globRoot("*.lua"), "");
-    EXPECT_EQ(tools::globRoot("**/x/*.lua"), "");
-    EXPECT_EQ(tools::globProblem("ui/**/*.lua"), "");
+    EXPECT_EQ(globRoot("ui/icons/*.png"), "ui/icons");
+    EXPECT_EQ(globRoot("ui/main.lua"), "ui");
+    EXPECT_EQ(globRoot("*.lua"), "");
+    EXPECT_EQ(globRoot("**/x/*.lua"), "");
+    EXPECT_EQ(globProblem("ui/**/*.lua"), "");
     for (const char* bad : {"", "/abs/*.lua", "../*.lua", "a/../b", "a//b", "./a", "a\\b", "c:/x"})
-        EXPECT_NE(tools::globProblem(bad), "") << bad;
+        EXPECT_NE(globProblem(bad), "") << bad;
 }
 
 // ------------------------------------------------------------------ groups and selection
@@ -120,6 +119,20 @@ TEST(ResourceManifest, OneGroupWithFilesAndPatterns) {
         EXPECT_TRUE(fs::equivalent(f.file, dir.path() / "app" / f.path)) << f.path;
         EXPECT_FALSE(f.compress) << f.path;
     }
+    // The selection as written, for the dev folder mount (ResourceSelection), which then serves the same files.
+    EXPECT_EQ(g.listed, (std::vector<std::string>{"notes.md"}));
+    EXPECT_EQ(g.include, (std::vector<std::string>{"**/*.lua", "*.png"}));
+    EXPECT_EQ(g.exclude, (std::vector<std::string>{"ui/deep/**"}));
+    const ResourceSelection selection{.files = g.listed, .include = g.include, .exclude = g.exclude, .unmatched = {}};
+    std::vector<std::string> served;
+    for (const auto& entry : fs::recursive_directory_iterator(g.base))
+        if (entry.is_regular_file()) {
+            const auto relative = entry.path().lexically_relative(g.base).generic_u8string();
+            std::string path{relative.begin(), relative.end()};
+            if (selection.contains(path)) served.push_back(std::move(path));
+        }
+    std::ranges::sort(served);
+    EXPECT_EQ(served, paths(g));
 }
 
 TEST(ResourceManifest, ListOfGroupsWithMountFolders) {
@@ -220,6 +233,20 @@ TEST(ResourceManifest, FileNotFound) {
               std::string::npos);
 }
 
+// Resource names are case-sensitive, so a listed file must be spelled as on disk: on a file system that ignores case
+// (Windows, macOS) `Main.lua` would find main.lua and embed it as `Main.lua`, which the dev folder mount (strict about
+// case) wouldn't serve, and a pattern would add `main.lua` a second time.
+TEST(ResourceManifest, ListedFilesMustBeSpelledAsOnDisk) {
+    test::TempDir dir;
+    dir.write("ui/main.lua", "-- main");
+    const std::string error =
+        failure(dir, R"(return { prefix = "app", files = { "UI/Main.lua" }, include = "**/*.lua" })");
+    EXPECT_NE(error, "");
+    if (fs::exists(dir.path() / "UI" / "MAIN.LUA")) // case-insensitive: found, but spelled differently
+        EXPECT_NE(error.find("is spelled 'ui/main.lua' on disk"), std::string::npos) << error;
+    EXPECT_EQ(failure(dir, R"(return { prefix = "app", files = { "ui/main.lua" }, include = "**/*.lua" })"), "");
+}
+
 TEST(ResourceManifest, PathsCantLeaveTheBaseFolder) {
     test::TempDir dir;
     dir.write("secret.txt", "secret");
@@ -250,6 +277,39 @@ TEST(ResourceManifest, NamesStartingWithTwoDotsStayInside) {
     EXPECT_EQ((*collected)[0].path, "..config/x.lua");
     EXPECT_EQ((*collected)[1].path, "..foo.png");
     EXPECT_FALSE(tools::collectFiles(dir.path() / "app", {dir.path() / "resources.lua"}, error));
+}
+
+// imlui_pack's by-hand mode packs every file under a folder: an entry that can't be queried (a link to nothing) isn't a
+// file and doesn't end the walk early (which would make an incomplete archive), and a folder that doesn't exist fails.
+TEST(SourceFiles, CollectsPastEntriesThatCantBeQueried) {
+    test::TempDir dir;
+    dir.write("app/a.txt", "a");
+    dir.write("app/z/z.txt", "z");
+    std::error_code ec;
+    fs::create_symlink(dir.path() / "app" / "missing.txt", dir.path() / "app" / "b_dangling", ec);
+    if (ec) GTEST_SKIP() << "can't create a symbolic link here: " << ec.message();
+    std::string error;
+    const auto collected = tools::collectFiles(dir.path() / "app", {}, error);
+    ASSERT_TRUE(collected) << error;
+    std::vector<std::string> names;
+    for (const auto& f : *collected)
+        names.push_back(f.path);
+    EXPECT_EQ(names, (std::vector<std::string>{"a.txt", "z/z.txt"}));
+    EXPECT_FALSE(tools::collectFiles(dir.path() / "nowhere", {}, error));
+}
+
+// The tools replace their outputs through a temporary file, so an interrupted write never leaves a partial one.
+TEST(SourceFiles, ReplaceFileWritesWholeFilesOnly) {
+    test::TempDir dir;
+    const fs::path file = dir.path() / "out.bin";
+    const auto bytes = [](std::string_view s) { return std::as_bytes(std::span{s.data(), s.size()}); };
+    ASSERT_TRUE(tools::replaceFile(file, bytes("first")));
+    ASSERT_TRUE(tools::replaceFile(file, bytes("second, longer")));
+    EXPECT_EQ(tools::readFile(file)->size(), std::string_view{"second, longer"}.size());
+    EXPECT_FALSE(fs::exists(dir.path() / "out.bin.tmp"));
+    std::string error;
+    EXPECT_FALSE(tools::replaceFile(dir.path() / "no" / "such" / "folder.bin", bytes("x"), &error));
+    EXPECT_NE(error, "");
 }
 
 // A file an `include` pattern matches is checked like a `files` entry: a link to a file outside the base folder is
@@ -448,11 +508,19 @@ constexpr bool libraryEmbedded = false;
 TEST(ResourceManifest, EmbeddedLibraryMatchesItsManifest) {
     expectMatchesManifest(embedded::imlui::packages(), fs::path{IMLUI_RESOURCES_DIR} / "resources.lua",
                           libraryEmbedded);
-    // The manifest lies in the first group's folder: the dev folder mount hides it (no imlui:/resources.lua).
+    // With a source folder, each package carries its group's selection; the manifest lies in the first group's
+    // folder, where no pattern matches it (no imlui:/resources.lua in dev builds either).
     const auto packages = embedded::imlui::packages();
     if (!packages[0].sourceDir.empty()) {
-        EXPECT_EQ(packages[0].hidden, std::vector<std::string>{"resources.lua"});
-        EXPECT_TRUE(packages[1].hidden.empty());
+        ASSERT_TRUE(packages[0].selection && packages[1].selection);
+        EXPECT_EQ(packages[0].selection->include, std::vector<std::string>{"**"});
+        EXPECT_EQ(packages[0].selection->unmatched, std::vector<std::string>{"resources.lua"});
+        EXPECT_FALSE(packages[0].selection->contains("resources.lua"));
+        EXPECT_TRUE(packages[1].selection->unmatched.empty());
+        EXPECT_TRUE(packages[1].selection->contains("Roboto-Regular.ttf"));
+        EXPECT_FALSE(packages[1].selection->contains("README.md"));
+    } else {
+        EXPECT_FALSE(packages[0].selection); // nothing to select from, and no source paths in a release binary
     }
     std::string error;
     const auto m = tools::loadManifest(fs::path{IMLUI_RESOURCES_DIR} / "resources.lua", error);
@@ -477,12 +545,17 @@ TEST(ResourceManifest, NotEmbeddedNamesTheSourceFolders) {
     embedded::smoke_sources::mount(res);
     EXPECT_TRUE(res.exists("app:/main.lua"));
     EXPECT_TRUE(res.exists("app:/images/rgba_4x2.png"));
-    // The manifest isn't a resource: hidden from the folder mounts that hold it.
-    EXPECT_EQ(packages[0].hidden, std::vector<std::string>{"resources.lua"});
-    EXPECT_EQ(packages[1].hidden, std::vector<std::string>{"smoke_app/resources.lua"});
+    // The folders serve what the manifest selects, as embedded: no pattern matches the manifest, and the image
+    // group's folder (tests/data) shows only its one listed file, not the rest of the folder.
+    ASSERT_TRUE(packages[0].selection && packages[1].selection);
+    EXPECT_EQ(packages[0].selection->unmatched, std::vector<std::string>{"resources.lua"});
+    EXPECT_EQ(packages[1].selection->unmatched, std::vector<std::string>{"smoke_app/resources.lua"});
+    EXPECT_EQ(packages[1].selection->files, std::vector<std::string>{"rgba_4x2.png"});
     EXPECT_FALSE(res.exists("app:/resources.lua"));
     EXPECT_FALSE(res.read("app:/images/smoke_app/resources.lua"));
-    EXPECT_TRUE(res.exists("app:/images/smoke_app/main.lua"));
+    EXPECT_FALSE(res.exists("app:/images/smoke_app/main.lua"));
+    EXPECT_FALSE(res.exists("app:/images/orange_8x8.jpg"));
+    EXPECT_EQ(res.list("app:/images/"), std::vector<std::string>{"rgba_4x2.png"});
     EXPECT_TRUE(res.modified("app:/main.lua")); // directories: hot reload sees changes
     EXPECT_TRUE(res.origin("app:/main.lua").starts_with("directory '"));
 }

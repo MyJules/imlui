@@ -4,6 +4,7 @@ export module imlui.resources.package;
 import std;
 
 import imlui.resources.mount;
+export import imlui.resources.selection;
 
 export namespace imlui {
 
@@ -18,9 +19,11 @@ struct ResourcePackage {
     /// The absolute folder the files come from (the group's `base`) when the build has IMLUI_DEV_PATHS=ON,
     /// otherwise "". defaultConfig() mounts it over the embedded files, so editing them hot-reloads.
     std::string sourceDir;
-    /// Files in `sourceDir` that aren't resources, as paths relative to it: the manifest itself when it lies there
-    /// (`resources.lua`). defaultConfig() hides them from the folder's mount (see DirectoryMount).
-    std::vector<std::string> hidden = {};
+    /// Which files of `sourceDir` are the package's: the manifest group's `files`, `include` and `exclude`, and the
+    /// manifest itself when it lies there (never matched by a pattern). defaultConfig() mounts `sourceDir` with it
+    /// (see DirectoryMount), so the folder serves what the embedded copy holds and nothing else. nullopt (a package
+    /// made by hand): every file of the folder.
+    std::optional<ResourceSelection> selection = {};
 };
 
 } // namespace imlui

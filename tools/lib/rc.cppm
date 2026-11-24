@@ -16,8 +16,9 @@
 //
 // The generated module is `imlui.embedded.<name>`, exporting `imlui::embedded::<name>::packages()` (one
 // ResourcePackage per group of the manifest: its files, its mount point and, with --dev-paths, the group's absolute
-// base folder as the dev source folder, plus the manifest's path in it when it lies there, for the folder mount to
-// hide) and `mount(Resources&)` (mounts every group's files). With --source-dirs the packages' files are null and
+// base folder as the dev source folder, plus the group's selection (its `files`, `include` and `exclude`, and the
+// manifest's path when it lies there, which no pattern matches), so the folder mount serves the same files) and
+// `mount(Resources&)` (mounts every group's files). With --source-dirs the packages' files are null and
 // `mount()` mounts the source folders instead.
 export module imlui.tools.rc;
 
@@ -64,11 +65,13 @@ std::string escaped(std::string_view s) {
     return out;
 }
 
+/// Leaves `file` alone (and its time: nothing that depends on it rebuilds) when it already holds `bytes`. Otherwise
+/// replaces it whole (replaceFile), so an interrupted run never leaves a truncated blob or module whose time is newer
+/// than its inputs. Ninja then rebuilds what includes it: clang lists a file pulled in with `#embed` in the
+/// dependency file of the module that embeds it, like a header.
 bool writeIfChanged(const fs::path& file, std::span<const std::byte> bytes) {
     if (auto old = readFile(file); old && std::ranges::equal(*old, bytes)) return true;
-    std::ofstream out{file, std::ios::binary | std::ios::trunc};
-    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    return static_cast<bool>(out);
+    return replaceFile(file, bytes);
 }
 
 struct Record {
@@ -82,13 +85,17 @@ struct Record {
 /// One group as the generated module embeds it.
 struct EmbeddedGroup {
     std::string mountPoint;
-    std::string sourceDir;           ///< "" without --dev-paths
-    std::vector<std::string> hidden; ///< paths in sourceDir its folder mount hides: the manifest, when it lies there
+    std::string sourceDir; ///< "" without --dev-paths
+    // The group's selection, for the folder mount (ResourceSelection); unused without a source folder.
+    std::vector<std::string> files;
+    std::vector<std::string> include;
+    std::vector<std::string> exclude;
+    std::vector<std::string> unmatched; ///< the manifest's path in sourceDir, when it lies there
     std::vector<Record> records;
 };
 
-/// The manifest's path inside folder `base` as a one-element list (a manifest isn't a resource, so the dev folder
-/// mount hides it), or an empty list when it lies elsewhere.
+/// The manifest's path inside folder `base` as a one-element list (no pattern matches the manifest, so the dev folder
+/// mount serves it only when `files` lists it), or an empty list when it lies elsewhere.
 std::vector<std::string> manifestIn(const fs::path& manifest, const fs::path& base) {
     std::error_code ec;
     const fs::path relative = fs::weakly_canonical(manifest, ec).lexically_relative(base);
@@ -102,6 +109,26 @@ std::string stringList(const std::vector<std::string>& strings) {
     for (std::size_t i = 0; i < strings.size(); ++i)
         s += (i ? ", \"" : "\"") + escaped(strings[i]) + "\"";
     return s + "}";
+}
+
+/// The group's ResourceSelection as a C++ expression; std::nullopt without a source folder (nothing to select from).
+std::string selectionSource(const EmbeddedGroup& g) {
+    if (g.sourceDir.empty()) return "std::nullopt";
+    return "ResourceSelection{" + stringList(g.files) + ", " + stringList(g.include) + ", " + stringList(g.exclude) +
+           ", " + stringList(g.unmatched) + "}";
+}
+
+/// `group` for the generated module, without records: mount point and, with `sourceDir`, the folder and selection.
+EmbeddedGroup embeddedGroup(const ResourceManifest& manifest, const ResourceGroup& group, bool sourceDir) {
+    EmbeddedGroup out;
+    out.mountPoint = group.mountPoint;
+    if (!sourceDir) return out;
+    out.sourceDir = utf8(group.base);
+    out.files = group.listed;
+    out.include = group.include;
+    out.exclude = group.exclude;
+    out.unmatched = manifestIn(manifest.file, group.base);
+    return out;
 }
 
 std::string moduleSource(std::string_view name, const fs::path& manifest, const std::vector<EmbeddedGroup>& groups) {
@@ -152,7 +179,7 @@ std::string moduleSource(std::string_view name, const fs::path& manifest, const 
     s += "std::vector<ResourcePackage> packages() {\n    return {\n";
     for (std::size_t i = 0; i < groups.size(); ++i)
         s += "        {\"" + escaped(groups[i].mountPoint) + "\", files" + std::to_string(i) + "(), \"" +
-             escaped(groups[i].sourceDir) + "\", " + stringList(groups[i].hidden) + "},\n";
+             escaped(groups[i].sourceDir) + "\", " + selectionSource(groups[i]) + "},\n";
     s += "    };\n}\n\n";
     s += "void mount(Resources& resources) {\n";
     s += "    for (const ResourcePackage& p : packages())\n        resources.mount(p.mountPoint, p.files);\n}\n\n";
@@ -183,17 +210,13 @@ std::string sourceDirsModuleSource(std::string_view name, const fs::path& manife
     s += "std::vector<ResourcePackage> packages() {\n    return {\n";
     for (const auto& g : groups)
         s += "        {\"" + escaped(g.mountPoint) + "\", nullptr, \"" + escaped(g.sourceDir) + "\", " +
-             stringList(g.hidden) + "},\n";
+             selectionSource(g) + "},\n";
     s += "    };\n}\n\n";
     s += "void mount(Resources& resources) {\n";
     s += "    for (const ResourcePackage& p : packages()) {\n";
     s += "        const std::u8string dir{p.sourceDir.begin(), p.sourceDir.end()};\n";
-    s += "        resources.mount(p.mountPoint,\n";
-    s += "                        std::make_shared<DirectoryMount>(std::filesystem::path{dir},\n";
-    s += "                                                         std::set<std::string, "
-         "std::less<>>{p.hidden.begin(),\n";
-    s += "                                                                                             "
-         "p.hidden.end()}));\n";
+    s += "        resources.mount(p.mountPoint, std::make_shared<DirectoryMount>(std::filesystem::path{dir}, "
+         "p.selection));\n";
     s += "    }\n}\n\n";
     s += "} // namespace imlui::embedded::" + n + "\n";
     return s;
@@ -243,10 +266,7 @@ int runRc(int argc, char** argv) {
     if (sourceDirs) {
         std::vector<EmbeddedGroup> groups;
         for (const auto& group : manifest->groups)
-            groups.push_back({.mountPoint = group.mountPoint,
-                              .sourceDir = utf8(group.base),
-                              .hidden = manifestIn(manifest->file, group.base),
-                              .records = {}});
+            groups.push_back(embeddedGroup(*manifest, group, true));
         const std::string source = sourceDirsModuleSource(name, manifest->file, groups);
         if (!writeIfChanged(moduleFile, std::as_bytes(std::span{source})))
             return fail("can't write to '" + utf8(outDir) + "'");
@@ -256,12 +276,7 @@ int runRc(int argc, char** argv) {
     std::vector<std::byte> blob;
     std::vector<EmbeddedGroup> groups;
     for (const auto& group : manifest->groups) {
-        auto& out = groups.emplace_back();
-        out.mountPoint = group.mountPoint;
-        if (devPaths) {
-            out.sourceDir = utf8(group.base);
-            out.hidden = manifestIn(manifest->file, group.base);
-        }
+        auto& out = groups.emplace_back(embeddedGroup(*manifest, group, devPaths));
         for (const auto& f : group.files) {
             const auto data = readFile(f.file);
             if (!data) return fail("can't read '" + utf8(f.file) + "'");

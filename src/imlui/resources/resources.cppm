@@ -32,7 +32,8 @@ public:
     /// The entries of folder `name` across its mounts, sorted and without duplicates: file names, and folder names
     /// with a trailing `/`. Mount points inside the folder show up as folders.
     [[nodiscard]] std::vector<std::string> list(std::string_view name) const;
-    /// The full names of all files under folder `name`, at any depth, sorted.
+    /// The full names of all files under folder `name` (with or without a trailing `/`, like list()), at any depth,
+    /// sorted.
     [[nodiscard]] std::vector<std::string> listRecursive(std::string_view name) const;
     /// When file `name` last changed, from the mount that serves it; nullopt when it's missing or that mount is
     /// immutable.
@@ -144,9 +145,12 @@ std::vector<std::string> Resources::list(std::string_view name) const {
 
 std::vector<std::string> Resources::listRecursive(std::string_view name) const {
     std::vector<std::string> out;
-    auto folder = folderOf(name);
-    if (!folder) return out;
-    std::vector<std::string> pending{std::move(*folder)};
+    // `name` is the folder itself, like in list(): `imlui:/fonts` is `imlui:/fonts/`, not `imlui:/` (folderOf()).
+    const auto parsed = parseName(name);
+    if (!parsed) return out;
+    std::string folder = parsed->full();
+    if (!folder.ends_with('/')) folder += '/';
+    std::vector<std::string> pending{std::move(folder)};
     while (!pending.empty()) {
         const std::string current = std::move(pending.back());
         pending.pop_back();

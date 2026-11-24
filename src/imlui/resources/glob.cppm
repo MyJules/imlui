@@ -1,12 +1,14 @@
 // Glob patterns for resource manifests (`include`, `exclude`): `*` any characters but `/`, `?` one character but
 // `/`, `**` any characters including `/` (as a whole segment, `**/` also matches no folder at all: `**/*.lua`
 // matches `main.lua` and `ui/Card.lua`). Everything else matches itself. Patterns and paths are `/`-separated and
-// relative.
-export module imlui.tools.glob;
+// relative. Shared by the resource tools (which select files with them at build time) and the library (a dev build's
+// source folder mounts serve only what the manifest selects, ResourceSelection), so it is its own small library,
+// imlui_glob (src/CMakeLists.txt), like imlui_lua.
+export module imlui.resources.glob;
 
 import std;
 
-export namespace imlui::tools {
+export namespace imlui {
 
 /// True when `path` matches `pattern` as a whole.
 [[nodiscard]] bool globMatch(std::string_view pattern, std::string_view path);
@@ -19,11 +21,11 @@ export namespace imlui::tools {
 /// `.` or `..` segment.
 [[nodiscard]] std::string globProblem(std::string_view pattern);
 
-} // namespace imlui::tools
+} // namespace imlui
 
 module :private;
 
-namespace imlui::tools {
+namespace imlui {
 
 namespace {
 
@@ -89,4 +91,4 @@ std::string globProblem(std::string_view pattern) {
     }
 }
 
-} // namespace imlui::tools
+} // namespace imlui

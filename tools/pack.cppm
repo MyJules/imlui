@@ -169,29 +169,12 @@ int runPack(int argc, char** argv) {
     }
     const auto pak = packFiles(mountPoint, files, error);
     if (!pak) return fail(error);
-    // Written next to the output and renamed over it, so a failed run leaves the previous archive, never a partial
-    // one.
-    fs::path temporary = output;
-    temporary += ".tmp";
     std::error_code ec;
     // The output's folder (a multi-config generator's per-configuration folder) may not exist yet.
     for (const fs::path& file : {output, depfile})
         if (file.has_parent_path()) fs::create_directories(file.parent_path(), ec);
-    {
-        std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
-        out.write(reinterpret_cast<const char*>(pak->data()), static_cast<std::streamsize>(pak->size()));
-        out.close();
-        if (!out) {
-            fs::remove(temporary, ec);
-            return fail("can't write '" + utf8(temporary) + "'");
-        }
-    }
-    fs::rename(temporary, output, ec);
-    if (ec) {
-        const std::string reason = ec.message();
-        fs::remove(temporary, ec);
-        return fail("can't replace '" + utf8(output) + "': " + reason);
-    }
+    // Through a temporary file, so a failed run leaves the previous archive, never a partial one.
+    if (!replaceFile(output, *pak, &error)) return fail(error);
     if (!depfile.empty() && !writeDepfile(depfile, fs::absolute(output, ec), dependencies))
         return fail("can't write '" + utf8(depfile) + "'");
     return 0;

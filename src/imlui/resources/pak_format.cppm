@@ -44,16 +44,20 @@ inline constexpr std::string_view pakMagic = "IMLUIPAK";
 inline constexpr std::uint32_t pakVersion = 1;
 /// Files larger than this (decompressed) are rejected as corrupt.
 inline constexpr std::uint64_t pakMaxFileSize = std::uint64_t{1} << 31;
+/// Archives larger than this aren't written or opened: an archive is read into memory whole.
+inline constexpr std::uint64_t pakMaxArchiveSize = std::uint64_t{1} << 32;
 
 /// The bytes of an archive holding `files`, mounted at `mountPoint`. nullopt (with a reason in `error`, when given)
 /// when the archive couldn't be read back: a string or the file count doesn't fit its u32 field, a file is larger
-/// than pakMaxFileSize or a stored one's size isn't its stored size, or two files have the same path. Paths and the
+/// than pakMaxFileSize or a stored one's size isn't its stored size, two files have the same path, or the archive
+/// would be larger than pakMaxArchiveSize. Paths and the
 /// mount point aren't checked here (parsePak() does).
 [[nodiscard]] std::optional<std::vector<std::byte>>
 writePak(std::string_view mountPoint, std::span<const PakFile> files, std::string* error = nullptr);
 
-/// Parses and checks the header and index of `archive`: the magic and version, a valid mount point, normalized
-/// paths without duplicates, and every file inside the archive. nullopt (with a reason in `error`, when given) for
+/// Parses and checks the header and index of `archive`: the magic and version, a mount point that is a canonical
+/// full folder name (`app:/`, `imlui:/fonts/`: not `app:/main.lua`), normalized paths without duplicates, and every
+/// file inside the archive. nullopt (with a reason in `error`, when given) for
 /// anything else.
 [[nodiscard]] std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string* error = nullptr);
 
@@ -144,6 +148,13 @@ std::optional<std::vector<std::byte>> writePak(std::string_view mountPoint, std:
         if (!paths.insert(f.path).second) return failed(error, "'" + f.path + "' is listed twice");
     }
 
+    std::uint64_t total = pakMagic.size() + 4 + 4 + 4 + mountPoint.size();
+    for (const auto& f : files)
+        total += 4 + f.path.size() + 8 + 8 + 8 + 4 + f.stored.size();
+    if (total > pakMaxArchiveSize)
+        return failed(error, "the archive would be too large (" + std::to_string(total) + " bytes, at most " +
+                                 std::to_string(pakMaxArchiveSize) + ")");
+
     std::vector<std::byte> out;
     for (const char c : pakMagic)
         out.push_back(static_cast<std::byte>(c));
@@ -171,6 +182,7 @@ std::optional<std::vector<std::byte>> writePak(std::string_view mountPoint, std:
 std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string* error) {
     Reader in{archive};
     if (in.string(pakMagic.size()) != pakMagic || !in.ok()) return failed(error, "not a .pak archive (bad magic)");
+    if (archive.size() > pakMaxArchiveSize) return failed(error, "too large for a .pak archive");
     const auto version = in.number(4);
     if (!in.ok()) return failed(error, "truncated header");
     if (version != pakVersion) return failed(error, "unsupported .pak version " + std::to_string(version));
@@ -178,7 +190,12 @@ std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string
     PakIndex index;
     index.mountPoint = in.string(static_cast<std::size_t>(in.number(4)));
     if (!in.ok()) return failed(error, "truncated header");
-    if (!normalizeName(index.mountPoint)) return failed(error, "invalid mount point '" + index.mountPoint + "'");
+    // A folder, spelled canonically with its trailing slash: Resources mounts any name as a folder, so a file name
+    // (`app:/main.lua`) would silently become one.
+    if (const auto folder = normalizeName(index.mountPoint);
+        !folder || (folder->ends_with('/') ? *folder : *folder + "/") != index.mountPoint)
+        return failed(error, "invalid mount point '" + index.mountPoint +
+                                 "' (a full folder name ending in '/', such as 'app:/' or 'imlui:/fonts/')");
     std::set<std::string, std::less<>> seen;
 
     for (std::uint64_t i = 0; i < count; ++i) {
