@@ -124,6 +124,30 @@ private:
     float m_w = 10.0f;
 };
 
+/// Emits onRender while it renders (Lua code running mid-frame, like a handler) and takes no space.
+class Writer final : public Element {
+public:
+    static void declare(TypeBuilder<Writer>& type) { type.signal("onRender"); }
+    void render(Frame&) override { emit("onRender"); }
+};
+
+/// Takes its resolved `width` (a fill-minus) and records where it was placed and how wide it was.
+class Filler final : public Element {
+public:
+    static void declare(TypeBuilder<Filler>&) {}
+    void render(Frame& frame) override {
+        m_pos = ImGui::GetCursorScreenPos();
+        m_w = frame.resolvedWidth();
+        ImGui::Dummy({m_w, 10.0f});
+    }
+    [[nodiscard]] ImVec2 pos() const { return m_pos; }
+    [[nodiscard]] float w() const { return m_w; }
+
+private:
+    ImVec2 m_pos{-1.0f, -1.0f};
+    float m_w = 0.0f;
+};
+
 class LayoutTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -132,6 +156,8 @@ protected:
         m_h.registerType<RawImGui>("Raw");
         m_h.registerType<Grower>("Grower");
         m_h.registerType<Measure>("Measure");
+        m_h.registerType<Writer>("Writer");
+        m_h.registerType<Filler>("Filler");
     }
     [[nodiscard]] ImVec2 lastSize(std::string_view name) {
         test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
@@ -828,23 +854,120 @@ TEST_F(LayoutTest, AnUnsettledLayoutStopsAskingForFrames) {
     EXPECT_GT(secondsUntilFrame(), 0.0);
 }
 
-// Sizes of elements that went away are dropped: a list whose items change every frame doesn't grow the cache.
+// Sizes of elements that went away are dropped: a list whose items change every frame doesn't grow the cache past
+// its cap (the least recently used entries go first), and entries not used for long (in frames and in time) go.
 TEST_F(LayoutTest, TheLayoutCacheDropsElementsThatAreGone) {
     run(R"(
         items = {}
         root = Column { align = "center",
                         Repeater { model = function() return items end,
                                    delegate = function(item) return Text { text = item } end } }
-        function refill(n) items = {} for i = 1, 20 do items[i] = n .. "-" .. i end end)");
-    std::size_t first = 0;
-    for (int n = 0; n < 50; ++n) {
-        run("refill(" + std::to_string(n) + ")");
+        function refill(n, count) items = {} for i = 1, count do items[i] = n .. "-" .. i end end)");
+    constexpr int perFrame = 500;
+    const int frames = static_cast<int>(2 * layout::maxEntries / perFrame); // past the cap
+    std::size_t most = 0;
+    for (int n = 0; n < frames; ++n) {
+        run("refill(" + std::to_string(n) + ", " + std::to_string(perFrame) + ")");
         m_h.renderFrame("root");
-        if (n == 2) first = layout::cacheEntries();
+        most = std::max(most, layout::cacheEntries());
     }
-    EXPECT_GE(first, 20u);
-    EXPECT_LE(layout::cacheEntries(), first + 25u); // at most this frame's and the last frame's items
+    // It keeps gone items for a while (a hidden page's sizes), up to the cap (Lua reuses some tables' addresses,
+    // which are the keys, so not every frame adds `perFrame`) ...
+    EXPECT_GT(most, layout::maxEntries);
+    EXPECT_LE(most, layout::maxEntries + perFrame); // ... and no further (one frame's new entries over it at most)
+    EXPECT_LE(layout::cacheEntries(), layout::maxEntries + perFrame);
+
+    // Unused for keepFrames frames and keepSeconds seconds: dropped, down to what is still shown.
+    run("refill(-1, 3)");
+    const int idle = std::max(layout::keepFrames, static_cast<int>(layout::keepSeconds * 60.0)) + 2;
+    m_h.renderFrames("root", idle);
+    EXPECT_LE(layout::cacheEntries(), 10u);
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A page a TabBar hides keeps its sizes: switching back shows its aligned and Row children in place on the first
+// frame, never unseen (the cache used to drop them after two frames, so every switch re-measured them unseen).
+TEST_F(LayoutTest, SwitchingTabsNeverRendersAChildUnseenAgain) {
+    run(R"(
+        a = Probe { w = 40 } b = Probe { w = 50 } c = Probe { w = 30, h = 30 }
+        root = TabBar {
+            Tab { title = "A", Row { justify = "end", a } },
+            Tab { title = "B", Column { align = "center", b }, Row { Probe { intrinsic = true }, c } } })");
+    m_h.renderFrame("root");
+    renderWhileRequested("root");
+    ASSERT_TRUE(probe("a").seen());
+    run("root.currentIndex = 2");
+    m_h.renderFrame("root"); // b's first appearance: unseen is fine here
+    renderWhileRequested("root");
+    ASSERT_TRUE(probe("b").seen());
+    for (int round = 0; round < 6; ++round) {
+        run("root.currentIndex = 1");
+        m_h.renderFrame("root");
+        EXPECT_TRUE(probe("a").seen()) << round;
+        m_h.renderFrames("root", 100); // hidden long past the old two frames
+        run("root.currentIndex = 2");
+        m_h.renderFrame("root");
+        EXPECT_TRUE(probe("b").seen()) << round;
+        EXPECT_TRUE(probe("c").seen()) << round;
+        m_h.renderFrames("root", 100);
+    }
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    EXPECT_FLOAT_EQ(probe("b").pos().x, x0 + (contentWidth() - 50.0f) * 0.5f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A fill-minus child under a centered (or end-aligned) stack: its width is the box's less N, known before it
+// renders, so it is placed on its first frame, and nothing asks for frames to settle it.
+TEST_F(LayoutTest, AFillMinusChildUnderAnAlignedStackSettlesOnItsFirstFrame) {
+    run(R"(
+        centered = Filler { width = -100 } ended = Filler { width = -60 }
+        root = Column { Column { align = "center", centered }, Column { align = "end", ended } })");
+    m_h.renderFrame("root");
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    const auto check = [&] {
+        Filler* c = m_h.instance<Filler>("centered");
+        Filler* e = m_h.instance<Filler>("ended");
+        ASSERT_NE(c, nullptr);
+        ASSERT_NE(e, nullptr);
+        EXPECT_FLOAT_EQ(c->w(), contentWidth() - 100.0f);
+        EXPECT_FLOAT_EQ(c->pos().x, x0 + 50.0f);
+        EXPECT_FLOAT_EQ(e->w(), contentWidth() - 60.0f);
+        EXPECT_FLOAT_EQ(e->pos().x, x0 + 60.0f);
+    };
+    check();
+    EXPECT_LE(renderWhileRequested("root"), 1);
+    check();
+    EXPECT_GT(secondsUntilFrame(), 0.0);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A Row asks a child whether it fills and for its intrinsic size, then renders it: one property sync a frame (a
+// function-bound prop is read once).
+TEST_F(LayoutTest, ARowSyncsEachChildOncePerFrame) {
+    run(R"(
+        calls = 0
+        root = Row { Text { text = function() calls = calls + 1 return "label" end }, Probe { w = 20 } })");
+    m_h.renderFrames("root", 3);
+    run("calls = 0");
+    m_h.renderFrame("root");
+    check("calls == 1");
+    run("calls = 0");
+    m_h.renderFrames("root", 4);
+    check("calls == 4");
+}
+
+// ... but Lua code that runs between a layout's questions and the render (a handler) may change the child: it is
+// synced again, so the change shows on the same frame.
+TEST_F(LayoutTest, AChangeMadeMidFrameIsSyncedBeforeTheChildRenders) {
+    run(R"(
+        label = Probe { w = 10 } after = Probe { w = 10 }
+        root = Row { align = "top", spacing = 0,
+                     Writer { onRender = function() if grow then label.w = 50 end end }, label, after })");
+    m_h.renderFrames("root", 3);
+    EXPECT_FLOAT_EQ(probe("after").pos().x - probe("label").pos().x, 10.0f);
+    run("grow = true");
+    m_h.renderFrame("root");
+    EXPECT_FLOAT_EQ(probe("after").pos().x - probe("label").pos().x, 50.0f);
 }
 
 // ------------------------------------------------------------ Intrinsic sizes
@@ -923,5 +1046,26 @@ TEST_F(LayoutTest, AChildWithoutASizeRendersUnseenOnItsFirstFrame) {
     const float x0 = ImGui::GetStyle().WindowPadding.x;
     EXPECT_FLOAT_EQ(probe("centered").pos().x, x0 + (contentWidth() - 40.0f) * 0.5f);
     EXPECT_FLOAT_EQ(probe("rowed").pos().x, x0 + contentWidth() - 40.0f);
+    EXPECT_GT(secondsUntilFrame(), 0.0);
+}
+
+// A Row that only aligns heights (the default align = "center", justify = "start", no fills) needs no widths to
+// place its children: a child without a known height renders seen at the top on its first frame (the others are
+// centered among the known heights) and the row asks for the frame that centers it, a shift of a few pixels at most.
+TEST_F(LayoutTest, ARowShowsAChildWithAnUnknownHeightOnItsFirstFrame) {
+    run(R"(
+        tall = Probe { w = 20, h = 30 } short = Probe { w = 20, h = 10, intrinsic = true }
+        root = Row { spacing = 0, tall, short })");
+    m_h.renderFrame("root");
+    EXPECT_TRUE(probe("tall").seen());
+    EXPECT_TRUE(probe("short").seen());
+    const float top = ImGui::GetStyle().WindowPadding.y;
+    EXPECT_FLOAT_EQ(probe("tall").pos().y, top);
+    EXPECT_FLOAT_EQ(probe("short").pos().y, top); // the only known height: nothing to center it in yet
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+    EXPECT_GE(renderWhileRequested("root"), 1);
+    EXPECT_FLOAT_EQ(probe("tall").pos().y, top);
+    EXPECT_FLOAT_EQ(probe("short").pos().y, top + 10.0f);
+    EXPECT_FLOAT_EQ(probe("short").pos().x, probe("tall").pos().x + 20.0f);
     EXPECT_GT(secondsUntilFrame(), 0.0);
 }

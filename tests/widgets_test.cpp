@@ -116,6 +116,62 @@ TEST_F(WidgetsTest, SnackbarWidthIsClampedAndFitsANarrowViewport) {
     EXPECT_FLOAT_EQ(md::snackbarWidth(dp(100), dp(300)), dp(268)); // ... even below the minimum
 }
 
+// A message longer than the widest bar wraps inside it (it used to run out of the window and be clipped): the bar
+// keeps its computed width, grows by a line (68dp for two lines), and every glyph stays within the padding.
+TEST_F(WidgetsTest, ALongSnackbarMessageWrapsInsideTheBar) {
+    const std::string message = "A message far too long for one line of a snackbar, which therefore wraps onto a "
+                                "second line instead of running out of the bar and being clipped by its edge";
+    ASSERT_GT(md::measure(TextStyle::BodyMedium, message).x, dp(672));
+    const float viewport = ImGui::GetIO().DisplaySize.x > 0.0f ? ImGui::GetIO().DisplaySize.x : 800.0f;
+    std::vector<ImVec2> sizes;
+    float textLeft = 1e9f, textRight = -1e9f, textTop = 1e9f, textBottom = -1e9f;
+    ImVec2 pos{};
+    const ImU32 textColor = md::col(md::scheme().inverseOnSurface);
+    for (int i = 0; i < 6; ++i) {
+        frame([&] {
+            bool closed = false;
+            md::snackbar(message, "Undo", 1.0f, false, &closed);
+            ImGui::Begin(md::scopedWindowName("", "snackbar").c_str());
+            sizes.push_back(ImGui::GetWindowSize());
+            pos = ImGui::GetWindowPos();
+            const ImDrawList* dl = ImGui::GetWindowDrawList();
+            textLeft = textTop = 1e9f;
+            textRight = textBottom = -1e9f;
+            for (const Vertex& v : dl->VtxBuffer) {
+                if (v.col != textColor) continue;
+                textLeft = std::min(textLeft, v.pos.x);
+                textRight = std::max(textRight, v.pos.x);
+                textTop = std::min(textTop, v.pos.y);
+                textBottom = std::max(textBottom, v.pos.y);
+            }
+            ImGui::End();
+        });
+    }
+    const float width = md::snackbarWidth(dp(10000), viewport);
+    for (std::size_t i = 1; i < sizes.size(); ++i) {
+        EXPECT_FLOAT_EQ(sizes[i].x, width) << i;
+        EXPECT_FLOAT_EQ(sizes[i].y, sizes[1].y) << i;
+    }
+    EXPECT_GE(sizes.back().y, dp(68) + 2.0f * dp(4)); // two lines at least, and the vertical padding
+    ASSERT_LT(textLeft, textRight);                   // the message was drawn
+    EXPECT_GE(textLeft, pos.x + dp(16) - 1.0f);
+    EXPECT_LE(textRight, pos.x + width - dp(16) + 1.0f);
+    EXPECT_GE(textTop, pos.y);
+    EXPECT_LE(textBottom, pos.y + sizes.back().y);
+
+    // Lines: word-wrapped, at newlines too, without blanks at their ends.
+    const std::vector<std::string_view> lines = md::snackbarLines(message, dp(400));
+    EXPECT_GE(lines.size(), 2u);
+    for (const std::string_view line : lines) {
+        EXPECT_LE(md::measure(TextStyle::BodyMedium, line).x, dp(400) + 0.5f) << line;
+        EXPECT_FALSE(line.empty());
+        EXPECT_NE(line.front(), ' ');
+        EXPECT_NE(line.back(), ' ');
+    }
+    EXPECT_EQ(md::snackbarLines("one\ntwo", dp(400)), (std::vector<std::string_view>{"one", "two"}));
+    EXPECT_EQ(md::snackbarLines("", dp(400)).size(), 1u);
+}
+
 // ------------------------------------------------------------------ Menus
 
 TEST_F(WidgetsTest, AnAnchoredMenuFitsItsWidestRowAndShrinksBack) {

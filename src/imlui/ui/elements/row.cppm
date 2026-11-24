@@ -4,7 +4,13 @@
 // Text, Spacer { fill }) share the width the others leave, each rendered in a layout box of its share. The others'
 // widths and the heights (for `align`) are their intrinsic sizes, else the ones of the previous frame
 // (Frame::Child::expectedWidth / expectedHeight, immediate mode); when a child renders at another size, the layout
-// cache asks for another frame, so the row settles. On a child's first frame without either, the row renders unseen.
+// cache asks for another frame, so the row settles.
+//
+// A child's first frame without either size: when the row needs its width to place the others (fills share what it
+// leaves, or `justify` isn't "start"), a wrong guess would shift its siblings far, so the row renders unseen for that
+// frame. When only its height is unknown (`align` center or bottom), the child renders visibly at the top and the
+// others are aligned among the known heights; the requested next frame moves them by a few pixels at most, which is
+// far less noticeable than a row that blinks in.
 export module imlui.ui.elements.row;
 
 import std;
@@ -84,11 +90,11 @@ void Row::render(Frame& frame) {
             slot.w = c.expectedWidth(rowW);
             unknownWidth = unknownWidth || !known;
         }
-        if (alignsHeights) {
+        if (alignsHeights && known) {
             slot.h = c.expectedHeight(rowW);
             rowH = std::max(rowH, slot.h);
-            unknownHeight = unknownHeight || !known;
         }
+        unknownHeight = unknownHeight || (alignsHeights && !known); // it renders at the top (h = 0)
         slots.push_back(slot);
     });
     const int count = static_cast<int>(slots.size());
@@ -118,9 +124,11 @@ void Row::render(Frame& frame) {
         const auto next = static_cast<std::size_t>(i + 1);
         after[static_cast<std::size_t>(i)] = after[next] + sp + extraGap + (slots[next].fills ? 0.0f : slots[next].w);
     }
-    // On a frame where a size the placement depends on is unknown (a child's first), the children render unseen:
-    // measured, not drawn in the wrong place; the next frame (requested) places them.
-    const bool unseen = (alignsHeights && unknownHeight) || (unknownWidth && (fills > 0 || m_justify != "start"));
+    // On a frame where a width the horizontal placement depends on is unknown (a child's first), the children render
+    // unseen: measured, not drawn in the wrong place; the next frame (requested) places them. An unknown height only
+    // offsets the alignment by a few pixels for a frame: the row renders seen, and asks for the frame that aligns it.
+    const bool unseen = unknownWidth && (fills > 0 || m_justify != "start");
+    if (unknownHeight && !unseen) frame.requestFrame();
 
     // Pass 2: place and render. A fill renders in a box of its share; any other child's box ends where the children
     // after it start, so a fill inside it (a Column with a filling child) stops there.

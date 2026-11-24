@@ -26,6 +26,16 @@ int panicHandler(lua::State* state);
 /// protected mode. On success leaves `nresults` values; on failure reports
 /// the error (with traceback) and leaves nothing.
 bool safeCall(lua::State* state, int nargs, int nresults);
+/// safeCall() for a call that only reads (a property's binding, a bind source, `__children`): it doesn't count as a
+/// possible change of the Lua state (changes()), and neither do the calls it makes.
+bool safeRead(lua::State* state, int nargs, int nresults);
+
+/// A count that moves whenever the Lua state may have changed: every safeCall() outside a safeRead() (a handler, a
+/// write-back), and every noteChange(). While it stands still within a frame, an element's properties read the same,
+/// so the TypeRegistry syncs each element at most once a frame.
+[[nodiscard]] std::uint64_t changes();
+/// Counts a change made without a call (C++ writing a table field).
+void noteChange();
 
 /// Raises the Lua error "<where><detail>: <what>" (`what` null: "unknown C++ exception"). Never returns.
 [[noreturn]] void raiseException(lua::State* state, std::string_view where, std::string_view detail, const char* what);
@@ -81,6 +91,19 @@ namespace imlui::luaui {
 namespace {
 
 std::vector<std::string> recorded;
+std::uint64_t changeCount = 0; // main thread only, like all Lua code
+int readDepth = 0;             ///< safeRead() calls running
+
+/// Leaves the read depth as it was, also when the call throws (a C++ exception through a Lua error).
+class ReadScope {
+public:
+    ReadScope() { ++readDepth; }
+    ~ReadScope() { --readDepth; }
+    ReadScope(const ReadScope&) = delete;
+    ReadScope& operator=(const ReadScope&) = delete;
+    ReadScope(ReadScope&&) = delete;
+    ReadScope& operator=(ReadScope&&) = delete;
+};
 
 /// Arg 1: any value. Pushes luaL_tolstring's result (runs __tostring).
 int toStringFn(lua::State* state) {
@@ -131,6 +154,13 @@ int panicHandler(lua::State* state) {
 }
 
 bool safeCall(lua::State* state, int nargs, int nresults) {
+    // Counted before and after: code inside the call (a sync from a method) and code after it see new counts.
+    if (readDepth == 0) ++changeCount;
+    struct After {
+        ~After() {
+            if (readDepth == 0) ++changeCount;
+        }
+    } after;
     int base = lua::gettop(state) - nargs;
     lua::pushcfunction(state, &tracebackHandler);
     lua::insert(state, base);
@@ -143,6 +173,14 @@ bool safeCall(lua::State* state, int nargs, int nresults) {
     }
     return true;
 }
+
+bool safeRead(lua::State* state, int nargs, int nresults) {
+    const ReadScope scope;
+    return safeCall(state, nargs, nresults);
+}
+
+std::uint64_t changes() { return changeCount; }
+void noteChange() { ++changeCount; }
 
 void raiseException(lua::State* state, std::string_view where, std::string_view detail, const char* what) {
     const std::string msg = describeException(where, detail, what);

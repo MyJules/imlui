@@ -78,14 +78,16 @@ public:
         [[nodiscard]] float expectedWidth(float maxWidth, float fallback = 0.0f) const;
         [[nodiscard]] float expectedHeight(float maxWidth, float fallback = 0.0f) const;
 
-        /// Size of the child when it was last rendered (this frame or the last), or `fallback` when it wasn't.
-        /// Reading it tells the layout cache that the caller places the child by it: when the child then renders
-        /// at another size (by more than half a pixel), another frame is requested, so the layout settles.
+        /// Size of the child when it was last rendered (the layout cache keeps it while the child is hidden), or
+        /// `fallback` when it never was. Reading it tells the layout cache that the caller places the child by it:
+        /// when the child then renders at another size (by more than half a pixel), another frame is requested, so
+        /// the layout settles.
         [[nodiscard]] float lastWidth(float fallback = 0.0f) const;
         [[nodiscard]] float lastHeight(float fallback = 0.0f) const;
 
         /// Syncs the declared properties of a typed child into its instance and returns it; nullptr when the
-        /// child isn't a registered type. Rendering the child syncs again (setters only run on change).
+        /// child isn't a registered type. Rendering the child later in the frame reuses this sync, unless Lua code
+        /// that may have changed its table (a handler, a write-back) ran in between.
         ScriptObject* syncProperties() const;
 
         /// The child's C++ instance as a T, with its properties synced: `child.as<Tab>()->title()`. nullptr

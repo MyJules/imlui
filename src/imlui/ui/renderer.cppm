@@ -19,6 +19,7 @@ import imlui.lua.node;
 import imlui.ui.layout_box;
 import imlui.ui.layout_cache;
 import imlui.ui.frame_request;
+import imlui.ui.item_size;
 import imlui.ui.props;
 
 export namespace imlui {
@@ -76,7 +77,7 @@ public:
         node.pushRaw("__children");
         if (lua::isfunction(state, -1)) {
             lua::pushvalue(state, node.index());
-            if (!luaui::safeCall(state, 1, 1)) return;
+            if (!luaui::safeRead(state, 1, 1)) return; // a read: the model, the delegates it builds
             if (!lua::istable(state, -1)) {
                 lua::pop(state);
                 return;
@@ -209,7 +210,8 @@ void Renderer::renderStack(const Node& node) {
     const auto spacing = node.number("spacing");
     const float align = alignFactor(node.string("align", "start"));
     lua::State* state = node.state();
-    float avail = layout::availableWidth();
+    const float boxAvail = layout::availableWidth();
+    float avail = boxAvail;
     const float x0 = ImGui::GetCursorScreenPos().x;
     // In an auto-sized window the stack is as wide as its widest child (a fill there is only the window's minimum
     // width), so `align` places the children in that width, as measured on the last frame. Not in the window's
@@ -234,24 +236,40 @@ void Renderer::renderStack(const Node& node) {
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
                                  ImGui::GetStyle().ItemSpacing.y);
         bool unseen = false;
+        float fillOffset = 0.0f;
         if (align > 0.0f) {
-            // Placed by its intrinsic width, else by its width on the last frame; render() records the one it takes
-            // (another frame if it differs). On its first frame without either, it renders unseen.
-            const ImGuiID key = ImGui::GetID(c.ptr());
-            std::optional<float> w;
-            if (const auto intrinsic = intrinsicSize(c, avail))
-                w = intrinsic->x;
-            else if (const auto last = layout::lastSize(key))
-                w = last->x;
-            unseen = !w;
-            layout::assumeWidth(key, w.value_or(0.0f));
-            ImGui::SetCursorScreenPos(
-                {x0 + std::max(0.0f, (avail - w.value_or(0.0f)) * align), ImGui::GetCursorScreenPos().y});
+            const float width = sizeProp(c, "width");
+            if (width != 0.0f ? width < 0.0f : fillsWidth(state, idx)) {
+                // A fill or fill-minus child's width is known up front: the box's width (less N). It is placed by it
+                // and rendered in a box that starts where it does and is as wide as the stack's, so it resolves to
+                // that width again: settled on its first frame, with no cached width (which, read back through its
+                // own offset, would converge only geometrically).
+                const float w = resolveSize(width != 0.0f ? width : -1.0f, boxAvail, 0.0f);
+                fillOffset = std::max(0.0f, (avail - w) * align);
+                ImGui::SetCursorScreenPos({x0 + fillOffset, ImGui::GetCursorScreenPos().y});
+            } else {
+                // Placed by its intrinsic width, else by its width on the last frame; render() records the one it
+                // takes (another frame if it differs). On its first frame without either, it renders unseen.
+                const ImGuiID key = ImGui::GetID(c.ptr());
+                std::optional<float> w;
+                if (const auto intrinsic = intrinsicSize(c, avail))
+                    w = intrinsic->x;
+                else if (const auto last = layout::lastSize(key))
+                    w = last->x;
+                unseen = !w;
+                layout::assumeWidth(key, w.value_or(0.0f));
+                ImGui::SetCursorScreenPos(
+                    {x0 + std::max(0.0f, (avail - w.value_or(0.0f)) * align), ImGui::GetCursorScreenPos().y});
+            }
         }
-        if (unseen)
+        if (unseen) {
             renderUnseen(state, idx);
-        else
+        } else if (fillOffset > 0.0f) {
+            const layout::BoxScope box{layout::insetBox(-fillOffset)};
             render(state, idx);
+        } else {
+            render(state, idx);
+        }
         if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
         first = false;
     });

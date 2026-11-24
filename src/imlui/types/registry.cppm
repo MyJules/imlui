@@ -21,7 +21,9 @@
 // lazily: before a method called from Lua runs on them, and when a parent or another element asks for them
 // (sync(), Frame::Child::as<T>()). componentComplete() runs once, right after the first sync. Ticking
 // elements (Element::setTicking) are synced and ticked at the start of every frame by tick(now), which
-// ui.__tick calls, rendered or not.
+// ui.__tick calls, rendered or not. While a frame renders, an element is synced once: a layout's questions about a
+// child (fillsWidth, intrinsicSize, Frame::Child::as) and its render share the sync, unless Lua code that may have
+// changed the table ran in between (luaui::changes(): a handler, a write-back), which syncs it again.
 // Main thread only.
 export module imlui.types.registry;
 
@@ -130,11 +132,15 @@ private:
         TypeInfo::Defaults defaults;         ///< captured at registration
     };
 
+    /// sync() while rendering: an element already synced this frame isn't synced again while nothing that could
+    /// change its table ran since (luaui::changes()).
+    Element* renderSync(const luaui::Node& node) const;
+
     TypeInfo& addType(std::unique_ptr<TypeInfo> info);
     TypeInfo& addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info,
                            std::shared_ptr<ScriptObject> owner);
 
-    /// What Frames use to resolve typed children (Frame::Child::as): sync(node).
+    /// What Frames use to resolve typed children (Frame::Child::as): renderSync(node).
     Frame::InstanceLookup m_instances;
     /// Never shrinks: Lua states hold raw pointers to these until they close.
     std::vector<std::unique_ptr<TypeInfo>> m_infos;
@@ -171,7 +177,22 @@ struct Box {
     bool owned = false;
     bool complete = false; ///< componentComplete() was called
     bool syncing = false;  ///< a sync is running (a binding that calls a method of its own element)
+    // When the last sync ended: an ImGui frame (-1 outside one) and luaui::changes() (see Sync::OncePerFrame).
+    int syncedFrame = -1;
+    std::uint64_t syncedChanges = 0;
 };
+
+/// Whether syncInstance may skip an element synced earlier in the frame.
+enum class Sync {
+    Always,
+    /// Layouts ask about a child (fillsWidth, intrinsicSize) and then render it, and a Row asks twice: one sync a
+    /// frame is enough while nothing that could change its table ran in between (luaui::changes() stood still: a
+    /// handler, a write-back or a script between frames moves it). Only while rendering a frame.
+    OncePerFrame,
+};
+
+/// The current ImGui frame, -1 without a context.
+int currentFrame() { return ImGui::GetCurrentContext() ? ImGui::GetFrameCount() : -1; }
 
 /// Runs the Box destructor and leaves an empty Box in the userdata memory, so a finalized userdata that
 /// is still reachable (resurrected by another finalizer) reads as "no object" instead of freed memory.
@@ -291,18 +312,25 @@ int syncPropertiesFn(lua::State* state) {
 /// componentComplete() if this was the first sync. Skipped while a sync of the same element runs.
 /// Never raises: an error in the sync (a metamethod of the table, a binding's source, ...) or an exception
 /// from componentComplete() is reported.
-void syncInstance(lua::State* state, int tbl, Box& b) {
+void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) {
     if (b.syncing || !b.element) return;
+    const int frame = currentFrame();
+    if (mode == Sync::OncePerFrame && b.complete && frame >= 0 && b.syncedFrame == frame &&
+        b.syncedChanges == luaui::changes())
+        return;
     tbl = lua::absindex(state, tbl);
     b.syncing = true;
     // Protected: an error in the loop is reported, not raised, and can't skip the reset below (`syncing` left set
-    // would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.)
+    // would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.) It only reads
+    // the table (and the bindings), so it doesn't count as a change itself.
     lua::checkstack(state, 4);
     lua::pushcfunction(state, &syncPropertiesFn);
     lua::pushlightuserdata(state, &b);
     lua::pushvalue(state, tbl);
-    luaui::safeCall(state, 2, 0);
+    luaui::safeRead(state, 2, 0);
     b.syncing = false;
+    b.syncedFrame = frame;
+    b.syncedChanges = luaui::changes(); // before componentComplete(), whose handlers may change the table
     if (!b.complete && b.element) {
         b.complete = true;
         Element* e = b.element;
@@ -542,7 +570,7 @@ int libTickingCount(lua::State* state) {
     return 1;
 }
 
-Box* syncBox(const Node& node, const TypeInfo& info) {
+Box* syncBox(const Node& node, const TypeInfo& info, Sync mode) {
     lua::State* state = node.state();
     Box* b = selfBox(state, node.index());
     if (!b) b = attachInstance(state, node.index(), info);
@@ -552,13 +580,14 @@ Box* syncBox(const Node& node, const TypeInfo& info) {
         luaui::reportError("element of type '" + info.name() + "' carries an instance of '" + b->type->name() + "'");
         return nullptr;
     }
-    syncInstance(state, node.index(), *b);
+    syncInstance(state, node.index(), *b, mode);
     return b->element ? b : nullptr;
 }
 
 } // namespace
 
-TypeRegistry::TypeRegistry() : m_instances{[this](const Node& node) -> ScriptObject* { return sync(node); }} {}
+TypeRegistry::TypeRegistry()
+    : m_instances{[this](const Node& node) -> ScriptObject* { return renderSync(node); }} {}
 
 TypeInfo& TypeRegistry::addType(std::unique_ptr<TypeInfo> info) {
     TypeInfo& ref = *info;
@@ -598,7 +627,7 @@ TypeRegistry::Kind TypeRegistry::kind(std::string_view type) const {
 void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
     const TypeInfo* info = find(node.type());
     if (!info) return;
-    Box* b = syncBox(node, *info);
+    Box* b = syncBox(node, *info, Sync::OncePerFrame);
     if (!b) return;
     Frame frame{renderer, node, &m_instances, info->fillsWidth(b->element)};
     b->element->render(frame);
@@ -607,7 +636,7 @@ void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
 std::optional<ImVec2> TypeRegistry::intrinsicSize(Renderer& renderer, const Node& node, float maxWidth) {
     const TypeInfo* info = find(node.type());
     if (!info || !info->visual()) return std::nullopt;
-    Box* b = syncBox(node, *info);
+    Box* b = syncBox(node, *info, Sync::OncePerFrame);
     if (!b) return std::nullopt;
     const Frame frame{renderer, node, &m_instances, info->fillsWidth(b->element)};
     return b->element->intrinsicSize(frame, maxWidth);
@@ -617,13 +646,20 @@ bool TypeRegistry::fillsWidth(const Node& node) {
     const TypeInfo* info = find(node.type());
     if (!info) return false;
     if (!info->fillsWidthDependsOnInstance()) return info->fillsWidth(nullptr);
-    return info->fillsWidth(sync(node));
+    return info->fillsWidth(renderSync(node));
 }
 
 Element* TypeRegistry::sync(const Node& node) const {
     const TypeInfo* info = find(node.type());
     if (!info) return nullptr;
-    Box* b = syncBox(node, *info);
+    Box* b = syncBox(node, *info, Sync::Always);
+    return b ? b->element : nullptr;
+}
+
+Element* TypeRegistry::renderSync(const Node& node) const {
+    const TypeInfo* info = find(node.type());
+    if (!info) return nullptr;
+    Box* b = syncBox(node, *info, Sync::OncePerFrame);
     return b ? b->element : nullptr;
 }
 

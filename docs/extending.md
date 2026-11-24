@@ -387,6 +387,14 @@ is synced when something needs it:
   its Lua values on its first method call;
 - when a **parent or another element** asks for it: `Frame::Child::as<T>()` and `TypeRegistry::sync(node)`.
 
+While a frame renders, an element is synced **once**: a layout that asks a child whether it fills, for its intrinsic
+size or for `as<T>()`, and then renders it, syncs it on the first of these, and the others reuse that sync (a
+`Row` child's function-bound prop runs once a frame, not three times). Lua code that may have changed element
+tables in between (a signal handler, a `notify` write-back: anything run through `luaui::safeCall`, which counts in
+`luaui::changes()`) makes the next of them sync again, so a change a handler made earlier in the frame is rendered
+in the same frame. Property reads (bindings, bind sources, `__children`) run through `luaui::safeRead` and don't
+count. `TypeRegistry::sync(node)`, method calls and `tick()` always sync.
+
 `componentComplete()` runs once, right after the first sync, wherever that happens (first render, first method
 call, or a parent's `as<T>()`). An exception thrown by `componentComplete()`, `tick()` or `destroyed()` is
 reported as a script error (`Gauge.componentComplete(): ...`) and the element carries on (or is deleted anyway,
