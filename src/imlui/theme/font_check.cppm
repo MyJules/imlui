@@ -2,12 +2,14 @@
 //
 // ImGui parses fonts with stb_truetype, which trusts the data: offsets are read without bounds checks, and data it
 // doesn't expect trips IM_ASSERT_USER_ERROR or STBTT_assert, which abort the program. checkFont() walks everything
-// stb_truetype reads when a font is added (stbtt_GetFontOffsetForIndex, stbtt_InitFont) and when a glyph is looked
-// up (the character map, glyph locations, metrics, the CFF indexes), and rejects data that would make it read out of
-// bounds or assert. It doesn't decode TrueType glyph outlines. CFF outlines are different: stb_truetype runs a glyph's
-// charstring program to get its box (stbtt_GetGlyphBox, which ImGui calls for every glyph it loads), and a broken
-// program trips an STBTT_assert there. Once the structure is known to be sound, checkFont() runs every charstring
-// through its own copy of stb_truetype, whose STBTT_assert records the failure instead of aborting.
+// stb_truetype reads when a font is added (stbtt_GetFontOffsetForIndex, stbtt_InitFont), when a glyph is looked up
+// (the character map, glyph locations, metrics, the CFF indexes) and when it is rasterized (stbtt_GetGlyphShape), and
+// rejects data that would make it read out of bounds, assert, or recurse without end. TrueType outlines (glyf) are
+// decoded the way stb_truetype decodes them (class Outlines): every byte of a simple glyph, every part of a composite
+// one, recursively. CFF outlines are programs: stb_truetype runs a glyph's charstring to get its box
+// (stbtt_GetGlyphBox, which ImGui calls for every glyph it loads) and its shape, and a broken program trips an
+// STBTT_assert there. Once the structure is known to be sound, checkFont() runs every charstring through its own copy
+// of stb_truetype, whose STBTT_assert records the failure instead of aborting.
 module;
 
 #include <errno.h> // errno: where STBTT_assert records a failure
@@ -403,29 +405,332 @@ Problem checkCmap(const Reader& r, Table cmap, std::size_t glyphs) {
     return std::nullopt;
 }
 
-/// Every glyph's CFF charstring, run by stb_truetype as stbtt_GetGlyphBox runs it. Only for a font whose structure
-/// checkSfnt() found sound: stb_truetype reads the CFF table through a buffer it thinks is 512 MiB long, so only
-/// checkCff()'s checks keep it inside the data.
-Problem checkCharstrings(const Reader& r, std::size_t font) {
-    if (r.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return "the font is too large";
+// ------------------------------------------------------------------ TrueType outlines
+
+/// What stbtt_GetGlyphShape makes of a glyph, as far as the composite glyphs that use it care.
+struct Shape {
+    std::uint64_t vertices = 0; ///< how many it returns
+    std::uint64_t work = 0;     ///< vertices allocated, decoded, copied and transformed on the way, parts included
+    std::size_t levels = 0;     ///< levels of composite glyphs inside it
+    /// Decoding it reads past stb_truetype's vertex array (a last contour of one point off the curve): harmless
+    /// unless the glyph is drawn.
+    bool readsPast = false;
+    /// A box around every coordinate of the vertices, control points included (a line's control point is (0, 0), so
+    /// the box always holds it).
+    std::int32_t minX = 0, minY = 0, maxX = 0, maxY = 0;
+};
+
+/// Every glyph's TrueType outline (glyf), read the way stbtt_GetGlyphShape reads it when ImGui rasterizes the glyph:
+/// stb_truetype trusts the data, so every byte it would read must lie inside the glyph; and it fetches a composite
+/// glyph's parts by recursion, so they must not contain the glyph itself (a stack overflow), nest too deeply, or
+/// repeat so much that the work explodes. Also each glyph's box, which ImGui sizes the glyph's bitmap by.
+class Outlines {
+public:
+    /// `starts`: the glyphs' offsets in glyf from loca (checked: ascending and inside glyf), one more than there are
+    /// glyphs. `maxExtent`: the largest box width or height allowed (maxGlyphExtent()).
+    Outlines(const Reader& r, std::size_t glyf, std::vector<std::size_t> starts, std::int64_t maxExtent)
+        : m_r{r}, m_glyf{glyf}, m_starts{std::move(starts)}, m_maxExtent{maxExtent},
+          m_state(m_starts.size() - 1, State::Unseen), m_shapes(m_starts.size() - 1) {}
+
+    Problem check() {
+        for (std::size_t glyph = 0; glyph < m_shapes.size(); ++glyph)
+            if (auto p = shape(glyph, 0)) return p;
+        return std::nullopt;
+    }
+
+private:
+    enum class State : std::uint8_t { Unseen, Reading, Read };
+
+    /// Composite glyphs inside composite glyphs: stb_truetype recurses once per level.
+    static constexpr std::size_t maxDepth = 16;
+    /// Per glyph, parts included: far above what real glyphs need.
+    static constexpr std::uint64_t maxVertices = 1 << 18;
+    static constexpr std::uint64_t maxWork = 1 << 22;
+
+    [[nodiscard]] static std::string problem(std::size_t glyph, std::string_view what) {
+        return "the outline of glyph " + std::to_string(glyph) + " " + std::string{what};
+    }
+
+    Problem shape(std::size_t glyph, std::size_t depth) {
+        // A glyph inside `depth` composite glyphs: stb_truetype's recursion reaches depth + its levels.
+        if (depth > maxDepth || (m_state[glyph] == State::Read && depth + m_shapes[glyph].levels > maxDepth))
+            return problem(glyph, "is nested too deeply");
+        if (m_state[glyph] == State::Read) return std::nullopt;
+        if (m_state[glyph] == State::Reading) return problem(glyph, "contains itself");
+        m_state[glyph] = State::Reading;
+        const Range g{m_glyf + m_starts[glyph], m_glyf + m_starts[glyph + 1]};
+        Shape s;
+        bool drawn = false;
+        if (g.begin != g.end) { // stb_truetype reads nothing of an empty glyph
+            // The 10-byte header was checked with loca: numberOfContours (signed), then the box.
+            const auto word = [&](std::size_t at) { return std::int64_t{static_cast<std::int16_t>(m_r.u16(at))}; };
+            const std::int64_t xMin = word(g.begin + 2), yMin = word(g.begin + 4), xMax = word(g.begin + 6),
+                               yMax = word(g.begin + 8);
+            // ImGui gives a glyph a bitmap of its box's size: an inverted box makes that size negative, and both
+            // trip an IM_ASSERT.
+            if (xMin > xMax || yMin > yMax) return problem(glyph, "has an inverted box");
+            if (xMax - xMin > m_maxExtent || yMax - yMin > m_maxExtent)
+                return problem(glyph, "is far larger than the font");
+            // ImGui draws a glyph whose box covers a pixel at some size: unless it is 0 wide or high at 0.
+            drawn = !(xMin == 0 && xMax == 0) && !(yMin == 0 && yMax == 0);
+            const auto contours = static_cast<std::int16_t>(m_r.u16(g.begin));
+            if (contours > 0) {
+                if (auto p = simple(glyph, g, static_cast<std::size_t>(contours), s)) return p;
+            } else if (contours < 0) {
+                if (auto p = composite(glyph, g, depth, s)) return p;
+            }
+        }
+        if (s.vertices > maxVertices || s.work > maxWork) return problem(glyph, "is too complex");
+        if (s.readsPast && drawn) return problem(glyph, "is broken");
+        m_shapes[glyph] = s;
+        m_state[glyph] = State::Read;
+        return std::nullopt;
+    }
+
+    /// A simple glyph (numberOfContours > 0), as stbtt__GetGlyphShapeTT reads it: the contours' end points, the
+    /// instructions (skipped), the flags with their repeat counts, then the x and the y coordinates, 1 or 2 bytes
+    /// or none each as the flags say. stb_truetype reads them all without a bound, and takes the number of points
+    /// from the last end point alone.
+    Problem simple(std::size_t glyph, Range g, std::size_t contours, Shape& s) {
+        const auto broken = [&] { return problem(glyph, "is broken"); };
+        const std::size_t endPts = g.begin + 10;
+        if (endPts + 2 * contours + 2 > g.end) return broken();
+        const std::size_t points = std::size_t{m_r.u16(endPts + 2 * contours - 2)} + 1;
+        std::size_t at = endPts + 2 * contours + 2 + m_r.u16(endPts + 2 * contours); // past the instructions
+        m_flags.resize(points);
+        std::uint32_t flags = 0, repeat = 0;
+        for (std::size_t i = 0; i < points; ++i) {
+            if (repeat == 0) {
+                if (at >= g.end) return broken();
+                flags = m_r.u8(at++);
+                if (flags & 8) {
+                    if (at >= g.end) return broken();
+                    repeat = m_r.u8(at++);
+                }
+            } else {
+                --repeat;
+            }
+            m_flags[i] = static_cast<std::uint8_t>(flags);
+        }
+        // The coordinates, as the int16 stb_truetype keeps of its running sums (which can't overflow its int32).
+        const auto coordinates = [&](std::uint32_t byteBit, std::uint32_t sameBit, std::int32_t& low,
+                                     std::int32_t& high) {
+            std::int64_t v = 0;
+            for (std::size_t i = 0; i < points; ++i) {
+                const std::uint32_t f = m_flags[i];
+                if (f & byteBit) {
+                    if (at >= g.end) return false;
+                    const std::int64_t d = m_r.u8(at++);
+                    v += (f & sameBit) ? d : -d;
+                } else if (!(f & sameBit)) {
+                    if (at + 2 > g.end) return false;
+                    v += static_cast<std::int16_t>(m_r.u16(at));
+                    at += 2;
+                }
+                const std::int32_t c = static_cast<std::int16_t>(static_cast<std::uint16_t>(v & 0xFFFF));
+                low = std::min(low, c);
+                high = std::max(high, c);
+            }
+            return true;
+        };
+        if (!coordinates(2, 16, s.minX, s.maxX) || !coordinates(4, 32, s.minY, s.maxY)) return broken();
+
+        // The vertices, counted the way stb_truetype makes them. A contour starts at point 0 and after each end
+        // point. One that starts off the curve looks at its next point too: for a last contour of one point off the
+        // curve, that is past stb_truetype's array (fonts have such glyphs with an empty box, as placeholders; they
+        // are never drawn). No more contours start than there are end points (the last one ends the points), so the
+        // vertices fit the points + 2 * contours it allocates.
+        std::size_t vertices = 0, contour = 0, nextStart = 0;
+        bool wasOff = false, startOff = false;
+        const auto close = [&] { vertices += startOff && wasOff ? 2 : 1; };
+        for (std::size_t i = 0; i < points; ++i) {
+            const bool on = (m_flags[i] & 1) != 0;
+            if (i == nextStart) {
+                if (i != 0) close();
+                startOff = !on;
+                if (startOff) {
+                    if (i + 1 >= points)
+                        s.readsPast = true; // what it reads there decides; either way this is the last point
+                    else if (m_flags[i + 1] & 1)
+                        ++i; // the next point starts the contour
+                }
+                ++vertices;
+                wasOff = false;
+                if (contour >= contours) return broken(); // can't happen (see above); keeps this inside endPts
+                nextStart = std::size_t{m_r.u16(endPts + 2 * contour)} + 1;
+                ++contour;
+            } else if (!on) {
+                if (wasOff) ++vertices;
+                wasOff = true;
+            } else {
+                ++vertices;
+                wasOff = false;
+            }
+        }
+        close();
+        s.vertices = vertices;
+        s.work = 2 * points + 2 * contours;
+        return std::nullopt;
+    }
+
+    /// A composite glyph (numberOfContours < 0): parts, each a flags word, a glyph index, an offset (two bytes or
+    /// two words) and an optional scale (one, x and y, or a 2x2 matrix), for as long as the flags say more follow.
+    /// stb_truetype fetches each part's shape (recursively), transforms it and appends it.
+    Problem composite(std::size_t glyph, Range g, std::size_t depth, Shape& s) {
+        std::size_t at = g.begin + 10;
+        for (bool more = true; more;) {
+            if (at + 4 > g.end) return problem(glyph, "is broken");
+            const std::uint32_t flags = m_r.u16(at);
+            const std::size_t part = m_r.u16(at + 2);
+            at += 4;
+            // Placing a part by matching points isn't implemented: stb_truetype asserts.
+            if (!(flags & 2)) return problem(glyph, "places a part by its points");
+            std::size_t size = (flags & 1) ? 4 : 2;
+            if (flags & (1 << 3))
+                size += 2;
+            else if (flags & (1 << 6))
+                size += 4;
+            else if (flags & (1 << 7))
+                size += 8;
+            if (at + size > g.end) return problem(glyph, "is broken");
+            std::array<float, 6> mtx{1, 0, 0, 1, 0, 0};
+            const auto word = [&] {
+                const auto v = static_cast<float>(static_cast<std::int16_t>(m_r.u16(at)));
+                at += 2;
+                return v;
+            };
+            if (flags & 1) {
+                mtx[4] = word();
+                mtx[5] = word();
+            } else {
+                mtx[4] = static_cast<float>(static_cast<std::int8_t>(m_r.u8(at)));
+                mtx[5] = static_cast<float>(static_cast<std::int8_t>(m_r.u8(at + 1)));
+                at += 2;
+            }
+            if (flags & (1 << 3)) {
+                mtx[0] = mtx[3] = word() / 16384.0f;
+            } else if (flags & (1 << 6)) {
+                mtx[0] = word() / 16384.0f;
+                mtx[3] = word() / 16384.0f;
+            } else if (flags & (1 << 7)) {
+                for (std::size_t k = 0; k < 4; ++k)
+                    mtx[k] = word() / 16384.0f;
+            }
+            more = (flags & (1 << 5)) != 0;
+
+            // stbtt__GetGlyfOffset gives no outline for a glyph index past the font's.
+            if (part >= m_shapes.size()) continue;
+            if (auto p = shape(part, depth + 1)) return p;
+            const Shape& p = m_shapes[part];
+            s.levels = std::max(s.levels, p.levels + 1);
+            s.readsPast = s.readsPast || p.readsPast;
+            s.work += p.work;
+            if (p.vertices == 0) continue;
+            // Each coordinate pair (x, y) of a vertex becomes ((short)(m * (a x + c y + e)), (short)(n * (b x + d y +
+            // f))) (sic: the scale is applied twice), and a float-to-int conversion out of range is undefined. The
+            // extremes of an affine map over the part's box lie at its corners.
+            std::array<double, 6> t{};
+            for (std::size_t k = 0; k < t.size(); ++k)
+                t[k] = static_cast<double>(mtx[k]);
+            const double m = std::sqrt(t[0] * t[0] + t[1] * t[1]), n = std::sqrt(t[2] * t[2] + t[3] * t[3]);
+            constexpr double limit = 32767.0; // a margin below 32768 for float rounding
+            for (const std::int32_t x : {p.minX, p.maxX}) {
+                for (const std::int32_t y : {p.minY, p.maxY}) {
+                    const double tx = m * (t[0] * x + t[2] * y + t[4]), ty = n * (t[1] * x + t[3] * y + t[5]);
+                    if (std::abs(tx) > limit || std::abs(ty) > limit)
+                        return problem(glyph, "moves a part out of range");
+                    s.minX = std::min(s.minX, static_cast<std::int32_t>(std::floor(tx)));
+                    s.maxX = std::max(s.maxX, static_cast<std::int32_t>(std::ceil(tx)));
+                    s.minY = std::min(s.minY, static_cast<std::int32_t>(std::floor(ty)));
+                    s.maxY = std::max(s.maxY, static_cast<std::int32_t>(std::ceil(ty)));
+                }
+            }
+            // Transformed, then copied with every vertex before it into a new array.
+            s.work += 2 * p.vertices + s.vertices;
+            s.vertices += p.vertices;
+            if (s.vertices > maxVertices || s.work > maxWork) return problem(glyph, "is too complex");
+        }
+        return std::nullopt;
+    }
+
+    const Reader& m_r;
+    std::size_t m_glyf;
+    std::vector<std::size_t> m_starts;
+    std::int64_t m_maxExtent;
+    std::vector<State> m_state;
+    std::vector<Shape> m_shapes;
+    std::vector<std::uint8_t> m_flags; ///< a simple glyph's, while it is read
+};
+
+/// The largest glyph box width or height for a font `height` units high (ascender - descender). ImGui gives a glyph
+/// a bitmap of its box's size, scaled by the font size / its height, and a bitmap larger than its atlas (or 65535
+/// pixels) trips an IM_ASSERT. Real fonts stay below 8 heights (tall Arabic ligatures); 16 keeps a 128px font's
+/// largest glyph well inside ImGui's 8192-pixel atlas.
+std::int64_t maxGlyphExtent(std::int64_t height) { return 16 * height; }
+
+/// Every glyph's CFF charstring, run by stb_truetype as stbtt_GetGlyphBox runs it, and the box it gives (see
+/// maxGlyphExtent()). Only for a font whose structure checkSfnt() found sound: stb_truetype reads the CFF table
+/// through a buffer it thinks is 512 MiB long, so only checkCff()'s checks keep it inside the data.
+Problem checkCharstrings(const Reader& r, std::size_t font, std::int64_t maxExtent) {
     const int saved = errno;
     errno = 0;
     stbtt_fontinfo info{};
     const bool read = stbtt_InitFont(&info, r.data(), static_cast<int>(font)) != 0 && errno == 0;
     int glyph = 0;
-    for (; read && glyph < info.numGlyphs && errno == 0; ++glyph) {
+    bool tooLarge = false;
+    for (; read && glyph < info.numGlyphs && errno == 0 && !tooLarge; ++glyph) {
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         stbtt_GetGlyphBox(&info, glyph, &x0, &y0, &x1, &y1);
+        tooLarge = std::int64_t{x1} - x0 > maxExtent || std::int64_t{y1} - y0 > maxExtent;
     }
     const bool asserted = errno != 0;
     errno = saved;
     if (!read) return "the CFF table is broken";
     if (asserted) return "the CFF charstring of glyph " + std::to_string(glyph - 1) + " is broken";
+    if (tooLarge) return "the outline of glyph " + std::to_string(glyph - 1) + " is far larger than the font";
+    return std::nullopt;
+}
+
+/// The top of every TrueType glyph whose box ends at or below the baseline, from the outline stb_truetype makes of it
+/// (stbtt_GetGlyphShape: safe once Outlines found the glyphs sound). ImGui's bitmap for such a glyph starts at the
+/// baseline at small sizes, and stb_truetype's rasterizer asserts when an edge of the outline lies wholly above its
+/// bitmap's first row (it clamps such edges only for bitmaps that start elsewhere; found by the `font` fuzz target).
+/// So the outline must not rise above the baseline. Real fonts' boxes are often a few units off their outlines, but
+/// none of these glyphs rises above the baseline.
+Problem checkTops(const Reader& r, std::size_t font) {
+    stbtt_fontinfo info{};
+    if (!stbtt_InitFont(&info, r.data(), static_cast<int>(font))) return "the font can't be read"; // checked before
+    for (int glyph = 0; glyph < info.numGlyphs; ++glyph) {
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        if (!stbtt_GetGlyphBox(&info, glyph, &x0, &y0, &x1, &y1) || y1 > 0) continue;
+        if ((x0 == 0 && x1 == 0) || (y0 == 0 && y1 == 0)) continue; // never drawn (see Outlines)
+        stbtt_vertex* vertices = nullptr;
+        const int count = stbtt_GetGlyphShape(&info, glyph, &vertices);
+        // The rasterizer flattens each curve into points on it: its top is an end or the extremum in between.
+        double top = -std::numeric_limits<double>::infinity(), y = 0;
+        for (int k = 0; k < count; ++k) {
+            const stbtt_vertex& v = vertices[k];
+            const double y2 = v.y;
+            top = std::max(top, y2);
+            if (v.type == STBTT_vcurve) {
+                const double c = v.cy, denominator = y - 2 * c + y2;
+                if (denominator != 0) {
+                    const double t = (y - c) / denominator;
+                    if (t > 0 && t < 1) top = std::max(top, (1 - t) * (1 - t) * y + 2 * t * (1 - t) * c + t * t * y2);
+                }
+            }
+            y = y2;
+        }
+        stbtt_FreeShape(&info, vertices);
+        if (top > 0) return "the outline of glyph " + std::to_string(glyph) + " rises above its box";
+    }
     return std::nullopt;
 }
 
 /// One font of the data: the sfnt at `font`.
 Problem checkSfnt(const Reader& r, std::size_t font) {
+    // stb_truetype keeps offsets into the data in ints.
+    if (r.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return "the font is too large";
     if (!r.has(font, 12)) return "the font header is truncated";
     const std::uint32_t count = r.u16(font + 4);
     if (count == 0) return "the font has no tables";
@@ -458,6 +763,13 @@ Problem checkSfnt(const Reader& r, std::size_t font) {
     const std::size_t glyphs = r.u16(maxp->offset + 4);
     // Glyph 0 (.notdef) is looked up for every character the font lacks.
     if (glyphs == 0) return "the font has no glyphs";
+    // ImGui scales the font by 1 / its height, ascender - descender: 0 would scale every glyph to infinity, and a
+    // negative height flips the edges stb_truetype's rasterizer sorts top to bottom, which trips its STBTT_asserts
+    // (found by the `font` fuzz target).
+    if (static_cast<std::int16_t>(r.u16(hhea->offset + 4)) <= static_cast<std::int16_t>(r.u16(hhea->offset + 6)))
+        return "table 'hhea' gives the font no height";
+    const std::int64_t maxExtent = maxGlyphExtent(std::int64_t{static_cast<std::int16_t>(r.u16(hhea->offset + 4))} -
+                                                  static_cast<std::int16_t>(r.u16(hhea->offset + 6)));
     const std::size_t longMetrics = r.u16(hhea->offset + 34);
     if (longMetrics == 0 && glyphs > 0) return "table 'hhea' is broken";
     const std::size_t shortMetrics = glyphs > longMetrics ? glyphs - longMetrics : 0;
@@ -471,20 +783,23 @@ Problem checkSfnt(const Reader& r, std::size_t font) {
         if (format > 1) return "table 'head' is broken";
         const std::size_t entry = format == 0 ? 2 : 4;
         if ((glyphs + 1) * entry > loca->length) return "table 'loca' is truncated";
+        // stb_truetype takes a glyph to run from its loca offset to the next one.
+        std::vector<std::size_t> starts(glyphs + 1);
         std::size_t previous = 0;
         for (std::size_t i = 0; i <= glyphs; ++i) {
             const std::size_t at = loca->offset + i * entry;
             const std::size_t offset = format == 0 ? 2 * std::size_t{r.u16(at)} : r.u32(at);
             if (offset < previous || offset > glyf->length) return "table 'loca' is broken";
             if (offset != previous && offset - previous < 10) return "table 'glyf' is broken"; // a glyph header
-            previous = offset;
+            starts[i] = previous = offset;
         }
-        return std::nullopt;
+        if (auto p = Outlines{r, glyf->offset, std::move(starts), maxExtent}.check()) return p;
+        return checkTops(r, font);
     }
     const auto cff = findTable(r, font, "CFF ");
     if (!cff || cff->offset == 0) return "the font has neither TrueType ('glyf') nor CFF outlines";
     if (auto p = checkCff(r, *cff, glyphs)) return p;
-    return checkCharstrings(r, font);
+    return checkCharstrings(r, font, maxExtent);
 }
 
 } // namespace
