@@ -389,6 +389,65 @@ TEST(FontCheck, RejectsDamagedFonts) {
     writeU32(font, recordOf(font, "CFF ") + 12, 3);
     EXPECT_EQ(problem(font), "CFF table is broken");
 
+    // A charstring stb_truetype can't run (found by the `font` fuzz target): its last operator is a hintmask whose
+    // mask bytes would lie past the end of the glyph's program, so stbtt_GetGlyphBox, which ImGui calls for every
+    // glyph it loads, asserts. Glyph 1's program is overwritten in place with stems, then that hintmask.
+    {
+        const auto byte = [&](std::size_t at) -> std::size_t { return static_cast<unsigned char>(icons[at]); };
+        const auto number = [&](std::size_t at, std::size_t size) {
+            std::size_t v = 0;
+            for (std::size_t i = 0; i < size; ++i)
+                v = v << 8 | byte(at + i);
+            return v;
+        };
+        // An INDEX at `at`: the range of element `i`, and where the INDEX ends.
+        const auto element = [&](std::size_t at, std::size_t i, std::size_t* end = nullptr) {
+            const std::size_t count = number(at, 2), offSize = byte(at + 2);
+            const std::size_t data = at + 3 + (count + 1) * offSize - 1;
+            if (end) *end = data + number(at + 3 + count * offSize, offSize);
+            return std::pair{data + number(at + 3 + i * offSize, offSize),
+                             data + number(at + 3 + (i + 1) * offSize, offSize)};
+        };
+        std::size_t at = cff + byte(cff + 2);
+        static_cast<void>(element(at, 0, &at)); // Name INDEX
+        const auto [topBegin, topEnd] = element(at, 0);
+        // The Top DICT's CharStrings offset (operator 17): integer operands only in this font.
+        std::size_t charStrings = 0, operand = 0;
+        for (std::size_t i = topBegin; i < topEnd;) {
+            const std::size_t b0 = byte(i);
+            if (b0 == 28)
+                operand = number(i + 1, 2), i += 3;
+            else if (b0 == 29)
+                operand = number(i + 1, 4), i += 5;
+            else if (b0 >= 32 && b0 <= 246)
+                operand = b0 - 139, i += 1;
+            else if (b0 >= 247 && b0 <= 250)
+                operand = (b0 - 247) * 256 + byte(i + 1) + 108, i += 2;
+            else if (b0 >= 251 && b0 <= 254)
+                i += 2;
+            else {
+                if (b0 == 17) charStrings = operand;
+                i += b0 == 12 ? 2 : 1;
+            }
+        }
+        ASSERT_NE(charStrings, 0u);
+        const auto [begin, end] = element(cff + charStrings, 1);
+        ASSERT_GE(end - begin, 3u);
+        font = icons;
+        // 0 0 hstem ... (each one mask bit), any spare bytes as leading zeros, then hintmask as the last byte.
+        const std::size_t stems = (end - begin - 1) / 3, spare = (end - begin - 1) % 3;
+        std::size_t i = begin;
+        for (std::size_t k = 0; k < spare; ++k)
+            font[i++] = static_cast<char>(139);
+        for (std::size_t k = 0; k < stems; ++k) {
+            font[i++] = static_cast<char>(139);
+            font[i++] = static_cast<char>(139);
+            font[i++] = 1; // hstem
+        }
+        font[i] = 0x13; // hintmask
+        EXPECT_EQ(problem(font), "the CFF charstring of glyph 1 is broken");
+    }
+
     // Every truncation is caught (the last table ends the file, padding aside).
     for (std::size_t size = 0; size + 4 < roboto.size(); size += 997)
         EXPECT_TRUE(checkFont(bytesOf(roboto.substr(0, size)))) << size;
@@ -544,6 +603,10 @@ TEST(FontCheck, CharacterMapsMapOnlyToGlyphsTheFontHas) {
     f = validFormat4();
     f.searchRange = 8;
     f.entrySelector = 2; // segment 1 + 2 + 1
+    EXPECT_EQ(problem(f), broken);
+    f = validFormat4();
+    f.searchRange = 0;
+    f.entrySelector = 0xFFFF; // steps that add nothing, but stb_truetype takes every one on every lookup
     EXPECT_EQ(problem(f), broken);
     f = validFormat4();
     f.segments.clear();

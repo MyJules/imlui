@@ -290,6 +290,7 @@ Presets (`CMakePresets.json`), all clang + Ninja, build into `build/<preset>/`:
 | `clang-release` | Release. Build it too before merging: optimization can surface other warnings. |
 | `clang-ship` | Release with `IMLUI_DEV_PATHS=OFF`: everything embedded, no source paths, as shipped or installed. |
 | `clang-asan` | Debug code with AddressSanitizer + UndefinedBehaviorSanitizer on every target, vendored ones included. |
+| `clang-fuzz` | RelWithDebInfo with ASan + UBSan + libFuzzer coverage on every target, and the libFuzzer executables. See [Fuzzing](#fuzzing). |
 
 ```sh
 cmake --preset clang-debug
@@ -346,6 +347,8 @@ On this target:
 - Covered: ASan (heap, stack and global buffer overflows, use-after-free, double free), and the UBSan `undefined`
   group (signed overflow, shifts, null, alignment, bounds, enum/bool loads, float-cast overflow, unreachable,
   `function`, and more). UB aborts the process, so a test with UB fails.
+- Vendored Lua is compiled with `-fwrapv`: it relies on signed integer arithmetic wrapping (a hex float's exponent
+  in `lua_strx2number`, found by the `manifest` fuzz target), which UBSan would otherwise abort on.
 - Not covered: LeakSanitizer (not available on Windows), UBSan `vptr` (not supported for the MSVC ABI), and
   ThreadSanitizer/MemorySanitizer (not available for this target).
 
@@ -395,13 +398,17 @@ On this target:
 - `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns, one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
-  base folder, a listed file spelled differently on disk, the sandbox, bad shapes), `collectFiles` past entries
+  base folder, a listed file spelled differently on disk, the sandbox and its instruction and memory limits, strings
+  that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), `collectFiles` past entries
 that can't be queried, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
   hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is
   checked the embedded way and `imlui.embedded.smoke_sources` (forced `EMBED OFF`, dev builds) the other way, with
   its `mount()` mounting the folders.
+- **Fuzz corpus replays** (`fuzz.pak`, `fuzz.font`, `fuzz.manifest`, `fuzz.image`, label `fuzz`): every fuzz
+  target's seed corpus, crash regressions included, run once through the target in every build. See
+  [Fuzzing](#fuzzing).
 - **Smoke test** (`smoke.imlui_smoke_host`, `tests/smoke_run.cmake`) runs the test app host like a shipped release.
   `imlui_smoke_host` (`tests/smoke_host/main.cpp`, built only with the tests) embeds the smoke app
   (`tests/data/smoke_app/`: `main.lua`, a `Tile.lua` component, a `widgets/Label.lua` component in a nested folder,
@@ -517,6 +524,61 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a `Dialog` and a
 `ModalNavigationDrawer` through `native.injectKey`) and one `elements_<family>_test.cpp` per element family
 (windows, layout, navigation, controls, inputs, data, system) use it.
+
+## Fuzzing
+
+The code that reads bytes it can't trust has fuzz targets in `tests/fuzz/`. Each is one file, `<name>.cpp`,
+defining libFuzzer's `LLVMFuzzerTestOneInput`:
+
+| Target | Input | What it checks |
+|---|---|---|
+| `pak` | a `.pak` archive | `PakMount::fromBytes` (`parsePak`) accepts or rejects it with a reason; every file of an accepted archive reads back at its declared size (zstd decompression in `PackedMount`, files declaring more than 16 MiB skipped), and `exists`/`list` work on every folder. |
+| `font` | font data | A font `checkFont` accepts is read with stb_truetype the way ImGui reads it (`imlui.fuzz.truetype`, `tests/fuzz/support/`): `stbtt_GetFontOffsetForIndex`, `stbtt_InitFont`, the vertical metrics, `stbtt_FindGlyphIndex` for every code point an `ImWchar` holds (each must map to a glyph the font has), and every glyph found's box and horizontal metrics, with `STBTT_assert` aborting (for CFF fonts the box runs the glyph's charstring). Glyphs aren't rasterized: `checkFont` doesn't check TrueType outlines. |
+| `manifest` | a resource manifest's Lua text | `evaluateManifest` (the sandbox, the instruction and memory limits) returns groups or an error; groups whose `base` stays inside the fixture `tests/fuzz/manifest_root/` are resolved against it (`resolveManifest`, `manifestListing`). |
+| `image` | PNG or JPEG bytes | `decodeImage` (stb_image) decodes or fails with a reason; a decoded image has `width * height * 4` bytes. Images over 4096 x 4096 pixels are skipped. |
+
+Each target is built two ways (`tests/fuzz/CMakeLists.txt`, `imlui_add_fuzz_target`):
+
+- **Always**, as `imlui_fuzz_replay_<name>`: the target with `tests/fuzz/replay_main.cpp`, which feeds it every file
+  of its seed corpus once. The ctest test `fuzz.<name>` (label `fuzz`) runs it on `tests/fuzz/corpus/<name>/` plus
+  the seeds too large to check in or built (the bundled fonts, the smoke app's `.pak`), so every `ctest` run, in
+  every preset, replays the corpora, crash regressions included. It prints each file before running it, so the last
+  name in a failed test's output is the input that crashed.
+- **With `IMLUI_FUZZ=ON`** (the `clang-fuzz` preset), as `imlui_fuzz_<name>`: the libFuzzer executable
+  (`-fsanitize=fuzzer`). The option adds `fuzzer-no-link` (libFuzzer's coverage instrumentation) to the sanitizer
+  list, so every target, vendored ones included, is instrumented. When the compiler can't link a libFuzzer executable,
+  configuring warns and only the replay tests are built.
+
+On Windows (`x86_64-pc-windows-msvc`), LLVM's `clang_rt.fuzzer` is built against the static release CRT and without
+the STL's ASan annotations, and the MSVC STL refuses to link objects that disagree on either. So `clang-fuzz` uses
+`CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` (unlike `clang-asan`; ASan works with it), and `IMLUI_FUZZ` defines
+`_DISABLE_STRING_ANNOTATION` and `_DISABLE_VECTOR_ANNOTATION` everywhere. The ASan runtime DLL is copied to
+`build/clang-fuzz/bin` as for `clang-asan`.
+
+```sh
+cmake --preset clang-fuzz
+cmake --build --preset clang-fuzz
+ctest --preset clang-fuzz -L fuzz       # the replays, under the sanitizers
+
+# Fuzz one target for 10 minutes. The first folder is the working corpus (new inputs go there), the others are read.
+mkdir -p fuzz-work/pak
+build/clang-fuzz/bin/imlui_fuzz_pak -max_total_time=600 -timeout=20 -rss_limit_mb=4096 \
+    -dict=tests/fuzz/pak.dict -artifact_prefix=fuzz-work/ fuzz-work/pak tests/fuzz/corpus/pak build/clang-fuzz/tests/smoke.pak
+```
+
+`tests/fuzz/<name>.dict` are libFuzzer dictionaries (field names, magics, Lua tokens). A crash leaves
+`crash-<hash>` (or `timeout-`, `oom-`) under `-artifact_prefix`; rerun it with `imlui_fuzz_<name> <file>`, shrink it
+with `-minimize_crash=1 -runs=10000 <file>`, fix the bug, and check the minimized input in as
+`tests/fuzz/corpus/<name>/regress-<what>` so the replay test keeps it fixed. Keep corpus files small (a few KiB);
+larger seeds go in the `SEEDS` of `imlui_add_fuzz_target` from where they already live.
+
+**Adding a target:** write `tests/fuzz/<name>.cpp` (declare `extern "C" int LLVMFuzzerTestOneInput(const
+std::uint8_t* data, std::size_t size);`, then define it; `import` what it tests; return 0; call `std::abort()` when
+an invariant breaks, such as a rejection without a reason), add a few seeds under `tests/fuzz/corpus/<name>/` (valid
+samples and hand-made broken ones), and call `imlui_add_fuzz_target(<name> LIBRARIES <libs> [DEFINITIONS ...]
+[SEEDS ...])` in `tests/fuzz/CMakeLists.txt`. Copy the input into a buffer of exactly `size` bytes when the code
+under test might read past it, so ASan sees the overrun, and skip inputs that are valid but only slow (huge
+declared sizes), which would trip the fuzzer's memory or time limit.
 
 ## Scripted UI tests
 

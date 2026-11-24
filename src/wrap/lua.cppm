@@ -24,6 +24,9 @@ export namespace lua {
 
 using State = ::lua_State;
 using CFunction = ::lua_CFunction;
+using Alloc = ::lua_Alloc;
+using Hook = ::lua_Hook;
+using Debug = ::lua_Debug;
 using Integer = ::lua_Integer;
 using Number = ::lua_Number;
 
@@ -39,18 +42,24 @@ inline constexpr int multRet = LUA_MULTRET;
 inline constexpr int registryIndex = LUA_REGISTRYINDEX;
 inline constexpr int noRef = LUA_NOREF;
 inline constexpr int refNil = LUA_REFNIL;
+inline constexpr int errMem = LUA_ERRMEM;
+inline constexpr int maskCount = LUA_MASKCOUNT;
 
 /// Type of a Lua value, as returned by type(), getfield(), rawgeti() ...
 enum class Type : int { None = -1, Nil, Boolean, LightUserData, Number, String, Table, Function, UserData, Thread };
 
 // ---------------------------------------------------------------- state
 State* newstate();
+/// A state whose memory comes from `allocator` (called with `ud`), e.g. to cap a sandbox's memory.
+State* newstate(Alloc allocator, void* ud);
 void close(State* state);
 void openlibs(State* state);
 /// Opens only the base library (print, pairs, tostring, ...) into the globals; for sandboxes.
 void openbase(State* state);
 /// Sets the panic function (called on an error outside any protected call, before Lua aborts); returns the old one.
 CFunction atpanic(State* state, CFunction panicf);
+/// Sets the debug hook (lua_sethook), e.g. maskCount to run `hook` after every `count` instructions.
+void sethook(State* state, Hook hook, int mask, int count);
 
 // ---------------------------------------------------------------- stack
 int gettop(State* state);
@@ -173,9 +182,11 @@ Type toType(int t) { return static_cast<Type>(t); }
 
 // ---------------------------------------------------------------- state
 State* newstate() { return luaL_newstate(); }
+State* newstate(Alloc allocator, void* ud) { return lua_newstate(allocator, ud); }
 void close(State* state) { lua_close(state); }
 void openlibs(State* state) { luaL_openlibs(state); }
 CFunction atpanic(State* state, CFunction panicf) { return lua_atpanic(state, panicf); }
+void sethook(State* state, Hook hook, int mask, int count) { lua_sethook(state, hook, mask, count); }
 void openbase(State* state) {
     luaL_requiref(state, LUA_GNAME, luaopen_base, 1);
     lua_pop(state, 1);

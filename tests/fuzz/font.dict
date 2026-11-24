@@ -1,0 +1,13 @@
+# libFuzzer dictionary for the `font` target: sfnt signatures and table tags.
+"\x00\x01\x00\x00"
+"OTTO"
+"true"
+"ttcf"
+"cmap"
+"head"
+"hhea"
+"hmtx"
+"maxp"
+"loca"
+"glyf"
+"CFF "

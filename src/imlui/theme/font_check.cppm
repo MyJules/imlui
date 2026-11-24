@@ -4,7 +4,24 @@
 // doesn't expect trips IM_ASSERT_USER_ERROR or STBTT_assert, which abort the program. checkFont() walks everything
 // stb_truetype reads when a font is added (stbtt_GetFontOffsetForIndex, stbtt_InitFont) and when a glyph is looked
 // up (the character map, glyph locations, metrics, the CFF indexes), and rejects data that would make it read out of
-// bounds or assert. It doesn't decode the glyph outlines themselves.
+// bounds or assert. It doesn't decode TrueType glyph outlines. CFF outlines are different: stb_truetype runs a glyph's
+// charstring program to get its box (stbtt_GetGlyphBox, which ImGui calls for every glyph it loads), and a broken
+// program trips an STBTT_assert there. Once the structure is known to be sound, checkFont() runs every charstring
+// through its own copy of stb_truetype, whose STBTT_assert records the failure instead of aborting.
+module;
+
+#include <errno.h> // errno: where STBTT_assert records a failure
+
+// stb_truetype, a static copy of the one ImGui compiles into imgui_draw.cpp (same file, so the same interpreter).
+// STBTT_assert sets errno to -1, a value no library function sets, for checkCharstrings() to see: nothing else can
+// be declared in this fragment, and an exception can't be used (stb_truetype's functions are extern "C", which the
+// MSVC exception model assumes never throw). stb_truetype's buffer reads are bounds-checked and clamp where they
+// assert, so it carries on safely; getting a glyph's box calls nothing else that sets errno.
+#define STBTT_STATIC
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_assert(x) ((x) ? (void)0 : (void)(errno = -1))
+#include "imstb_truetype.h"
+
 export module imlui.theme.font_check;
 
 import std;
@@ -32,6 +49,7 @@ public:
     explicit Reader(std::span<const std::byte> bytes) : m_bytes{bytes} {}
 
     [[nodiscard]] std::size_t size() const { return m_bytes.size(); }
+    [[nodiscard]] const unsigned char* data() const { return reinterpret_cast<const unsigned char*>(m_bytes.data()); }
     /// True when [offset, offset + length) lies inside the data.
     [[nodiscard]] bool has(std::size_t offset, std::size_t length) const {
         return offset <= m_bytes.size() && length <= m_bytes.size() - offset;
@@ -293,7 +311,10 @@ Problem checkCmap4(const Reader& r, std::size_t at, std::size_t length, std::siz
     // segments - 1 for the values the spec prescribes.)
     std::size_t furthest = r.u16(at + 12) >> 1;
     const std::size_t searchRange = r.u16(at + 8) >> 1;
-    const std::size_t steps = std::min<std::size_t>(r.u16(at + 10), 16); // further steps add 0
+    // entrySelector is log2 of the segment count, at most 15. stb_truetype loops that many times on every lookup,
+    // so a bogus 65535 would make each one run 65535 steps (found by the `font` fuzz target).
+    const std::size_t steps = r.u16(at + 10);
+    if (steps > 15) return broken;
     for (std::size_t k = 1; k <= steps; ++k)
         furthest += searchRange >> k;
     if (furthest >= segments) return broken;
@@ -382,6 +403,27 @@ Problem checkCmap(const Reader& r, Table cmap, std::size_t glyphs) {
     return std::nullopt;
 }
 
+/// Every glyph's CFF charstring, run by stb_truetype as stbtt_GetGlyphBox runs it. Only for a font whose structure
+/// checkSfnt() found sound: stb_truetype reads the CFF table through a buffer it thinks is 512 MiB long, so only
+/// checkCff()'s checks keep it inside the data.
+Problem checkCharstrings(const Reader& r, std::size_t font) {
+    if (r.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return "the font is too large";
+    const int saved = errno;
+    errno = 0;
+    stbtt_fontinfo info{};
+    const bool read = stbtt_InitFont(&info, r.data(), static_cast<int>(font)) != 0 && errno == 0;
+    int glyph = 0;
+    for (; read && glyph < info.numGlyphs && errno == 0; ++glyph) {
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        stbtt_GetGlyphBox(&info, glyph, &x0, &y0, &x1, &y1);
+    }
+    const bool asserted = errno != 0;
+    errno = saved;
+    if (!read) return "the CFF table is broken";
+    if (asserted) return "the CFF charstring of glyph " + std::to_string(glyph - 1) + " is broken";
+    return std::nullopt;
+}
+
 /// One font of the data: the sfnt at `font`.
 Problem checkSfnt(const Reader& r, std::size_t font) {
     if (!r.has(font, 12)) return "the font header is truncated";
@@ -441,7 +483,8 @@ Problem checkSfnt(const Reader& r, std::size_t font) {
     }
     const auto cff = findTable(r, font, "CFF ");
     if (!cff || cff->offset == 0) return "the font has neither TrueType ('glyf') nor CFF outlines";
-    return checkCff(r, *cff, glyphs);
+    if (auto p = checkCff(r, *cff, glyphs)) return p;
+    return checkCharstrings(r, font);
 }
 
 } // namespace
