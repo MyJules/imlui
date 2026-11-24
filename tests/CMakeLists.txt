@@ -23,9 +23,10 @@ target_compile_definitions(imlui_tests PRIVATE IMLUI_DOCS_DIR="${PROJECT_SOURCE_
                                                IMLUI_ELEMENTS_DIR="${PROJECT_SOURCE_DIR}/src/imlui/ui/elements")
 # An archive built through imlui_add_pak (the smoke app's scripts at app:/smoke/, manifest data/smoke_pak.lua), read
 # back by resources_packed_test.
-imlui_add_pak(imlui_test_pak data/smoke_pak.lua OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/smoke.pak)
+set(IMLUI_TEST_PAK_FILE ${CMAKE_CURRENT_BINARY_DIR}/smoke.pak) # also a seed of the `pak` fuzz target (fuzz/)
+imlui_add_pak(imlui_test_pak data/smoke_pak.lua OUTPUT ${IMLUI_TEST_PAK_FILE})
 add_dependencies(imlui_tests imlui_test_pak)
-target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${CMAKE_CURRENT_BINARY_DIR}/smoke.pak"
+target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${IMLUI_TEST_PAK_FILE}"
                                                IMLUI_SMOKE_APP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/smoke_app")
 # Both shapes of a generated module, whatever IMLUI_EMBED_RESOURCES says: the smoke app's manifest embedded
 # (imlui.embedded.smoke_embedded) and, in dev builds, not embedded (imlui.embedded.smoke_sources: source folders only).
@@ -70,6 +71,9 @@ function(imlui_add_smoke_test name target expect)
     set_tests_properties(${name} PROPERTIES TIMEOUT 120 RUN_SERIAL ON)
 endfunction()
 imlui_add_smoke_test(smoke.imlui_smoke_host imlui_smoke_host "embedded 'smoke_app (app:/)' main.lua")
+
+# The fuzz targets and their corpus replay tests (fuzz/CMakeLists.txt, label `fuzz`).
+add_subdirectory(fuzz)
 
 # The package tests: a consumer app built with imlui added by add_subdirectory, FetchContent and find_package
 # (package/CMakeLists.txt, label `package`).

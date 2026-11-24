@@ -312,8 +312,11 @@ checks its structure: ImGui parses fonts with stb_truetype, which trusts the dat
 checks and aborts through `IM_ASSERT_USER_ERROR`/`STBTT_assert` on data it doesn't expect. The check walks what
 stb_truetype reads when a font is added and when glyphs are looked up (the table directory, `head`, `hhea`, `hmtx`,
 `maxp`, the Unicode `cmap` subtable it picks, `loca`/`glyf` offsets, or the CFF header, INDEXes, DICTs, Private
-DICTs and FDSelect); glyph outlines themselves aren't decoded. A damaged font is reported like a missing one and the
-built-in face is used.
+DICTs and FDSelect). TrueType glyph outlines aren't decoded. CFF ones are: stb_truetype runs a glyph's charstring
+program to get its box, which ImGui does for every glyph it loads, so once the structure is sound `checkFont` runs every
+charstring through its own static copy of stb_truetype, whose `STBTT_assert` records the failure (in `errno`) instead of
+aborting, and rejects the font if one trips it. A damaged font is reported like a missing one and the built-in face is
+used.
 
 Lua sees resources in two ways (`imlui.lua.resources`):
 
@@ -374,12 +377,14 @@ return {
   case-sensitive, and on a file system that ignores case the wrong spelling would be embedded under a name the dev
   folder mount doesn't serve.
 - Every path stays under `base`: a `..` segment, an absolute path, a `\` or a `:` is an error, and so is a listed
-  file that doesn't exist, an unknown field, a value of the wrong type, a missing or malformed `prefix`, a group
-  that selects nothing, and a `compress` entry that isn't one of the group's files. Errors name the manifest and, in
-  a list, the group (`resources.lua: group 2: 'prefix' is required`).
+  file that doesn't exist, an unknown field, a value of the wrong type, a string that isn't valid UTF-8, a missing or
+  malformed `prefix`, a group that selects nothing, and a `compress` entry that isn't one of the group's files.
+  Errors name the manifest and, in a list, the group (`resources.lua: group 2: 'prefix' is required`).
 - The manifest runs in a sandbox: a fresh Lua state with the base library only (`pairs`, `ipairs`, `tostring`,
   `error`, ...), without `dofile`, `loadfile`, `load` and `collectgarbage`, and no `io`, `os`, `require`, `string`
-  or `debug`. Bytecode is refused. A Lua error is reported at the manifest's `file:line`.
+  or `debug`. Bytecode is refused. A Lua error is reported at the manifest's `file:line`. It may run at most
+  10 million Lua instructions and use at most 64 MiB (`manifestMaxInstructions`, `manifestMaxMemory`), so an endless
+  loop or a runaway table fails the build with an error instead of hanging it.
 
 The tools evaluate manifests at build time (`imlui.tools.resource_manifest`, with `imlui.resources.glob`), through the
 `lua` wrapper module, which is its own library (`imlui_lua`) because `imlui_rc` can't link the `imlui` library it
@@ -572,7 +577,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `lua` | Lua 5.4 C API, with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise` and `openbase` for sandboxes); `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
+| `lua` | Lua 5.4 C API, with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes); `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on scope exit |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
@@ -597,7 +602,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
 | `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font` (the scope's face override, else the theme's face for the weight), `fontSize`, `fontPixels`, `pushFont` |
 | `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount` |
-| `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads |
+| `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then every CFF charstring run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
 | `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `resolveColor`, `imguiColorIndex`, `isStyleField` |
@@ -718,7 +723,7 @@ The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke te
 | `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
 | `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data, compress)`, `compressible(path)`: the compression rule and its override |
 | `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through `<file>.tmp` and a rename), `utf8`/`pathFromUtf8` |
-| `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup` (with the selection as written: `listed`, `include`, `exclude`), `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), `manifestDependencies`, `manifestListing` |
+| `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup` (with the selection as written: `listed`, `include`, `exclude`), `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), its two halves `evaluateManifest` (the Lua, into `ManifestGroupFields`) and `resolveManifest` (the file system), `manifestDependencies`, `manifestListing` |
 | `imlui.tools.depfile` | `tools/lib/` | `depfileText`, `writeDepfile`: Make-style dependency files for Ninja |
 | `imlui.tools.rc` | `tools/lib/` | `runRc`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |
 | `imlui.tools.pack` | `tools/` | `runPack`, `packFiles(mountPoint, files, error)`, `mergeGroups(manifest, error)`: the `imlui_pack` tool |

@@ -1,0 +1,8 @@
+# libFuzzer dictionary for the `pak` target: the archive's magic, version, mount points, a zstd frame's magic.
+"IMLUIPAK"
+"\x01\x00\x00\x00"
+"app:/"
+"imlui:/fonts/"
+"\x28\xb5\x2f\xfd"
+"../"
+"//"

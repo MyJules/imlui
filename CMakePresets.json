@@ -38,17 +38,30 @@
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
         "IMLUI_SANITIZERS": "address,undefined"
       }
+    },
+    {
+      "name": "clang-fuzz",
+      "inherits": "clang-base",
+      "displayName": "Clang RelWithDebInfo + libFuzzer + AddressSanitizer + UBSan (tests/fuzz)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "IMLUI_SANITIZERS": "address,undefined",
+        "IMLUI_FUZZ": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "clang-debug", "configurePreset": "clang-debug" },
     { "name": "clang-release", "configurePreset": "clang-release" },
     { "name": "clang-ship", "configurePreset": "clang-ship" },
-    { "name": "clang-asan", "configurePreset": "clang-asan" }
+    { "name": "clang-asan", "configurePreset": "clang-asan" },
+    { "name": "clang-fuzz", "configurePreset": "clang-fuzz" }
   ],
   "testPresets": [
     { "name": "clang-debug", "configurePreset": "clang-debug", "output": { "outputOnFailure": true } },
     { "name": "clang-ship", "configurePreset": "clang-ship", "output": { "outputOnFailure": true } },
-    { "name": "clang-asan", "configurePreset": "clang-asan", "output": { "outputOnFailure": true } }
+    { "name": "clang-asan", "configurePreset": "clang-asan", "output": { "outputOnFailure": true } },
+    { "name": "clang-fuzz", "configurePreset": "clang-fuzz", "output": { "outputOnFailure": true } }
   ]
 }
