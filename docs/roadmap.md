@@ -27,7 +27,7 @@ examples/
 Examples with C++ have their own `CMakeLists.txt` (`add_subdirectory`) and executable. The default script, docs
 and helper scripts follow the new paths.
 
-## 2b. Type-system limitations
+## 2b. Type-system limitations *(done)*
 
 | Limitation | Fix |
 |---|---|
@@ -65,4 +65,4 @@ Five groups in parallel, one class per module; the old `Renderer::registerElemen
 - Text-caret blink is driven by 100 ms frame requests (approximate).
 - Monitor DPI changes are handled but can't be verified on a single-monitor 100 % setup.
 - Injected mouse positions are overridden by the real cursor while the window is focused and the cursor is
-  outside it (test tooling only; key injection covers most automated checks).
+  outside it (test tooling only; `native.injectKey` covers most automated checks).

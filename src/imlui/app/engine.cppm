@@ -19,6 +19,7 @@ module;
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -71,11 +72,19 @@ public:
     }
 
     /// Exposes `object` (derived from imlui::ScriptObject) to Lua as the global `name`. Not owned: it must
-    /// outlive run(). Call before run().
+    /// outlive run() (declare it before the Engine, or use the shared_ptr overload). Call before run().
     template <class T>
         requires std::derived_from<T, ScriptObject>
     TypeInfo& registerSingleton(std::string name, T& object) {
         return m_types.registerSingleton<T>(std::move(name), object);
+    }
+
+    /// Exposes `object` to Lua as the global `name` and keeps it alive as long as the Engine, so it
+    /// outlives run() and every Lua state. Call before run().
+    template <class T>
+        requires std::derived_from<T, ScriptObject>
+    TypeInfo& registerSingleton(std::string name, std::shared_ptr<T> object) {
+        return m_types.registerSingleton<T>(std::move(name), std::move(object));
     }
 
     /// The registered types and singletons.
@@ -238,6 +247,7 @@ int Engine::run() {
     reloadNow();
     applyPendingWindowSize(); // a script that calls setWindowSize() while loading wins over its root size
     m_window.center();
+    m_window.keepInWorkArea();
     m_window.show();
     m_snapshot = scanFiles();
     m_lastCheck = std::chrono::steady_clock::now();
@@ -305,6 +315,7 @@ void Engine::applyPendingWindowSize() {
     m_pendingWindowSize.reset();
     // dp, scaled by the monitor content scale like the root window's width/height.
     m_window.setScaledSize(w, h);
+    m_window.keepInWorkArea(); // a "phone preview" toggle must not push the window off-screen
     requestFramesFor(settleSeconds);
 }
 
@@ -507,6 +518,7 @@ void Engine::applyRootWindowProps(lua::State* state, int rootRef) {
         m_appliedHeight = h;
         // width/height are dp: scaled by the monitor content scale (not by the user zoom).
         m_window.setScaledSize(w, h);
+        m_window.keepInWorkArea();
     }
     std::string title = n.string("title", "");
     if (!title.empty()) m_window.setTitle(title);

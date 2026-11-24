@@ -1,7 +1,8 @@
 // TypeBuilder<T>: declares what a C++ type exposes to Lua, from its static `declare()`:
 //
 //   static void declare(imlui::TypeBuilder<Gauge>& type) {
-//       type.property("value", &Gauge::value, &Gauge::setValue)   // read/write
+//       type.property("value", &Gauge::value, &Gauge::setValue)   // read/write; nil resets to the initial value
+//           .property("max", &Gauge::max, &Gauge::setMax, 1.0)     // read/write; nil resets to 1.0
 //           .property("peak", &Gauge::peak)                       // read-only
 //           .signal("onPeak")
 //           .method("reset", &Gauge::reset);
@@ -9,7 +10,8 @@
 //
 // Getters are anything std::invoke can call with a `const T&` (usually `V (T::*)() const`), setters
 // anything it can call with `(T&, V)`. V must have a LuaConvert<V> specialization. Methods are member
-// function pointers; their arguments and result convert through LuaConvert as well.
+// function pointers; their arguments and result convert through LuaConvert as well. Pick one of an
+// overloaded set with imlui::overload<Args...>(&T::fn) (imlui.types.overload).
 //
 // A template, so it lives in the interface (CODE_STYLE).
 module;
@@ -18,6 +20,7 @@ module;
 #include <cstddef>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -100,25 +103,34 @@ public:
         static_assert(std::derived_from<T, ScriptObject>, "TypeBuilder<T>: T must derive from imlui::ScriptObject");
     }
 
-    /// A read/write property. The setter is called (by the per-frame sync, or `obj.name = v` on a
-    /// singleton) only when the converted value differs from the getter's.
+    /// A read/write property. The setter is called (by the property sync, or `obj.name = v` on a
+    /// singleton) only when the converted value differs from the getter's. A nil value resets the property
+    /// to its default: the getter's value right after the object was constructed (std::optional properties:
+    /// nil is std::nullopt).
     template <class Getter, class Setter>
     TypeBuilder& property(std::string name, Getter getter, Setter setter) {
         using V = ValueOf<Getter>;
-        static_assert(LuaReadable<V>, "a writable property needs a LuaConvert<V> with check() and get()");
-        static_assert(std::is_invocable_v<const Setter&, T&, V&&>, "the setter must accept the getter's type");
-        TypeInfo::Property p = readOnly<Getter>(std::move(name), getter);
-        p.nullable = detail::isOptional<V>;
-        p.assign = [getter, setter](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
-            if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
-            V v = LuaConvert<V>::get(s, idx);
-            T& self = static_cast<T&>(o);
-            if constexpr (std::equality_comparable<V>) {
-                if (std::invoke(getter, std::as_const(self)) == v) return TypeInfo::Assign::Unchanged;
-            }
-            std::invoke(setter, self, std::move(v));
-            return TypeInfo::Assign::Changed;
-        };
+        TypeInfo::Property p = readWrite(std::move(name), getter, setter);
+        if constexpr (!detail::isOptional<V> && std::copy_constructible<V>) {
+            p.captureDefault = [getter](const ScriptObject& o) -> std::shared_ptr<const void> {
+                return std::make_shared<const V>(std::invoke(getter, static_cast<const T&>(o)));
+            };
+        }
+        m_info.addProperty(std::move(p));
+        return *this;
+    }
+
+    /// A read/write property whose nil value resets it to `defaultValue` (instead of the getter's value
+    /// after construction): `.property("interval", &Timer::interval, &Timer::setInterval, 1000.0)`.
+    template <class Getter, class Setter, class D>
+    TypeBuilder& property(std::string name, Getter getter, Setter setter, D&& defaultValue) {
+        using V = ValueOf<Getter>;
+        static_assert(!detail::isOptional<V>, "nil is std::nullopt for an optional property; it takes no default");
+        static_assert(std::copy_constructible<V>, "a property default must be copyable");
+        static_assert(std::constructible_from<V, D&&>, "the default must convert to the property's type");
+        TypeInfo::Property p = readWrite(std::move(name), getter, setter);
+        auto shared = std::make_shared<const V>(std::forward<D>(defaultValue));
+        p.captureDefault = [shared](const ScriptObject&) -> std::shared_ptr<const void> { return shared; };
         m_info.addProperty(std::move(p));
         return *this;
     }
@@ -183,6 +195,35 @@ public:
 private:
     template <class Getter>
     using ValueOf = std::remove_cvref_t<std::invoke_result_t<const Getter&, const T&>>;
+
+    template <class Getter, class Setter>
+    TypeInfo::Property readWrite(std::string name, Getter getter, Setter setter) {
+        using V = ValueOf<Getter>;
+        static_assert(LuaReadable<V>, "a writable property needs a LuaConvert<V> with check() and get()");
+        static_assert(std::is_invocable_v<const Setter&, T&, V&&>, "the setter must accept the getter's type");
+        TypeInfo::Property p = readOnly<Getter>(std::move(name), getter);
+        p.nullable = detail::isOptional<V>;
+        p.assign = [getter, setter](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
+            if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
+            return store(getter, setter, static_cast<T&>(o), LuaConvert<V>::get(s, idx));
+        };
+        if constexpr (!detail::isOptional<V> && std::copy_constructible<V>) {
+            p.reset = [getter, setter](const void* value, ScriptObject& o) -> TypeInfo::Assign {
+                return store(getter, setter, static_cast<T&>(o), V(*static_cast<const V*>(value)));
+            };
+        }
+        return p;
+    }
+
+    /// Calls the setter with `v` unless the getter already returns it.
+    template <class Getter, class Setter, class V>
+    static TypeInfo::Assign store(const Getter& getter, const Setter& setter, T& self, V v) {
+        if constexpr (std::equality_comparable<V>) {
+            if (std::invoke(getter, std::as_const(self)) == v) return TypeInfo::Assign::Unchanged;
+        }
+        std::invoke(setter, self, std::move(v));
+        return TypeInfo::Assign::Changed;
+    }
 
     template <class Getter>
     TypeInfo::Property readOnly(std::string name, Getter getter) {

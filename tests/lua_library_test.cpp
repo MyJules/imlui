@@ -14,7 +14,9 @@ protected:
         std::string boot = std::string{"package.path = '"} + IMLUI_LUA_DIR + "/?.lua;' .. package.path\n" +
                            R"(package.preload["imlui.native"] = function()
                                   local now = 0
-                                  return { time = function() return now end, log = function() end }
+                                  reported = {}
+                                  return { time = function() return now end, log = function() end,
+                                           reportError = function(msg) reported[#reported + 1] = msg end }
                               end
                               ui = require("imlui"))";
         run(boot);
@@ -137,5 +139,25 @@ TEST_F(LuaLibraryTest, ResponsiveShowsTheElementForTheCurrentSizeClass) {
         class = "large"; assert(shown() == nil, "false shows nothing")
         class = "extraLarge"; assert(shown() == nil)
         class = "compact"; assert(shown() == phone, "the same element instance comes back")
+    )");
+}
+
+TEST_F(LuaLibraryTest, ElementIdsThatCollideWithUiMembersOrGlobalsAreReported) {
+    run(R"(
+        local shadowed = ui.Column { id = "io" }
+        assert(#reported == 1, "no error for an id that a global shadows")
+        assert(reported[1] == "element id 'io' collides with Lua global 'io'; it can't be referenced by name — rename it",
+               reported[1])
+        assert(ui.env.io == io, "the lookup order stays: ui, then globals, then ids")
+        assert(ui.ids.io == shadowed)
+
+        ui.Text { id = "state" }
+        assert(#reported == 2)
+        assert(reported[2]:find("element id 'state' collides with ui member 'ui.state'", 1, true), reported[2])
+
+        local field = ui.TextField { id = "nameField" }
+        local count = ui.Row { id = 3 } -- not a name: nothing to collide with
+        assert(#reported == 2, "a free id was reported: " .. tostring(reported[3]))
+        assert(ui.env.nameField == field)
     )");
 }

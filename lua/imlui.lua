@@ -56,9 +56,34 @@ function ui.element(name)
         if type(props) ~= "table" then props = { props } end
         props.__type = name
         if typed then types.attach(props) end
-        if props.id ~= nil then ui.ids[props.id] = props end
+        if props.id ~= nil then
+            ui.checkId(props.id)
+            ui.ids[props.id] = props
+        end
         return props
     end
+end
+
+--- Shows a script error in the error overlay (logged once; the script keeps running).
+function ui.reportError(msg)
+    if native.reportError then native.reportError(msg) else native.log("error", msg) end
+end
+
+--- Reports an element id that can't be referenced by name in a UI script: free names are looked up in
+--- `ui`, then in the Lua globals, and only then in the element ids (see ui.env), so an id like `io` or
+--- `text` would silently resolve to the global or the ui member instead. Returns false for such an id.
+function ui.checkId(id)
+    if type(id) ~= "string" then return true end
+    local what
+    if rawget(ui, id) ~= nil then
+        what = "ui member 'ui." .. id .. "'"
+    elseif _G[id] ~= nil then
+        what = "Lua global '" .. id .. "'"
+    else
+        return true
+    end
+    ui.reportError(("element id '%s' collides with %s; it can't be referenced by name — rename it"):format(id, what))
+    return false
 end
 
 --- Names of the element types registered from C++ with Engine::registerType<T>(), sorted.

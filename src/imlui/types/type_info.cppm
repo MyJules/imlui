@@ -31,9 +31,19 @@ public:
         /// Converts the value at `idx` and calls the setter if it differs from the getter's value.
         /// Empty for read-only properties.
         std::function<Assign(lua::State*, int, ScriptObject&)> assign;
-        /// True when nil is a value of the property (std::optional): nil is then synced, not skipped.
+        /// True when nil is a value of the property (std::optional): nil is then synced as std::nullopt.
         bool nullable = false;
+        /// The value nil resets the property to, captured for an object right after its construction:
+        /// the declared default (TypeBuilder::property(name, get, set, defaultValue)), or else a copy of
+        /// the getter's value. Empty for read-only and nullable properties, and for value types that
+        /// can't be copied (nil then keeps the current value).
+        std::function<std::shared_ptr<const void>(const ScriptObject&)> captureDefault;
+        /// Sets the property to a value captured by captureDefault (the setter only runs when it differs).
+        std::function<Assign(const void*, ScriptObject&)> reset;
     };
+
+    /// Per-object defaults, one entry per property (nullptr where captureDefault is empty).
+    using Defaults = std::vector<std::shared_ptr<const void>>;
 
     struct Method {
         std::string name;
@@ -70,6 +80,9 @@ public:
     /// Element types have a factory; singleton types don't.
     [[nodiscard]] const Factory& factory() const;
     void setFactory(Factory factory);
+
+    /// Captures the nil-reset values of every property from `object`, just constructed.
+    [[nodiscard]] Defaults captureDefaults(const ScriptObject& object) const;
 
 private:
     void checkUnique(std::string_view name) const;
@@ -145,5 +158,13 @@ void TypeInfo::addSignal(std::string name) {
 
 const TypeInfo::Factory& TypeInfo::factory() const { return m_factory; }
 void TypeInfo::setFactory(Factory factory) { m_factory = std::move(factory); }
+
+TypeInfo::Defaults TypeInfo::captureDefaults(const ScriptObject& object) const {
+    Defaults out;
+    out.reserve(m_properties.size());
+    for (const auto& p : m_properties)
+        out.push_back(p.captureDefault ? p.captureDefault(object) : nullptr);
+    return out;
+}
 
 } // namespace imlui

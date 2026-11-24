@@ -27,6 +27,7 @@ export import imlui.types.frame;
 export import imlui.types.element;
 export import imlui.types.type_info;
 export import imlui.types.type_builder;
+export import imlui.types.overload;
 export import imlui.types.registry;
 export import imlui.ui.elements;
 export import imlui.app.config;

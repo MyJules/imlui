@@ -75,6 +75,7 @@ A complete, runnable version is the [`imlui_custom_types` example](#the-example-
 - [Singletons](#singletons)
 - [Value conversion](#value-conversion): `LuaConvert<T>` and your own types
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
+- [Testing elements](#testing-elements): the headless frame harness
 - [Threading and frame requests](#threading-and-frame-requests)
 - [The low-level path: `registerElement`](#the-low-level-path-registerelement)
 - [The example app](#the-example-app)
@@ -90,7 +91,7 @@ like every element constructor.
 class Element : public ScriptObject {
 public:
     virtual void render(Frame& frame) = 0; // every rendered frame the element is visible
-    virtual void componentComplete();      // once: after the first property sync, before the first render
+    virtual void componentComplete();      // once: right after the first property sync (before the first render)
     virtual void destroyed();              // right before the instance is deleted (no Lua access any more)
 };
 ```
@@ -162,8 +163,9 @@ calls chain. A name can be used only once across properties, methods and signals
 ### Properties
 
 ```cpp
-type.property("value", &Gauge::value, &Gauge::setValue) // read/write
-    .property("peak", &Gauge::peak);                    // read-only
+type.property("value", &Gauge::value, &Gauge::setValue)       // read/write
+    .property("max", &Gauge::max, &Gauge::setMax, 1.0)        // read/write, nil resets it to 1.0
+    .property("peak", &Gauge::peak);                          // read-only
 ```
 
 - The **getter** is anything `std::invoke` can call with a `const T&`, usually `V (T::*)() const`. Its return type
@@ -172,6 +174,11 @@ type.property("value", &Gauge::value, &Gauge::setValue) // read/write
   `void (T::*)(const V&)`.
 - Read-only properties are readable from Lua on singletons and through `notify` write-back, but never synced from
   the element table.
+- **Defaults.** When a property's Lua value is `nil` (never set, set back to `nil`, or a binding that returns
+  `nil`), the property is reset to its default. The default is the getter's value **right after construction**
+  (so C++ member initializers are the defaults), or the value given as the fourth argument,
+  `property(name, getter, setter, defaultValue)`. An `std::optional<T>` property takes no default: `nil` is
+  `std::nullopt`. A value type that can't be copied keeps its current value on `nil`.
 
 ### Signals
 
@@ -190,8 +197,8 @@ type.method("reset", &Gauge::reset)
     .method("setRange", &Gauge::setRange); // void setRange(double min, double max)
 ```
 
-Methods are member function pointers, `const` and `noexcept` ones included (pick one of several overloads with a
-`static_cast`). Lua calls them with `:` on the element (through its id or `self`) or on the singleton:
+Methods are member function pointers, `const` and `noexcept` ones included. Lua calls them with `:` on the element
+(through its id or `self`) or on the singleton:
 
 ```lua
 cpu:reset()
@@ -201,7 +208,20 @@ local text = backend:describe("cpu")   -- results are converted back
 
 Arguments are checked with `LuaConvert<A>::check`. A wrong argument raises a normal Lua error,
 `bad argument #1 to 'Gauge:setRange' (number expected, got string)`. A C++ exception thrown by the method becomes
-a Lua error too.
+a Lua error too. Before a method runs on an element, the element's properties are [synced](#property-sync), so it
+sees the current Lua values even if the element never rendered.
+
+**Overloads.** `&T::fn` of an overloaded member doesn't name one function. Pick one by its parameter types with
+`imlui::overload<Args...>` (non-`const` members) or `imlui::constOverload<Args...>` (`const` members), from module
+`imlui.types.overload`. The class and the return type are deduced; no `static_cast` to the full member pointer
+type is needed. They work for getters and setters too:
+
+```cpp
+type.method("grow", imlui::overload<double>(&Shape::grow))              // double grow(double)
+    .method("growBoth", imlui::overload<double, double>(&Shape::grow))  // double grow(double, double)
+    .method("area", imlui::constOverload<>(&Shape::area))               // double area() const
+    .property("size", imlui::constOverload<>(&Shape::size), imlui::overload<double>(&Shape::setSize));
+```
 
 ### `nonVisual()` and `defaultProperty(name)`
 
@@ -254,8 +274,8 @@ instance:
 
 1. Each property is read through `luaui::Node`, so all three [property forms](lua-api.md#property-values) work:
    a plain value, a function binding (re-evaluated every frame), or a two-way `bind()`.
-2. A `nil` value (the prop isn't set) is skipped, and the C++ value stays, so C++ member initializers are the
-   defaults. Exception: an `std::optional<T>` property receives `std::nullopt`.
+2. A `nil` value resets the property to its [default](#properties) (the getter's value after construction, or the
+   declared `defaultValue`). An `std::optional<T>` property receives `std::nullopt`.
 3. The value is converted with `LuaConvert<V>`. If the conversion isn't possible, the error goes to the error
    overlay (`Gauge.value: number expected, got string`) and the setter isn't called.
 4. The **setter runs only if the value differs** from what the getter returns (`operator==`; types without one are
@@ -263,6 +283,18 @@ instance:
 
 Bindings that read singletons (`function() return backend.load end`) are re-evaluated on every rendered frame,
 like any binding.
+
+**Lazy sync.** An element that isn't rendered (on a hidden page, `visible = false`, a model item that isn't shown)
+is synced when something needs it:
+
+- before a **method called from Lua** runs on it (`cpu:reset()`), so an element that never rendered still sees
+  its Lua values on its first method call;
+- when a **parent or another element** asks for it: `Frame::Child::as<T>()` and `TypeRegistry::sync(node)`.
+
+`componentComplete()` runs once, right after the first sync, wherever that happens (first render, first method
+call, or a parent's `as<T>()`). A binding that calls a method of its own element
+(`text = function(self) return self:describe() end`) doesn't sync it again from inside its sync. Lua never reads an
+element's property through the instance (it reads the element table), so that needs no sync.
 
 Because the sync compares with the getter, the element table is the source of truth: a C++ change that isn't
 `notify`'d is overwritten by the Lua value at the next sync. Always `notify` after changing a property in C++.
@@ -307,11 +339,20 @@ emit("onRowMoved", from, to, std::string{"drag"});
 
 ## Singletons
 
-A singleton is any object deriving `imlui::ScriptObject` with a `declare()`. Register it by reference:
+A singleton is any object deriving `imlui::ScriptObject` with a `declare()`. Register it by `std::shared_ptr`,
+and the engine keeps it alive as long as the engine exists, so it outlives `run()` and every Lua state:
 
 ```cpp
-SystemInfo backend;
-engine.registerSingleton("backend", backend); // the object must outlive engine.run()
+auto backend = std::make_shared<SystemInfo>();
+engine.registerSingleton("backend", backend); // owned (shared) by the engine from now on
+```
+
+or by reference, when something else owns it. Then the object **must outlive `engine.run()`**, because every Lua
+state the engine creates points at it until it closes:
+
+```cpp
+SystemInfo backend;                           // declared before the Engine, so it dies after it
+engine.registerSingleton("backend", backend);
 ```
 
 Scripts see a global userdata:
@@ -319,7 +360,7 @@ Scripts see a global userdata:
 | Lua | C++ |
 |---|---|
 | `backend.load` | the `load` getter |
-| `backend.paused = true` | the `paused` setter (when the value changed). A read-only property raises `backend.time is read-only`, an unknown name `... has no property 'x'`. |
+| `backend.paused = true` | the `paused` setter (when the value changed). A read-only property raises `backend.time is read-only`, an unknown name `... has no property 'x'`. `backend.paused = nil` resets the property to its default (its value at registration, or the declared `defaultValue`). |
 | `backend:tick()` | the `tick` method |
 | `backend.onTick = function(n) ... end` | stores a handler for `emit("onTick", n)`. Any `on*` name accepts a function or `nil`. |
 | `backend.onLoadChanged = function(v) ... end` | called by `notify("load")` |
@@ -394,17 +435,46 @@ so the sync can skip unchanged values.
 - Nothing else holds the instance: its link back to the table is weak. When Lua collects the element table, the
   userdata goes with it, `destroyed()` runs and the instance is deleted. Elements that the UI keeps (the tree
   returned by the script, ids, captured locals) live as long as the Lua state.
-- Properties are synced at the first render, not in the constructor, so the constructor sees no Lua values.
-  Methods called before the first render see the C++ defaults. `componentComplete()` runs once after the first
-  sync.
+- Properties are synced at the first render, the first method call or a parent's `as<T>()`, whichever comes
+  first, not in the constructor, so the constructor sees no Lua values. Defaults for `nil` are captured right
+  after the constructor. `componentComplete()` runs once after the first sync.
 - A table built without the constructor (`{ __type = "Gauge" }`) gets its instance at its first render.
 
-**Singletons** belong to you. The registry keeps a non-owning pointer, and every Lua state the engine creates gets
-a global userdata pointing at the object. The object must outlive `engine.run()`. Declaring it after the
-`Engine` in `main` is enough, because `run()` closes the Lua state before it returns.
+**Singletons** registered by `std::shared_ptr` are shared with the registry, which releases them when the engine
+is destroyed (after its last Lua state closed). Singletons registered by reference belong to you: the registry
+keeps a non-owning pointer, and every Lua state the engine creates gets a global userdata pointing at the object.
+That object must outlive `engine.run()`. Declaring it before the `Engine` in `main` is enough.
 
 Don't keep `Element*` pointers to instances in other C++ objects: Lua decides when they die. Keep shared state
 in a singleton (or a model the singleton owns) and let elements read it through bindings.
+
+## Testing elements
+
+The tests build a headless ImGui frame harness, `imlui::test::HeadlessFrame` (test-only module
+`imlui.test.headless_frame` in `tests/support/headless_frame.cppm`). It owns an ImGui context without a window,
+backend or GPU, a `Renderer` and a `TypeRegistry`, and a Lua state set up like the engine's (the real
+`imlui.native`, the painter library, `lua/imlui.lua`). Register types, run Lua in the UI script environment, render
+frames and look at the instances:
+
+```cpp
+#include <gtest/gtest.h>
+import imlui.test.headless_frame;
+
+TEST(GaugeTest, RendersAndSyncs) {
+    imlui::test::HeadlessFrame h{{.builtins = true}};   // also Column, Dialog, ... like the engine
+    h.registerType<Gauge>("Gauge");
+    ASSERT_EQ(h.run(R"(
+        s = state { v = 0.25 }
+        root = Column { Gauge { id = "gauge", value = bind(s, "v") } })"), "");  // "" = no Lua error
+    h.renderFrames("root", 2);                             // NewFrame .. Render, with ui.__tick
+    EXPECT_DOUBLE_EQ(h.instance<Gauge>("gauge")->value(), 0.25);
+    ASSERT_EQ(h.run("ui.native.injectKey('Escape', true)"), ""); // seen by the next frame
+}
+```
+
+`render()`, `componentComplete()` and children rendering through `Frame` run exactly as in the app. Errors that
+scripts report land in `luaui::errors()`. See `tests/element_test.cpp` and `tests/frame_test.cpp`, and
+[Development](development.md#testing) for more.
 
 ## Hot reload
 
@@ -500,21 +570,21 @@ build/clang-debug/bin/imlui_custom_types
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
 | `imlui.types.element` | `Element`: `render`, `componentComplete`, `destroyed` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in |
-| `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `extends` |
-| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>`, `install`, `activate`, `sync`, `typeNames` |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal`, `method`, `nonVisual`, `defaultProperty`, `extends` |
+| `imlui.types.overload` | `overload<Args...>(&T::fn)`, `constOverload<Args...>(&T::fn)`: pick one of overloaded members |
+| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`), `install`, `activate`, `sync`, `typeNames` |
 
-`Engine` forwards `registerType<T>(name)` and `registerSingleton(name, obj)` to its registry, which `types()`
-returns. All of these come with `import imlui;`.
+`Engine` forwards `registerType<T>(name)` and both `registerSingleton(name, obj)` overloads to its registry, which
+`types()` returns. All of these come with `import imlui;`.
 
 From Lua, `ui.types()` lists the registered element type names, and `require("imlui.types")` is the small native
 library the DSL uses (`names()`, `isType(name)`, `attach(element)`).
 
 **Limitations**
 
-- Properties are synced, not observed: a setter runs at the element's next render, not when the Lua value
-  changes. Elements that aren't rendered (on a hidden page, `visible = false`) aren't synced.
-- Setting a property back to `nil` keeps the last C++ value (except for `std::optional` properties).
-- Methods are member function pointers. Overloaded methods need a cast to pick one. Default arguments aren't
-  seen (pass all arguments, or wrap the method).
+- Properties are synced, not observed: a setter runs at the element's next render, method call or `as<T>()`,
+  not when the Lua value changes.
+- Methods are member function pointers. Default arguments aren't seen (pass all arguments, or wrap the
+  method).
 - A method can't share a name with a property or signal of the same type.
 - Singleton handlers don't receive `self`. Element handlers do.

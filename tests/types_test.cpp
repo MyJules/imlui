@@ -16,6 +16,7 @@ import imlui.types.frame;
 import imlui.types.type_info;
 import imlui.types.type_builder;
 import imlui.types.registry;
+import imlui.types.overload;
 
 using namespace imlui;
 using luaui::Node;
@@ -38,6 +39,7 @@ public:
             .property("tint", &Probe::tint, &Probe::setTint)
             .property("limit", &Probe::limit, &Probe::setLimit)
             .property("items", &Probe::items, &Probe::setItems)
+            .property("scale", &Probe::scale, &Probe::setScale, 2.0) // an explicit nil default
             .property("setCount", &Probe::setCount)
             .signal("onFired")
             .method("add", &Probe::add)
@@ -71,6 +73,8 @@ public:
     [[nodiscard]] const std::vector<std::string>& items() const { return m_items; }
     void setItems(std::vector<std::string> i) { m_items = std::move(i); }
     [[nodiscard]] int setCount() const { return counters.setValueCalls; }
+    [[nodiscard]] double scale() const { return m_scale; }
+    void setScale(double s) { m_scale = s; }
 
     [[nodiscard]] double add(double a, int b) const { return m_value + a + b; }
     [[nodiscard]] std::string greet(const std::string& who) const { return "hello " + who + " from " + m_name; }
@@ -86,6 +90,7 @@ private:
     Color m_tint{};
     std::optional<int> m_limit;
     std::vector<std::string> m_items;
+    double m_scale = 1.0;
 };
 
 class Backend final : public ScriptObject {
@@ -111,6 +116,47 @@ public:
 private:
     double m_level = 0.5;
 };
+
+/// Overloaded members, picked with imlui::overload / constOverload.
+class Shape final : public ScriptObject {
+public:
+    static void declare(TypeBuilder<Shape>& type) {
+        type.property("size", constOverload<>(&Shape::size), overload<double>(&Shape::setSize))
+            .method("grow", overload<double>(&Shape::grow))
+            .method("growBoth", overload<double, double>(&Shape::grow))
+            .method("area", constOverload<>(&Shape::area))
+            .method("scaledArea", constOverload<double>(&Shape::area))
+            .method("named", overload<const std::string&>(&Shape::setSize));
+    }
+
+    [[nodiscard]] double size() const { return m_w; }
+    [[nodiscard]] double size(int axis) const { return axis == 0 ? m_w : m_h; }
+    void setSize(double s) { m_w = m_h = s; }
+    std::string setSize(const std::string& preset) {
+        setSize(preset == "large" ? 10.0 : 1.0);
+        return preset;
+    }
+    double grow(double by) noexcept {
+        m_w += by;
+        m_h += by;
+        return m_w;
+    }
+    double grow(double w, double h) {
+        m_w += w;
+        m_h += h;
+        return m_w * m_h;
+    }
+    [[nodiscard]] double area() const { return m_w * m_h; }
+    [[nodiscard]] double area(double k) const { return m_w * m_h * k; }
+
+private:
+    double m_w = 1.0;
+    double m_h = 1.0;
+};
+
+static_assert(std::is_same_v<decltype(overload<double, double>(&Shape::grow)), double (Shape::*)(double, double)>);
+static_assert(std::is_same_v<decltype(constOverload<int>(&Shape::size)), double (Shape::*)(int) const>);
+static_assert(overload<double>(&Shape::setSize) == static_cast<void (Shape::*)(double)>(&Shape::setSize));
 
 lua::State* newUiState(TypeRegistry& types) {
     lua::State* state = lua::newstate();
@@ -251,11 +297,13 @@ TEST_F(TypesTest, MethodsConvertArgumentsAndResults) {
     run(R"(
         p = Probe { name = "P" }
         assert(p:add(1.5, 2) == 3.5)
-        assert(p:greet("you") == "hello you from probe") -- not synced yet: C++ default name
+        assert(p:greet("you") == "hello you from P") -- never rendered: synced before the call
+        p.name = "Q"
+        assert(p:greet("you") == "hello you from Q") -- changed since: synced again
     )");
     Probe* p = sync("p");
     ASSERT_NE(p, nullptr);
-    run(R"(assert(p:greet("you") == "hello you from P"))");
+    EXPECT_EQ(p->name(), "Q");
     EXPECT_NE(runError(R"(p:add("x", 1))").find("bad argument #1 to 'Probe:add' (number expected, got string)"),
               std::string::npos);
     EXPECT_NE(runError(R"(p.add({}, 1, 2))").find("method called without its object"), std::string::npos);
@@ -295,6 +343,44 @@ TEST_F(TypesTest, SyncReadsPlainFunctionAndBindValues) {
     EXPECT_DOUBLE_EQ(sync("bound")->value(), 10);
     EXPECT_EQ(sync("plain")->limit(), std::nullopt); // optional: nil is a value
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(TypesTest, NilResetsPropertiesToTheirDefaults) {
+    run(R"(
+        s = ui.state { v = 3, name = "bound" }
+        p = Probe { value = 1.5, name = "named", scale = 4, limit = 2 }
+        fn = Probe { value = function() return s.v end, name = ui.bind(s, "name") }
+    )");
+    Probe* p = sync("p");
+    EXPECT_DOUBLE_EQ(p->value(), 1.5);
+    EXPECT_DOUBLE_EQ(p->scale(), 4);
+    run("p.value = nil; p.name = nil; p.scale = nil; p.limit = nil");
+    sync("p");
+    EXPECT_DOUBLE_EQ(p->value(), 0);     // the getter's value right after construction
+    EXPECT_EQ(p->name(), "probe");       // likewise
+    EXPECT_DOUBLE_EQ(p->scale(), 2);     // the declared default (not the constructed 1.0)
+    EXPECT_EQ(p->limit(), std::nullopt); // optional: nil is nullopt
+
+    Probe* fn = sync("fn");
+    EXPECT_DOUBLE_EQ(fn->value(), 3);
+    EXPECT_EQ(fn->name(), "bound");
+    run("s.v = nil; s.name = nil"); // a binding and a two-way bind that now give nil
+    sync("fn");
+    EXPECT_DOUBLE_EQ(fn->value(), 0);
+    EXPECT_EQ(fn->name(), "probe");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(TypesTest, DefaultsAreCapturedPerInstanceBeforeAnySetter) {
+    run(R"(
+        a = Probe { value = 7 }
+        b = Probe { }
+    )");
+    sync("a");
+    run("a.value = nil");
+    EXPECT_DOUBLE_EQ(sync("a")->value(), 0);
+    EXPECT_DOUBLE_EQ(sync("b")->value(), 0);
+    EXPECT_DOUBLE_EQ(sync("b")->scale(), 2); // never set: the explicit default applies from the first sync
 }
 
 TEST_F(TypesTest, SyncCallsSettersOnlyOnChange) {
@@ -343,7 +429,7 @@ TEST_F(TypesTest, NotifyWritesThroughBindsAndEmitsChanged) {
         assert(type(fn.value) == "function", "a function binding must be left alone")
     )");
     EXPECT_DOUBLE_EQ(sync("fn")->value(), 9); // the binding wins again on the next sync
-    EXPECT_LE(secondsUntilFrame(), 0.0);       // notify requested a frame
+    EXPECT_LE(secondsUntilFrame(), 0.0);      // notify requested a frame
 }
 
 TEST_F(TypesTest, NotifyWritesThroughGetterSetterBinds) {
@@ -425,6 +511,61 @@ TEST_F(TypesTest, SingletonPropertiesMethodsAndSignals) {
     EXPECT_NE(runError("backend.level = {}").find("backend.level: number expected, got table"), std::string::npos);
     EXPECT_NE(runError("backend.nope = 1").find("has no property 'nope'"), std::string::npos);
     EXPECT_NE(runError("backend.onPing = 5").find("signal handlers must be functions"), std::string::npos);
+}
+
+TEST_F(TypesTest, AssigningNilToASingletonPropertyResetsIt) {
+    run("backend.level = 0.9; assert(backend.level == 0.9); backend.level = nil; assert(backend.level == 0.5)");
+    EXPECT_DOUBLE_EQ(m_backend.level(), 0.5); // the value at registration
+}
+
+TEST(SharedSingletonTest, TheRegistryKeepsASharedSingletonAlive) {
+    std::weak_ptr<Backend> weak;
+    {
+        Renderer renderer;
+        TypeRegistry types{renderer};
+        {
+            auto backend = std::make_shared<Backend>();
+            weak = backend;
+            types.registerSingleton("shared", std::move(backend));
+        }
+        EXPECT_FALSE(weak.expired());
+        lua::State* state = lua::newstate();
+        lua::openlibs(state);
+        types.install(state);
+        ASSERT_EQ(lua::loadbuffer(state, "assert(shared.level == 0.5); shared.level = 0.7", "=test"), lua::ok);
+        ASSERT_EQ(lua::pcall(state, 0, 0, 0), lua::ok) << lua::tostring(state, -1);
+        ASSERT_FALSE(weak.expired());
+        EXPECT_DOUBLE_EQ(weak.lock()->level(), 0.7);
+        lua::close(state);
+        EXPECT_FALSE(weak.expired()); // outlives the Lua state
+        EXPECT_THROW(types.registerSingleton("none", std::shared_ptr<Backend>{}), std::invalid_argument);
+    }
+    EXPECT_TRUE(weak.expired()); // released with the registry
+    clearFrameRequests();
+}
+
+TEST(OverloadTest, PicksOverloadsByParameterTypes) {
+    Renderer renderer;
+    TypeRegistry types{renderer};
+    Shape shape;
+    types.registerSingleton("shape", shape);
+    lua::State* state = lua::newstate();
+    lua::openlibs(state);
+    types.install(state);
+    ASSERT_EQ(lua::loadbuffer(state, R"(
+        assert(shape.size == 1)
+        shape.size = 2
+        assert(shape:area() == 4)
+        assert(shape:grow(1) == 3)
+        assert(shape:growBoth(1, 2) == 4 * 5)
+        assert(shape:scaledArea(0.5) == 10)
+        assert(shape:named("large") == "large" and shape.size == 10)
+    )",
+                              "=test"),
+              lua::ok);
+    EXPECT_EQ(lua::pcall(state, 0, 0, 0), lua::ok) << lua::tostring(state, -1);
+    EXPECT_DOUBLE_EQ(shape.size(1), 10);
+    lua::close(state);
 }
 
 TEST_F(TypesTest, BindingsReadSingletonsLive) {
