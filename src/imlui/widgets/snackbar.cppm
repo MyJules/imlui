@@ -15,18 +15,46 @@ import imlui.widgets.button;
 export namespace imlui::md {
 
 /// Draws a snackbar at the bottom of the viewport. `t` in [0, 1] is its
-/// show animation. Returns true when the action was clicked.
+/// show animation. Returns true when the action was clicked. A message wider than the bar leaves for it (the bar's
+/// width less the padding and the actions) wraps there: the bar grows from 48dp by 20dp a line (68dp for two
+/// lines), and the actions stay on the right, centered vertically.
 bool snackbar(std::string_view message, std::string_view action, float t, bool closeIcon, bool* closed);
 
 /// The snackbar's width for `content` pixels (the message, the actions and the padding) on a viewport
 /// `viewportWidth` wide: within 344-672dp, and at most the viewport less 16dp on each side, which wins.
 [[nodiscard]] float snackbarWidth(float content, float viewportWidth);
 
+/// The lines `message` takes in a snackbar with `width` pixels for it (word-wrapped, and at each newline).
+[[nodiscard]] std::vector<std::string_view> snackbarLines(std::string_view message, float width);
+
 } // namespace imlui::md
 
 module :private;
 
 namespace imlui::md {
+
+std::vector<std::string_view> snackbarLines(std::string_view message, float width) {
+    std::vector<std::string_view> lines;
+    ImFont* f = font(TextStyle::BodyMedium);
+    const float size = fontPixels(TextStyle::BodyMedium);
+    const char* p = message.data();
+    const char* const end = p + message.size();
+    while (p < end) {
+        const char* const lineEnd = std::find(p, end, '\n');
+        const char* e = f ? f->CalcWordWrapPosition(size, p, lineEnd, std::max(1.0f, width)) : lineEnd;
+        if (e <= p || e > lineEnd) e = lineEnd; // nothing fits (no font): the rest of the line
+        const char* last = e;
+        while (last > p && (last[-1] == ' ' || last[-1] == '\t'))
+            --last;
+        lines.emplace_back(p, static_cast<std::size_t>(last - p));
+        p = e;
+        while (p < lineEnd && (*p == ' ' || *p == '\t'))
+            ++p;                          // a wrapped line doesn't start with a blank
+        if (p == lineEnd && p < end) ++p; // the newline
+    }
+    if (lines.empty()) lines.emplace_back();
+    return lines;
+}
 
 float snackbarWidth(float content, float viewportWidth) {
     const float most = std::min(dp(672), viewportWidth - dp(32));
@@ -67,18 +95,28 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
     pushSurface(s.inverseSurface);
     bool clicked = false;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float h = dp(48);
+    // The message wraps in what the bar leaves for it (only when the bar is at its widest): 48dp for one line, 20dp
+    // more for each further one (M3: 68dp for two), with 14dp above and below the lines.
+    const float msgRoom = std::max(dp(48), width - 2.0f * padX - right);
+    const std::vector<std::string_view> lines = snackbarLines(message, msgW > msgRoom ? msgRoom : hugeExtent);
+    const float msgBoxW = std::min(msgW, msgRoom);
+    const float lineH = dp(20);
+    const float h = std::max(dp(48), static_cast<float>(lines.size()) * lineH + 2.0f * dp(14));
+    const float lineY = ImGui::GetCursorPosY();
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::Dummy({msgW, h});
-    drawTextV(dl, TextStyle::BodyMedium, p.x, p.y + h * 0.5f, s.inverseOnSurface.withAlpha(ease), message);
-    const float spacer = width - 2.0f * padX - msgW - right;
+    ImGui::Dummy({msgBoxW, h});
+    const float firstCenter = lines.size() == 1 ? h * 0.5f : dp(14) + lineH * 0.5f;
+    for (std::size_t i = 0; i < lines.size(); ++i)
+        drawTextV(dl, TextStyle::BodyMedium, p.x, p.y + firstCenter + lineH * static_cast<float>(i),
+                  s.inverseOnSurface.withAlpha(ease), lines[i]);
+    const float spacer = width - 2.0f * padX - msgBoxW - right;
     if (spacer > 0) {
         ImGui::SameLine(0, 0);
         ImGui::Dummy({spacer, 1});
     }
     if (!action.empty()) {
         ImGui::SameLine(0, actionGap);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (h - dp(40)) * 0.5f);
+        ImGui::SetCursorPosY(lineY + (h - dp(40)) * 0.5f);
         std::string a{action};
         a += "###snack_action";
         // Text button in inversePrimary.
@@ -91,6 +129,7 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
     }
     if (closeIcon) {
         ImGui::SameLine(0, closeGap);
+        ImGui::SetCursorPosY(lineY + (h - dp(48)) * 0.5f);
         if (iconButton("##snack_close", "close", IconButtonVariant::Standard, false, false, s.inverseOnSurface) &&
             closed)
             *closed = true;

@@ -104,7 +104,7 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView` and `Card`; *raw* on the others. |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it. |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it; a fill-minus child (`width = -40`) is the stack's width less 40dp, and `align` places it in the stack (centered: 20dp on each side). |
 
 Non-visual children are rendered in place and don't count for the spacing.
 
@@ -113,7 +113,10 @@ How `align` knows a child's width before drawing it: `Text` (unwrapped, start-al
 Any other child is placed by its width on the last frame; when that changed, another frame follows right away, so
 the layout settles by itself even when nothing else is redrawing (a `Timer` changing a label, a script setting a
 prop). On a child's very first frame, when neither is known, it is laid out but not shown, and appears in place on
-the next frame. The same goes for `Row`, `TopAppBar` actions and `NavigationRail` destinations.
+the next frame. The same goes for `Row` (see there: only where a wrong width would shift its siblings), `TopAppBar`
+actions and `NavigationRail` destinations. A size, once measured, is kept while the child is hidden (another tab, an
+`If` branch, a collapsed section, for at least a minute), so a child that comes back is in place on its first frame.
+A fill or fill-minus child needs no measured width: it is as wide as the stack, less its `-N`.
 
 ## Values that come back from C++
 
@@ -241,7 +244,10 @@ create one. Non-visual.
 | `closable` | bool | `false` | Shows a close icon. |
 
 The bar is as wide as its content (the message, the action, the close icon and 16dp padding on each side), 344–672dp,
-and at most the viewport less 16dp on each side; the action and the close icon sit at its right edge.
+and at most the viewport less 16dp on each side; the action and the close icon sit at its right edge. A message too
+long for the widest bar wraps in what the bar leaves it (word by word, and at `\n`); the bar grows from 48dp by 20dp a
+line (68dp for two, as Material 3 specifies) and keeps the action and the close icon on the right, vertically
+centered. Its width doesn't change with the wrapping.
 
 **Signals:** `onAction(self)` when the action is clicked (the snackbar then fades out).
 **Two-way:** `shownAt`.
@@ -279,9 +285,14 @@ its table: `TextField`, `Card`, `Slider`, `Grid`, `ScrollView`, ...), wrapping t
 `Spacer { fill = true }`. Each fill is laid out in its share: it fills it, a fill-minus width is its share minus
 `|v|`, wrapping text wraps at it. The other children keep their own width (their intrinsic size, else their width
 on the previous frame, settling within a frame) and are bounded by the children after them, so a fill nested inside
-one stops there. `align` centers (or bottom-aligns) each child against the tallest, by the same sizes. On a child's
-first frame, when a size the row needs isn't known yet (no intrinsic size), the row is laid out unseen for that one
-frame and shown in place on the next.
+one stops there. `align` centers (or bottom-aligns) each child against the tallest, by the same sizes.
+
+On a child's very first frame its size may not be known yet (no intrinsic size, never rendered). When the row needs
+its **width** (the row has fills, or `justify` isn't `"start"`), a guess would shift its siblings far, so the row is
+laid out unseen for that one frame and shown in place on the next. When the row only needs its **height** (the
+default `align = "center"`, or `"bottom"`), the child is shown at the top on that frame, the others are aligned among
+the known heights, and the next frame (requested) aligns them all: a shift of a few pixels for one frame, much less
+noticeable than a row that blinks in.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|

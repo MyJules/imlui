@@ -127,7 +127,7 @@ lua::Type Node::push(const char* key) const {
     lua::getfield(m_state, m_index, key);
     if (lua::isfunction(m_state, -1)) {
         lua::pushvalue(m_state, m_index);
-        if (!safeCall(m_state, 1, 1)) lua::pushnil(m_state);
+        if (!safeRead(m_state, 1, 1)) lua::pushnil(m_state);
     } else if (isBind(m_state, -1)) {
         resolveBind(-1);
     }
@@ -250,6 +250,7 @@ void Node::setTop(const char* key) const {
         return;
     }
     lua::setfield(m_state, m_index, key); // pops the value
+    noteChange();
 }
 
 bool Node::emit(const char* signal, std::initializer_list<Value> args) const {
@@ -284,11 +285,11 @@ void Node::resolveBind(int idx) const {
         lua::pushcfunction(m_state, &bindGet);
         lua::insert(m_state, -2);
         pushRawField(m_state, b, "k");
-        if (!safeCall(m_state, 2, 1)) lua::pushnil(m_state);
+        if (!safeRead(m_state, 2, 1)) lua::pushnil(m_state);
     } else {
         lua::pop(m_state);
         pushRawField(m_state, b, "get");
-        if (!lua::isfunction(m_state, -1) || !safeCall(m_state, 0, 1)) {
+        if (!lua::isfunction(m_state, -1) || !safeRead(m_state, 0, 1)) {
             if (lua::gettop(m_state) > b) lua::settop(m_state, b);
             lua::pushnil(m_state);
         }

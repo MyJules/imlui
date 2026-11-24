@@ -240,14 +240,29 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   cache requests another frame. Rendering is on demand, so without this a label a `Timer` or a posted change made
   longer would stay misplaced until the next input; with it the layout settles by itself, and a settled layout asks
   for nothing. A size that keeps changing for more than `layout::maxSettleFrames` (8) frames in a row stops asking
-  (logged once at debug level), so a layout that can't settle doesn't render forever. Entries not used for two
-  frames are dropped (elements come and go; a hidden page re-measures when shown), and a new ImGui context starts
-  empty.
-- **First appearance.** A child with neither an intrinsic size nor a cached one, which a layout must place by its
-  size (under a non-start stack `align`; in a `Row` that aligns heights, has fills or justifies; a `TopAppBar`
+  (logged once at debug level), so a layout that can't settle doesn't render forever.
+- **Retention.** A hidden page (another `TabBar` tab, an `If` branch, a collapsed `Section`) keeps its sizes, so it
+  is in place, and seen, on the frame it comes back. An entry is dropped only when it is old both in frames and in
+  time (`layout::keepFrames` 600 frames and `layout::keepSeconds` 60s: on-demand rendering renders few frames while
+  idle, an animation many a second), and above `layout::maxEntries` (16384, about 2 MB) the least recently used go
+  first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
+  `ImGui::GetID(element table)` in the parent's ID scope, stable for as long as the table lives: `TabBar` pages are
+  the same tables every time, and `Repeater`/`ListView` keep a delegate while the item at its index doesn't change.
+  A new table that reuses a collected one's address starts from that size and converges like any stale size. A new
+  ImGui context starts empty.
+- **First appearance.** A child with neither an intrinsic size nor a cached one, which a layout must place
+  horizontally by its width (under a non-start stack `align`; in a `Row` that has fills or justifies; a `TopAppBar`
   action; a non-filling `NavigationRail` child), renders **unseen** for its first frame
   (`Frame::Child::renderUnseen()`: an empty clip rect, so it is measured but nothing is drawn or hovered) and
-  requests the next frame, which shows it in place.
+  requests the next frame, which shows it in place. Only where a wrong guess would misplace things far: a `Row` that
+  only aligns heights (the default `align = "center"`) shows such a child at the top and aligns the others among the
+  known heights, then aligns them all on the requested frame, a vertical shift of a few pixels for one frame.
+- **Fills under the stack `align`** need no size from anywhere: a fill or fill-minus child is the box's width (less
+  N), placed by it and rendered in a box as wide as the stack from where it starts, so it resolves to that width
+  again. A fill-minus child under `align = "center"` is centered with N/2 on each side on its first frame.
+- **One sync a frame.** A layout's questions about a child (`fillsWidth`, `intrinsicSize`, `as<T>()`) and its
+  render share one property sync while no Lua code that may change tables ran in between (`luaui::changes()`), so
+  a `Row` child's bindings run once a frame; a handler that ran in between makes the render sync again.
 - **`Row` is a flex row.** Before rendering it asks each child whether it fills, gives the fills equal shares of
   the width the others take (their expected widths), and renders each fill in a box of its share (fill-minus
   resolves against it, wrapping text wraps at it). Every other child's box ends where the children after it start.
@@ -263,11 +278,11 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   Sizes: `Window` fills `width` (240dp when unset) and wraps at the viewport's right edge; `Dialog` 280–560dp (or its
   `width`); menus at least 112dp, as wide as the widest row. The `Snackbar` doesn't auto-size at all: it computes its
   width (`md::snackbarWidth`: message + actions + padding within 344–672dp, at most the viewport less 32dp) and sets
-  it.
+  it; a longer message wraps inside it (`md::snackbarLines`) and only the height grows.
 - **What still lags a frame:** the placement of children without an intrinsic size (any container, `TextField`,
   `Chip`, a custom element that doesn't implement it) is one frame behind when their size changes, and settles on
-  the requested frame; wrapping or aligned `Text` has no intrinsic size. A fill-minus child under a non-start stack
-  `align` converges over several frames (its width depends on its own offset).
+  the requested frame; wrapping or aligned `Text` has no intrinsic size. Such a child's first-ever appearance is
+  unseen for a frame where its width places things, and a few pixels off vertically for a frame in a centered `Row`.
 
 ## Hot reload
 
@@ -681,7 +696,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`; `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `raiseException`, `toDisplayString` (protected `tostring`) |
+| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `raiseException`, `toDisplayString` (protected `tostring`) |
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
@@ -727,7 +742,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
-| `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `cacheEntries`: last frame's sizes by ImGui ID, and another frame when a layout placed something by a stale size (convergence) |
+| `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `keepFrames`/`keepSeconds`/`maxEntries`, `cacheEntries`: the last measured sizes by ImGui ID (kept while hidden, bounded by age and an LRU cap), and another frame when a layout placed something by a stale size (convergence) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `renderUnseen`, `isVisual`, `fillsWidth`, `intrinsicSize`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
