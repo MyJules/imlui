@@ -4,12 +4,16 @@
 // doesn't expect trips IM_ASSERT_USER_ERROR or STBTT_assert, which abort the program. checkFont() walks everything
 // stb_truetype reads when a font is added (stbtt_GetFontOffsetForIndex, stbtt_InitFont), when a glyph is looked up
 // (the character map, glyph locations, metrics, the CFF indexes) and when it is rasterized (stbtt_GetGlyphShape), and
-// rejects data that would make it read out of bounds, assert, or recurse without end. TrueType outlines (glyf) are
-// decoded the way stb_truetype decodes them (class Outlines): every byte of a simple glyph, every part of a composite
-// one, recursively. CFF outlines are programs: stb_truetype runs a glyph's charstring to get its box
-// (stbtt_GetGlyphBox, which ImGui calls for every glyph it loads) and its shape, and a broken program trips an
-// STBTT_assert there. Once the structure is known to be sound, checkFont() runs every charstring through its own copy
-// of stb_truetype, whose STBTT_assert records the failure instead of aborting.
+// rejects data that would make it read out of bounds, assert, or recurse without end. The tables are checked whole;
+// glyphs only as far as ImGui can use them: ImGui asks stb_truetype for glyphs by code point alone, so only a glyph
+// the character map gives for a code point ImGui can ask for (drawableGlyphs()) is ever measured or drawn, and with it
+// the parts of a composite one. Fonts carry glyphs nothing maps to (alternates, ligatures, placeholders), and a flaw
+// there harms nothing. Those glyphs' TrueType outlines (glyf) are decoded the way stb_truetype decodes them (class
+// Outlines): every byte of a simple glyph, every part of a composite one, recursively. CFF outlines are programs:
+// stb_truetype runs a glyph's charstring to get its box (stbtt_GetGlyphBox, which ImGui calls for every glyph it
+// loads) and its shape, and a broken program trips an STBTT_assert there. Once the structure is known to be sound,
+// checkFont() runs those glyphs' charstrings through its own copy of stb_truetype, whose STBTT_assert records the
+// failure instead of aborting.
 module;
 
 #include <errno.h> // errno: where STBTT_assert records a failure
@@ -36,6 +40,10 @@ export namespace imlui {
 
 /// The message checkFont() returns for data that doesn't start like a font at all.
 constexpr std::string_view notAFont = "not a TrueType/OpenType font";
+
+/// The highest code point ImGui asks a font for (an ImWchar is 16 bits). The glyphs checkFont() checks are those
+/// stbtt_FindGlyphIndex gives for code points 0 to this one, except glyph 0, and the parts of composite ones.
+constexpr int lastCodepoint = 0xFFFF;
 
 } // namespace imlui
 
@@ -420,10 +428,11 @@ struct Shape {
     std::int32_t minX = 0, minY = 0, maxX = 0, maxY = 0;
 };
 
-/// Every glyph's TrueType outline (glyf), read the way stbtt_GetGlyphShape reads it when ImGui rasterizes the glyph:
-/// stb_truetype trusts the data, so every byte it would read must lie inside the glyph; and it fetches a composite
-/// glyph's parts by recursion, so they must not contain the glyph itself (a stack overflow), nest too deeply, or
-/// repeat so much that the work explodes. Also each glyph's box, which ImGui sizes the glyph's bitmap by.
+/// The TrueType outlines (glyf) of the glyphs ImGui can draw, read the way stbtt_GetGlyphShape reads them when ImGui
+/// rasterizes a glyph: stb_truetype trusts the data, so every byte it would read must lie inside the glyph; and it
+/// fetches a composite glyph's parts by recursion, so they must not contain the glyph itself (a stack overflow), nest
+/// too deeply, or repeat so much that the work explodes. Also the box of each glyph drawn, which ImGui sizes the
+/// glyph's bitmap by (a part's box is never used).
 class Outlines {
 public:
     /// `starts`: the glyphs' offsets in glyf from loca (checked: ascending and inside glyf), one more than there are
@@ -432,9 +441,13 @@ public:
         : m_r{r}, m_glyf{glyf}, m_starts{std::move(starts)}, m_maxExtent{maxExtent},
           m_state(m_starts.size() - 1, State::Unseen), m_shapes(m_starts.size() - 1) {}
 
-    Problem check() {
-        for (std::size_t glyph = 0; glyph < m_shapes.size(); ++glyph)
+    /// `glyphs`: those ImGui can draw (drawableGlyphs()). Their parts are read with them.
+    Problem check(std::span<const int> glyphs) {
+        for (const int g : glyphs) {
+            const auto glyph = static_cast<std::size_t>(g);
             if (auto p = shape(glyph, 0)) return p;
+            if (auto p = box(glyph)) return p;
+        }
         return std::nullopt;
     }
 
@@ -458,21 +471,10 @@ private:
         if (m_state[glyph] == State::Read) return std::nullopt;
         if (m_state[glyph] == State::Reading) return problem(glyph, "contains itself");
         m_state[glyph] = State::Reading;
-        const Range g{m_glyf + m_starts[glyph], m_glyf + m_starts[glyph + 1]};
+        const Range g = range(glyph);
         Shape s;
-        bool drawn = false;
         if (g.begin != g.end) { // stb_truetype reads nothing of an empty glyph
             // The 10-byte header was checked with loca: numberOfContours (signed), then the box.
-            const auto word = [&](std::size_t at) { return std::int64_t{static_cast<std::int16_t>(m_r.u16(at))}; };
-            const std::int64_t xMin = word(g.begin + 2), yMin = word(g.begin + 4), xMax = word(g.begin + 6),
-                               yMax = word(g.begin + 8);
-            // ImGui gives a glyph a bitmap of its box's size: an inverted box makes that size negative, and both
-            // trip an IM_ASSERT.
-            if (xMin > xMax || yMin > yMax) return problem(glyph, "has an inverted box");
-            if (xMax - xMin > m_maxExtent || yMax - yMin > m_maxExtent)
-                return problem(glyph, "is far larger than the font");
-            // ImGui draws a glyph whose box covers a pixel at some size: unless it is 0 wide or high at 0.
-            drawn = !(xMin == 0 && xMax == 0) && !(yMin == 0 && yMax == 0);
             const auto contours = static_cast<std::int16_t>(m_r.u16(g.begin));
             if (contours > 0) {
                 if (auto p = simple(glyph, g, static_cast<std::size_t>(contours), s)) return p;
@@ -481,9 +483,31 @@ private:
             }
         }
         if (s.vertices > maxVertices || s.work > maxWork) return problem(glyph, "is too complex");
-        if (s.readsPast && drawn) return problem(glyph, "is broken");
         m_shapes[glyph] = s;
         m_state[glyph] = State::Read;
+        return std::nullopt;
+    }
+
+    [[nodiscard]] Range range(std::size_t glyph) const {
+        return {m_glyf + m_starts[glyph], m_glyf + m_starts[glyph + 1]};
+    }
+
+    /// What ImGui does with the box of a glyph it draws (its outline read by shape() already).
+    [[nodiscard]] Problem box(std::size_t glyph) const {
+        const Range g = range(glyph);
+        if (g.begin == g.end) return std::nullopt; // stb_truetype gives it no box
+        const auto word = [&](std::size_t at) { return std::int64_t{static_cast<std::int16_t>(m_r.u16(at))}; };
+        const std::int64_t xMin = word(g.begin + 2), yMin = word(g.begin + 4), xMax = word(g.begin + 6),
+                           yMax = word(g.begin + 8);
+        // ImGui gives a glyph a bitmap of its box's size: an inverted box makes that size negative, and both trip an
+        // IM_ASSERT.
+        if (xMin > xMax || yMin > yMax) return problem(glyph, "has an inverted box");
+        if (xMax - xMin > m_maxExtent || yMax - yMin > m_maxExtent)
+            return problem(glyph, "is far larger than the font");
+        // ImGui rasterizes a glyph whose box covers a pixel at some size: unless it is 0 wide or high at 0. Only then
+        // is its outline decoded.
+        const bool drawn = !(xMin == 0 && xMax == 0) && !(yMin == 0 && yMax == 0);
+        if (m_shapes[glyph].readsPast && drawn) return problem(glyph, "is broken");
         return std::nullopt;
     }
 
@@ -668,39 +692,59 @@ private:
 /// largest glyph well inside ImGui's 8192-pixel atlas.
 std::int64_t maxGlyphExtent(std::int64_t height) { return 16 * height; }
 
-/// Every glyph's CFF charstring, run by stb_truetype as stbtt_GetGlyphBox runs it, and the box it gives (see
-/// maxGlyphExtent()). Only for a font whose structure checkSfnt() found sound: stb_truetype reads the CFF table
-/// through a buffer it thinks is 512 MiB long, so only checkCff()'s checks keep it inside the data.
-Problem checkCharstrings(const Reader& r, std::size_t font, std::int64_t maxExtent) {
+/// stb_truetype's view of the font (stbtt_InitFont); false when it fails or asserts. Only for a font whose structure
+/// checkSfnt() found sound.
+bool initFont(const Reader& r, std::size_t font, stbtt_fontinfo& info) {
     const int saved = errno;
     errno = 0;
-    stbtt_fontinfo info{};
     const bool read = stbtt_InitFont(&info, r.data(), static_cast<int>(font)) != 0 && errno == 0;
-    int glyph = 0;
+    errno = saved;
+    return read;
+}
+
+/// The glyphs ImGui can draw, ascending: those stbtt_FindGlyphIndex gives for a code point up to lastCodepoint,
+/// except glyph 0. ImGui reaches glyphs only that way (FontSrcContainsGlyph and FontBakedLoadGlyph take a code point;
+/// so do the fallback and ellipsis characters), and FontBakedLoadGlyph loads nothing for glyph 0, which stands for a
+/// code point the font lacks: glyph 0 is drawn only as a part of a composite glyph. Asking stb_truetype itself picks
+/// the subtable and searches it exactly as ImGui's copy does (checkCmap() found it sound).
+std::vector<int> drawableGlyphs(const stbtt_fontinfo& info) {
+    std::vector<bool> found(static_cast<std::size_t>(info.numGlyphs));
+    for (int codepoint = 0; codepoint <= lastCodepoint; ++codepoint)
+        found[static_cast<std::size_t>(stbtt_FindGlyphIndex(&info, codepoint))] = true; // checkCmap(): < numGlyphs
+    std::vector<int> glyphs;
+    for (std::size_t glyph = 1; glyph < found.size(); ++glyph)
+        if (found[glyph]) glyphs.push_back(static_cast<int>(glyph));
+    return glyphs;
+}
+
+/// The CFF charstrings of `glyphs`, run by stb_truetype as stbtt_GetGlyphBox runs them, and the boxes they give (see
+/// maxGlyphExtent()). Only for a font whose structure checkSfnt() found sound: stb_truetype reads the CFF table
+/// through a buffer it thinks is 512 MiB long, so only checkCff()'s checks keep it inside the data.
+Problem checkCharstrings(const stbtt_fontinfo& info, std::span<const int> glyphs, std::int64_t maxExtent) {
+    const int saved = errno;
+    errno = 0;
+    std::size_t i = 0;
     bool tooLarge = false;
-    for (; read && glyph < info.numGlyphs && errno == 0 && !tooLarge; ++glyph) {
+    for (; i < glyphs.size() && errno == 0 && !tooLarge; ++i) {
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-        stbtt_GetGlyphBox(&info, glyph, &x0, &y0, &x1, &y1);
+        stbtt_GetGlyphBox(&info, glyphs[i], &x0, &y0, &x1, &y1);
         tooLarge = std::int64_t{x1} - x0 > maxExtent || std::int64_t{y1} - y0 > maxExtent;
     }
     const bool asserted = errno != 0;
     errno = saved;
-    if (!read) return "the CFF table is broken";
-    if (asserted) return "the CFF charstring of glyph " + std::to_string(glyph - 1) + " is broken";
-    if (tooLarge) return "the outline of glyph " + std::to_string(glyph - 1) + " is far larger than the font";
+    if (asserted) return "the CFF charstring of glyph " + std::to_string(glyphs[i - 1]) + " is broken";
+    if (tooLarge) return "the outline of glyph " + std::to_string(glyphs[i - 1]) + " is far larger than the font";
     return std::nullopt;
 }
 
-/// The top of every TrueType glyph whose box ends at or below the baseline, from the outline stb_truetype makes of it
-/// (stbtt_GetGlyphShape: safe once Outlines found the glyphs sound). ImGui's bitmap for such a glyph starts at the
-/// baseline at small sizes, and stb_truetype's rasterizer asserts when an edge of the outline lies wholly above its
+/// The top of every TrueType glyph drawn whose box ends at or below the baseline, from the outline stb_truetype makes
+/// of it (stbtt_GetGlyphShape: safe once Outlines found the glyphs sound). ImGui's bitmap for such a glyph starts at
+/// the baseline at small sizes, and stb_truetype's rasterizer asserts when an edge of the outline lies wholly above its
 /// bitmap's first row (it clamps such edges only for bitmaps that start elsewhere; found by the `font` fuzz target).
 /// So the outline must not rise above the baseline. Real fonts' boxes are often a few units off their outlines, but
 /// none of these glyphs rises above the baseline.
-Problem checkTops(const Reader& r, std::size_t font) {
-    stbtt_fontinfo info{};
-    if (!stbtt_InitFont(&info, r.data(), static_cast<int>(font))) return "the font can't be read"; // checked before
-    for (int glyph = 0; glyph < info.numGlyphs; ++glyph) {
+Problem checkTops(const stbtt_fontinfo& info, std::span<const int> glyphs) {
+    for (const int glyph : glyphs) {
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         if (!stbtt_GetGlyphBox(&info, glyph, &x0, &y0, &x1, &y1) || y1 > 0) continue;
         if ((x0 == 0 && x1 == 0) || (y0 == 0 && y1 == 0)) continue; // never drawn (see Outlines)
@@ -761,7 +805,7 @@ Problem checkSfnt(const Reader& r, std::size_t font) {
     for (const auto* t : {&*cmap, &*head, &*hhea, &*hmtx, &*maxp})
         if (t->offset == 0) return "the table directory is broken";
     const std::size_t glyphs = r.u16(maxp->offset + 4);
-    // Glyph 0 (.notdef) is looked up for every character the font lacks.
+    // stbtt_FindGlyphIndex gives glyph 0 (.notdef) for every character the font lacks, so it must exist.
     if (glyphs == 0) return "the font has no glyphs";
     // ImGui scales the font by 1 / its height, ascender - descender: 0 would scale every glyph to infinity, and a
     // negative height flips the edges stb_truetype's rasterizer sorts top to bottom, which trips its STBTT_asserts
@@ -793,13 +837,18 @@ Problem checkSfnt(const Reader& r, std::size_t font) {
             if (offset != previous && offset - previous < 10) return "table 'glyf' is broken"; // a glyph header
             starts[i] = previous = offset;
         }
-        if (auto p = Outlines{r, glyf->offset, std::move(starts), maxExtent}.check()) return p;
-        return checkTops(r, font);
+        stbtt_fontinfo info{};
+        if (!initFont(r, font, info)) return "the font can't be read"; // checked: can't happen
+        const std::vector<int> drawable = drawableGlyphs(info);
+        if (auto p = Outlines{r, glyf->offset, std::move(starts), maxExtent}.check(drawable)) return p;
+        return checkTops(info, drawable);
     }
     const auto cff = findTable(r, font, "CFF ");
     if (!cff || cff->offset == 0) return "the font has neither TrueType ('glyf') nor CFF outlines";
     if (auto p = checkCff(r, *cff, glyphs)) return p;
-    return checkCharstrings(r, font, maxExtent);
+    stbtt_fontinfo info{};
+    if (!initFont(r, font, info)) return "the CFF table is broken";
+    return checkCharstrings(info, drawableGlyphs(info), maxExtent);
 }
 
 } // namespace
