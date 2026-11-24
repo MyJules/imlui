@@ -23,8 +23,8 @@ built-in and your own.
 - [App bars, navigation and menus](#app-bars-navigation-and-menus): [TopAppBar](#topappbar),
   [NavigationItem](#navigationitem), [NavigationBar](#navigationbar), [NavigationRail](#navigationrail),
   [ModalNavigationDrawer](#modalnavigationdrawer), [MenuBar, Menu, MenuItem](#menubar-menu-menuitem)
-- [Text and decoration](#text-and-decoration): [Text / Label](#text--label), [Icon](#icon), [Link](#link),
-  [Divider / Separator](#divider--separator), [Spacer](#spacer)
+- [Text and decoration](#text-and-decoration): [Text / Label](#text--label), [Icon](#icon), [Image](#image),
+  [Link](#link), [Divider / Separator](#divider--separator), [Spacer](#spacer)
 - [Buttons and selection controls](#buttons-and-selection-controls): [Button](#button),
   [IconButton](#iconbutton), [Checkbox](#checkbox), [Switch](#switch), [RadioButton](#radiobutton),
   [RadioGroup](#radiogroup), [Chip](#chip), [SegmentedButton](#segmentedbutton), [ListItem](#listitem)
@@ -130,6 +130,7 @@ These elements take a positional string as their `text` (their default property)
 |---|---|
 | `Text` / `Label` | the text |
 | `Icon` | the glyph name (after `name` and `icon`) |
+| `Image` | the `source` (`Image { "logo.png" }`) |
 | `Link` | the label, and the URL unless `url` is set |
 | `Separator` | the label |
 | `Section` / `Expander` | the title, unless `title` is set |
@@ -598,6 +599,36 @@ A Material icon glyph.
 | `size` | number | `24` | Size (dp). |
 | `color` | color | — | Tint. Unset: `onSurfaceVariant`. |
 
+### Image
+
+A PNG or JPEG image from the app's [resources](lua-api.md#resources), decoded once per resource name (stb_image)
+and drawn as a texture. It's drawn at its natural size times the DPI scale (one image pixel per dp) unless
+`width`/`height` are set, so it stays sharp only up to its pixel size. When the file changes in a directory mount
+(dev builds), the image is decoded again within half a second, without a script reload.
+
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `source` | string | `""` | Positional. A resource name: `app:/img/logo.png`, or relative (`logo.png`, `../img/x.jpg`) to the folder of the script that created the `Image` (a relative name from a binding too). Empty: nothing is drawn and no space is taken. |
+| `width`, `height` | size | `0` | *Raw.* Unset: the natural size times the DPI scale. Only one set: the other follows the image's aspect ratio. Fill values work. |
+| `fillMode` | `"stretch"` \| `"fit"` \| `"crop"` \| `"tile"` | `"stretch"` | How the image fills its size when the aspect ratios differ: stretched; scaled to fit inside, centered (`preserveAspectFit` too); scaled to cover, centered and cut off (`preserveAspectCrop` too); repeated at its natural size from the top left. An unknown name is reported and stretches. |
+| `radius` | number | `0` | Corner radius (dp). With `fit`, the corners of the drawn image; not applied to `tile`. `radius` = half the size and `crop` make a circle. |
+| `opacity` | number | `1` | 0 to 1. |
+| `tint` | color | — | Multiplies the pixels (`"primary"`, `"#FFFFFF80"`); its alpha multiplies the opacity. |
+| `smooth` | bool | `true` | `false` samples the nearest pixel (pixel art, scaled-up icons) instead of filtering. |
+| `status` | string | — | *Read-only.* `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render. Decoding happens on the first render that needs it. |
+| `implicitWidth`, `implicitHeight` | number | `0` | *Read-only.* The image's size in pixels (dp at its natural size); 0 until it's ready. |
+
+A missing or undecodable file is reported once in the error overlay (`Image: image 'app:/logo.png' not found`) and
+drawn as a placeholder: a `surfaceContainerHighest` box with a broken-image icon, 48dp unless sized.
+
+**Signals:** `onStatusChanged(self, status)`, `onImplicitWidthChanged(self, w)`, `onImplicitHeightChanged(self, h)`
+
+```lua
+Image { source = "img/avatar.jpg", width = 96, height = 96, fillMode = "crop", radius = 48 }
+Image { source = "app:/banner.png", fillWidth = true, height = 160, fillMode = "crop", radius = 12,
+        onStatusChanged = function(self, status) if status == "error" then print("no banner") end end }
+```
+
 ### Link
 
 A clickable text link (`bodyLarge`) that opens a URL in the browser.
@@ -1064,6 +1095,7 @@ Each also emits `on<Prop>Changed(self, value)` when written back ([above](#value
 | `ColorPicker` | `onColorChanged(self, hex)` |
 | `Table` | `onRowClicked(self, row)` |
 | `Canvas` | `onPaint(self, p)`, `onClicked(self, x, y)` |
+| `Image` | `onStatusChanged(self, status)` |
 
 ### Non-visual elements
 

@@ -18,6 +18,7 @@ import lua;
 import imgui;
 import imlui.theme.dpi;
 import imlui.widgets;
+import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.props;
@@ -48,6 +49,11 @@ public:
     /// last ui.setTitle(), else "imlui".
     [[nodiscard]] const std::string& windowTitle() const;
     void setWindowTitle(std::string title);
+
+    /// The images that Image elements draw (decoded from the owner's resources); null when there are none.
+    /// Set by the owner (the Engine, the test harness); it must outlive the renderer's use of it.
+    [[nodiscard]] ImageCache* images() const;
+    void setImages(ImageCache* images);
 
     /// Renders the element at stack index `idx`. Returns false if it was
     /// hidden (visible = false) or of an unknown type ("unknown element type" is reported).
@@ -111,6 +117,7 @@ public:
 private:
     Types& m_types;
     std::string m_title{"imlui"};
+    ImageCache* m_images = nullptr;
 };
 
 } // namespace imlui
@@ -125,6 +132,8 @@ Renderer::Renderer(Types& types) : m_types{types} {}
 
 const std::string& Renderer::windowTitle() const { return m_title; }
 void Renderer::setWindowTitle(std::string title) { m_title = std::move(title); }
+ImageCache* Renderer::images() const { return m_images; }
+void Renderer::setImages(ImageCache* images) { m_images = images; }
 
 bool Renderer::render(lua::State* state, int idx) {
     lua::checkstack(state, 32);

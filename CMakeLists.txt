@@ -27,7 +27,7 @@ target_sources(imlui
         BASE_DIRS src
         FILES ${IMLUI_MODULES}
 )
-target_link_libraries(imlui PRIVATE ext::lua ext::imgui ext::spdlog)
+target_link_libraries(imlui PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image)
 target_compile_features(imlui PUBLIC cxx_std_20)
 imlui_set_warnings(imlui)
 imlui_set_hardening(imlui)

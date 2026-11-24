@@ -5,7 +5,7 @@ next to it and are loaded with `require` (which searches the script's folder).
 
 | Example | Shows | Run |
 |---|---|---|
-| [`gallery/`](gallery/) | Every built-in element, adaptive navigation and a live theme editor. `StatCard.lua` is a reusable component (`require "StatCard"`). | `imlui_app` (the default script) or `imlui_app examples/gallery/main.lua` |
+| [`gallery/`](gallery/) | Every built-in element, adaptive navigation and a live theme editor. `StatCard.lua` is a reusable component (`require "StatCard"`). `landscape.png` is the image the Canvas page shows. | `imlui_app` (the default script) or `imlui_app examples/gallery/main.lua` |
 | [`counter/`](counter/) | The smallest useful app: state, a binding and a button. | `imlui_app examples/counter/main.lua` |
 | [`custom_types/`](custom_types/) | Registering C++ types: a `Gauge` element (`gauge.cppm`) and a `backend` singleton fed by a worker thread (`system_info.cppm`). See [Registering C++ types](../docs/extending.md#the-example-app). | target `imlui_custom_types`, then `imlui_custom_types` |
 

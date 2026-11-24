@@ -19,6 +19,7 @@ import imlui.ui.elements.divider;
 import imlui.ui.elements.grid;
 import imlui.ui.elements.icon;
 import imlui.ui.elements.icon_button;
+import imlui.ui.elements.image;
 import imlui.ui.elements.imgui_demo;
 import imlui.ui.elements.inline_container;
 import imlui.ui.elements.link;
@@ -109,6 +110,7 @@ void registerBuiltinTypes(TypeRegistry& types) {
     types.registerType<Text>("Text");
     types.registerType<Text>("Label");
     types.registerType<Icon>("Icon");
+    types.registerType<Image>("Image");
     types.registerType<Link>("Link");
     types.registerType<Separator>("Separator");
     types.registerType<Divider>("Divider");

@@ -5,7 +5,8 @@
 //  * renders that tree on demand through the Renderer: after input (for a short
 //    settle period), and while animations, timers or scripts request frames
 //  * keeps the UI scaled to the monitor DPI times the user zoom
-//  * hot-reloads when a .lua resource in a mutable mount (a directory) changes
+//  * hot-reloads when a .lua resource in a mutable mount (a directory) changes; a changed image is decoded again
+//    without a reload
 //  * exposes `imlui.native` to Lua (theme, colors, time, quit, ...)
 //  * owns the TypeRegistry: C++ element types and singletons registered with registerType<T>() and
 //    registerSingleton(), installed into every new Lua state
@@ -51,6 +52,7 @@ import imlui.lua.resources;
 import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.name;
+import imlui.image.image_cache;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
@@ -144,6 +146,7 @@ private:
     platform::Window m_window;
     TypeRegistry m_types;
     Renderer m_renderer{m_types};
+    ImageCache m_images{m_config.resources}; ///< what Image elements draw; outlives the ImGui context (see ~ImageCache)
     luaui::NativeHooks m_hooks;
     lua::State* m_state = nullptr;
     int m_rootRef = lua::noRef;
@@ -191,6 +194,7 @@ void closeState(lua::State* state) {
 
 Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
     registerBuiltinTypes(m_types);
+    m_renderer.setImages(&m_images);
     m_hooks.quit = [this] { requestQuit(); };
     m_hooks.reload = [this] { requestReload(); };
     m_hooks.setTitle = [this](const std::string& title) { m_renderer.setWindowTitle(title); };
@@ -316,6 +320,7 @@ void Engine::renderFrame() {
     if (ImGui::IsAnyMouseDown()) requestFrameAfter(1.0 / 30.0);
     ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
     m_window.endFrame(bg.x, bg.y, bg.z);
+    m_images.collect(); // textures the backend destroyed while drawing this frame
     if (!m_renderer.windowTitle().empty()) m_window.setTitle(m_renderer.windowTitle());
     applyPendingWindowSize();
 }
@@ -453,6 +458,8 @@ void Engine::checkForChanges() {
     auto now = std::chrono::steady_clock::now();
     if (now - m_lastCheck < std::chrono::duration<double>(fileCheckSeconds)) return;
     m_lastCheck = now;
+    // A changed image is decoded again at its next use; no reload needed.
+    if (m_images.refresh() > 0) requestFramesFor(settleSeconds);
     auto snap = scanFiles();
     // A changed time, a removed file, or a new .lua file is a change. A name that is new only because a script
     // read it since the last check (a reload, ui.resource.read at runtime) is not.

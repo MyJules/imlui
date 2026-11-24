@@ -15,6 +15,7 @@ imlui_set_hardening(imlui_tests)
 # lua_library_test and the headless harness load lua/imlui.lua from the source tree; the harness loads the
 # Roboto fonts from external/fonts.
 target_compile_definitions(imlui_tests PRIVATE IMLUI_LUA_DIR="${CMAKE_SOURCE_DIR}/lua"
+                                               IMLUI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
                                                IMLUI_FONT_DIR="${CMAKE_SOURCE_DIR}/external/fonts")
 
 include(GoogleTest)
