@@ -104,6 +104,37 @@ TEST_F(LayoutTest, ColumnPaddingSpacingWidthAndAlign) {
     EXPECT_FLOAT_EQ(probe("d").itemWidth(), 100.0f);
 }
 
+// A fixed width is the children's available width: `align` and fills measure the column, not the window.
+TEST_F(LayoutTest, AFixedWidthColumnConstrainsAlignAndFills) {
+    m_h.registerType<test::LastItemProbe>("Last");
+    run(R"(
+        start = Probe { w = 0, h = 0 } d = Probe { w = 30 } e = Probe { w = 30 }
+        root = Row { spacing = 0, align = "top", start,
+                     Column { width = 100, align = "end", d },
+                     Column { width = 200, align = "center", e },
+                     Column { width = 120, Last { id = "fill", ProgressBar { fillWidth = true } } },
+                     Column { width = 200, Last { id = "field", TextField { fillWidth = true } } },
+                     Column { width = 150, Last { id = "minus", Spacer { width = -20 } } } })");
+    m_h.renderFrames("root", 3);
+    const float x0 = probe("start").pos().x;
+    EXPECT_FLOAT_EQ(probe("d").pos().x - x0, 100.0f - 30.0f); // at the column's right edge, not the window's
+    EXPECT_FLOAT_EQ(probe("e").pos().x - x0, 100.0f + (200.0f - 30.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("fill")->size().x, 120.0f);
+    EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("field")->size().x, 200.0f);
+    EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("minus")->size().x, 150.0f - 20.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// The narrowing ends with the column: a sibling after it fills the window again.
+TEST_F(LayoutTest, AFixedWidthColumnRestoresTheRegion) {
+    m_h.registerType<test::LastItemProbe>("Last");
+    run(R"(
+        root = Column { Column { width = 100, Probe {} },
+                        Last { id = "after", ProgressBar { fillWidth = true } } })");
+    m_h.renderFrames("root", 2);
+    EXPECT_GT(m_h.instance<test::LastItemProbe>("after")->size().x, 500.0f);
+}
+
 // ------------------------------------------------------------ Row
 
 TEST_F(LayoutTest, RowSpacingAlignAndDefaults) {
@@ -153,7 +184,7 @@ TEST_F(LayoutTest, RowSkipsHiddenAndRendersNonVisualChildren) {
     run(R"(
         fired = 0
         a = Probe { w = 50 } b = Probe { w = 30, visible = false } c = Probe { w = 30 }
-        root = Row { spacing = 0, a, b, Timer { interval = 0, onTriggered = function() fired = fired + 1 end }, c })");
+        root = Row { spacing = 0, a, b, Timer { interval = 1, onTriggered = function() fired = fired + 1 end }, c })");
     m_h.renderFrames("root", 3);
     EXPECT_EQ(probe("b").renders(), 0);
     EXPECT_FLOAT_EQ(probe("c").pos().x - probe("a").pos().x, 50.0f);
@@ -355,6 +386,33 @@ TEST_F(LayoutTest, TabBarShowsTheCurrentTabAndWritesBackClicks) {
     m_h.renderFrame("root");
     EXPECT_EQ(probe("b").renders(), bBefore + 1);
     check("s.tab == 9");
+}
+
+// Non-visual children are no tabs: they don't count for currentIndex and render whichever tab is shown, so a
+// Dialog in a TabBar opens.
+TEST_F(LayoutTest, TabBarRendersNonVisualChildrenInPlace) {
+    run(R"(
+        fired = 0
+        a = Probe {} b = Probe {} c = Probe {}
+        root = TabBar { currentIndex = 2,
+                        Timer { interval = 10, onTriggered = function() fired = fired + 1 end },
+                        Tab { title = "One", a },
+                        Dialog { title = "Dlg", open = true, c },
+                        Tab { title = "Two", b } })");
+    m_h.renderFrames("root", 3);
+    EXPECT_EQ(probe("a").renders(), 0);
+    EXPECT_EQ(probe("b").renders(), 3); // the second Tab, not the Timer's slot
+    EXPECT_GE(probe("c").renders(), 2); // the dialog is open
+    check("fired > 0");
+
+    // The index is clamped among the tabs only.
+    run("root.currentIndex = 3");
+    m_h.renderFrame("root");
+    EXPECT_EQ(probe("b").renders(), 4);
+    run("root.currentIndex = math.mininteger");
+    m_h.renderFrame("root");
+    EXPECT_EQ(probe("a").renders(), 1);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 TEST_F(LayoutTest, StrayTabRendersItsContent) {

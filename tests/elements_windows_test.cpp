@@ -287,3 +287,41 @@ TEST_F(WindowsTest, ANestedDialogIsItsOwnPopupAndEscapeClosesTheTopOne) {
     run("assert(s.outer == false, 'the outer dialog is still open')");
     EXPECT_TRUE(luaui::errors().empty());
 }
+
+// ImGui keeps one popup per level: two sibling dialogs open at once would close each other every frame. The second
+// waits until the first closes, then opens (a frame later, so the Escape that closed the first doesn't close it).
+TEST_F(WindowsTest, SiblingDialogsOpenOneAtATime) {
+    run(R"(
+        s = state { a = true, b = false }
+        root = Column { Dialog { title = "A", open = bind(s, "a"), Probe { id = "a" } },
+                        Dialog { title = "B", open = bind(s, "b"), Probe { id = "b" } } })");
+    m_h.renderFrames("root", 2);
+    run("s.b = true");
+    m_h.renderFrames("root", 4);
+    EXPECT_EQ(renders("a"), 6); // A stays up, every frame
+    EXPECT_EQ(renders("b"), 0); // B waits
+    const ImDrawList* aList = m_h.instance<Probe>("a")->drawList();
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(m_h.instance<Probe>("a")->drawList(), aList);
+    run("assert(s.a == true and s.b == true, tostring(s.a) .. ' ' .. tostring(s.b))");
+
+    run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
+    m_h.renderFrames("root", 4);
+    run("assert(s.a == false and s.b == true, tostring(s.a) .. ' ' .. tostring(s.b))"); // one Escape, one dialog
+    EXPECT_GE(renders("b"), 2);
+
+    // The same with the waiting dialog first in the tree.
+    run(R"(
+        s = state { a = false, b = true }
+        root = Column { Dialog { title = "A", open = bind(s, "a"), Probe { id = "a" } },
+                        Dialog { title = "B", open = bind(s, "b"), Probe { id = "b" } } })");
+    m_h.renderFrames("root", 4);
+    run("s.a = true");
+    m_h.renderFrames("root", 3);
+    EXPECT_EQ(renders("a"), 0);
+    run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
+    m_h.renderFrames("root", 4);
+    run("assert(s.a == true and s.b == false, tostring(s.a) .. ' ' .. tostring(s.b))");
+    EXPECT_GE(renders("a"), 2);
+    EXPECT_TRUE(luaui::errors().empty());
+}

@@ -7,6 +7,7 @@ import imlui.widgets.dropdown;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -78,7 +79,7 @@ void ComboBox::render(Frame& frame) {
     o.outlined = m_variant == "outlined";
     o.error = m_error;
     o.width = frame.size("width");
-    int cur = m_currentIndex - 1;
+    int cur = indexValue(m_currentIndex) - 1; // no overflow on INT_MIN
     if (md::dropdown("##dd", m_model, &cur, o, m_icons)) {
         m_currentIndex = cur + 1;
         // Copied before notify(): its handler may replace the model (a method call on the element syncs it).

@@ -9,6 +9,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -51,7 +52,7 @@ void RadioGroup::declare(TypeBuilder<RadioGroup>& type) {
 }
 
 void RadioGroup::render(Frame& frame) {
-    const int cur = static_cast<int>(m_currentIndex);
+    const int cur = indexValue(m_currentIndex); // NaN, infinities and huge values are safe
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {ImGui::GetStyle().ItemSpacing.x, 0});
     // Iterate a copy: the handler may replace the model.
     const std::vector<std::string> items = m_model;

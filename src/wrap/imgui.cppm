@@ -7,7 +7,8 @@
 module;
 
 #include "imgui.h"
-#include "imgui_internal.h" // RegisterUserTexture / UnregisterUserTexture (images), ErrorRecovery* (Lua errors)
+#include "imgui_internal.h" // RegisterUserTexture / UnregisterUserTexture (images), ErrorRecovery* (Lua errors),
+                            // ImGuiWindow / GetCurrentWindow (Column), ImGuiContext popup stacks (Dialog)
 
 export module imgui;
 
@@ -37,6 +38,11 @@ export using ::ImGuiStorage;
 export using ::ImGuiViewport;
 export using ::ImGuiContext;
 export using ::ImGuiErrorRecoveryState;
+// internals: a fixed-width Column narrows the window's content region; a Dialog reads the popup stacks
+export using ::ImGuiWindow;
+export using ::ImRect;
+export using ::ImGuiPopupData;
+export using ::ImGuiWindowFlags_Modal;
 export using ::ImGuiInputTextCallback;
 export using ::ImGuiInputTextCallbackData;
 
@@ -336,6 +342,8 @@ using ImGui::UnregisterUserTexture;
 // recovery after a Lua error escaped mid-frame (imlui.lua.protected_render): unwinds Begin/Push left open
 using ImGui::ErrorRecoveryStoreState;
 using ImGui::ErrorRecoveryTryToRecoverState;
+// internals (see the types above)
+using ImGui::GetCurrentWindow;
 
 using ImGui::GetStyle;
 using ImGui::NewFrame;
