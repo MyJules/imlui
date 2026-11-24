@@ -18,7 +18,8 @@ enum class CardVariant { Elevated, Filled, Outlined };
 /// "elevated" (default), "filled", "outlined".
 [[nodiscard]] CardVariant cardVariant(std::string_view n);
 
-/// Begins a card container (auto-height unless `height` > 0). Pair with endCard().
+/// Begins a card container (auto-height unless `height` > 0). Pair with endCard(). `width` follows resolveSize
+/// (itemWidth): 0 is the natural 320dp, -1 fills (the Card element passes -1 when its width is unset).
 void beginCard(const char* id, CardVariant v, float width = 0.0f, float padding = 16.0f, float height = 0.0f,
                std::optional<Color> color = std::nullopt, float rounding = -1.0f);
 void endCard();
@@ -50,7 +51,7 @@ void beginCard(const char* id, CardVariant v, float width, float padding, float 
     const Scheme& s = scheme();
     ImGuiID key = ImGui::GetID(id);
     const float rnd = rounding >= 0 ? dp(rounding) : dp(shape().medium);
-    const float w = itemWidth(width == 0.0f ? -1.0f : width, dp(320));
+    const float w = itemWidth(width, dp(320));
     Color bg = color.value_or(v == CardVariant::Filled     ? s.surfaceContainerHighest
                               : v == CardVariant::Outlined ? s.surface
                                                            : s.surfaceContainerLow);

@@ -28,15 +28,24 @@ using namespace imlui;
 
 namespace {
 
-/// A w x h box that records where it was placed, the item width it got and how often it rendered.
+/// A w x h box that records where it was placed, the item width it got and how often it rendered. With
+/// `intrinsic = true` it reports its size before rendering (Element::intrinsicSize).
 class Probe final : public Element {
 public:
     static void declare(TypeBuilder<Probe>& type) {
-        type.property("w", &Probe::w, &Probe::setW).property("h", &Probe::h, &Probe::setH);
+        type.property("w", &Probe::w, &Probe::setW)
+            .property("h", &Probe::h, &Probe::setH)
+            .property("intrinsic", &Probe::intrinsic, &Probe::setIntrinsic);
+    }
+    std::optional<ImVec2> intrinsicSize(const Frame&, float) override {
+        if (!m_intrinsic) return std::nullopt;
+        return ImVec2{m_w, m_h};
     }
     void render(Frame&) override {
         m_pos = ImGui::GetCursorScreenPos();
         m_itemWidth = ImGui::CalcItemWidth();
+        const ImDrawList* dl = ImGui::GetWindowDrawList();
+        m_seen = dl->GetClipRectMax().x > dl->GetClipRectMin().x && dl->GetClipRectMax().y > dl->GetClipRectMin().y;
         ++m_renders;
         ImGui::Dummy({m_w, m_h});
     }
@@ -45,9 +54,13 @@ public:
     void setW(float w) { m_w = w; }
     [[nodiscard]] float h() const { return m_h; }
     void setH(float h) { m_h = h; }
+    [[nodiscard]] bool intrinsic() const { return m_intrinsic; }
+    void setIntrinsic(bool intrinsic) { m_intrinsic = intrinsic; }
     [[nodiscard]] ImVec2 pos() const { return m_pos; }
     [[nodiscard]] float itemWidth() const { return m_itemWidth; }
     [[nodiscard]] int renders() const { return m_renders; }
+    /// Whether it could be seen when it last rendered (not clipped away).
+    [[nodiscard]] bool seen() const { return m_seen; }
 
 private:
     float m_w = 10.0f;
@@ -55,6 +68,30 @@ private:
     ImVec2 m_pos{-1.0f, -1.0f};
     float m_itemWidth = 0.0f;
     int m_renders = 0;
+    bool m_seen = false;
+    bool m_intrinsic = false;
+};
+
+/// Renders its children top to bottom and records, for each, the intrinsic size it reported before rendering and
+/// the size it took.
+class Measure final : public Element {
+public:
+    struct Result {
+        std::string type;
+        std::optional<ImVec2> intrinsic;
+        ImVec2 rendered;
+    };
+    static void declare(TypeBuilder<Measure>&) {}
+    void render(Frame& frame) override {
+        results.clear();
+        frame.forEachChild([&](Frame::Child& c) {
+            if (!c.isVisual()) return;
+            const std::optional<ImVec2> intrinsic = c.intrinsicSize(frame.available().x);
+            c.render();
+            results.push_back({c.type(), intrinsic, ImGui::GetItemRectSize()});
+        });
+    }
+    std::vector<Result> results;
 };
 
 /// Raw ImGui inside an element: wrapped text and the item width ImGui gives, like a custom element would draw.
@@ -94,6 +131,7 @@ protected:
         m_h.registerType<test::LastItemProbe>("Last");
         m_h.registerType<RawImGui>("Raw");
         m_h.registerType<Grower>("Grower");
+        m_h.registerType<Measure>("Measure");
     }
     [[nodiscard]] ImVec2 lastSize(std::string_view name) {
         test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
@@ -710,7 +748,7 @@ TEST_F(LayoutTest, FillAndFillMinusWidthsAreTheSameForEveryElement) {
             std::string code = e;
             code.replace(code.find('W'), 1, w);
             run("root = Last { " + code + " }");
-            m_h.renderFrames("root", 2); // a Row measures its children on the frame before
+            m_h.renderFrame("root"); // right from the first frame: a Row gives a fill its share before it renders
             const float got = m_h.instance<test::LastItemProbe>("root")->size().x;
             if (fill == 0.0f) fill = got; // the first: ProgressBar, through md::itemWidth
             EXPECT_FLOAT_EQ(got, w == "-1" ? fill : fill - 20.0f) << code;
@@ -807,4 +845,83 @@ TEST_F(LayoutTest, TheLayoutCacheDropsElementsThatAreGone) {
     EXPECT_GE(first, 20u);
     EXPECT_LE(layout::cacheEntries(), first + 25u); // at most this frame's and the last frame's items
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ Intrinsic sizes
+
+// An intrinsic size must be exactly what the element then renders at (or layouts would keep asking for frames):
+// Text, Icon, Button, IconButton and Spacer report theirs; wrapping or aligned Text and fills don't.
+TEST_F(LayoutTest, IntrinsicSizesAreWhatTheElementsRender) {
+    run(R"(
+        root = Measure {
+            Text { "Hello" }, Text { "" }, Text { "Two\nlines", style = "headlineSmall" },
+            Icon { "home" }, Icon { "home", size = 40 },
+            Button { "OK" }, Button { "Save", icon = "save", variant = "tonal" }, Button { "Go", variant = "text" },
+            Button { variant = "fab", icon = "add" }, Button { "Compose", variant = "fab", icon = "edit" },
+            Button { "Wide", width = 200, height = 50 }, IconButton { "menu" },
+            Spacer {}, Spacer { width = 30, height = 12 },
+            Text { "wrapped", wrap = true }, Text { "centered", align = "center" },
+            Button { "fill", fillWidth = true }, Spacer { fill = true }, Probe {} })");
+    m_h.renderFrames("root", 2);
+    Measure* m = m_h.instance<Measure>("root");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 19u);
+    for (std::size_t i = 0; i < m->results.size(); ++i) {
+        const Measure::Result& r = m->results[i];
+        if (i >= 14) {
+            EXPECT_FALSE(r.intrinsic) << i << " " << r.type;
+            continue;
+        }
+        ASSERT_TRUE(r.intrinsic) << i << " " << r.type;
+        EXPECT_FLOAT_EQ(r.intrinsic->x, r.rendered.x) << i << " " << r.type;
+        EXPECT_FLOAT_EQ(r.intrinsic->y, r.rendered.y) << i << " " << r.type;
+        EXPECT_GT(r.rendered.y, 0.0f) << i << " " << r.type;
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Layouts place children with an intrinsic size right from their first frame (no misplaced frame, no extra one):
+// a centered Column, a Row justified to the end and aligned to the center, TopAppBar actions.
+TEST_F(LayoutTest, IntrinsicSizesPlaceChildrenOnTheirFirstFrame) {
+    run(R"(
+        centered = Probe { w = 40, intrinsic = true }
+        short = Probe { w = 30, h = 10, intrinsic = true } tall = Probe { w = 40, h = 40, intrinsic = true }
+        action = Probe { w = 48, h = 48, intrinsic = true }
+        root = Column {
+            Column { align = "center", centered },
+            Row { width = 300, spacing = 0, justify = "end", align = "center", short, tall },
+            TopAppBar { title = "Title", action } })");
+    m_h.renderFrame("root");
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    EXPECT_FLOAT_EQ(probe("centered").pos().x, x0 + (contentWidth() - 40.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(probe("short").pos().x, x0 + 300.0f - 70.0f);
+    EXPECT_FLOAT_EQ(probe("tall").pos().x, x0 + 300.0f - 40.0f);
+    EXPECT_FLOAT_EQ(probe("short").pos().y, probe("tall").pos().y + 15.0f);
+    EXPECT_FLOAT_EQ(probe("action").pos().x, x0 + contentWidth() - 4.0f - 48.0f);
+    EXPECT_TRUE(probe("centered").seen());
+    EXPECT_TRUE(probe("short").seen());
+    EXPECT_TRUE(probe("action").seen());
+    // Nothing was misplaced, so nothing asks for another frame.
+    EXPECT_GT(secondsUntilFrame(), 0.0);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A child without an intrinsic size or a size from the last frame, which a non-start align must place, renders
+// unseen on its first frame (measured, not drawn in the wrong place) and asks for the frame that shows it in place.
+TEST_F(LayoutTest, AChildWithoutASizeRendersUnseenOnItsFirstFrame) {
+    run(R"(
+        centered = Probe { w = 40 } rowed = Probe { w = 40 } plain = Probe { w = 40 }
+        root = Column { Column { align = "center", centered }, Row { justify = "end", rowed }, plain })");
+    m_h.renderFrame("root");
+    EXPECT_FALSE(probe("centered").seen());
+    EXPECT_FALSE(probe("rowed").seen());
+    EXPECT_TRUE(probe("plain").seen()); // placed without knowing its size
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+    EXPECT_GE(renderWhileRequested("root"), 1);
+    EXPECT_TRUE(probe("centered").seen());
+    EXPECT_TRUE(probe("rowed").seen());
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    EXPECT_FLOAT_EQ(probe("centered").pos().x, x0 + (contentWidth() - 40.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(probe("rowed").pos().x, x0 + contentWidth() - 40.0f);
+    EXPECT_GT(secondsUntilFrame(), 0.0);
 }

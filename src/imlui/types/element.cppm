@@ -11,6 +11,7 @@ export module imlui.types.element;
 
 import std;
 
+import imgui;
 import imlui.types.frame;
 import imlui.types.script_object;
 
@@ -24,6 +25,16 @@ public:
     /// Draws the element (Material widgets, the draw list) and its children (frame.renderChildren()).
     /// Called on every rendered frame the element is visible, after the property sync.
     virtual void render(Frame& frame) = 0;
+
+    /// The size render() will take, known before rendering, when the element can tell cheaply (a Text's line, a
+    /// Button, an Icon): layouts that place children by their sizes (Row, the stack `align`, TopAppBar actions) use
+    /// it instead of the size of the last frame, so the element is in place from its first frame and the frame it
+    /// changes. It must match what render() then takes exactly (the group of what it draws), or the layout cache
+    /// keeps asking for frames to settle. `maxWidth` is the width available where it will render (only content that
+    /// wraps depends on it). nullopt (the default): unknown, the layout uses the last frame's size. An element whose
+    /// width fills (Frame::size("width") < 0) usually returns nullopt: its parent decides its width. Its properties
+    /// are synced; `frame` is the element's own.
+    [[nodiscard]] virtual std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth);
 
     /// Called once, right after the first property sync (the first render, method call from Lua or parent
     /// access, whichever comes first), so before the first render().
@@ -65,6 +76,7 @@ std::vector<Element*> ticking; // main thread only, like everything that touches
 
 Element::~Element() { setTicking(false); }
 
+std::optional<ImVec2> Element::intrinsicSize(const Frame&, float) { return std::nullopt; }
 void Element::componentComplete() {}
 void Element::destroyed() {}
 void Element::tick(double) {}

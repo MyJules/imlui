@@ -28,6 +28,7 @@ export module imlui.types.registry;
 import std;
 
 import lua;
+import imgui;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.renderer;
@@ -96,6 +97,8 @@ public:
     [[nodiscard]] Kind kind(std::string_view type) const override;
     void renderElement(Renderer& renderer, const luaui::Node& node) override;
     [[nodiscard]] bool fillsWidth(const luaui::Node& node) override;
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
+                                                      float maxWidth) override;
 
     /// The instance of the element table `node`, created now if the table has none yet. Then syncs
     /// the declared properties into it (and calls componentComplete() after the first sync). nullptr if
@@ -597,8 +600,17 @@ void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
     if (!info) return;
     Box* b = syncBox(node, *info);
     if (!b) return;
-    Frame frame{renderer, node, &m_instances};
+    Frame frame{renderer, node, &m_instances, info->fillsWidth(b->element)};
     b->element->render(frame);
+}
+
+std::optional<ImVec2> TypeRegistry::intrinsicSize(Renderer& renderer, const Node& node, float maxWidth) {
+    const TypeInfo* info = find(node.type());
+    if (!info || !info->visual()) return std::nullopt;
+    Box* b = syncBox(node, *info);
+    if (!b) return std::nullopt;
+    const Frame frame{renderer, node, &m_instances, info->fillsWidth(b->element)};
+    return b->element->intrinsicSize(frame, maxWidth);
 }
 
 bool TypeRegistry::fillsWidth(const Node& node) {

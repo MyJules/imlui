@@ -15,7 +15,7 @@ import imlui.types.type_builder;
 export namespace imlui {
 
 /// The Material top app bar. The children are actions, right-aligned in the 64dp top row by their widths, each
-/// centered vertically by its height (sizes from the last frame: Frame::Child::lastWidth / lastHeight).
+/// centered vertically by its height (intrinsic sizes, else last frame's: Frame::Child::expectedWidth / Height).
 ///
 /// Props:   title = "", navigationIcon = "", variant = "small" ("center", "medium", "large"),
 ///          color = unset (the current surface)
@@ -66,7 +66,7 @@ void TopAppBar::render(Frame& frame) {
     const float barH = frame.dp(64);
     const float h = medium ? frame.dp(112) : large ? frame.dp(152) : barH;
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = frame.resolvedWidth(frame.available().x);
+    const float w = frame.resolvedWidth();
     ImDrawList* dl = frame.drawList();
     const Color bg = m_color.value_or(md::surfaceColor());
     dl->AddRectFilled(p, {p.x + w, p.y + h}, ImGui::ColorConvertFloat4ToU32(bg.vec4()));
@@ -77,10 +77,14 @@ void TopAppBar::render(Frame& frame) {
         if (md::iconButton("##nav", m_navigationIcon)) emit("onNavigation");
         titleX = p.x + frame.dp(56);
     }
-    // Actions, right-aligned by their total width, each centered in the 64dp row.
+    // Actions, right-aligned by their total width, each centered in the 64dp row (intrinsic sizes, else last
+    // frame's). On an action's first frame without either, they render unseen.
     float total = 0.0f;
+    bool unknown = false;
     frame.forEachChild([&](Frame::Child& child) {
-        if (child.isVisual()) total += child.lastWidth();
+        if (!child.isVisual()) return;
+        unknown = unknown || !child.expectedSize(w).has_value();
+        total += child.expectedWidth(w);
     });
     float x = p.x + w - frame.dp(4) - total;
     frame.forEachChild([&](Frame::Child& child) {
@@ -88,8 +92,11 @@ void TopAppBar::render(Frame& frame) {
             child.render();
             return;
         }
-        ImGui::SetCursorScreenPos({x, p.y + (barH - child.lastHeight(frame.dp(48))) * 0.5f});
-        child.render();
+        ImGui::SetCursorScreenPos({x, p.y + (barH - child.expectedHeight(w, frame.dp(48))) * 0.5f});
+        if (unknown)
+            child.renderUnseen();
+        else
+            child.render();
         x += ImGui::GetItemRectSize().x;
     });
 

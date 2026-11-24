@@ -113,7 +113,7 @@ void ScrollView::render(Frame& frame) {
     }
 
     // Unset: the available width (the layout box), and ImGui's default height (0: the remaining space).
-    ImGui::BeginChild("##scroll", {frame.resolvedWidth(frame.available().x), frame.resolvedHeight(0.0f)}, cf);
+    ImGui::BeginChild("##scroll", {frame.resolvedWidth(), frame.resolvedHeight(0.0f)}, cf);
     ImGui::PopStyleVar();
     if (m_color) ImGui::PopStyleColor();
     if (pad > 0) ImGui::PopStyleVar();

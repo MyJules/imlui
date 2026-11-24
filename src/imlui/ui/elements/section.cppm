@@ -58,7 +58,7 @@ void Section::declare(TypeBuilder<Section>& type) {
 
 void Section::render(Frame& frame) {
     bool open = m_expanded;
-    if (md::expander("##exp", m_title ? *m_title : m_text, m_supportingText, &open, frame.size("width", -1.0f))) {
+    if (md::expander("##exp", m_title ? *m_title : m_text, m_supportingText, &open, frame.size("width"))) {
         m_expanded = open;
         notify("expanded");
         emit("onToggled", open);

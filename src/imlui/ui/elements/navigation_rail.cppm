@@ -47,11 +47,15 @@ namespace imlui {
 
 namespace {
 
-/// Renders `child` horizontally centered in [x, x + width] at `y`, by its width on the last frame. Returns its
-/// height.
+/// Renders `child` horizontally centered in [x, x + width] at `y`, by its intrinsic width or else its width on the
+/// last frame (a child that fills: the rail's). Unseen on its first frame without either. Returns its height.
 float renderCentered(Frame::Child& child, float x, float width, float y) {
-    ImGui::SetCursorScreenPos({x + std::floor((width - child.lastWidth(width)) * 0.5f), y});
-    child.render();
+    const bool unseen = !child.fillsWidth() && !child.expectedSize(width);
+    ImGui::SetCursorScreenPos({x + std::floor((width - child.expectedWidth(width, width)) * 0.5f), y});
+    if (unseen)
+        child.renderUnseen();
+    else
+        child.render();
     return ImGui::GetItemRectSize().y;
 }
 
@@ -79,8 +83,8 @@ void NavigationRail::render(Frame& frame) {
 
     // The destinations scroll in a child region below the header, from there to the rail's bottom edge. While
     // they fit, the region shows no scrollbar and the layout is the plain stack: `align` places them in the
-    // height left above the 12dp bottom margin, by their heights on the last frame. When they don't, a thin themed
-    // scrollbar appears in the rail's right gutter; the destinations keep their place and width.
+    // height left above the 12dp bottom margin, by their heights (intrinsic, else last frame's). When they don't, a
+    // thin themed scrollbar appears in the rail's right gutter; the destinations keep their place and width.
     const float regionH = std::max(1.0f, p.y + h - y);
     const float bottomMargin = frame.dp(12);
     ImGui::SetCursorScreenPos({p.x, y});
@@ -98,7 +102,7 @@ void NavigationRail::render(Frame& frame) {
         if (align > 0.0f) {
             frame.forEachChild([&](Frame::Child& child) {
                 if (!child.isVisual()) return;
-                total += child.lastHeight() + (first ? 0.0f : spacing);
+                total += child.expectedHeight(w) + (first ? 0.0f : spacing);
                 first = false;
             });
         }

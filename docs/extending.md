@@ -68,9 +68,11 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 
 ## Contents
 
-- [Element types](#element-types): `Element`, `render(Frame&)`, the lifecycle hooks
+- [Element types](#element-types): `Element`, `render(Frame&)`, the lifecycle hooks, custom layouts (layout boxes, the
+  layout cache)
 - [Declaring members](#declaring-members): `TypeBuilder<T>`: properties, signals, methods, `nonVisual`,
-  `defaultProperty`, aliases, subclasses (`extends`)
+  `defaultProperty`, the size policy (`fillsWidth`), [intrinsic sizes](#intrinsic-sizes), aliases, subclasses
+  (`extends`)
 - [Property sync](#property-sync): how Lua values reach the setters every frame
 - [Telling Lua about changes](#telling-lua-about-changes): `notify` and `emit`
 - [Singletons](#singletons)
@@ -95,6 +97,7 @@ element constructor.
 class Element : public ScriptObject {
 public:
     virtual void render(Frame& frame) = 0; // every rendered frame the element is visible
+    virtual std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth); // size before rendering, if cheap
     virtual void componentComplete();      // once: right after the first property sync (before the first render)
     virtual void destroyed();              // right before the instance is deleted (no Lua access any more)
     virtual void tick(double now);         // every frame while ticking, rendered or not (see Ticking elements)
@@ -118,9 +121,9 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `forEachChild(f)` | Custom layouts: `f(Frame::Child& child)` is called for every **visible** child (inline containers spliced in). Place the cursor, then `child.render()`. See [Child handles](#child-handles). |
 | `withElementProp(key, f)`, `renderElementProp(key)` | A prop whose value is an element (`menuBar = MenuBar { ... }`, `header = ...`): `f(Frame::Child&)` is called when it's set and visible; `renderElementProp` just renders it at the cursor. |
 | `attachMenu(clicked)` | The `menu` prop (a `Menu` element) as a popup anchored to the last item: opened when `clicked`, rendered while open. Call it right after the widget that opens it. |
-| `size(key)`, `size(key, ifAuto)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values). The second form returns `ifAuto` for an unset (0) size: `size("width", -1)` fills by default. Pass it to the `md::` widgets, which resolve it. |
+| `size(key)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values; 0 when unset). An unset `width` of a type declared [`fillsWidth()`](#nonvisual-defaultpropertyname-and-fillswidth) reads as `-1` (fill): the size policy lives in the type, not in the widget. Pass it to the `md::` widgets, which resolve it (0 is their natural size). |
 | `available()` | The space available at the cursor (`ImVec2`, pixels): the width to the right edge of the layout box the parent gave (a fixed `Column`, a `Row` share, a `Grid` cell, else the window's content region), and the height left in the window. Use it instead of `ImGui::GetContentRegionAvail()`, which only knows the window. |
-| `resolvedWidth(natural)`, `resolvedHeight(natural)` | `width` / `height` resolved to pixels against `available()` with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset (`resolvedWidth(frame.available().x)` fills by default). Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
+| `resolvedWidth(natural = 0)`, `resolvedHeight(natural = 0)` | `width` / `height` (`size()`) resolved to pixels against `available()` with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset; a type that fills by default fills. Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
 | `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; `"start"`/`"center"`/`"end"` as 0/0.5/1. |
 | `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
 | `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes. |
@@ -137,32 +140,63 @@ Every built-in element is written this way, so the built-ins are the reference e
 
 | `Frame::Child` member | What |
 |---|---|
-| `render()` | Renders the child at the cursor through the renderer, with the same per-element wrapper as everywhere (see below). False if it's hidden or unknown. Afterwards a visual child is the last ImGui item (`ImGui::GetItemRectSize()`), and its size is stored for the next frame. |
+| `render()` | Renders the child at the cursor through the renderer, with the same per-element wrapper as everywhere (see below). False if it's hidden or unknown. Afterwards a visual child is the last ImGui item (`ImGui::GetItemRectSize()`), and its size is in the layout cache for the next frame. |
 | `render(right)` | The same inside a layout box ending at screen x `right`: the child's available width (fills, `align`, text wrapping, raw ImGui item widths) is `right - cursor x`. How a layout gives a child less than its own width (a `Row` share, a column of a custom grid). |
+| `renderUnseen()` | Renders the child measured but not drawn (clipped away) and asks for another frame: for a child you can't place yet because `expectedSize()` is unknown (its first frame), so it doesn't flash in the wrong place. |
 | `fillsWidth()` | Whether the child fills the available width: a fill or fill-minus `width` (`fillWidth`), or no `width` on a type that fills by default (`fillsWidth()` / `fillsWidthWhen()` in its `declare`). Read it before rendering to share space, like `Row`. May sync the child's properties. |
 | `isVisual()` | False for non-visual types (`Timer`, `Dialog`, ...). Layouts render those where they are and don't place, count or space them. |
 | `node()`, `type()` | The child's element table and its type name (`"Spacer"`). |
 | `id()` | A stable ImGui ID for the child in the parent's ID scope: the key of its size in the layout cache, and for your own per-child state in `ImGui::GetStateStorage()`. |
-| `lastWidth(fallback)`, `lastHeight(fallback)` | The child's size when it was last rendered, or `fallback` on its first frame. Immediate-mode layouts (centering, right alignment, rows) place children by last frame's sizes. Reading one tells the layout cache you placed the child by it: if the child then renders at another size, another frame is requested, so the layout settles even when nothing else asks for frames. Read them in the ID scope the child renders in. |
+| `intrinsicSize(maxWidth)` | The child's [intrinsic size](#intrinsic-sizes) with `maxWidth` available, when its type can tell before rendering (`Text`, `Icon`, `Button`, `IconButton`, `Spacer`, your own); `nullopt` otherwise. May sync its properties. |
+| `expectedSize(maxWidth)` | What a layout should place the child by: its intrinsic size, else its size on the last frame (the layout cache), else `nullopt` (its first frame). |
+| `expectedWidth(maxWidth, fallback)`, `expectedHeight(maxWidth, fallback)` | `expectedSize()`'s width / height, or `fallback`, **and** a note to the layout cache that you place the child by it: if the child then renders at another size (by more than half a pixel), another frame is requested, so the layout settles even when nothing else asks for frames. Use these for placement. |
+| `lastWidth(fallback)`, `lastHeight(fallback)` | The same from the layout cache only: the child's size when it was last rendered, or `fallback`. |
 | `as<T>()` | The C++ instance of a typed child as a `T*`, with its declared properties **synced first**, so the parent reads this frame's values (`child.as<Tab>()->title()`). `nullptr` when the child isn't a typed element or not a `T`. `syncProperties()` does the sync and returns the `ScriptObject*`. |
 
 ```cpp
-// A simplified Row: each child gets an equal column of the available width, vertically centered.
+// A simplified Row: each child gets an equal column of the available width, vertically centered in the tallest.
 void Columns::render(imlui::Frame& frame) {
     const ImVec2 start = ImGui::GetCursorScreenPos();
     int n = 0;
     frame.forEachChild([&](imlui::Frame::Child& child) { n += child.isVisual() ? 1 : 0; });
     const float colW = n > 0 ? frame.available().x / static_cast<float>(n) : 0.0f;
-    float x = start.x;
+    // Pass 1: the sizes the children are expected to take (intrinsic, else last frame's).
+    float tallest = 0.0f;
+    bool unknown = false;
+    frame.forEachChild([&](imlui::Frame::Child& child) {
+        if (!child.isVisual()) return;
+        unknown = unknown || !child.expectedSize(colW);
+        tallest = std::max(tallest, child.expectedHeight(colW));
+    });
+    // Pass 2: place and render.
+    float x = start.x, bottom = start.y;
     frame.forEachChild([&](imlui::Frame::Child& child) {
         if (!child.isVisual()) { child.render(); return; }   // a Timer, a Dialog, ...
-        const float h = child.lastHeight();                  // measured last frame
-        ImGui::SetCursorScreenPos({x, start.y + std::max(0.0f, (m_height - h) * 0.5f)});
-        child.render(x + colW);                              // fills in the child stop at its column
+        const float h = child.expectedHeight(colW);          // the cache checks it against what renders
+        ImGui::SetCursorScreenPos({x, start.y + std::max(0.0f, (tallest - h) * 0.5f)});
+        if (unknown) {
+            const imlui::layout::BoxScope box{imlui::layout::boxTo(x + colW)};
+            child.renderUnseen();                            // a first frame: measure, show it on the next
+        } else {
+            child.render(x + colW);                          // fills in the child stop at its column
+        }
+        bottom = std::max(bottom, ImGui::GetItemRectMax().y);
         x += colW;
     });
+    ImGui::SetCursorScreenPos(start);
+    ImGui::Dummy({std::max(1.0f, x - start.x), std::max(1.0f, bottom - start.y)}); // the layout's own extent
 }
 ```
+
+How a container lays out its children, in short: **constraints go down** (give each child a layout box:
+`child.render(right)`, or a `layout::BoxScope` around several), **sizes come up** (place children by
+`expectedWidth`/`expectedHeight`, which are this frame's intrinsic sizes or last frame's measured ones), and the
+layout cache **converges** (a size you placed by that turns out stale requests another frame). Read sizes in the ID
+scope the children render in (inside your `BeginChild`, if you open one). Never keep your own copies of children's
+sizes in `ImGui::GetStateStorage()` or members: the cache drops the sizes of elements that went away, and the
+copies would miss the convergence. For a size of your own that you place by before you know it (a shadow drawn
+under content of last frame's height, a total), use the cache directly (module `imlui.ui.layout_cache`):
+`layout::lastSize(id)`, `layout::assumeWidth/assumeHeight(id, used)` before, `layout::recordSize(id, size)` after.
 
 Layout boxes (module `imlui.ui.layout_box`, namespace `imlui::layout`) are what `available()` reads. To give all
 your children a narrower width, push one around them: `const layout::BoxScope box{layout::boxTo(right)};` (for one
@@ -188,7 +222,7 @@ The common props keep working on typed elements without being declared, exactly 
 the renderer skips the element when `visible` is false, wraps it in `BeginDisabled` when `enabled` is false, in an
 ImGui group when it's visual, and in `PushID`, and shows `tooltip` after it. `id` registers the element for lookup
 by name, and sizes are read with `frame.size("width")` / `frame.size("height")` (or resolved to pixels with
-`frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`).
+`frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`), the type's fill policy applied.
 
 ## Declaring members
 
@@ -264,12 +298,32 @@ type.method("grow", imlui::overload<double>(&Shape::grow))              // doubl
 - `type.nonVisual()` makes the element take no layout space or spacing, like `Timer` or `Dialog`.
 - `type.defaultProperty("value")` lets a positional first value set the property, `Gauge { 0.5 }`, like `text`
   for `Button { "OK" }`. A table in that position is a child, not a value.
-- `type.fillsWidth()` says that an unset `width` fills the available width (the element's own default, like
-  `width = -1`), as for `Card`, `TextField` or `Slider`. A `Row` reads it **before** rendering the child and gives it
-  a share of the free width instead of letting it run to the row's edge. `type.fillsWidthWhen(pred)` decides it per
-  element from the synced instance, `pred(const T&)`: `Text` declares `.fillsWidthWhen(&Text::wrap)`, `Spacer`
-  `.fillsWidthWhen(&Spacer::fill)`. Declare it when your `render()` fills by default (`frame.resolvedWidth(
-  frame.available().x)`, `frame.size("width", -1)`); a `width` prop always wins (`Frame::Child::fillsWidth()`).
+- `type.fillsWidth()` is the type's **size policy**: an unset `width` fills the available width (like
+  `width = -1`), as for `Card`, `TextField` or `Slider`. It is the one place the default lives: the element's
+  `frame.size("width")` reads `-1` and `frame.resolvedWidth()` fills, so `render()` passes them on and the `md::`
+  widgets need no default of their own (to them, 0 is their natural width). A `Row` reads it **before** rendering
+  the child and gives it a share of the free width instead of letting it run to the row's edge.
+  `type.fillsWidthWhen(pred)` decides it per element from the synced instance, `pred(const T&)`: `Text` declares
+  `.fillsWidthWhen(&Text::wrap)`, `Spacer` `.fillsWidthWhen(&Spacer::fill)`. A `width` prop always wins
+  (`Frame::Child::fillsWidth()`).
+
+### Intrinsic sizes
+
+`intrinsicSize(frame, maxWidth)` returns the size `render()` will take, when the element can tell cheaply before
+rendering (`frame` is the element's own, its properties synced; `maxWidth` is the width available where it will
+render, which only content that wraps depends on). Layouts that place children by their sizes (`Row`, the stack
+`align`, `TopAppBar` actions, `NavigationRail`) use it instead of the size of the last frame, so the element is in
+place on its first frame and on the frame it changes, with no extra frame. The default returns `std::nullopt`
+(unknown: layouts use the layout cache). It must be **exactly** the size of what `render()` then draws (its group),
+or the layout cache keeps requesting frames to settle; measure with the same helpers `render()` uses
+(`md::textSize`, `md::buttonSize`, `md::iconSize`, `md::iconButtonSize`). An element whose width fills
+(`frame.size("width") < 0`) returns `std::nullopt`: its width is its parent's to give.
+
+```cpp
+std::optional<ImVec2> Badge::intrinsicSize(const imlui::Frame& frame, float) {
+    return ImVec2{frame.dp(24), frame.dp(24)}; // render() draws a 24dp circle with ImGui::Dummy({dp(24), dp(24)})
+}
+```
 
 ### Aliases
 
@@ -777,9 +831,11 @@ skeleton.
 | `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `handle()` (`ScriptObject::Handle`: `alive()`, `post(fn)`, for worker threads), the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
-| `imlui.types.element` | `Element`: `render`, `componentComplete`, `destroyed`, `tick` / `setTicking` |
+| `imlui.types.element` | `Element`: `render`, `intrinsicSize`, `componentComplete`, `destroyed`, `tick` / `setTicking` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in |
-| `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal`, `method`, `nonVisual`, `defaultProperty`, `extends` |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal`, `method`, `nonVisual`, `defaultProperty`, `fillsWidth` / `fillsWidthWhen`, `extends` |
+| `imlui.ui.layout_box` | Layout boxes (`imlui::layout`): `BoxScope`, `boxTo`, `regionBox`, `shrinkToFitBox`, `insetBox`, `pushBox`/`popBox`, `availableWidth`, `claimWidth`: the space a container gives its children |
+| `imlui.ui.layout_cache` | The layout cache (`imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`: last frame's sizes by ImGui ID and convergence (another frame when a layout placed something by a stale size) |
 | `imlui.types.overload` | `overload<Args...>(&T::fn)`, `constOverload<Args...>(&T::fn)`: pick one of overloaded members |
 | `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`), `install`, `activate`, `sync`, `typeNames`; it is the `Renderer::Types` the renderer dispatches every element to |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: every built-in element |

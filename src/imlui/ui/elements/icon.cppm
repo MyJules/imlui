@@ -3,6 +3,7 @@ export module imlui.ui.elements.icon;
 
 import std;
 
+import imgui;
 import imlui.color;
 import imlui.widgets;
 import imlui.types.element;
@@ -19,6 +20,7 @@ public:
     static void declare(TypeBuilder<Icon>& type);
 
     void render(Frame& frame) override;
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::optional<std::string>& name() const;
     void setName(std::optional<std::string> name);
@@ -58,6 +60,7 @@ void Icon::declare(TypeBuilder<Icon>& type) {
 }
 
 void Icon::render(Frame&) { md::icon(glyph(), m_size, m_color); }
+std::optional<ImVec2> Icon::intrinsicSize(const Frame&, float) { return md::iconSize(m_size); }
 
 const std::optional<std::string>& Icon::name() const { return m_name; }
 void Icon::setName(std::optional<std::string> name) { m_name = std::move(name); }

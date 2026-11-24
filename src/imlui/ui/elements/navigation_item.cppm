@@ -69,7 +69,7 @@ void NavigationItem::render(Frame& frame) {
         clicked = md::navigationRailItem("##nav", m_icon, m_text, m_selected, m_badge, context.itemWidth);
         break;
     case NavigationScope::Style::Drawer:
-        clicked = md::navigationItem("##nav", m_icon, m_text, m_selected, m_badge, frame.size("width", -1.0f));
+        clicked = md::navigationItem("##nav", m_icon, m_text, m_selected, m_badge, frame.size("width"));
         break;
     }
     if (clicked) emit("onClicked");

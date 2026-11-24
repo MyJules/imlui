@@ -63,7 +63,7 @@ void TabBar::render(Frame& frame) {
     });
     const int last = std::max(0, static_cast<int>(tabs.size()) - 1);
     int cur = std::clamp(indexValue(m_currentIndex) - 1, 0, last); // indexValue: no overflow on INT_MIN
-    if (md::tabs("##tabs", tabs, &cur, m_variant == "secondary", frame.size("width", -1.0f))) {
+    if (md::tabs("##tabs", tabs, &cur, m_variant == "secondary", frame.size("width"))) {
         m_currentIndex = cur + 1;
         notify("currentIndex");
         emit("onCurrentChanged", m_currentIndex);

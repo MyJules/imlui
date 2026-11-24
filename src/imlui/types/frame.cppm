@@ -47,6 +47,10 @@ public:
         /// Renders the child inside a layout box that ends at screen x `right`: its available width (fills, `align`,
         /// text wrapping, raw ImGui item widths) is `right - cursor x` instead of its parent's.
         bool render(float right);
+        /// Renders the child measured but unseen (clipped away), and asks for another frame: for a layout that
+        /// can't place it yet because expectedSize() doesn't know its size (its first frame), so it doesn't flash
+        /// in the wrong place. Its size is in the cache on the next frame.
+        bool renderUnseen();
 
         /// False for non-visual types (Timer, Dialog, ...): they take no layout space. Layouts render them
         /// where they are and don't place, count or space them.
@@ -62,6 +66,17 @@ public:
         /// A stable ImGui ID for the child in the parent's ID scope: the key of its size in the layout cache
         /// (imlui.ui.layout_cache), and a key for per-child state in ImGui::GetStateStorage().
         [[nodiscard]] ImGuiID id() const;
+
+        /// The child's intrinsic size with `maxWidth` available (Element::intrinsicSize), when its type can tell
+        /// before rendering: Text, Icon, Button, IconButton, Spacer.
+        [[nodiscard]] std::optional<ImVec2> intrinsicSize(float maxWidth) const;
+        /// The size the child will render at with `maxWidth` available, as far as is known before rendering it: its
+        /// intrinsic size, else its size on the last frame (lastWidth / lastHeight), else nullopt (its first frame).
+        [[nodiscard]] std::optional<ImVec2> expectedSize(float maxWidth) const;
+        /// expectedSize()'s width / height, or `fallback`. Like lastWidth(), reading one tells the layout cache that
+        /// the caller places the child by it (another frame follows when the child renders at another size).
+        [[nodiscard]] float expectedWidth(float maxWidth, float fallback = 0.0f) const;
+        [[nodiscard]] float expectedHeight(float maxWidth, float fallback = 0.0f) const;
 
         /// Size of the child when it was last rendered (this frame or the last), or `fallback` when it wasn't.
         /// Reading it tells the layout cache that the caller places the child by it: when the child then renders
@@ -86,10 +101,15 @@ public:
         luaui::Node m_node;
         ImGuiID m_id;
         bool m_visual;
+        /// The last intrinsicSize() query (maxWidth, result): a layout asks for the width and the height.
+        mutable std::optional<std::pair<float, std::optional<ImVec2>>> m_intrinsic;
     };
 
     /// `instances` (may be null) resolves typed children for Child::as(); the TypeRegistry passes its own.
-    Frame(Renderer& renderer, const luaui::Node& node, const InstanceLookup* instances = nullptr);
+    /// `fillsWidth`: the element's type fills the width when `width` is unset (TypeBuilder::fillsWidth /
+    /// fillsWidthWhen), so size("width") and resolvedWidth() treat an unset width as a fill.
+    Frame(Renderer& renderer, const luaui::Node& node, const InstanceLookup* instances = nullptr,
+          bool fillsWidth = false);
 
     // ---- children
 
@@ -149,18 +169,18 @@ public:
     // ---- common props
 
     /// A size prop in pixels, like the built-ins read `width`/`height`: > 0 fixed, -1 fill, < -1 fill minus
-    /// |v| dp, 0 auto; `fillWidth = true` counts as -1 for width keys.
+    /// |v| dp, 0 auto; `fillWidth = true` counts as -1 for width keys. An unset `width` is -1 (fill) for a type
+    /// that fills by default (TypeBuilder::fillsWidth / fillsWidthWhen): the size policy lives in the type, so a
+    /// widget given this value needs no default of its own.
     [[nodiscard]] float size(const char* key) const;
-    /// The same, with `ifAuto` in place of 0 (auto): `size("width", -1)` fills unless a width is set.
-    [[nodiscard]] float size(const char* key, float ifAuto) const;
     /// The space available at the cursor: the width to the right edge of the layout box the parent gave (a fixed
     /// Column's width, a Row's share, a Grid cell, else the window's content region), and the height left in the
     /// window or scroll region.
     [[nodiscard]] ImVec2 available() const;
-    /// The `width` / `height` prop resolved to pixels against available() by resolveSize(), the rule every element
-    /// follows: fixed, fill, fill minus, or `natural` when unset.
-    [[nodiscard]] float resolvedWidth(float natural) const;
-    [[nodiscard]] float resolvedHeight(float natural) const;
+    /// The `width` / `height` prop (size()) resolved to pixels against available() by resolveSize(), the rule every
+    /// element follows: fixed, fill, fill minus, or `natural` when unset (a type that fills by default fills).
+    [[nodiscard]] float resolvedWidth(float natural = 0.0f) const;
+    [[nodiscard]] float resolvedHeight(float natural = 0.0f) const;
     /// "Label###id": the visible text may change every frame without changing the ImGui ID.
     [[nodiscard]] static std::string labelId(std::string_view text, const char* id);
     /// "start" -> 0, "center" -> 0.5, "end" / "right" / "bottom" -> 1.
@@ -195,6 +215,7 @@ private:
     Renderer& m_renderer;
     const luaui::Node& m_node;
     const InstanceLookup* m_instances;
+    bool m_fillsWidth;
 };
 
 } // namespace imlui
@@ -216,6 +237,8 @@ bool Frame::Child::render(float right) {
     return render();
 }
 
+bool Frame::Child::renderUnseen() { return m_frame.m_renderer.renderUnseen(m_node.state(), m_node.index()); }
+
 bool Frame::Child::isVisual() const { return m_visual; }
 bool Frame::Child::fillsWidth() const {
     const float w = sizeProp(m_node, "width");
@@ -225,6 +248,32 @@ bool Frame::Child::fillsWidth() const {
 const luaui::Node& Frame::Child::node() const { return m_node; }
 std::string Frame::Child::type() const { return m_node.type(); }
 ImGuiID Frame::Child::id() const { return m_id; }
+
+std::optional<ImVec2> Frame::Child::intrinsicSize(float maxWidth) const {
+    if (!m_visual) return std::nullopt;
+    if (!m_intrinsic || m_intrinsic->first != maxWidth)
+        m_intrinsic.emplace(maxWidth, m_frame.m_renderer.intrinsicSize(m_node, maxWidth));
+    return m_intrinsic->second;
+}
+
+std::optional<ImVec2> Frame::Child::expectedSize(float maxWidth) const {
+    if (const std::optional<ImVec2> intrinsic = intrinsicSize(maxWidth)) return intrinsic;
+    return layout::lastSize(m_id);
+}
+
+float Frame::Child::expectedWidth(float maxWidth, float fallback) const {
+    const std::optional<ImVec2> size = expectedSize(maxWidth);
+    const float w = size ? size->x : fallback;
+    layout::assumeWidth(m_id, w);
+    return w;
+}
+
+float Frame::Child::expectedHeight(float maxWidth, float fallback) const {
+    const std::optional<ImVec2> size = expectedSize(maxWidth);
+    const float h = size ? size->y : fallback;
+    layout::assumeHeight(m_id, h);
+    return h;
+}
 
 float Frame::Child::lastWidth(float fallback) const {
     const std::optional<ImVec2> last = layout::lastSize(m_id);
@@ -246,8 +295,8 @@ ScriptObject* Frame::Child::syncProperties() const {
 
 // ------------------------------------------------------------ Frame
 
-Frame::Frame(Renderer& renderer, const luaui::Node& node, const InstanceLookup* instances)
-    : m_renderer{renderer}, m_node{node}, m_instances{instances} {}
+Frame::Frame(Renderer& renderer, const luaui::Node& node, const InstanceLookup* instances, bool fillsWidth)
+    : m_renderer{renderer}, m_node{node}, m_instances{instances}, m_fillsWidth{fillsWidth} {}
 
 void Frame::renderChildren() { m_renderer.renderChildren(m_node); }
 void Frame::renderStack() { m_renderer.renderStack(m_node); }
@@ -262,17 +311,17 @@ bool Frame::renderElementProp(const char* key) {
 
 void Frame::attachMenu(bool clicked) { m_renderer.attachMenu(m_node, clicked); }
 
-float Frame::size(const char* key) const { return sizeProp(m_node, key); }
-float Frame::size(const char* key, float ifAuto) const {
+float Frame::size(const char* key) const {
     const float v = sizeProp(m_node, key);
-    return v == 0.0f ? ifAuto : v;
+    if (v == 0.0f && m_fillsWidth && std::string_view{key} == "width") return -1.0f;
+    return v;
 }
 ImVec2 Frame::available() const { return {layout::availableWidth(), layout::availableHeight()}; }
 float Frame::resolvedWidth(float natural) const {
-    return resolveSize(sizeProp(m_node, "width"), layout::availableWidth(), natural);
+    return resolveSize(size("width"), layout::availableWidth(), natural);
 }
 float Frame::resolvedHeight(float natural) const {
-    return resolveSize(sizeProp(m_node, "height"), layout::availableHeight(), natural);
+    return resolveSize(size("height"), layout::availableHeight(), natural);
 }
 std::string Frame::labelId(std::string_view text, const char* id) { return imlui::labelId(text, id); }
 float Frame::alignFactor(std::string_view align) { return imlui::alignFactor(align); }

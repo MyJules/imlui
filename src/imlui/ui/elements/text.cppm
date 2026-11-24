@@ -3,6 +3,7 @@ export module imlui.ui.elements.text;
 
 import std;
 
+import imgui;
 import imlui.color;
 import imlui.theme.font_face_scope;
 import imlui.theme.typography;
@@ -23,6 +24,7 @@ public:
     static void declare(TypeBuilder<Text>& type);
 
     void render(Frame& frame) override;
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -74,6 +76,13 @@ void Text::declare(TypeBuilder<Text>& type) {
 void Text::render(Frame&) {
     FontFaceScope face{m_font};
     md::text(m_text, m_textStyle, m_color, m_wrap, Frame::alignFactor(m_align));
+}
+
+std::optional<ImVec2> Text::intrinsicSize(const Frame&, float) {
+    // Wrapping text fills (its width is the parent's to give); aligned text is offset within the available width.
+    if (m_wrap || Frame::alignFactor(m_align) > 0.0f) return std::nullopt;
+    FontFaceScope face{m_font};
+    return md::textSize(m_text, m_textStyle);
 }
 
 const std::string& Text::text() const { return m_text; }

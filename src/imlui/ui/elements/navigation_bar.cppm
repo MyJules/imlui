@@ -44,7 +44,7 @@ void NavigationBar::declare(TypeBuilder<NavigationBar>& type) {
 
 void NavigationBar::render(Frame& frame) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = frame.resolvedWidth(frame.available().x);
+    const float w = frame.resolvedWidth();
     const float h = frame.dp(80);
     const Color bg = m_color.value_or(frame.scheme().surfaceContainer);
     md::fillRoundRect(frame.drawList(), p, {p.x + w, p.y + h}, 0.0f, bg);

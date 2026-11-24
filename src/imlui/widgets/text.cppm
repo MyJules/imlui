@@ -18,9 +18,14 @@ export namespace imlui::md {
 /// text in the available width.
 void text(std::string_view s, TextStyle style, std::optional<Color> color = std::nullopt, bool wrap = false,
           float align = 0.0f);
+/// The size text() takes for unwrapped, start-aligned text (one item per line, as ImGui measures it); nullopt for
+/// text too long to measure cheaply (ImGui lays it out differently), which a caller then measures by rendering.
+[[nodiscard]] std::optional<ImVec2> textSize(std::string_view s, TextStyle style);
 
 /// A standalone icon item (size in dp).
 void icon(std::string_view name, float size = 24.0f, std::optional<Color> color = std::nullopt);
+/// The size of icon(): `size` dp square.
+[[nodiscard]] ImVec2 iconSize(float size = 24.0f);
 
 /// Plain tooltip (inverseSurface) for the last item.
 void tooltip(std::string_view s);
@@ -49,9 +54,18 @@ void text(std::string_view s, TextStyle style, std::optional<Color> color, bool 
     if (color) ImGui::PopStyleColor();
 }
 
+std::optional<ImVec2> textSize(std::string_view s, TextStyle style) {
+    // ImGui::TextUnformatted measures text up to this long in one CalcTextSize(); longer text goes another way.
+    if (s.size() > 2000) return std::nullopt;
+    FontScope fs{style};
+    return ImGui::CalcTextSize(s.data(), s.data() + s.size());
+}
+
+ImVec2 iconSize(float size) { return {dp(size), dp(size)}; }
+
 void icon(std::string_view name, float size, std::optional<Color> color) {
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::Dummy({dp(size), dp(size)});
+    ImGui::Dummy(iconSize(size));
     drawIcon(ImGui::GetWindowDrawList(), name, {p.x + dp(size) * 0.5f, p.y + dp(size) * 0.5f}, size,
              itemDisabled() ? disabledContent() : color.value_or(scheme().onSurfaceVariant));
 }

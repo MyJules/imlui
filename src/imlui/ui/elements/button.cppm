@@ -3,6 +3,7 @@ export module imlui.ui.elements.button;
 
 import std;
 
+import imgui;
 import imlui.theme.font_face_scope;
 import imlui.widgets;
 import imlui.types.element;
@@ -22,6 +23,7 @@ public:
     static void declare(TypeBuilder<Button>& type);
 
     void render(Frame& frame) override;
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -64,6 +66,15 @@ void Button::render(Frame& frame) {
     }
     if (clicked) emit("onClicked");
     frame.attachMenu(clicked);
+}
+
+std::optional<ImVec2> Button::intrinsicSize(const Frame& frame, float) {
+    // A fill width is its parent's to give; a fill height depends on where it renders.
+    const float w = frame.size("width"), h = frame.size("height");
+    if (w < 0.0f || h < 0.0f) return std::nullopt;
+    const std::string label = Frame::labelId(m_text, "btn");
+    FontFaceScope face{m_font};
+    return md::buttonSize(label.c_str(), md::buttonVariant(m_variant), {w, h}, m_icon);
 }
 
 const std::string& Button::text() const { return m_text; }

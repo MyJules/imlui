@@ -2,8 +2,9 @@
 //
 // A flex layout: children that fill (Frame::Child::fillsWidth(): a fill width, a type that fills by default, wrapping
 // Text, Spacer { fill }) share the width the others leave, each rendered in a layout box of its share. The others'
-// widths and the heights (for `align`) are the ones of the previous frame (Frame::Child::lastWidth / lastHeight,
-// immediate mode); when a child renders at another size, the layout cache asks for another frame, so the row settles.
+// widths and the heights (for `align`) are their intrinsic sizes, else the ones of the previous frame
+// (Frame::Child::expectedWidth / expectedHeight, immediate mode); when a child renders at another size, the layout
+// cache asks for another frame, so the row settles. On a child's first frame without either, the row renders unseen.
 export module imlui.ui.elements.row;
 
 import std;
@@ -56,8 +57,9 @@ namespace {
 
 /// A visual child as the row sees it before rendering.
 struct Slot {
-    bool fills;  ///< takes a share of the free width
-    float lastW; ///< its width on the last frame (0 on its first; unused for fills)
+    bool fills; ///< takes a share of the free width
+    float w;    ///< its expected width (unused for fills)
+    float h;    ///< its expected height (only when the row aligns heights)
 };
 
 } // namespace
@@ -68,15 +70,26 @@ void Row::render(Frame& frame) {
     const float rowW = frame.resolvedWidth(frame.available().x);
     const float rowRight = start.x + rowW;
 
-    // Pass 1: which children fill, how wide the others were, and (to align them) how tall the tallest was.
+    // Pass 1: which children fill, how wide the others are, and (to align them) how tall the tallest is: their
+    // intrinsic sizes, else last frame's (Frame::Child::expectedWidth / expectedHeight).
     const bool alignsHeights = m_align == "center" || m_align == "bottom";
     std::vector<Slot> slots;
     float rowH = 0.0f;
+    bool unknownWidth = false, unknownHeight = false; // a child's first frame
     frame.forEachChild([&](Frame::Child& c) {
         if (!c.isVisual()) return;
-        const bool fills = c.fillsWidth();
-        slots.push_back({fills, fills ? 0.0f : c.lastWidth()});
-        if (alignsHeights) rowH = std::max(rowH, c.lastHeight());
+        Slot slot{c.fillsWidth(), 0.0f, 0.0f};
+        const bool known = c.expectedSize(rowW).has_value();
+        if (!slot.fills) {
+            slot.w = c.expectedWidth(rowW);
+            unknownWidth = unknownWidth || !known;
+        }
+        if (alignsHeights) {
+            slot.h = c.expectedHeight(rowW);
+            rowH = std::max(rowH, slot.h);
+            unknownHeight = unknownHeight || !known;
+        }
+        slots.push_back(slot);
     });
     const int count = static_cast<int>(slots.size());
     float fixedW = 0.0f;
@@ -85,7 +98,7 @@ void Row::render(Frame& frame) {
         if (s.fills)
             ++fills;
         else
-            fixedW += s.lastW;
+            fixedW += s.w;
     }
     const float gaps = count > 1 ? sp * static_cast<float>(count - 1) : 0.0f;
     const float free = std::max(0.0f, rowW - fixedW - gaps);
@@ -99,13 +112,15 @@ void Row::render(Frame& frame) {
         else if (m_justify == "spaceBetween" && count > 1)
             extraGap = free / static_cast<float>(count - 1);
     }
-    // What the children after each one need: their last widths (the shares of fills) and the gaps before them.
+    // What the children after each one need: their widths (the shares of fills) and the gaps before them.
     std::vector<float> after(slots.size(), 0.0f);
     for (int i = count - 2; i >= 0; --i) {
         const auto next = static_cast<std::size_t>(i + 1);
-        after[static_cast<std::size_t>(i)] =
-            after[next] + sp + extraGap + (slots[next].fills ? 0.0f : slots[next].lastW);
+        after[static_cast<std::size_t>(i)] = after[next] + sp + extraGap + (slots[next].fills ? 0.0f : slots[next].w);
     }
+    // On a frame where a size the placement depends on is unknown (a child's first), the children render unseen:
+    // measured, not drawn in the wrong place; the next frame (requested) places them.
+    const bool unseen = (alignsHeights && unknownHeight) || (unknownWidth && (fills > 0 || m_justify != "start"));
 
     // Pass 2: place and render. A fill renders in a box of its share; any other child's box ends where the children
     // after it start, so a fill inside it (a Column with a filling child) stops there.
@@ -122,13 +137,16 @@ void Row::render(Frame& frame) {
         const Slot& slot = slots[i];
         if (i > 0) x += sp + extraGap;
         float y = top;
-        if (alignsHeights) {
-            const float ch = c.lastHeight();
-            if (rowH > 0 && ch > 0) y = top + std::max(0.0f, (rowH - ch) * (m_align == "center" ? 0.5f : 1.0f));
-        }
+        if (alignsHeights && rowH > 0 && slot.h > 0)
+            y = top + std::max(0.0f, (rowH - slot.h) * (m_align == "center" ? 0.5f : 1.0f));
         ImGui::SetCursorScreenPos({x, y});
         const float right = slot.fills ? x + share : std::max(x, rowRight - after[i]);
-        c.render(right);
+        if (unseen) {
+            const layout::BoxScope box{layout::boxTo(right)};
+            c.renderUnseen();
+        } else {
+            c.render(right);
+        }
         const ImVec2 sz = ImGui::GetItemRectSize();
         maxH = std::max(maxH, sz.y);
         x += slot.fills ? std::max(share, sz.x) : sz.x;
