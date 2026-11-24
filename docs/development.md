@@ -62,7 +62,7 @@ const std::string& Example::name() const { return m_name; }
   edits, but you do need to re-run the build (which re-checks the glob). Keep `.cppm` files out of
   `src/resources/`, which holds the embedded resources only.
 
-See [Architecture](architecture.md#module-map-target-layout) for the module map.
+See [Architecture](architecture.md#module-map) for the module map.
 
 ## Adding an element
 
@@ -179,10 +179,6 @@ conventions they share, and new built-ins follow them:
    property and signal of every registered built-in must appear in the class doc comment (with its base class's,
    for a subclass) and in the type's section of elements.md (or its table row), each default property in the
    "Positional strings" table, and the "Non-visual elements" list must match the non-visual flag.
-9. **Sizes** go through one rule: pass `frame.size("width")` to an `md::` widget (it resolves it with
-   `md::itemWidth`), or resolve it yourself with `frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`
-   when the element sizes itself. Both use `resolveSize` (`imlui.ui.item_size`), so `-1` is exactly the available
-   space and `< -1` exactly that minus `|v|` dp everywhere. Don't compute `avail + w` by hand.
 3. **Register it** in `registerBuiltinTypes` (`builtin.cppm`) under its family comment, aliases on the next line
    (`registerType<Column>("Column")`, then `("Item")`: Lua sees separate types).
 4. **Two-way props**: set the member, `notify("prop")`, then `emit(...)`. `notify` writes the value back and emits
@@ -200,13 +196,17 @@ conventions they share, and new built-ins follow them:
    (see [Trying changes in an app](#trying-changes-in-an-app)) with screenshots from before the change, at desktop and
    phone size. The tag `full-gallery` of imlui-example has a page for every built-in element. Animated content (progress, canvas,
    chart) and timer texts differ by nature.
+9. **Sizes** go through one rule: pass `frame.size("width")` to an `md::` widget (it resolves it with
+   `md::itemWidth`), or resolve it yourself with `frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`
+   when the element sizes itself. Both use `resolveSize` (`imlui.ui.item_size`), so `-1` is exactly the available
+   space and `< -1` exactly that minus `|v|` dp everywhere. Don't compute `avail + w` by hand.
 
 ## Adding a native function
 
-`imlui.native` is the C++ library behind the Lua API. In the target layout it lives in `imlui.lua.native`
-(`luaui::registerNative(lua::State*, NativeHooks*)`). App actions (`quit`, `reload`, `setTitle`) go through
-`NativeHooks` callbacks, so the module doesn't depend on `Engine`. On `material-ui` it's still
-`Engine::registerNative` in `engine.cppm`.
+`imlui.native` is the C++ library behind the Lua API. It lives in `imlui.lua.native`
+(`luaui::registerNative(lua::State*, NativeHooks*)`, `src/imlui/lua/native.cppm`), which `Engine` calls when it
+creates the Lua state. App actions (`quit`, `reload`, `setTitle`) go through `NativeHooks` callbacks, so the module
+doesn't depend on `Engine`.
 
 1. Add an entry `{"name", [](lua::State* state) -> int { ...; return nResults; }}` to the function table. Use
    `lua::error(state, "...")` for bad arguments. If the function needs the app, add a hook to `NativeHooks`.
@@ -243,7 +243,7 @@ conventions they share, and new built-ins follow them:
   BMIs that the build's compile commands reference (the `.modmap` files). Earlier, clang-tidy 22.1.7 crashed with
   an access violation in `readability-identifier-naming` on many modules that import `imlui.widgets` or another
   umbrella (`progress_bar.cppm`, `button.cppm`, `link.cppm`, ...), so the naming checks didn't cover them. With
-  freshly built BMIs it doesn't reproduce: all 114 modules pass, run one by one, all in one process and in
+  freshly built BMIs it didn't reproduce: all 114 modules of the time passed, run one by one, all in one process and in
   parallel, with the default options and with `--header-filter=.*`, `--system-headers`, `--fix`, against
   `clang-debug` both at this commit and at the commit before the cleanup. It also doesn't reproduce with a stale
   BMI (a changed imported module, not rebuilt). If it comes back, rebuild (`cmake --build build/clang-debug`) and run

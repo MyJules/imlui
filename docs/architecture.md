@@ -512,7 +512,7 @@ the BMIs in the app's build. Hence:
 - `IMLUI_DEV_PATHS` and `IMLUI_EMBED_RESOURCES` are defined by `ImluiResources.cmake`, so they exist in the app's build
   in every mode (with their defaults) and govern the app's own `imlui_add_resources` calls.
 
-## Module map (target layout)
+## Module map
 
 All project code is C++20 modules in `src/`. Each module exports one class or one family of functions, and the
 implementation goes after `module :private;`. See [Development](development.md#module-conventions).
