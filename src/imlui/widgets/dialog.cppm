@@ -49,7 +49,8 @@ bool beginDialog(const char* title, bool* open, float width, std::string_view he
         *open = false;
         return false;
     }
-    if (!*open || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    // Escape closes the top-most popup only: not this dialog while a nested dialog or a menu opened from it is open.
+    if (!*open || (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId))) {
         *open = false;
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();

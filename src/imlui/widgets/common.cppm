@@ -43,7 +43,14 @@ inline constexpr float hugeExtent = 3.4e38f;
 /// Visible part of an ImGui label ("Text##id" -> "Text").
 [[nodiscard]] std::string_view visibleLabel(const char* label);
 
-/// Smoothly moves a per-id stored value towards `target`. Requests another frame while it moves.
+/// Name for a top-level window or a modal popup owned by the current ID scope: "label###id<hash>". ImGui names
+/// top-level windows by their name alone, ignoring the ID stack, so the hash of `id` in the current scope (an
+/// element renders inside its node's scope) keeps two instances apart. It doesn't depend on `label`, so the window
+/// keeps its position, size and popup state across frames and title changes.
+[[nodiscard]] std::string scopedWindowName(std::string_view label, std::string_view id);
+
+/// Smoothly moves a per-id stored value towards `target`. Requests another frame while it moves. A non-finite
+/// target is ignored (the stored value stays); a non-finite stored value jumps to the target.
 float animate(ImGuiID id, float target, float speed = 14.0f);
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
 float stateLayer(ImGuiID id, bool hovered, bool active);
@@ -110,8 +117,15 @@ std::string_view visibleLabel(const char* label) {
     return {label, static_cast<std::size_t>(labelEnd(label) - label)};
 }
 
+std::string scopedWindowName(std::string_view label, std::string_view id) {
+    return std::format("{}###{}{:08X}", label, id, ImGui::GetID(id.data(), id.data() + id.size()));
+}
+
 float animate(ImGuiID id, float target, float speed) {
     float* v = ImGui::GetStateStorage()->GetFloatRef(id, target);
+    // A NaN target (a Slider value of 0/0) would never converge and request frames forever.
+    if (!std::isfinite(target)) return std::isfinite(*v) ? *v : 0.0f;
+    if (!std::isfinite(*v)) *v = target;
     // The first frame after an idle wait has a long DeltaTime. Capping it keeps a
     // transition that starts then (hover, press) from jumping to its end.
     float dt = std::min(ImGui::GetIO().DeltaTime, 1.0f / 30.0f);

@@ -109,3 +109,26 @@ TEST_F(FrameRequestTest, WakeOnEarlierDelayedRequest) {
     requestFrameAfter(2.0);
     EXPECT_EQ(wakes, 2);
 }
+
+TEST_F(FrameRequestTest, AFullQueueKeepsTheEarliestRequests) {
+    for (int i = 0; i < 64; ++i) // the queue's capacity
+        requestFrameAfter(100.0 + i);
+    requestFrameAfter(162.5); // lands before the last entry, which is dropped to make room
+    requestFrameAfter(170.0); // later than every entry of a full queue: dropped
+    requestFrameAfter(50.0);  // earlier than every entry
+    EXPECT_LE(secondsUntilFrame(), 50.0);
+    EXPECT_GT(secondsUntilFrame(), 49.0);
+}
+
+TEST_F(FrameRequestTest, NonFiniteDelaysAreIgnored) {
+    requestFrameAfter(__builtin_nan(""));
+    requestFrameAfter(inf);
+    requestFramesFor(__builtin_nan(""));
+    requestFramesFor(inf);
+    EXPECT_EQ(secondsUntilFrame(), inf);
+    requestFrameAfter(5.0); // the queue still works
+    EXPECT_LE(secondsUntilFrame(), 5.0);
+    EXPECT_GT(secondsUntilFrame(), 4.0);
+    requestFrameAfter(-inf); // as soon as possible, like any delay <= 0
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+}

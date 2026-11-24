@@ -10,6 +10,7 @@ import imlui.color;
 import imlui.theme.scheme;
 import imlui.widgets.card;
 import imlui.widgets.table;
+import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.element;
 import imlui.types.frame;
@@ -23,6 +24,9 @@ export namespace imlui {
 /// Raw:     rows (a list of lists), width
 /// Signals: onRowClicked(self, row)
 /// Two-way: currentRow
+///
+/// A row that isn't a list renders empty and is reported as a script error. At most 511 columns (ImGui's limit)
+/// are shown; more are reported.
 class Table final : public Element {
 public:
     static void declare(TypeBuilder<Table>& type);
@@ -39,7 +43,7 @@ public:
     void setCurrentRow(int row);
 
 private:
-    void renderRows(const Frame& frame, float rowHeight);
+    void renderRows(const Frame& frame, float rowHeight, int columnCount);
 
     std::vector<std::string> m_columns;
     double m_rowHeight = 52.0;
@@ -53,6 +57,12 @@ module :private;
 
 namespace imlui {
 
+namespace {
+
+constexpr std::size_t maxColumns = 511; // BeginTable() asserts columns < IMGUI_TABLE_MAX_COLUMNS (512)
+
+} // namespace
+
 void Table::declare(TypeBuilder<Table>& type) {
     type.property("columns", &Table::columns, &Table::setColumns)
         .property("rowHeight", &Table::rowHeight, &Table::setRowHeight)
@@ -63,6 +73,9 @@ void Table::declare(TypeBuilder<Table>& type) {
 
 void Table::render(Frame& frame) {
     if (m_columns.empty()) return;
+    if (m_columns.size() > maxColumns)
+        luaui::reportError(std::format("Table: {} columns, at most {} are shown", m_columns.size(), maxColumns));
+    const int columnCount = static_cast<int>(std::min(m_columns.size(), maxColumns));
     const Scheme& s = frame.scheme();
     const float rowH = frame.dp(static_cast<float>(m_rowHeight)), headH = frame.dp(56);
     if (m_outlined) md::beginCard("##tablecard", md::CardVariant::Outlined, frame.size("width"), 0.0f);
@@ -73,15 +86,15 @@ void Table::render(Frame& frame) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {frame.dp(8), 0});
     const ImGuiTableFlags flags =
         ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX;
-    if (ImGui::BeginTable("##table", static_cast<int>(m_columns.size()), flags)) {
-        for (const auto& h : m_columns)
-            ImGui::TableSetupColumn(h.c_str());
+    if (ImGui::BeginTable("##table", columnCount, flags)) {
+        for (int c = 0; c < columnCount; ++c)
+            ImGui::TableSetupColumn(m_columns[static_cast<std::size_t>(c)].c_str());
         ImGui::TableNextRow(0, headH);
-        for (const auto& h : m_columns) {
+        for (int c = 0; c < columnCount; ++c) {
             ImGui::TableNextColumn();
-            md::tableHeaderCell(h, headH);
+            md::tableHeaderCell(m_columns[static_cast<std::size_t>(c)], headH);
         }
-        renderRows(frame, rowH);
+        renderRows(frame, rowH, columnCount);
         ImGui::EndTable();
     }
     ImGui::PopStyleVar(2);
@@ -89,7 +102,7 @@ void Table::render(Frame& frame) {
     if (m_outlined) md::endCard();
 }
 
-void Table::renderRows(const Frame& frame, float rowH) {
+void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
     const luaui::Node& n = frame.node();
     lua::State* state = n.state();
     const Scheme& s = frame.scheme();
@@ -100,13 +113,17 @@ void Table::renderRows(const Frame& frame, float rowH) {
         // started, like the cells drawn before the click.
         const int selected = m_currentRow;
         for (lua::Integer i = 1; i <= count; ++i) {
-            lua::rawgeti(state, rows, i);
+            const bool isRow = lua::rawgeti(state, rows, i) == lua::Type::Table;
+            if (!isRow) luaui::reportError(std::format("Table: rows[{}] is not a list of cells", i));
             ImGui::TableNextRow(0, rowH);
-            for (int c = 0; c < static_cast<int>(m_columns.size()); ++c) {
+            for (int c = 0; c < columnCount; ++c) {
                 ImGui::TableNextColumn();
-                lua::rawgeti(state, -1, c + 1);
-                const std::string cell = lua::isnil(state, -1) ? std::string{} : lua::toStringAny(state, -1);
-                lua::pop(state);
+                std::string cell;
+                if (isRow) {
+                    lua::rawgeti(state, -1, c + 1);
+                    if (!lua::isnil(state, -1)) cell = lua::toStringAny(state, -1);
+                    lua::pop(state);
+                }
                 if (c == 0) {
                     ImGui::PushID(static_cast<int>(i));
                     const ImVec2 p = ImGui::GetCursorScreenPos();

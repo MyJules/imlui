@@ -54,7 +54,7 @@ void Dialog::declare(TypeBuilder<Dialog>& type) {
 
 void Dialog::render(Frame& frame) {
     bool open = m_open;
-    const std::string title = Frame::labelId(m_title, "dlg");
+    const std::string title = md::scopedWindowName(m_title, "dlg");
     if (md::beginDialog(title.c_str(), &open, frame.size("width"), m_icon)) {
         frame.renderStack();
         md::endDialog();

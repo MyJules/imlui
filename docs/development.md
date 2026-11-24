@@ -84,6 +84,9 @@ using `imlui.widgets.common`:
 - `animate(id, target)` for transitions. It requests frames while the value moves. Anything else that changes on
   its own over time must call `requestFrame()` from `imlui.ui.frame_request` (frames are rendered on demand).
 - `itemWidth(requested, natural)` so `width`/`fillWidth` behave like the other widgets.
+- `scopedWindowName(label, id)` to name a top-level window or a modal popup (`ImGui::Begin`, `BeginPopupModal`).
+  ImGui names those by the string alone, ignoring the ID stack, so a fixed name would make two instances share one
+  window; this one adds the hash of `id` in the element's ID scope and stays the same when the label changes.
 - The shape helpers for anything rounded or outlined: `fillRoundRect`/`strokeRoundRect` (with optional
   `ImDrawFlags_RoundCorners*`), `fillCircle`/`strokeCircle`, `strokeArc`, and `hLine`/`vLine` for dividers. Don't
   use `ImDrawList::AddRect`/`AddRectFilled` with a rounding, or `AddCircle*`: ImGui shrinks the radius (a pill gets
@@ -470,7 +473,7 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 | Module | Class | What |
 |---|---|---|
 | `imlui.test.last_item_probe` | `test::LastItemProbe` | Renders its children and remembers the rect of the last visual one (`min()`, `max()`, `size()`, `center()`), so a test knows where to click. |
-| `imlui.test.render_counter` | `test::RenderCounter` | A 10 x 10 dp box that counts its renders (`renders()`). |
+| `imlui.test.render_counter` | `test::RenderCounter` | A 10 x 10 dp box that counts its renders (`renders()`) and remembers the draw list of the ImGui window it last rendered into (`drawList()`). |
 
 `frame_test.cpp` (Frame, child handles, re-registration, unknown types), `element_test.cpp`
 (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a `Dialog` and a

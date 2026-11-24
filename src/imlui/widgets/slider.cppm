@@ -82,9 +82,12 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
     fillRoundRect(dl, {x0, cy - th * 0.5f}, {x1, cy + th * 0.5f}, th * 0.5f, inactive);
     if (hx > x0) fillRoundRect(dl, {x0, cy - th * 0.5f}, {hx, cy + th * 0.5f}, th * 0.5f, active);
     if (step > 0 && vmax > vmin && (vmax - vmin) / step <= 40) {
-        const int stops = static_cast<int>(std::floor((vmax - vmin) / step + 0.5));
+        // Only whole steps inside the range (range 1, step 0.4: 0, 0.4, 0.8). The small slack keeps the last tick
+        // when the division comes out just below a whole number (1 / 0.1 = 9.999...).
+        const int stops = static_cast<int>(std::floor((vmax - vmin) / step + 1e-6));
         for (int i = 0; i <= stops; ++i) {
-            const float sx = x0 + (x1 - x0) * static_cast<float>(static_cast<double>(i) * step / (vmax - vmin));
+            const double at = std::min(1.0, static_cast<double>(i) * step / (vmax - vmin));
+            const float sx = x0 + (x1 - x0) * static_cast<float>(at);
             fillCircle(dl, {sx, cy}, dp(1),
                        sx <= hx ? s.onPrimary.withAlpha(0.7f) : s.onSecondaryContainer.withAlpha(0.7f));
         }

@@ -91,7 +91,9 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 q{p.x + w, p.y + h};
     float layer = dis ? 0.0f : stateLayer(id, hov, act);
-    drawShadow(dl, p, q, rounding, elevation + (hov ? 0.6f : 0.0f));
+    // Material 3: hovering raises a button with a container by one level; Text and Outlined have no surface to lift.
+    const bool lifts = !dis && variant != ButtonVariant::Text && variant != ButtonVariant::Outlined;
+    drawShadow(dl, p, q, rounding, elevation + (hov && lifts ? 1.0f : 0.0f));
     fillRoundRect(dl, p, q, rounding, bg);
     if (layer > 0) fillRoundRect(dl, p, q, rounding, fg.withAlpha(layer));
     strokeRoundRect(dl, p, q, rounding, border, dp(1));

@@ -235,3 +235,55 @@ TEST_F(WindowsTest, DialogOnOpenChangedFollowsTheWriteBack) {
     m_h.renderFrames("root", 3);
     run("assert(#changes == 1 and changes[1] == false, 'changes: ' .. #changes)");
 }
+
+// ------------------------------------------------------------------ distinct ImGui windows
+
+TEST_F(WindowsTest, TwoWindowsAreSeparateImGuiWindows) {
+    // Top-level ImGui windows are named without the ID stack: each Window element needs a name of its own, even
+    // with the same title.
+    run(R"(
+        s = state { title = "Same" }
+        root = Column { Window { title = function() return s.title end, Probe { id = "a" } },
+                        Window { title = "Same", Probe { id = "b" } } })");
+    m_h.renderFrames("root", 2);
+    auto* a = m_h.instance<Probe>("a");
+    auto* b = m_h.instance<Probe>("b");
+    EXPECT_EQ(a->renders(), 2);
+    EXPECT_EQ(b->renders(), 2);
+    ASSERT_NE(a->drawList(), nullptr);
+    EXPECT_NE(a->drawList(), b->drawList());
+
+    // A new title keeps the same ImGui window (and so its position and size).
+    const ImDrawList* before = a->drawList();
+    run(R"(s.title = "Renamed")");
+    m_h.renderFrame("root");
+    EXPECT_EQ(a->drawList(), before);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(WindowsTest, ANestedDialogIsItsOwnPopupAndEscapeClosesTheTopOne) {
+    run(R"(
+        s = state { outer = true, inner = false }
+        root = Column { Dialog { title = "Outer", open = bind(s, "outer"), Probe { id = "a" },
+                                 Dialog { title = "Inner", open = bind(s, "inner"), Probe { id = "b" } } } })");
+    m_h.renderFrames("root", 3);
+    EXPECT_GE(renders("a"), 2);
+    EXPECT_EQ(renders("b"), 0);
+
+    run("s.inner = true"); // opened from inside the outer dialog
+    m_h.renderFrames("root", 3);
+    EXPECT_GE(renders("b"), 2);
+    EXPECT_NE(m_h.instance<Probe>("a")->drawList(), m_h.instance<Probe>("b")->drawList());
+
+    run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
+    m_h.renderFrames("root", 3);
+    run("assert(s.inner == false and s.outer == true, tostring(s.inner) .. ' ' .. tostring(s.outer))");
+    const int outerRenders = renders("a");
+    m_h.renderFrame("root");
+    EXPECT_EQ(renders("a"), outerRenders + 1); // the outer dialog is still shown
+
+    run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
+    m_h.renderFrames("root", 3);
+    run("assert(s.outer == false, 'the outer dialog is still open')");
+    EXPECT_TRUE(luaui::errors().empty());
+}

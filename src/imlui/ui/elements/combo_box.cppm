@@ -81,8 +81,10 @@ void ComboBox::render(Frame& frame) {
     int cur = m_currentIndex - 1;
     if (md::dropdown("##dd", m_model, &cur, o, m_icons)) {
         m_currentIndex = cur + 1;
+        // Copied before notify(): its handler may replace the model (a method call on the element syncs it).
+        const std::string text = m_model[static_cast<std::size_t>(cur)];
         notify("currentIndex");
-        emit("onActivated", m_currentIndex, m_model[static_cast<std::size_t>(cur)]);
+        emit("onActivated", cur + 1, text);
     }
 }
 
