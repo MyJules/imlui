@@ -46,7 +46,7 @@ public:
         float width = 800.0f; ///< display size in pixels
         float height = 600.0f;
         float deltaTime = 1.0f / 60.0f; ///< seconds between frames
-        /// Registers the built-in elements and types (Column, Dialog, ModalNavigationDrawer, ...) first,
+        /// Registers the built-in element types (Column, Dialog, ModalNavigationDrawer, ...) first,
         /// like the Engine does; types registered afterwards replace built-ins of the same name.
         bool builtins = false;
     };
@@ -102,8 +102,8 @@ private:
 
     Options m_options;
     ImGuiContext* m_context = nullptr;
-    Renderer m_renderer;
-    TypeRegistry m_types{m_renderer};
+    TypeRegistry m_types;
+    Renderer m_renderer{m_types};
     luaui::NativeHooks m_hooks;
     lua::State* m_state = nullptr;
     int m_runRef = lua::noRef;
@@ -134,7 +134,6 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     // loads them, so the font pointers never outlive their context into the next harness.
     loadFonts(IMLUI_FONT_DIR);
     if (m_options.builtins) {
-        registerBuiltinElements(m_renderer);
         registerBuiltinTypes(m_types);
     }
 }

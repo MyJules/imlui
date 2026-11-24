@@ -47,7 +47,7 @@ import imlui.lua.native;
 import imlui.lua.painter;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
-import imlui.ui.elements;
+import imlui.ui.elements.builtin;
 import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.type_info;
@@ -90,9 +90,6 @@ public:
     /// The registered types and singletons.
     TypeRegistry& types();
 
-    /// Low-level element registration: a handler function per element type. Prefer registerType<T>().
-    Renderer& renderer();
-
     /// Runs `fn` on the main thread at the next loop iteration and wakes the loop. The one Engine call
     /// that is safe from any thread: hand results of worker threads to the UI through it.
     void post(std::function<void()> fn);
@@ -132,8 +129,8 @@ private:
 
     EngineConfig m_config;
     platform::Window m_window;
-    Renderer m_renderer;
-    TypeRegistry m_types{m_renderer};
+    TypeRegistry m_types;
+    Renderer m_renderer{m_types};
     luaui::NativeHooks m_hooks;
     lua::State* m_state = nullptr;
     int m_rootRef = lua::noRef;
@@ -181,7 +178,6 @@ void closeState(lua::State* state) {
 } // namespace
 
 Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
-    registerBuiltinElements(m_renderer);
     registerBuiltinTypes(m_types);
     m_hooks.quit = [this] { requestQuit(); };
     m_hooks.reload = [this] { requestReload(); };
@@ -201,7 +197,6 @@ Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
 
 Engine::~Engine() { closeState(m_state); }
 
-Renderer& Engine::renderer() { return m_renderer; }
 TypeRegistry& Engine::types() { return m_types; }
 
 void Engine::post(std::function<void()> fn) {

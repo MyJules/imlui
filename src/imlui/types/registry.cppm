@@ -15,9 +15,9 @@
 // registerType<Column>("Item")). Each name is its own type to Lua; an instance belongs to the name it was
 // created for.
 //
-// Every registered element type is also a Renderer element whose handler syncs the declared
-// properties from the element table into the instance (setters run only on a changed value; nil resets a
-// property to its default), and then calls Element::render(). Elements that aren't rendered are synced
+// The registry is what the Renderer dispatches to (Renderer::Types): rendering an element of a registered
+// type syncs the declared properties from the element table into the instance (setters run only on a changed
+// value; nil resets a property to its default), and then calls Element::render(). Elements that aren't rendered are synced
 // lazily: before a method called from Lua runs on them, and when a parent or another element asks for them
 // (sync(), Frame::Child::as<T>()). componentComplete() runs once, right after the first sync. Ticking
 // elements (Element::setTicking) are synced and ticked at the start of every frame by tick(now), which
@@ -25,11 +25,11 @@
 // Main thread only.
 module;
 
-#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <exception>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -52,10 +52,9 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-class TypeRegistry {
+class TypeRegistry final : public Renderer::Types {
 public:
-    /// Registered element types become elements of `renderer`.
-    explicit TypeRegistry(Renderer& renderer);
+    TypeRegistry();
     TypeRegistry(const TypeRegistry&) = delete;
     TypeRegistry& operator=(const TypeRegistry&) = delete;
 
@@ -105,6 +104,10 @@ public:
     /// Registered element type names, sorted (what `ui.types()` returns).
     [[nodiscard]] std::vector<std::string> typeNames() const;
 
+    // Renderer::Types: the Renderer renders every element through these.
+    [[nodiscard]] Kind kind(std::string_view type) const override;
+    void renderElement(Renderer& renderer, const luaui::Node& node) override;
+
     /// The instance of the element table `node`, created now if the table has none yet. Then syncs
     /// the declared properties into it (and calls componentComplete() after the first sync). nullptr if
     /// `node` isn't a registered type.
@@ -139,12 +142,12 @@ private:
     TypeInfo& addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info,
                            std::shared_ptr<ScriptObject> owner);
 
-    Renderer& m_renderer;
     /// What Frames use to resolve typed children (Frame::Child::as): sync(node).
     Frame::InstanceLookup m_instances;
     /// Never shrinks: Lua states hold raw pointers to these until they close.
     std::vector<std::unique_ptr<TypeInfo>> m_infos;
-    std::vector<const TypeInfo*> m_types; ///< current element types (a re-registration replaces)
+    /// The current element types by name (a re-registration replaces).
+    std::map<std::string, const TypeInfo*, std::less<>> m_types;
     std::vector<Singleton> m_singletons;
 };
 
@@ -514,27 +517,14 @@ Box* syncBox(const Node& node, const TypeInfo& info) {
     return b->element ? b : nullptr;
 }
 
-void renderTyped(const TypeInfo& info, Renderer& renderer, const Node& node, const Frame::InstanceLookup& instances) {
-    Box* b = syncBox(node, info);
-    if (!b) return;
-    Frame frame{renderer, node, &instances};
-    b->element->render(frame);
-}
-
 } // namespace
 
-TypeRegistry::TypeRegistry(Renderer& renderer)
-    : m_renderer{renderer}, m_instances{[this](const Node& node) -> ScriptObject* { return sync(node); }} {}
+TypeRegistry::TypeRegistry() : m_instances{[this](const Node& node) -> ScriptObject* { return sync(node); }} {}
 
 TypeInfo& TypeRegistry::addType(std::unique_ptr<TypeInfo> info) {
     TypeInfo& ref = *info;
     m_infos.push_back(std::move(info));
-    std::erase_if(m_types, [&](const TypeInfo* t) { return t->name() == ref.name(); });
-    m_types.push_back(&ref);
-    // Replaces a handler of the same name (a built-in lambda during the port, or an earlier type): the last
-    // registration renders. The Engine registers the built-in handlers before any type, so types win.
-    m_renderer.registerElement(
-        ref.name(), [this, &ref](Renderer& r, const Node& n) { renderTyped(ref, r, n, m_instances); }, ref.visual());
+    m_types.insert_or_assign(ref.name(), &ref); // the last registration of a name wins
     return ref;
 }
 
@@ -549,17 +539,30 @@ TypeInfo& TypeRegistry::addSingleton(std::string name, ScriptObject& object, std
 }
 
 const TypeInfo* TypeRegistry::find(std::string_view name) const {
-    for (const TypeInfo* t : m_types)
-        if (t->name() == name) return t;
-    return nullptr;
+    const auto it = m_types.find(name);
+    return it == m_types.end() ? nullptr : it->second;
 }
 
 std::vector<std::string> TypeRegistry::typeNames() const {
     std::vector<std::string> out;
     out.reserve(m_types.size());
-    for (const TypeInfo* t : m_types) out.push_back(t->name());
-    std::sort(out.begin(), out.end());
+    for (const auto& [name, info] : m_types) out.push_back(name);
     return out;
+}
+
+TypeRegistry::Kind TypeRegistry::kind(std::string_view type) const {
+    const TypeInfo* info = find(type);
+    if (!info) return Kind::Unknown;
+    return info->visual() ? Kind::Visual : Kind::NonVisual;
+}
+
+void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
+    const TypeInfo* info = find(node.type());
+    if (!info) return;
+    Box* b = syncBox(node, *info);
+    if (!b) return;
+    Frame frame{renderer, node, &m_instances};
+    b->element->render(frame);
 }
 
 Element* TypeRegistry::sync(const Node& node) const {
@@ -603,7 +606,7 @@ void TypeRegistry::install(lua::State* state) {
     // Per-type methods tables, and element-table metatables that fall back to them.
     pushRegistryTable(state, methodsKey);
     pushRegistryTable(state, typeMetaKey);
-    for (const TypeInfo* t : m_types) {
+    for (const auto& [name, t] : m_types) {
         pushMethodsTable(state, *t);
         lua::pushvalue(state, -1);
         lua::rawsetp(state, top + 1, t);

@@ -1,6 +1,6 @@
 // Tests for Frame (imlui.types.frame) as typed elements use it: child handles (visibility, non-visual
 // children, last-frame sizes, as<T>() with synced properties), element-valued props, type aliases, subclass
-// declarations (TypeBuilder::extends) and typed types replacing handlers of the same name. Renders headless
+// declarations (TypeBuilder::extends), re-registration under a name, and unknown element types. Renders headless
 // ImGui frames (no window, no backend) through the test harness (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
@@ -9,7 +9,6 @@ import imgui;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.frame_request;
-import imlui.ui.renderer;
 import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.frame;
@@ -18,7 +17,6 @@ import imlui.types.registry;
 import imlui.test.headless_frame;
 
 using namespace imlui;
-using luaui::Node;
 
 namespace {
 
@@ -136,8 +134,8 @@ private:
 class FrameTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // A built-in-style handler of the same name, registered first, like the Engine does: the type replaces it.
-        m_h.renderer().registerElement("Leaf", [this](Renderer&, const Node&) { ++m_lambdaRenders; });
+        // Registered under "Leaf" first, like a built-in an app replaces: the later registration wins.
+        m_h.registerType<Tick>("Leaf");
         m_h.registerType<Leaf>("Leaf");
         m_h.registerType<Leaf>("Block"); // alias
         m_h.registerType<Tick>("Tick");
@@ -157,7 +155,6 @@ protected:
     }
 
     test::HeadlessFrame m_h;
-    int m_lambdaRenders = 0;
 };
 
 } // namespace
@@ -218,12 +215,22 @@ TEST_F(FrameTest, AsSyncsChangedPropertiesBeforeTheParentReadsThem) {
     EXPECT_EQ(instance<Row>("root")->seen[0].lastWidth, 40.0f);
 }
 
-TEST_F(FrameTest, TypesReplaceHandlersOfTheSameName) {
+TEST_F(FrameTest, ALaterRegistrationReplacesATypeOfTheSameName) {
     run("root = Row { Leaf { w = 7 } }");
     renderFrame("root");
     renderFrame("root");
-    EXPECT_EQ(m_lambdaRenders, 0);
-    EXPECT_EQ(instance<Row>("root")->seen[0].lastWidth, 7.0f); // the typed Leaf rendered
+    ASSERT_EQ(instance<Row>("root")->seen.size(), 1u);
+    EXPECT_TRUE(instance<Row>("root")->seen[0].visual);         // a Leaf, not the non-visual Tick
+    EXPECT_EQ(instance<Row>("root")->seen[0].lastWidth, 7.0f); // the Leaf rendered
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(FrameTest, UnknownElementTypesAreReported) {
+    run("root = Row { Leaf { w = 7 }, Nope { } }");
+    renderFrame("root");
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find("unknown element type 'Nope'"), std::string::npos);
+    EXPECT_EQ(instance<Row>("root")->seen.size(), 2u); // still a child: it just doesn't render
 }
 
 TEST_F(FrameTest, AliasesAreSeparateNamesForOneClass) {

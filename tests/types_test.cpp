@@ -8,7 +8,6 @@ import imlui.color;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.frame_request;
-import imlui.ui.renderer;
 import imlui.types.lua_convert;
 import imlui.types.script_object;
 import imlui.types.element;
@@ -213,8 +212,7 @@ protected:
         return dynamic_cast<Probe*>(e);
     }
 
-    Renderer m_renderer;
-    TypeRegistry m_types{m_renderer};
+    TypeRegistry m_types;
     Backend m_backend;
     lua::State* m_state = nullptr;
 };
@@ -521,8 +519,7 @@ TEST_F(TypesTest, AssigningNilToASingletonPropertyResetsIt) {
 TEST(SharedSingletonTest, TheRegistryKeepsASharedSingletonAlive) {
     std::weak_ptr<Backend> weak;
     {
-        Renderer renderer;
-        TypeRegistry types{renderer};
+        TypeRegistry types;
         {
             auto backend = std::make_shared<Backend>();
             weak = backend;
@@ -545,8 +542,7 @@ TEST(SharedSingletonTest, TheRegistryKeepsASharedSingletonAlive) {
 }
 
 TEST(OverloadTest, PicksOverloadsByParameterTypes) {
-    Renderer renderer;
-    TypeRegistry types{renderer};
+    TypeRegistry types;
     Shape shape;
     types.registerSingleton("shape", shape);
     lua::State* state = lua::newstate();

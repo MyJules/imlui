@@ -1,15 +1,15 @@
 // Renderer: walks the Lua element tree every frame and draws it with ImGui
 // (through the Material widgets in imlui.widgets).
 //
-// Each element type ("Button", "Column", ...) maps to a handler registered
-// with Renderer::registerElement(). The built-in elements live in
-// imlui.ui.elements; apps can add their own C++ elements the same way.
+// Every element type ("Button", "Column", ...) is a typed Element registered with the TypeRegistry, which the
+// Renderer reaches through the Renderer::Types interface (the registry implements it; this module can't import
+// the registry, whose Frames render children through the Renderer). render() wraps each element (visible,
+// enabled, layout group, tooltip, ID scope) and lets the registry sync and render its instance.
 module;
 
 #include <algorithm>
-#include <functional>
-#include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 
 export module imlui.ui.renderer;
@@ -24,16 +24,25 @@ import imlui.ui.props;
 
 export namespace imlui {
 
-class Renderer;
-using ElementFn = std::function<void(Renderer&, const luaui::Node&)>;
-
 class Renderer {
 public:
-    Renderer() = default;
+    /// The element types the renderer dispatches to, by type name (`__type`). TypeRegistry implements it.
+    class Types {
+    public:
+        /// Whether a type is registered under a name, and whether it takes layout space.
+        enum class Kind { Unknown, Visual, NonVisual };
 
-    /// Adds (or replaces) an element type. `visual == false` elements (e.g.
-    /// Timer, Dialog) take no layout space.
-    void registerElement(std::string name, ElementFn fn, bool visual = true);
+        /// What `type` is.
+        [[nodiscard]] virtual Kind kind(std::string_view type) const = 0;
+        /// Syncs and renders the element `node`, of a registered type. Runs inside the renderer's per-element
+        /// wrapper.
+        virtual void renderElement(Renderer& renderer, const luaui::Node& node) = 0;
+
+        virtual ~Types() = default;
+    };
+
+    /// `types` must outlive the renderer.
+    explicit Renderer(Types& types);
 
     /// Native window title: the root ApplicationWindow's `title` prop, else the
     /// last ui.setTitle(), else "imlui".
@@ -41,7 +50,7 @@ public:
     void setWindowTitle(std::string title);
 
     /// Renders the element at stack index `idx`. Returns false if it was
-    /// hidden (visible = false) or unknown.
+    /// hidden (visible = false) or of an unknown type ("unknown element type" is reported).
     bool render(lua::State* state, int idx);
 
     /// Calls f(stackIndex) for every child element. Children come from the
@@ -88,7 +97,7 @@ public:
 
     void renderChildren(const luaui::Node& node);
 
-    /// True unless the element at `idx` is a registered non-visual type.
+    /// True unless the element at `idx` is of a registered non-visual type (Timer, Dialog, ...).
     [[nodiscard]] bool isVisual(lua::State* state, int idx) const;
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
@@ -100,11 +109,7 @@ public:
     void attachMenu(const luaui::Node& node, bool clicked);
 
 private:
-    struct Entry {
-        ElementFn fn;
-        bool visual = true;
-    };
-    std::map<std::string, Entry, std::less<>> m_elements;
+    Types& m_types;
     std::string m_title{"imlui"};
 };
 
@@ -116,9 +121,7 @@ namespace imlui {
 
 using luaui::Node;
 
-void Renderer::registerElement(std::string name, ElementFn fn, bool visual) {
-    m_elements[std::move(name)] = Entry{std::move(fn), visual};
-}
+Renderer::Renderer(Types& types) : m_types{types} {}
 
 const std::string& Renderer::windowTitle() const { return m_title; }
 void Renderer::setWindowTitle(std::string title) { m_title = std::move(title); }
@@ -126,9 +129,9 @@ void Renderer::setWindowTitle(std::string title) { m_title = std::move(title); }
 bool Renderer::render(lua::State* state, int idx) {
     lua::checkstack(state, 32);
     Node n{state, idx};
-    std::string type = n.type();
-    auto it = m_elements.find(type);
-    if (it == m_elements.end()) {
+    const std::string type = n.type();
+    const Types::Kind kind = m_types.kind(type);
+    if (kind == Types::Kind::Unknown) {
         luaui::reportError("unknown element type '" + type + "'");
         return false;
     }
@@ -138,9 +141,9 @@ bool Renderer::render(lua::State* state, int idx) {
     if (disabled) ImGui::BeginDisabled();
     // Every visual element is exactly one layout item (a group), so
     // composite elements (label + field, ...) behave inside Rows.
-    const bool visual = it->second.visual;
+    const bool visual = kind == Types::Kind::Visual;
     if (visual) ImGui::BeginGroup();
-    it->second.fn(*this, n);
+    m_types.renderElement(*this, n);
     if (visual) ImGui::EndGroup();
     if (n.has("tooltip")) md::tooltip(n.string("tooltip"));
     if (disabled) ImGui::EndDisabled();
@@ -153,9 +156,7 @@ void Renderer::renderChildren(const Node& node) {
 }
 
 bool Renderer::isVisual(lua::State* state, int idx) const {
-    Node c{state, idx};
-    auto it = m_elements.find(c.type());
-    return it == m_elements.end() || it->second.visual;
+    return m_types.kind(Node{state, idx}.type()) != Types::Kind::NonVisual;
 }
 
 void Renderer::renderStack(const Node& node) {
