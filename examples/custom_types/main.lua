@@ -1,6 +1,6 @@
 -- C++ types from Lua: run with imlui_custom_types (it registers Gauge and the `backend` singleton).
---   Gauge    an element type written in C++ (examples/custom_types/gauge.cppm)
---   backend  a singleton object (examples/custom_types/system_info.cppm)
+--   Gauge    an element type written in C++ (gauge.cppm in this folder)
+--   backend  a singleton object (system_info.cppm in this folder)
 
 local s = state { level = 0.4, peaks = 0, ticks = 0, last = "" }
 

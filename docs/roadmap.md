@@ -13,7 +13,7 @@ records what landed.
 - Type aliases (Column/Item, Text/Label, ...) and subclass `declare` chaining (TextArea extends TextField).
 - Baseline screenshots of every gallery page (desktop and phone size) plus `regress.ps1` for visual regression checks.
 
-## 2a. Examples reorganization
+## 2a. Examples reorganization *(done)*
 
 Each example is one self-contained folder holding all of its code:
 

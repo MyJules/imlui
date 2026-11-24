@@ -465,7 +465,9 @@ the C++ instance whenever the name is a registered type.)
 
 ## The example app
 
-`examples/custom_types/` builds the executable `imlui_custom_types`, which runs `examples/custom_types.lua`:
+`examples/custom_types/` is a self-contained folder with all of the example's code: `CMakeLists.txt`, `main.cpp`,
+`gauge.cppm`, `system_info.cppm` and the UI script `main.lua`. It builds the executable `imlui_custom_types`, which
+runs that `main.lua`:
 
 ```sh
 cmake --build build/clang-debug --target imlui_custom_types
@@ -473,8 +475,9 @@ build/clang-debug/bin/imlui_custom_types
 ```
 
 - `main.cpp` is an import-only translation unit (per CODE_STYLE). It registers the types and calls
-  `defaultConfig(argc, argv, IMLUI_SOURCE_DIR, "custom_types.lua")`, so the script hot-reloads from the source
-  tree in dev builds.
+  `defaultConfig(argc, argv, IMLUI_SOURCE_DIR, IMLUI_EXAMPLE_SCRIPT)`. `IMLUI_EXAMPLE_SCRIPT` is set by the
+  folder's `CMakeLists.txt` to `examples/custom_types/main.lua`, relative to the root `defaultConfig` picks: the
+  source tree in dev builds, so the script hot-reloads from there, otherwise the binary's folder.
 - `gauge.cppm` (module `example.gauge`): **`Gauge`**, a Material arc gauge drawn with `md::strokeArc`,
   `md::textTop` and `md::animate`. Properties `value`, `min`, `max`, `label`, `size`, signal `onPeak` (fired by the
   setter when the value rises past `0.9 * max`), method `reset()`, default property `value`. Clicking a gauge
@@ -483,8 +486,10 @@ build/clang-debug/bin/imlui_custom_types
 - `system_info.cppm` (module `example.system_info`): **`SystemInfo`**, the singleton `backend`. Read-only
   `time`, `frame` and `load`, read/write `paused`, signal `onTick`, method `tick()`. A worker thread posts
   `tick()` to the main thread twice a second with `Engine::post`.
-- The CMake target lists both module files in its own `CXX_MODULES` file set, links `imlui`, and copies `lua/`,
-  `examples/` and the fonts next to the binary, like `imlui_app`.
+- `CMakeLists.txt` (added by `examples/CMakeLists.txt` when `IMLUI_BUILD_EXAMPLES` is `ON`, the default) lists
+  both module files in the target's own `CXX_MODULES` file set, links `imlui`, and copies `lua/`, the fonts and
+  `main.lua` (to `examples/custom_types/main.lua`) next to the binary. A new example with C++ follows the same
+  pattern: a folder with its own `CMakeLists.txt`, plus one `add_subdirectory` line in `examples/CMakeLists.txt`.
 
 ## Reference
 

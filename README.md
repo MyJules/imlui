@@ -30,8 +30,8 @@ Full docs are in [`docs/`](docs/README.md): [getting started](docs/getting-start
 ```
 cmake --preset clang-debug
 cmake --build build/clang-debug
-build/clang-debug/bin/imlui_app                      # gallery
-build/clang-debug/bin/imlui_app examples/counter.lua
+build/clang-debug/bin/imlui_app                      # gallery (examples/gallery/main.lua)
+build/clang-debug/bin/imlui_app examples/counter/main.lua
 build/clang-debug/bin/imlui_custom_types             # C++ element types and a singleton (docs/extending.md)
 ```
 
@@ -62,7 +62,7 @@ tree, so you don't need to rebuild.
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |
 | `lua/imlui.lua` | the DSL: elements, `state`, `bind`, `Repeater`, `theme`, timers |
-| `examples/` | `gallery.lua` (every element and a live theme editor), `counter.lua`, `StatCard.lua`, `custom_types.lua` with `custom_types/` (the `imlui_custom_types` app: a C++ `Gauge` element and a `backend` singleton) |
+| `examples/` | one self-contained folder per example ([examples/README.md](examples/README.md)): `gallery/` (every element and a live theme editor, with the `StatCard` component), `counter/`, `custom_types/` (the `imlui_custom_types` app: a C++ `Gauge` element, a `backend` singleton and its `main.lua`) |
 
 ## Concepts
 

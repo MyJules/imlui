@@ -29,8 +29,9 @@ cmake --build --preset clang-debug    # same as: cmake --build build/clang-debug
 | `clang-debug` | `build/clang-debug` | Debug |
 | `clang-release` | `build/clang-release` | Release |
 
-The app is `build/<preset>/bin/imlui_app` (`.exe` on Windows). After each build, `lua/`, `examples/` and the fonts
-are copied next to the executable, so the `bin/` folder runs on its own.
+The app is `build/<preset>/bin/imlui_app` (`.exe` on Windows). After each build, `lua/`, the fonts and the
+Lua-only examples (`examples/gallery/`, `examples/counter/`) are copied next to the executable, so the `bin/` folder
+runs on its own. Examples with C++ code have their own executables (see [examples/README.md](../examples/README.md)).
 
 Every `src/**/*.cppm` file is picked up by a `CONFIGURE_DEPENDS` glob, so adding or removing a module needs no
 CMake edits. `compile_commands.json` is always exported, which clangd, clice and clang-tidy use.
@@ -38,8 +39,16 @@ CMake edits. `compile_commands.json` is always exported, which clangd, clice and
 ## Run
 
 ```sh
-build/clang-debug/bin/imlui_app                        # the gallery (examples/gallery.lua)
-build/clang-debug/bin/imlui_app examples/counter.lua   # any script; paths are relative to the current dir
+build/clang-debug/bin/imlui_app                              # the gallery (examples/gallery/main.lua)
+build/clang-debug/bin/imlui_app examples/counter/main.lua    # any script
+```
+
+A relative script path is taken relative to the current directory. If no such file exists there, it is looked up
+under the source tree (dev builds) or next to the executable, so `imlui_app examples/counter/main.lua` works from
+any directory.
+
+```sh
+build/clang-debug/bin/imlui_custom_types                     # an example with C++ types (docs/extending.md)
 ```
 
 The gallery shows every element and has a live theme editor on its *Theme* page. Set `GALLERY_PAGE=n` to open
@@ -70,7 +79,7 @@ cmake --preset clang-debug -DIMLUI_DEV_PATHS=OFF
 
 | `IMLUI_DEV_PATHS` | Effect |
 |---|---|
-| `ON` (default) | The app is compiled with `IMLUI_SOURCE_DIR` set to the source tree. `lua/imlui.lua` and the default script (`examples/gallery.lua`) are read from the source tree, so editing them hot-reloads without rebuilding. |
+| `ON` (default) | The app is compiled with `IMLUI_SOURCE_DIR` set to the source tree. `lua/imlui.lua` and the default script (`examples/gallery/main.lua`) are read from the source tree, and so are relative script paths such as `examples/counter/main.lua`, so editing them hot-reloads without rebuilding. |
 | `OFF` | Everything is read from the copies next to the executable. Use this for a build you move or ship. |
 
 Fonts are always loaded from `fonts/` next to the executable.
@@ -119,7 +128,7 @@ How it works:
   global in the script. See [Lua API](lua-api.md).
 - `function() ... end` property values are **bindings** that are evaluated again every frame. `bind(s, "name")`
   is a **two-way binding**: typing in the field writes `s.name`.
-- To reuse a piece of UI, put it in its own file next to the script and `require` it. See `examples/StatCard.lua`
-  and [components](lua-api.md#components-and-require).
+- To reuse a piece of UI, put it in its own file next to the script and `require` it. See
+  `examples/gallery/StatCard.lua` and [components](lua-api.md#components-and-require).
 
 Next: [Elements](elements.md) for all props, and [Theming](theming.md) for colors and typography.
