@@ -38,6 +38,7 @@ import imlui.lua.painter;
 import imlui.lua.resources;
 import imlui.resources;
 import imlui.resources.directory_mount;
+import imlui.theme.font_library;
 import imlui.theme.icons;
 import imlui.theme.typography;
 import imlui.ui.frame_request;
@@ -165,6 +166,7 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
 HeadlessFrame::~HeadlessFrame() {
     // The Lua state first: closing it destroys the element instances and detaches the singletons.
     if (m_state) lua::close(m_state);
+    clearFontLibrary(); // its fonts are this context's, its resources this harness's
     ImGui::DestroyContext(m_context);
     luaui::clearErrors();
     clearFrameRequests();

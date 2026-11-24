@@ -336,6 +336,12 @@ end
       colors    = { primary = "#FF5722", surface = "#101010" },   -- override any role
       imgui     = { WindowBg = "#000000" },                      -- override raw ImGuiCol_*
       style     = { FrameRounding = 6, ItemSpacing = { 10, 6 } }, -- override raw ImGuiStyle fields
+      fonts     = {                                              -- resource names; unset: Roboto
+          regular  = "app:/fonts/Inter-Regular.ttf",   -- type-scale faces
+          medium   = "app:/fonts/Inter-Medium.ttf",
+          fallback = { "app:/fonts/NotoSansJP.otf" },  -- merged into every text font for missing glyphs
+          mono     = "app:/fonts/JetBrainsMono.ttf",   -- any other key: a named font, Text { font = "mono" }
+      },
   }
   Returns the resulting color scheme { primary = "#...", ... }.
   Color props everywhere accept a role name ("primary"), role with alpha

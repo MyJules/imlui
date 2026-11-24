@@ -9,6 +9,7 @@ export module imlui.lua.theme_table;
 import lua;
 import lua.stack_guard;
 import imlui.color;
+import imlui.theme.font_library;
 import imlui.theme.scheme;
 import imlui.theme.theme;
 import imlui.lua.errors;
@@ -18,6 +19,10 @@ export namespace imlui::luaui {
 
 /// Builds a Theme from a Lua table (see docs in lua/imlui.lua `ui.theme`).
 Theme themeFromTable(lua::State* state, int idx);
+
+/// Reads the `fonts` field of the theme table at `idx` into `fonts` (names only; nothing is loaded), reporting
+/// malformed entries.
+void readFonts(lua::State* state, int idx, FontSet& fonts);
 
 /// Pushes { primary = "#RRGGBB", ... } for `s`.
 void pushScheme(lua::State* state, const Scheme& s);
@@ -128,7 +133,58 @@ Theme themeFromTable(lua::State* state, int idx) {
         }
     }
     lua::pop(state);
+
+    readFonts(state, idx, t.fonts);
     return t;
+}
+
+void readFonts(lua::State* state, int idx, FontSet& fonts) {
+    idx = lua::absindex(state, idx);
+    lua::StackGuard guard{state};
+    // fonts = { regular = "app:/...", medium = ..., fallback = { ... }, mono = "app:/..." }. Only the names are
+    // read here; native.setTheme loads the fonts (loadFontSet()).
+    const lua::Type type = lua::getfield(state, idx, "fonts");
+    if (type == lua::Type::Nil) return;
+    if (type != lua::Type::Table) {
+        reportError("theme.fonts: expected a table");
+        return;
+    }
+    const int ft = lua::gettop(state);
+    lua::pushnil(state);
+    while (lua::next(state, ft)) {
+        if (lua::type(state, -2) != lua::Type::String) {
+            reportError("theme.fonts: keys must be font names");
+            lua::pop(state);
+            continue;
+        }
+        std::string key{lua::tostring(state, -2)};
+        const bool isName = lua::type(state, -1) == lua::Type::String;
+        if (key == "fallback") {
+            if (isName) {
+                fonts.fallback.emplace_back(lua::tostring(state, -1));
+            } else if (lua::istable(state, -1)) {
+                const lua::Integer n = lua::rawlen(state, -1);
+                for (lua::Integer i = 1; i <= n; ++i) {
+                    if (lua::rawgeti(state, -1, i) == lua::Type::String)
+                        fonts.fallback.emplace_back(lua::tostring(state, -1));
+                    else
+                        reportError("theme.fonts.fallback[" + std::to_string(i) + "]: expected a resource name");
+                    lua::pop(state);
+                }
+            } else {
+                reportError("theme.fonts.fallback: expected a resource name or a list of them");
+            }
+        } else if (!isName) {
+            reportError("theme.fonts." + key + ": expected a resource name such as \"app:/fonts/Inter.ttf\"");
+        } else if (key == "regular") {
+            fonts.regular = lua::tostring(state, -1);
+        } else if (key == "medium") {
+            fonts.medium = lua::tostring(state, -1);
+        } else {
+            fonts.named.insert_or_assign(std::move(key), std::string{lua::tostring(state, -1)});
+        }
+        lua::pop(state);
+    }
 }
 
 void pushScheme(lua::State* state, const Scheme& s) {

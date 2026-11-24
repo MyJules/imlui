@@ -7,6 +7,7 @@ module;
 export module imlui.ui.elements.text;
 
 import imlui.color;
+import imlui.theme.font_face_scope;
 import imlui.theme.typography;
 import imlui.widgets;
 import imlui.types.element;
@@ -18,7 +19,8 @@ export namespace imlui {
 /// A line or paragraph of text (also registered as Label).
 ///
 /// Props:   text = "" (positional), style = "bodyLarge", color = unset (the theme's text color), wrap = false,
-///          align = "start" ("center", "end"; ignored while wrapping)
+///          align = "start" ("center", "end"; ignored while wrapping), font = "" (a font the theme declares,
+///          drawn at the style's size; "" keeps the type scale's face)
 class Text final : public Element {
 public:
     static void declare(TypeBuilder<Text>& type);
@@ -37,6 +39,10 @@ public:
     /// "start", "center" or "end": the line's position in the available width.
     [[nodiscard]] const std::string& align() const;
     void setAlign(std::string align);
+    /// A font name the theme declares (`ui.theme { fonts = { mono = ... } }`), "regular" or "medium"; "" (the
+    /// default) draws in the style's own face, and so do names the theme doesn't declare.
+    [[nodiscard]] const std::string& font() const;
+    void setFont(std::string font);
 
     /// The style drawn (`style` resolved).
     [[nodiscard]] TextStyle textStyle() const;
@@ -48,6 +54,7 @@ private:
     std::optional<Color> m_color;
     bool m_wrap = false;
     std::string m_align = "start";
+    std::string m_font;
 };
 
 } // namespace imlui
@@ -62,10 +69,14 @@ void Text::declare(TypeBuilder<Text>& type) {
         .property("color", &Text::color, &Text::setColor)
         .property("wrap", &Text::wrap, &Text::setWrap)
         .property("align", &Text::align, &Text::setAlign)
+        .property("font", &Text::font, &Text::setFont)
         .defaultProperty("text");
 }
 
-void Text::render(Frame&) { md::text(m_text, m_textStyle, m_color, m_wrap, Frame::alignFactor(m_align)); }
+void Text::render(Frame&) {
+    FontFaceScope face{m_font};
+    md::text(m_text, m_textStyle, m_color, m_wrap, Frame::alignFactor(m_align));
+}
 
 const std::string& Text::text() const { return m_text; }
 void Text::setText(std::string text) { m_text = std::move(text); }
@@ -80,6 +91,8 @@ bool Text::wrap() const { return m_wrap; }
 void Text::setWrap(bool wrap) { m_wrap = wrap; }
 const std::string& Text::align() const { return m_align; }
 void Text::setAlign(std::string align) { m_align = std::move(align); }
+const std::string& Text::font() const { return m_font; }
+void Text::setFont(std::string font) { m_font = std::move(font); }
 TextStyle Text::textStyle() const { return m_textStyle; }
 
 } // namespace imlui

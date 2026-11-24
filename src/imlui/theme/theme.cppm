@@ -19,6 +19,7 @@ export module imlui.theme.theme;
 import imgui;
 import imlui.color;
 import imlui.theme.dpi;
+import imlui.theme.font_library;
 import imlui.theme.scheme;
 
 export namespace imlui {
@@ -45,6 +46,7 @@ struct Theme {
     float fontScale = 1.0f;
     std::vector<std::pair<int, Color>> imguiColors; ///< ImGuiCol index -> color
     std::vector<StyleOverride> style;               ///< ImGuiStyle field overrides
+    FontSet fonts;                                  ///< type-scale faces, named fonts and fallbacks
 };
 
 /// The theme currently in effect.
@@ -54,7 +56,7 @@ struct Theme {
 /// (safe to call from inside a frame, e.g. from a Lua click handler).
 void setTheme(Theme t);
 
-/// Applies a pending theme; call between frames. Returns true if it changed.
+/// Applies a pending theme, its fonts included (useFontSet()); call between frames. Returns true if it changed.
 bool applyPendingTheme();
 
 /// Re-applies the current theme to ImGuiStyle at the current dpiScale() (after a
@@ -263,6 +265,7 @@ bool applyPendingTheme() {
     currentTheme = std::move(*pendingTheme);
     pendingTheme.reset();
     applyNow(currentTheme);
+    useFontSet(currentTheme.fonts);
     return true;
 }
 

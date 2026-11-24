@@ -104,7 +104,8 @@ Order, one commit per step:
 2. Embedded mounts, `imlui_add_resources` and zstd. The library embeds its own Lua and fonts.
 3. Self-contained examples, and a test that runs a release build without the source tree.
 4. `.pak` mounts and the `imlui_pack` tool.
-5. Fonts declared from Lua.
+5. *(done)* Fonts declared from Lua: `theme { fonts = { regular, medium, fallback, <name> } }`, a `font` prop on
+   `Text`/`Label`/`Button`, `p:text(..., font)`, `textSize(..., font)`.
 6. The PNG/JPG `Image` element.
 
 ## Next

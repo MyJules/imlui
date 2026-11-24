@@ -584,6 +584,7 @@ ApplicationWindow { menuBar = MenuBar {
 | `color` | color | — | Text color. Unset: the theme's text color (`onSurface`). |
 | `wrap` | bool | `false` | Wraps at the available width. |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. |
+| `font` | string | `""` | A [font the theme declares](theming.md#fonts) (`"mono"`, or `"regular"` / `"medium"`), drawn at the style's size. `""` or an undeclared name: the style's own face. |
 
 ### Icon
 
@@ -637,6 +638,7 @@ A Material button.
 | `text` | string | `""` | Positional. Label (`labelLarge`). |
 | `variant` | `"filled"` \| `"tonal"` \| `"outlined"` \| `"text"` \| `"elevated"` \| `"fab"` | `"filled"` | Material emphasis. `fab` is a `primaryContainer` FAB: with empty `text` a 56dp square, otherwise an extended FAB. |
 | `icon` | icon | `""` | Leading icon (18dp, or 24dp on a FAB). |
+| `font` | string | `""` | The label's [font](theming.md#fonts), as on `Text`. |
 | `width` | size | `0` (natural, at least 48dp) | *Raw.* |
 | `height` | size | `0` (40dp, FAB 56dp) | *Raw.* |
 | `menu` | element | — | *Raw.* A [`Menu`](#menu) opened on click. |
@@ -972,7 +974,7 @@ use ImGui's anti-aliased lines.
 | `p:line(x1, y1, x2, y2, color, thickness)` | `color = "onSurface"`, `thickness = 1` |
 | `p:rect(x, y, w, h, color, rounding, outline, thickness)` | `color = "primary"`, `rounding = 0`, `outline = false` (filled), `thickness = 1` |
 | `p:circle(cx, cy, r, color, outline, thickness)` | `color = "primary"`, `outline = false` (filled), `thickness = 1` |
-| `p:text(x, y, text, color, style)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"` |
+| `p:text(x, y, text, color, style, font)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"`, `font` = a [named font](theming.md#fonts) (unset: the style's face) |
 | `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"` |
 | `p:polyline({x1, y1, x2, y2, ...}, color, thickness, closed)` | `color = "primary"`, `thickness = 1`, `closed = false` |
 

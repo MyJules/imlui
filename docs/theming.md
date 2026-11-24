@@ -1,8 +1,8 @@
 # Theming
 
 The theme is plain data, decided in Lua. `theme{...}` builds an `imlui::Theme`, which holds a Material 3 color
-scheme generated from one seed color, a shape scale, spacing and font scale. It can also override any color role,
-any raw `ImGuiCol_*` color and many `ImGuiStyle` fields. The engine applies it **between frames**. Scripts start
+scheme generated from one seed color, a shape scale, spacing, font scale and the text fonts. It can also override
+any color role, any raw `ImGuiCol_*` color and many `ImGuiStyle` fields. The engine applies it **between frames**. Scripts start
 from the default theme on every (re)load: seed `#6750A4`, dark, `preset = "material"`.
 
 ## The theme table
@@ -17,7 +17,8 @@ theme {
     shape     = { extraSmall = 4, small = 8, medium = 12, large = 16, extraLarge = 28 },
     colors    = { primary = "#FF5722", surface = "surfaceContainerLow" }, -- override any color role
     imgui     = { WindowBg = "#101010" },                      -- override any ImGuiCol_*
-    style     = { FrameRounding = 6, ItemSpacing = { 10, 6 } } -- override ImGuiStyle fields
+    style     = { FrameRounding = 6, ItemSpacing = { 10, 6 } }, -- override ImGuiStyle fields
+    fonts     = { regular = "app:/fonts/Inter-Regular.ttf", mono = "app:/fonts/JetBrainsMono.ttf" }, -- see Fonts
 }
 ```
 
@@ -32,6 +33,7 @@ theme {
 | `colors` | `{ role = color }` | — | Overrides generated roles. Values are [color specs](#color-specs); role names refer to the scheme generated from this table's `seed`/`dark` (before any overrides). An unknown role or invalid color reports an error. |
 | `imgui` | `{ ImGuiColName = color }` | — | Raw ImGui color overrides by name (`"WindowBg"`, `"Text"`, ...), applied after the preset. Values are [color specs](#color-specs), with roles from this table's generated scheme. An unknown name or invalid color reports an error. |
 | `style` | `{ Field = n \| {x, y} }` | — | Raw `ImGuiStyle` overrides, applied after the preset. An unknown field reports an error. |
+| `fonts` | `{ key = resource name }` | Roboto | The type scale's faces, named fonts and glyph fallbacks. See [Fonts](#fonts). |
 
 `style` accepts these fields: `Alpha`, `DisabledAlpha`, `WindowPadding`, `WindowRounding`, `WindowBorderSize`,
 `WindowMinSize`, `WindowTitleAlign`, `ChildRounding`, `ChildBorderSize`, `PopupRounding`, `PopupBorderSize`,
@@ -129,7 +131,8 @@ scheme generated from that table's seed, so `colors = { surface = "surfaceContai
 ## Typography
 
 The Material 3 type scale, with Roboto **Regular** and **Medium**. Use these names for `Text { style = ... }`,
-`textSize(text, style)` and `p:text(..., style)`.
+`textSize(text, style)` and `p:text(..., style)`. The weights' faces can be replaced, and other fonts added, from
+the theme (see [Fonts](#fonts)).
 
 | Style | Size (dp) | Weight |
 |---|---|---|
@@ -151,7 +154,42 @@ The Material 3 type scale, with Roboto **Regular** and **Medium**. Use these nam
 
 Final pixel size = size × `fontScale` × DPI scale. ImGui 1.92 rasterizes glyphs on demand at each size, so one
 font file per weight covers everything. If a Roboto file is missing, a warning is logged and ImGui's default font
-is used.
+is used. A theme can replace both faces with the app's own typeface (see [Fonts](#fonts)).
+
+## Fonts
+
+`theme { fonts = { ... } }` declares the app's text fonts by [resource name](lua-api.md#resources) (full names,
+such as `"app:/fonts/Inter-Regular.ttf"`; TrueType or OpenType files):
+
+```lua
+theme {
+    fonts = {
+        regular  = "app:/fonts/Inter-Regular.ttf",  -- the Regular face of the type scale
+        medium   = "app:/fonts/Inter-Medium.ttf",   -- the Medium face (titles, labels, buttons)
+        fallback = { "app:/fonts/NotoSansJP-Regular.otf" }, -- or one name as a string
+        mono     = "app:/fonts/JetBrainsMono-Regular.ttf",  -- any other key: a named font
+    },
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `regular`, `medium` | Replace Roboto Regular / Medium for every text style of that weight, app-wide. Unset: Roboto. |
+| `fallback` | Fonts merged, in order, into every text font (the type-scale faces, built-in or not, and the named fonts), for the glyphs it lacks: other scripts, symbols. The icon font is separate and unaffected. |
+| any other key | A **named font**, drawn by elements with `font = "<key>"` (`Text`, `Label`, `Button`), by `p:text(..., style, font)` in a Canvas and measured by `textSize(text, style, font)`, at the size of their text style. `"regular"` and `"medium"` name the type-scale faces. |
+
+- **Loading.** `theme{}` loads the fonts at once (so problems are reported while the script runs) and switches to
+  them with the rest of the theme at the start of the next frame. Fonts are size-independent in ImGui 1.92, so one
+  file per face covers every style, `fontScale` and DPI. The font data is read through Resources without a copy,
+  so fonts embedded in the executable work the same as files.
+- **Errors.** A missing file, a file that isn't a font, a name without a prefix or a value that isn't a string is
+  reported in the error overlay (`theme.fonts.regular: font 'app:/fonts/Inter.ttf' not found`). The type-scale
+  face then stays Roboto, a named font draws in its style's face, and a missing fallback is left out.
+- **Unknown names.** An element whose `font` names no declared font draws in its style's face; the name is logged
+  once.
+- **Reuse and hot reload.** Each face (with its fallbacks) becomes one atlas font, reused while its file is
+  unchanged: re-applying a theme, `themeState` changes and script reloads don't add fonts. The declared font files
+  are watched in dev builds: editing one reloads the script and replaces its atlas font (the old one is removed).
 
 ## Icons
 

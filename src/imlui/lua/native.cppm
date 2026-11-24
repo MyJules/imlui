@@ -18,6 +18,8 @@ import imlui.color;
 import imlui.color.oklch;
 import imlui.color.tonal_palette;
 import imlui.theme.dpi;
+import imlui.theme.font_face_scope;
+import imlui.theme.font_library;
 import imlui.theme.typography;
 import imlui.theme.theme;
 import imlui.lua.errors;
@@ -121,6 +123,10 @@ constexpr NativeFn nativeFns[] = {
      [](lua::State* state) -> int {
          if (!lua::istable(state, 1)) lua::error(state, "setTheme expects a table");
          Theme t = themeFromTable(state, 1);
+         // Loaded now, so a missing or broken font is reported with the script still running; the theme
+         // switches to them when it is applied (between frames).
+         for (const auto& e : loadFontSet(t.fonts))
+             reportError("theme.fonts." + e);
          pushScheme(state, t.scheme);
          setTheme(std::move(t));
          return 1;
@@ -254,6 +260,7 @@ constexpr NativeFn nativeFns[] = {
          TextStyle st = TextStyle::BodyLarge;
          if (lua::type(state, 2) == lua::Type::String)
              if (auto t = textStyleFromName(lua::tostring(state, 2))) st = *t;
+         const FontFaceScope face{lua::type(state, 3) == lua::Type::String ? lua::tostring(state, 3) : ""};
          ImVec2 sz = font(st)->CalcTextSizeA(fontPixels(st), 3.4e38f, 0.0f, s.data(), s.data() + s.size());
          lua::pushnumber(state, static_cast<double>(sz.x / dpiScale()));
          lua::pushnumber(state, static_cast<double>(sz.y / dpiScale()));

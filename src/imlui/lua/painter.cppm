@@ -16,6 +16,7 @@ import lua;
 import imgui;
 import imlui.color;
 import imlui.theme.dpi;
+import imlui.theme.font_face_scope;
 import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.theme.theme;
@@ -118,6 +119,7 @@ int text(lua::State* state) {
     TextStyle st = TextStyle::BodyMedium;
     if (lua::type(state, 6) == lua::Type::String)
         if (auto t = textStyleFromName(lua::tostring(state, 6))) st = *t;
+    const FontFaceScope face{lua::type(state, 7) == lua::Type::String ? lua::tostring(state, 7) : ""};
     target->AddText(font(st), fontPixels(st), p, u32(c), s.data(), s.data() + s.size());
     return 0;
 }

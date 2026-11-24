@@ -288,7 +288,7 @@ See [Theming](theming.md) for the table fields and the color roles.
 
 | Function | Description |
 |---|---|
-| `theme(t) -> scheme` | Applies theme table `t` **at the start of the next frame**. Returns the scheme `t` produces, as `{ role = "#RRGGBB" }`. Also stores `t` in `ui.__theme`. |
+| `theme(t) -> scheme` | Applies theme table `t` **at the start of the next frame**. Returns the scheme `t` produces, as `{ role = "#RRGGBB" }`. Also stores `t` in `ui.__theme`. Fonts in `t.fonts` are loaded at once and errors reported (see [Fonts](theming.md#fonts)). |
 | `scheme() -> scheme` | The scheme of the theme **currently in effect**. Right after `theme{}` it still returns the old scheme until the next frame. |
 | `schemeFor(t) -> scheme` | The scheme `t` would produce, without applying it. |
 | `themeState(init) -> state` | A `state` that applies itself as the theme now and on every change. Bind controls straight to it. |
@@ -414,7 +414,7 @@ Script errors are logged at error level automatically.
 | `quit()` | Ends the frame loop and exits. |
 | `reload()` | Reloads the script before the next frame (like saving a file). |
 | `setTitle(title)` | Sets the native window title, unless the `ApplicationWindow` has a `title` prop. See the note below. |
-| `textSize(text, style?) -> w, h` | Size of `text` in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`). |
+| `textSize(text, style?, font?) -> w, h` | Size of `text` in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`), in a [named font](theming.md#fonts) when `font` is given. Uses the fonts in effect: right after `theme{}` the old ones until the next frame. |
 
 > **Note.** The native title comes from, in order: the root `ApplicationWindow`'s `title` prop (re-read every
 > frame, so it can be a binding), the last `setTitle()` call, and then the default `"imlui"`. A script that calls
@@ -448,7 +448,7 @@ it. The ones not wrapped are marked **native only**.
 | `native.sizeClassFor(w) -> name` | Backs `sizeClassFor()`. |
 | `native.setWindowSize(w, h)` | Backs `setWindowSize()`. |
 | `native.requestFrame(seconds?)` | Backs `requestFrame()`. Note: **seconds**, where `requestFrame` takes ms. |
-| `native.textSize(text, style?) -> w, h` | Backs `textSize()`. |
+| `native.textSize(text, style?, font?) -> w, h` | Backs `textSize()`. |
 | `native.setTitle(title)` | Backs `setTitle()`. |
 | `native.quit()` | Backs `quit()`. |
 | `native.reload()` | Backs `reload()`. |

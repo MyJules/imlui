@@ -9,8 +9,8 @@ module;
 export module imlui.theme.typography;
 
 import imgui;
-import imlui.log;
 import imlui.resources;
+import imlui.theme.font_library;
 
 export namespace imlui {
 
@@ -37,13 +37,15 @@ struct TextStyleInfo {
 /// The style named `name` ("bodyLarge", "titleSmall", ...).
 std::optional<TextStyle> textStyleFromName(std::string_view name);
 
-/// Loads Roboto Regular/Medium (`imlui:/fonts/Roboto-Regular.ttf`, `-Medium.ttf`) from `resources`. Fonts are
-/// rasterized on demand at any size (ImGui 1.92), so one source per weight is enough. The atlas doesn't copy the
-/// font data: it points into the bytes Resources::read returned, so `resources` (its mounts) must outlive the font
-/// atlas. Clears the font atlas; call before loadIcons() and before the first frame.
+/// Clears the font atlas, points the font library at `resources` (see resetFontLibrary()) and loads the built-in
+/// Roboto Regular/Medium (`imlui:/fonts/Roboto-Regular.ttf`, `-Medium.ttf`) as the faces in use. Fonts are
+/// rasterized on demand at any size (ImGui 1.92), so one source per weight is enough. `resources` (its mounts) must
+/// outlive the font atlas. Call before loadIcons() and before the first frame. A theme's FontSet replaces the faces
+/// when the theme is applied.
 void loadFonts(const Resources& resources);
 
-/// The font of style `s`; ImGui's current font before loadFonts() (e.g. in headless tests).
+/// The font of style `s`: the face override of the scope (FontFaceScope), else the theme's face for its weight;
+/// ImGui's current font before loadFonts().
 [[nodiscard]] ImFont* font(TextStyle s);
 /// Size to pass to ImGui::PushFont (dp, before global scale factors).
 [[nodiscard]] float fontSize(TextStyle s);
@@ -69,9 +71,6 @@ constexpr std::array<TextStyleInfo, static_cast<int>(TextStyle::Count)> textStyl
     {"labelLarge", 14, Weight::Medium}, {"labelMedium", 12, Weight::Medium}, {"labelSmall", 11, Weight::Medium},
 }};
 
-ImFont* regularFont = nullptr;
-ImFont* mediumFont = nullptr;
-
 } // namespace
 
 const TextStyleInfo& textStyleInfo(TextStyle s) { return textStyles[static_cast<std::size_t>(s)]; }
@@ -83,30 +82,14 @@ std::optional<TextStyle> textStyleFromName(std::string_view name) {
 }
 
 void loadFonts(const Resources& resources) {
-    ImFontAtlas* atlas = ImGui::GetIO().Fonts;
-    atlas->Clear();
-    auto load = [&](std::string_view name) -> ImFont* {
-        const auto bytes = resources.read(name);
-        if (!bytes || bytes->empty()) {
-            log::warn("font '{}' not found", name);
-            return nullptr;
-        }
-        ImFontConfig cfg;
-        // The bytes stay alive as long as the mount (see Mount::read), so the atlas needn't own a copy. ImGui only
-        // reads them, but its API takes a non-const pointer.
-        cfg.FontDataOwnedByAtlas = false;
-        return atlas->AddFontFromMemoryTTF(const_cast<std::byte*>(bytes->data()), static_cast<int>(bytes->size()),
-                                           16.0f, &cfg);
-    };
-    regularFont = load("imlui:/fonts/Roboto-Regular.ttf");
-    mediumFont = load("imlui:/fonts/Roboto-Medium.ttf");
-    if (!regularFont) regularFont = atlas->AddFontDefault();
-    if (!mediumFont) mediumFont = regularFont;
-    ImGui::GetIO().FontDefault = regularFont;
+    ImGui::GetIO().Fonts->Clear();
+    resetFontLibrary(resources);
+    useFontSet({});
 }
 
 ImFont* font(TextStyle s) {
-    ImFont* f = textStyleInfo(s).weight == Weight::Medium ? mediumFont : regularFont;
+    if (ImFont* f = faceOverride()) return f;
+    ImFont* f = textStyleInfo(s).weight == Weight::Medium ? mediumFace() : regularFace();
     return f ? f : ImGui::GetFont();
 }
 float fontSize(TextStyle s) { return textStyleInfo(s).size; }

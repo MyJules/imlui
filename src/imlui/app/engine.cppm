@@ -38,6 +38,7 @@ import imlui.log;
 import imlui.platform.window;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
+import imlui.theme.font_library;
 import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.theme.theme;
@@ -49,6 +50,7 @@ import imlui.lua.painter;
 import imlui.lua.resources;
 import imlui.resources;
 import imlui.resources.mount;
+import imlui.resources.name;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
@@ -117,6 +119,8 @@ private:
     void renderFrame();
     /// Applies a pending zoom and re-applies the theme when the effective scale changed.
     void syncScale();
+    /// Adds the fonts the current theme declares to the resources watched for hot reload.
+    void watchThemeFonts();
     /// Ctrl + =/+, Ctrl + -, Ctrl + 0 and Ctrl + wheel. Call after beginFrame().
     void handleZoomShortcuts();
     /// How long the loop may sleep before it has to check for changed files.
@@ -293,6 +297,7 @@ int Engine::run() {
     closeState(m_state);
     m_state = nullptr;
     m_window.destroy();
+    clearFontLibrary();
     return 0;
 }
 
@@ -333,11 +338,25 @@ void Engine::syncScale() {
     // applyPendingTheme() builds the style at the current scale, so only a
     // scale change without a new theme needs the current one re-applied.
     const bool applied = applyPendingTheme();
+    if (applied) watchThemeFonts();
     if (!applied && dpiScale() != m_themeScale) {
         log::info("scale {:.2f} (content scale {:.2f} x zoom {:.2f})", dpiScale(), contentScale(), zoom());
         reapplyTheme();
     }
     m_themeScale = dpiScale();
+}
+
+void Engine::watchThemeFonts() {
+    const FontSet& fonts = theme().fonts;
+    auto watch = [&](const std::string& name) {
+        if (const auto canonical = normalizeName(name)) m_loaded.insert(*canonical);
+    };
+    watch(fonts.regular);
+    watch(fonts.medium);
+    for (const auto& name : fonts.fallback)
+        watch(name);
+    for (const auto& [key, name] : fonts.named)
+        watch(name);
 }
 
 void Engine::handleZoomShortcuts() {
