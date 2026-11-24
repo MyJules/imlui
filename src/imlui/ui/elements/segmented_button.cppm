@@ -26,7 +26,7 @@ public:
     void setModel(std::vector<std::string> model);
     [[nodiscard]] const std::vector<std::string>& icons() const; ///< per-segment icons for unselected segments
     void setIcons(std::vector<std::string> icons);
-    /// 1-based. A double, like the handler wrote it back (Lua sees a float).
+    /// 1-based. Whole numbers reach Lua as integers (see LuaConvert).
     [[nodiscard]] double currentIndex() const;
     void setCurrentIndex(double index);
 

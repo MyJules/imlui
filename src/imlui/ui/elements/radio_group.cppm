@@ -26,7 +26,7 @@ public:
 
     [[nodiscard]] const std::vector<std::string>& model() const;
     void setModel(std::vector<std::string> model);
-    /// 1-based. A double, like the handler wrote it back (Lua sees a float).
+    /// 1-based. Whole numbers reach Lua as integers (see LuaConvert).
     [[nodiscard]] double currentIndex() const;
     void setCurrentIndex(double index);
     [[nodiscard]] bool horizontal() const;

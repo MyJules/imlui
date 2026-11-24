@@ -211,7 +211,7 @@ TEST_F(ControlsTest, RadioGroupWritesTheOneBasedIndexBackAndEmitsOnActivated) {
     run(R"(
         assert(s.index == 3, tostring(s.index))
         local a = s.activated[1]
-        assert(a.i == 3 and math.type(a.i) == "float", tostring(a.i))
+        assert(a.i == 3 and math.type(a.i) == "integer", tostring(a.i))
         assert(a.text == "Large"); assert(a.at == 3))");
     // The current item doesn't activate again.
     click(28, 108);
@@ -284,7 +284,7 @@ TEST_F(ControlsTest, SegmentedButtonWritesTheOneBasedIndexBackAndEmitsOnActivate
     run(R"(
         assert(s.index == 2, tostring(s.index))
         local a = s.activated[1]
-        assert(a.i == 2 and math.type(a.i) == "float"); assert(a.text == "Week"); assert(a.at == 2))");
+        assert(a.i == 2 and math.type(a.i) == "integer"); assert(a.text == "Week"); assert(a.at == 2))");
     click(308, 28);
     run("assert(#s.activated == 1, 'the current segment does not activate again')");
     expectNoErrors();
