@@ -12,11 +12,6 @@ imlui_set_warnings(imlui_custom_types)
 imlui_set_hardening(imlui_custom_types)
 
 # main.lua is embedded (app:/main.lua), so the binary runs on its own: the library embeds its Lua and fonts too.
-# In dev builds defaultConfig mounts this folder over it (hot reload): the script path below is relative to the
-# source tree. A main.lua at the same relative path next to the binary would override it in a release build.
+# In dev builds (IMLUI_DEV_PATHS=ON) the package knows this folder and defaultConfig mounts it over the embedded copy
+# (hot reload). In a release build, app/main.lua next to the binary would override it.
 imlui_add_resources(imlui_custom_types NAME custom_types PREFIX app BASE ${CMAKE_CURRENT_SOURCE_DIR} FILES main.lua)
-file(RELATIVE_PATH IMLUI_CUSTOM_TYPES_SCRIPT ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/main.lua)
-target_compile_definitions(imlui_custom_types PRIVATE IMLUI_EXAMPLE_SCRIPT="${IMLUI_CUSTOM_TYPES_SCRIPT}")
-if(IMLUI_DEV_PATHS)
-    target_compile_definitions(imlui_custom_types PRIVATE IMLUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-endif()

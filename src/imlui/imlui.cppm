@@ -38,6 +38,7 @@ export import imlui.resources.packed_mount;
 export import imlui.resources.embedded_mount;
 export import imlui.resources.pak_format;
 export import imlui.resources.pak_mount;
+export import imlui.resources.package;
 export import imlui.resources;
 export import imlui.image.decode;
 export import imlui.image.fill_mode;

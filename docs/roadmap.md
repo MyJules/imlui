@@ -86,8 +86,9 @@ Ship an app as one executable with its Lua scripts, fonts, images and data. Deci
 - **`.pak` format:** imlui's own simple format: a header, an index, then per-file blobs, using the same layout as
   embedded data. A small `imlui_pack` tool builds it from CMake.
 - **Release default:** with `IMLUI_DEV_PATHS=OFF`, everything is embedded, so the exe is self-contained. A
-  directory or `.pak` next to the exe can still override files. Dev builds mount the source tree over the embedded
-  data, so names resolve the same way and hot reload keeps working.
+  directory or `.pak` next to the exe can still override files. Dev builds mount each embedded block's source folder
+  (baked into its `ResourcePackage` by `imlui_add_resources`) over the embedded data, so names resolve the same way
+  and hot reload keeps working. Hosts name no file paths: the app is `app:/main.lua`.
 - **Lua:**
   - A `package.searchers` entry finds modules through `Resources`.
   - `ui.__load` and component loading go through it, with chunk names like `app:/main.lua`.
@@ -108,6 +109,8 @@ Order, one commit per step:
 5. *(done)* Fonts declared from Lua: `theme { fonts = { regular, medium, fallback, <name> } }`, a `font` prop on
    `Text`/`Label`/`Button`, `p:text(..., font)`, `textSize(..., font)`.
 6. *(done)* The PNG/JPG `Image` element.
+7. *(done)* Path-free hosts: `defaultConfig(argc, argv, {packages...})` with `ResourcePackage`s that carry their dev
+   source folder; `<exe folder>/<prefix>/` override folders; no `IMLUI_SOURCE_DIR`.
 
 ## Next
 

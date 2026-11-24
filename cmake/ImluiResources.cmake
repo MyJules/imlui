@@ -5,8 +5,10 @@
 #                       [NAME <name>] [MOUNT <folder>] [FILES <file>...] [DIRECTORY <dir>...])
 #
 #     Embeds files into <target>. Generates the module `imlui.embedded.<name>` (into the build tree) and adds it to
-#     <target>; it exports `imlui::embedded::<name>::mount(imlui::Resources&)`, which mounts the files at
-#     `<prefix>:/` (or `<prefix>:/<folder>/` with MOUNT), and `files()`, the EmbeddedMount itself.
+#     <target>; it exports `imlui::embedded::<name>::package()`, the imlui::ResourcePackage to pass to
+#     defaultConfig(): the files, their mount point `<prefix>:/` (or `<prefix>:/<folder>/` with MOUNT) and, when
+#     IMLUI_DEV_PATHS is ON, the absolute BASE folder, which defaultConfig() mounts over the embedded copy (hot
+#     reload; "" with IMLUI_DEV_PATHS=OFF). Also `mount(imlui::Resources&)` and `files()`, the EmbeddedMount itself.
 #       PREFIX     the resource prefix: `app`, `imlui`, a library's own
 #       BASE       the folder the resource paths are relative to (relative paths: to the current source dir)
 #       NAME       the module and namespace name: lowercase letters, digits, `_` (default: <target>, made so)
@@ -56,6 +58,11 @@ function(_imlui_resource_spec out name)
     list(SORT files)
 
     set(content "name=${name}\nmount=${point}\nbase=${base}\n")
+    # Dev builds bake the source folder into the generated module (ResourcePackage::sourceDir): defaultConfig()
+    # mounts it over the embedded copy, so editing a file hot-reloads. imlui_pack ignores it.
+    if(IMLUI_DEV_PATHS)
+        string(APPEND content "source=${base}\n")
+    endif()
     foreach(file IN LISTS files)
         string(APPEND content "file=${file}\n")
     endforeach()

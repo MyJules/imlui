@@ -307,9 +307,11 @@ suppressions. Run `clang-asan` before merging larger changes.
   `.pak` archives written by the `imlui_pack` code (`tools::packFiles`) and read by `PakMount` (every truncation,
   a bad magic or version, an escaping path and corrupt compressed data are rejected cleanly; an archive built by
   `imlui_add_pak` in `tests/CMakeLists.txt` opens), the override order embedded < `.pak` < directory, the library's
-  embedded files against the sources, and a release-style setup: `defaultConfig` with no source tree and nothing
-  next to the executable, then with a `.pak` and a loose `lua/` folder, and the harness on embedded data only
-  (`Options::embedded`). The tests link `imlui_pack_lib` for the writer.
+  embedded files and their packages against the sources, `defaultConfig` (release-style from embedded data alone;
+  `.pak` archives in name order under the `app/` and `imlui/` override folders next to the executable; a package's
+  dev source folder on top, skipped with `IMLUI_DEV_PATHS=0` or when missing; a script argument replacing every
+  `app:/` mount, relative paths falling back to the executable's folder), and the harness on embedded data only
+  (`Options::embedded`). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
 - **Smoke tests** (`smoke.imlui_app`, `smoke.imlui_custom_types`, `tests/smoke_run.cmake`) run each app like a
   shipped release: the executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
   empty folder under `build/<preset>/tests/smoke/` and started with `IMLUI_DEV_PATHS=0` and
@@ -321,7 +323,7 @@ suppressions. Run `clang-asan` before merging larger changes.
 | Variable | Effect |
 |---|---|
 | `IMLUI_EXIT_AFTER_FRAMES=n` | Quit after `n` rendered frames, with exit code 1 when a script error was reported (`EngineConfig::exitAfterFrames`, read by `defaultConfig`). For smoke runs. |
-| `IMLUI_DEV_PATHS=0` | Ignore the source tree compiled into a dev build (`IMLUI_SOURCE_DIR`): run from the embedded data and the files next to the executable, like a release build. |
+| `IMLUI_DEV_PATHS=0` | Ignore the source folders compiled into a dev build's embedded packages (`ResourcePackage::sourceDir`): run from the embedded data and the files next to the executable, like a release build. |
 | `GALLERY_PAGE=n` | Open the gallery on page `n`. |
 
 ### Resource tools

@@ -223,18 +223,28 @@ spans stay valid. Corrupt compressed data reads as a missing file and is logged.
 
 `defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
 
-1. **Embedded:** the library's own files, `imlui:/` (`lua/`) and `imlui:/fonts/` (Roboto, Material Icons, the
-   codepoints and the font licenses), always. Then the app's embedded files (`mountApp`, such as
-   `imlui::embedded::gallery::mount`), when no script is given on the command line.
+1. **Embedded:** the files of every `ResourcePackage` (module `imlui.resources.package`: a mount point, the files,
+   a dev source folder). The library's own come first, always: `imlui:/` (`lua/`) and `imlui:/fonts/` (Roboto,
+   Material Icons, the codepoints and the font licenses). Then the host's packages, the `app` argument, such as
+   `imlui::embedded::gallery::package()`.
 2. **Archives:** every `*.pak` next to the executable, in file name order (`mountPaks`), each at the mount point
    stored in it. An archive that can't be read is logged and skipped.
-3. **Folders**, where they exist: `imlui:/` on `<root>/lua`, `imlui:/fonts/` on `fonts/` next to the executable,
-   and `app:/` on the entry script's folder (always mounted when the script is a command-line argument). The root
-   is the source tree in dev builds (`IMLUI_DEV_PATHS=ON`; the environment variable `IMLUI_DEV_PATHS=0` ignores it
-   at runtime), otherwise the executable's folder.
+3. **Override folders** next to the executable, named after a prefix, where they exist: `<exe folder>/app/` at
+   `app:/`, `<exe folder>/imlui/` at `imlui:/` (so `imlui/fonts/` overrides fonts), and the same for the prefix of
+   any other package.
+4. **Dev source folders:** each package's `sourceDir` at its mount point, where the folder exists. Only dev builds
+   have them (`IMLUI_DEV_PATHS=ON` makes `imlui_add_resources` bake the absolute `BASE` into the generated module);
+   the environment variable `IMLUI_DEV_PATHS=0` skips them at runtime.
 
-So a dev build reads `lua/` and the example from the source tree (hot reload), and a release build runs from its
-embedded data alone, while a `.pak` or loose files next to it still override single files.
+The entry is `app:/main.lua` (`EngineConfig::entry`, which a host can change). A script on the command line replaces
+the app: no package, archive or folder is mounted at `app:/`; the script's folder is mounted there instead (on top,
+even when it doesn't exist, so the error names it) and the entry becomes `app:/<file name>`. A relative script path
+is resolved against the current directory, then against the executable's folder, where `imlui_app`'s build copies
+the Lua-only examples.
+
+So a dev build reads `lua/`, the fonts and the app from the source tree (hot reload), and a release build runs from
+its embedded data alone, while a `.pak` or loose files next to it still override single files. Hosts name no file
+paths.
 
 The fonts are added to the ImGui atlas without a copy
 (`FontDataOwnedByAtlas = false`), pointing into the bytes the mount keeps, so the `Resources` in `EngineConfig`
@@ -271,7 +281,9 @@ file and writes `<name>.bin` (the stored bytes, back to back) and the module `im
 tree. The module pulls the blob in with `#embed`, a clang extension in C++ whose `-Wc23-extensions` warning is turned
 off only around that line of the generated file. It holds a static table of `EmbeddedMount::Record`s
 `{path, offset, storedSize, size, compressed}` and exports `imlui::embedded::<name>::files()` (the mount, created on
-first use and shared) and `mount(Resources&)` (at `<prefix>:/`, or `<prefix>:/<folder>/` with `MOUNT`). The custom
+first use and shared), `mount(Resources&)` (at `<prefix>:/`, or `<prefix>:/<folder>/` with `MOUNT`) and `package()`,
+the `ResourcePackage` a host passes to `defaultConfig`: the mount point, `files()`, and the absolute `BASE` folder
+when the build has `IMLUI_DEV_PATHS=ON` (the tool reads it from the spec's `source=` line; "" otherwise). The custom
 command depends on every listed file, so editing one re-embeds it, and `DIRECTORY` is globbed again on every build.
 The tool rewrites its outputs only when they change, so touching a file without changing it rebuilds nothing.
 
@@ -280,7 +292,7 @@ when it is at least 64 bytes, its extension isn't an already-compressed format (
 compression saves at least 10 %. Otherwise it's stored as is. `lua/imlui.lua` shrinks to about a third, the fonts to
 about half.
 
-The library embeds its own files this way (`CMakeLists.txt`), and so do `imlui_app` (the gallery, its default app)
+The library embeds its own files this way (`CMakeLists.txt`), and so do `imlui_app` (the gallery folder as `app:/`)
 and `imlui_custom_types` (its `main.lua`).
 
 **`.pak` archives** (`imlui.resources.pak_format`) use the same encoding. The layout, with little-endian integers:
@@ -412,6 +424,7 @@ See [Registering C++ types](extending.md).
 | `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
 | `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |
 | `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry` |
+| `imlui.resources.package` | `ResourcePackage`: an embedded block's mount point, files and dev source folder, what `imlui::embedded::<name>::package()` returns |
 | `imlui.resources.pak_mount` | `PakMount`: a `.pak` archive in memory; `open(file, error)`, `fromBytes(bytes, name, error)`, `mountPoint()` |
 | `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive`, `modified`, `origin`, `prefixes`, `describe` |
 
@@ -427,19 +440,18 @@ See [Registering C++ types](extending.md).
 
 | Module | Purpose |
 |---|---|
-| `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload, `exitAfterFrames`), `defaultConfig(argc, argv, sourceDir, defaultScript, mountApp)`, `mountPaks(resources, folder)` |
+| `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload, `exitAfterFrames`), `defaultConfig(argc, argv, {packages...})`, `mountPaks(resources, folder, skipPrefix)` |
 | `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `resources()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
 | `imlui` | Umbrella for apps: `import imlui;` |
 
 `app/main.cpp` is the host. It has no `#include`, only `import imlui;` and `import imlui.embedded.gallery;`, and
-calls `Engine{defaultConfig(argc, argv, IMLUI_SOURCE_DIR, "examples/gallery/main.lua",
-imlui::embedded::gallery::mount)}.run()`.
+calls `Engine{defaultConfig(argc, argv, {imlui::embedded::gallery::package()})}.run()`.
 
 ### Generated and tool modules
 
 | Module | Where | Purpose |
 |---|---|---|
-| `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::files()`, `mount(Resources&)`. The library has `imlui.embedded.imlui` and `imlui.embedded.imlui_fonts`. |
+| `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::files()`, `mount(Resources&)`, `package()`. The library has `imlui.embedded.imlui` and `imlui.embedded.imlui_fonts`. |
 | `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
 | `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data)`, `compressible(path)`: the compression rule |
 | `imlui.tools.resource_spec` | `tools/lib/` | `ResourceSpec`, `readSpec`, `collectFiles`, `readFile`: the tools' input |

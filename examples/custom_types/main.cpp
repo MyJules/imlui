@@ -9,18 +9,8 @@ import imlui.embedded.custom_types;
 import example.gauge;
 import example.system_info;
 
-#ifndef IMLUI_SOURCE_DIR
-#define IMLUI_SOURCE_DIR nullptr
-#endif
-// Set by CMakeLists.txt: this folder's main.lua, relative to the source tree (dev builds mount its folder over the
-// embedded copy).
-#ifndef IMLUI_EXAMPLE_SCRIPT
-#define IMLUI_EXAMPLE_SCRIPT "examples/custom_types/main.lua"
-#endif
-
 int main(int argc, char** argv) {
-    imlui::Engine engine{
-        imlui::defaultConfig(argc, argv, IMLUI_SOURCE_DIR, IMLUI_EXAMPLE_SCRIPT, imlui::embedded::custom_types::mount)};
+    imlui::Engine engine{imlui::defaultConfig(argc, argv, {imlui::embedded::custom_types::package()})};
     engine.registerType<example::Gauge>("Gauge");
 
     example::SystemInfo backend; // declared after the engine, destroyed (thread joined) before it

@@ -45,8 +45,9 @@ ImGui 1.92 rasterizes glyphs on demand, so every text style and icon size stays 
 when the theme's `fontScale` changes.
 
 Scripts **hot-reload** when you save any `.lua` file next to the script (or a file it read). In dev builds
-(`IMLUI_DEV_PATHS=ON`, the default) `lua/` and `examples/` are read from the source
-tree, so you don't need to rebuild.
+(`IMLUI_DEV_PATHS=ON`, the default) every embedded block also knows its source folder, so
+`lua/` and the gallery are read from the source tree and you don't need to rebuild. Hosts name no file paths: the
+app is the resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, {imlui::embedded::gallery::package()})`.
 
 ## Layout
 

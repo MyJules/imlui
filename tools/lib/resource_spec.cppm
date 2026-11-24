@@ -27,11 +27,13 @@ struct SourceFile {
 ///     name=imlui            identifier of the generated module (imlui_rc only)
 ///     mount=imlui:/         the mount point
 ///     base=E:/x/lua         the folder the paths are relative to
+///     source=E:/x/lua       optional: the dev source folder baked into the module (imlui_rc only; dev builds)
 ///     file=E:/x/lua/a.lua   one line per file (absolute, or relative to base)
 struct ResourceSpec {
     std::string name;
     std::string mountPoint;
     std::filesystem::path base;
+    std::string sourceDir;         ///< UTF-8, "" unless the build has IMLUI_DEV_PATHS=ON
     std::vector<SourceFile> files; ///< sorted by path
 };
 
@@ -137,6 +139,8 @@ std::optional<ResourceSpec> readSpec(const fs::path& specFile, std::string& erro
             spec.mountPoint = value;
         else if (key == "base")
             spec.base = pathFromUtf8(value);
+        else if (key == "source")
+            spec.sourceDir = value;
         else if (key == "file")
             files.push_back(pathFromUtf8(value));
         else {
