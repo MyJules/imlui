@@ -35,6 +35,11 @@ theme {
 | `style` | `{ Field = n \| {x, y} }` | — | Raw `ImGuiStyle` overrides, applied after the preset. An unknown field reports an error. |
 | `fonts` | `{ key = resource name }` | Roboto | The type scale's faces, named fonts and glyph fallbacks. See [Fonts](#fonts). |
 
+**The window's title bar follows the theme.** On Windows the engine colors the native title bar with the theme's
+`WindowBg` and `Text` colors (whatever the preset or overrides make them): Windows 11 takes both exactly; Windows 10
+(20H1 and later) switches the title bar to dark mode when `WindowBg` is dark. It's set before the window first
+shows and follows every theme change. Other platforms keep their own title bar.
+
 `style` accepts these fields: `Alpha`, `DisabledAlpha`, `WindowPadding`, `WindowRounding`, `WindowBorderSize`,
 `WindowMinSize`, `WindowTitleAlign`, `ChildRounding`, `ChildBorderSize`, `PopupRounding`, `PopupBorderSize`,
 `FramePadding`, `FrameRounding`, `FrameBorderSize`, `ItemSpacing`, `ItemInnerSpacing`, `CellPadding`,

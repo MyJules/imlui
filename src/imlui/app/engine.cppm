@@ -122,6 +122,7 @@ private:
     void applyRootWindowProps(lua::State* state, int rootRef);
     /// Applies a size requested with ui.setWindowSize().
     void applyPendingWindowSize();
+    void syncTitleBar();
     /// Runs the functions queued with post().
     void runPosted();
 
@@ -246,6 +247,9 @@ int Engine::run() {
     applyPendingWindowSize(); // a script that calls setWindowSize() while loading wins over its root size
     m_window.center();
     m_window.keepInWorkArea();
+    // The script's theme now, so the title bar has its colors before the window first shows.
+    if (applyPendingTheme()) watchThemeFonts();
+    syncTitleBar();
     m_window.show();
     m_snapshot = scanFiles();
     m_lastCheck = std::chrono::steady_clock::now();
@@ -311,10 +315,18 @@ void Engine::renderFrame() {
     // Held buttons: repeat buttons, drags that pause, press animations.
     if (ImGui::IsAnyMouseDown()) requestFrameAfter(1.0 / 30.0);
     ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    syncTitleBar();
     m_window.endFrame(bg.x, bg.y, bg.z);
     m_images.collect(); // textures the backend destroyed while drawing this frame
     if (!m_renderer.windowTitle().empty()) m_window.setTitle(m_renderer.windowTitle());
     applyPendingWindowSize();
+}
+
+void Engine::syncTitleBar() {
+    // The OS title bar follows the theme: its window background and text colors (any preset, light or dark).
+    const ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    const ImVec4 fg = ImGui::GetStyle().Colors[ImGuiCol_Text];
+    m_window.setTitleBarColors({bg.x, bg.y, bg.z}, {fg.x, fg.y, fg.z});
 }
 
 void Engine::applyPendingWindowSize() {

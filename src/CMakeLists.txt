@@ -58,6 +58,10 @@ target_sources(imlui_core
         FILES ${IMLUI_MODULES}
 )
 target_link_libraries(imlui_core PUBLIC imlui_lua PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image ext::zstd)
+# imlui.platform.window colors the title bar through DWM (DwmSetWindowAttribute).
+if(WIN32)
+    target_link_libraries(imlui_core PRIVATE dwmapi)
+endif()
 target_compile_features(imlui_core PUBLIC cxx_std_20)
 imlui_set_warnings(imlui_core)
 imlui_set_hardening(imlui_core) # -ftrapv in Debug, which imlui_lua already makes a usage requirement

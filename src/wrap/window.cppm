@@ -6,6 +6,14 @@
 module;
 
 #include <GLFW/glfw3.h>
+#if defined(_WIN32)
+// The native window handle, for the title bar colors (DwmSetWindowAttribute).
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <dwmapi.h>
+#endif
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -70,6 +78,10 @@ public:
     void endFrame(float r, float g, float b);
 
     void setTitle(const std::string& title);
+    /// Colors the OS title bar (sRGB, 0..1) to match the app: on Windows 10 (20H1+) a dark `background` switches
+    /// the title bar to dark mode; Windows 11 also takes both colors exactly. Calls with unchanged colors do
+    /// nothing; other platforms ignore it.
+    void setTitleBarColors(std::array<float, 3> background, std::array<float, 3> text);
     /// Sets the size in screen coordinates.
     void setSize(int w, int h);
     /// Sets the size in unscaled units (dp at 100 %): multiplied by the content
@@ -102,6 +114,7 @@ private:
     bool m_backendsReady = false;
     float m_scale = 1.0f;
     std::string m_title;
+    std::optional<std::pair<std::array<float, 3>, std::array<float, 3>>> m_titleBarColors;
 };
 
 } // namespace imlui::platform
@@ -271,6 +284,31 @@ void Window::setTitle(const std::string& title) {
         m_title = title;
         glfwSetWindowTitle(m_window, title.c_str());
     }
+}
+
+void Window::setTitleBarColors(std::array<float, 3> background, std::array<float, 3> text) {
+    if (!m_window || m_titleBarColors == std::pair{background, text}) return;
+    m_titleBarColors = std::pair{background, text};
+#if defined(_WIN32)
+    HWND hwnd = glfwGetWin32Window(m_window);
+    if (!hwnd) return;
+    // Relative luminance (Rec. 709 weights on the sRGB values: precise enough to tell dark from light).
+    const float luma = 0.2126f * background[0] + 0.7152f * background[1] + 0.0722f * background[2];
+    // DWMWA_USE_IMMERSIVE_DARK_MODE is 20 from Windows 10 20H1 on and was 19 before; the SDK may lack either.
+    constexpr DWORD useImmersiveDarkMode = 20, useImmersiveDarkModeBefore20H1 = 19;
+    const BOOL dark = luma < 0.5f ? TRUE : FALSE;
+    if (FAILED(DwmSetWindowAttribute(hwnd, useImmersiveDarkMode, &dark, sizeof dark)))
+        DwmSetWindowAttribute(hwnd, useImmersiveDarkModeBefore20H1, &dark, sizeof dark);
+    // DWMWA_CAPTION_COLOR / DWMWA_TEXT_COLOR: Windows 11 only; earlier versions fail the call, which is fine.
+    constexpr DWORD captionColor = 35, textColor = 36;
+    const auto colorRef = [](std::array<float, 3> c) {
+        const auto byte = [](float v) { return static_cast<DWORD>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+        return static_cast<COLORREF>(byte(c[0]) | (byte(c[1]) << 8) | (byte(c[2]) << 16));
+    };
+    const COLORREF caption = colorRef(background), captionText = colorRef(text);
+    DwmSetWindowAttribute(hwnd, captionColor, &caption, sizeof caption);
+    DwmSetWindowAttribute(hwnd, textColor, &captionText, sizeof captionText);
+#endif
 }
 
 void Window::setSize(int w, int h) { glfwSetWindowSize(m_window, w, h); }
