@@ -42,7 +42,7 @@ built as plain libraries. Project code only uses them through module wrappers.
 ImGui 1.92 rasterizes glyphs on demand, so every text style and icon size stays sharp, including
 when the theme's `fontScale` changes.
 
-Scripts **hot-reload** when you save any `.lua` file next to the script. In dev builds
+Scripts **hot-reload** when you save any `.lua` file next to the script (or a file it read). In dev builds
 (`IMLUI_DEV_PATHS=ON`, the default) `lua/` and `examples/` are read from the source
 tree, so you don't need to rebuild.
 
@@ -58,6 +58,7 @@ tree, so you don't need to rebuild.
 | `src/imlui/ui/` | `imlui.ui.renderer` (walks the Lua element tree every frame and renders each element through the type registry), `imlui.ui.props`, `imlui.ui.frame_request`, `imlui.ui.navigation_scope`, `imlui.ui.size_class` |
 | `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in elements, one typed `Element` class per module (`button.cppm`, `row.cppm`, ...), and `registerBuiltinTypes` (`builtin.cppm`) |
 | `src/imlui/types/` | `imlui.types.*`: the C++ type system: `ScriptObject`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
+| `src/imlui/resources/` | `imlui.resources*`: resource names (`app:/main.lua`), the `Mount` interface, `DirectoryMount`, `Resources` (stacked mounts) |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |
@@ -84,6 +85,8 @@ tree, so you don't need to rebuild.
   - `Responsive { compact = A, medium = B, expanded = C }`, which picks by window size class
 - **Components**: `require "StatCard"` loads `StatCard.lua` from the script's folder, the same way
   QML files work as components.
+- **Resources**: files are named `app:/data.json` (the app) or `imlui:/...` (the library);
+  `ui.resource.read("data.json")` reads one relative to the calling script.
 - **Common props**: `visible`, `enabled`, `tooltip`, `width`/`height` (dp; `-1` or `fillWidth = true` to fill).
 - **Adaptive layouts**: `sizeClass()` returns the Material 3 window size class (`"compact"`, `"medium"`,
   `"expanded"`, `"large"`, `"extraLarge"`) of `windowSize()` (dp). Read it in function props or use `Responsive`;

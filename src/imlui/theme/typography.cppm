@@ -2,7 +2,7 @@
 module;
 
 #include <array>
-#include <filesystem>
+#include <cstddef>
 #include <optional>
 #include <string_view>
 
@@ -10,6 +10,7 @@ export module imlui.theme.typography;
 
 import imgui;
 import imlui.log;
+import imlui.resources;
 
 export namespace imlui {
 
@@ -36,10 +37,11 @@ struct TextStyleInfo {
 /// The style named `name` ("bodyLarge", "titleSmall", ...).
 std::optional<TextStyle> textStyleFromName(std::string_view name);
 
-/// Loads Roboto Regular/Medium from `dir`. Fonts are rasterized on demand at
-/// any size (ImGui 1.92), so one source per weight is enough. Clears the font
-/// atlas; call before loadIcons() and before the first frame.
-void loadFonts(const std::filesystem::path& dir);
+/// Loads Roboto Regular/Medium (`imlui:/fonts/Roboto-Regular.ttf`, `-Medium.ttf`) from `resources`. Fonts are
+/// rasterized on demand at any size (ImGui 1.92), so one source per weight is enough. The atlas doesn't copy the
+/// font data: it points into the bytes Resources::read returned, so `resources` (its mounts) must outlive the font
+/// atlas. Clears the font atlas; call before loadIcons() and before the first frame.
+void loadFonts(const Resources& resources);
 
 /// The font of style `s`; ImGui's current font before loadFonts() (e.g. in headless tests).
 [[nodiscard]] ImFont* font(TextStyle s);
@@ -80,20 +82,24 @@ std::optional<TextStyle> textStyleFromName(std::string_view name) {
     return std::nullopt;
 }
 
-void loadFonts(const std::filesystem::path& dir) {
+void loadFonts(const Resources& resources) {
     ImFontAtlas* atlas = ImGui::GetIO().Fonts;
     atlas->Clear();
-    auto load = [&](const char* file) -> ImFont* {
-        auto path = (dir / file).string();
-        if (!std::filesystem::exists(path)) {
-            log::warn("font '{}' not found", path);
+    auto load = [&](std::string_view name) -> ImFont* {
+        const auto bytes = resources.read(name);
+        if (!bytes || bytes->empty()) {
+            log::warn("font '{}' not found", name);
             return nullptr;
         }
         ImFontConfig cfg;
-        return atlas->AddFontFromFileTTF(path.c_str(), 16.0f, &cfg);
+        // The bytes stay alive as long as the mount (see Mount::read), so the atlas needn't own a copy. ImGui only
+        // reads them, but its API takes a non-const pointer.
+        cfg.FontDataOwnedByAtlas = false;
+        return atlas->AddFontFromMemoryTTF(const_cast<std::byte*>(bytes->data()), static_cast<int>(bytes->size()),
+                                           16.0f, &cfg);
     };
-    regularFont = load("Roboto-Regular.ttf");
-    mediumFont = load("Roboto-Medium.ttf");
+    regularFont = load("imlui:/fonts/Roboto-Regular.ttf");
+    mediumFont = load("imlui:/fonts/Roboto-Medium.ttf");
     if (!regularFont) regularFont = atlas->AddFontDefault();
     if (!mediumFont) mediumFont = regularFont;
     ImGui::GetIO().FontDefault = regularFont;

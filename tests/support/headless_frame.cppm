@@ -1,11 +1,13 @@
 // HeadlessFrame: a test harness that renders imlui elements in real ImGui frames without a window, a GPU or
 // an ImGui backend. Test-only (built into imlui_tests).
 //
-// It owns an ImGui context (with the Roboto text fonts and the Material icon font loaded from IMLUI_FONT_DIR, as
-// the Material widgets measure and draw with them), a TypeRegistry, a Renderer and, once started, a Lua state set up
-// like the Engine's: the registered types installed, the real `imlui.native` (with empty host hooks) and painter
-// libraries, and lua/imlui.lua loaded. Lua code runs in the UI script environment (ui.env), so element
-// constructors, `state`, `bind`, ids and the registered types are free names, as in a UI script:
+// It owns Resources like the Engine's (`imlui:/` on lua/ and `imlui:/fonts/` on IMLUI_FONT_DIR; tests may mount
+// `app:/` and more before start()), an ImGui context (with the Roboto text fonts and the Material icon font loaded
+// through those resources, as the Material widgets measure and draw with them), a TypeRegistry, a Renderer and, once
+// started, a Lua state set up like the Engine's: the registered types installed, the real `imlui.native` (with empty
+// host hooks), painter and `imlui.resource` libraries, and imlui:/imlui.lua loaded through the resource searcher. Lua
+// code runs in the UI script environment (ui.env), so element constructors, `state`, `bind`, ids and the registered
+// types are free names, as in a UI script:
 //
 //   test::HeadlessFrame h;
 //   h.registerType<Gauge>("Gauge");
@@ -19,6 +21,8 @@ module;
 
 #include <concepts>
 #include <initializer_list>
+#include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,6 +35,9 @@ import imlui.lua.errors;
 import imlui.lua.native;
 import imlui.lua.node;
 import imlui.lua.painter;
+import imlui.lua.resources;
+import imlui.resources;
+import imlui.resources.directory_mount;
 import imlui.theme.icons;
 import imlui.theme.typography;
 import imlui.ui.frame_request;
@@ -71,6 +78,10 @@ public:
 
     [[nodiscard]] Renderer& renderer();
     [[nodiscard]] TypeRegistry& types();
+    /// The harness's resources. Mount more (e.g. `app:/` on a temporary folder) before start().
+    [[nodiscard]] Resources& resources();
+    /// Resources the Lua state read or loaded, like the Engine watches for hot reload.
+    [[nodiscard]] const std::set<std::string>& loadedResources() const;
 
     /// Creates the Lua state, once (run() calls it). Types registered later need a new harness.
     void start();
@@ -108,6 +119,8 @@ private:
     lua::Type pushName(std::string_view name);
 
     Options m_options;
+    Resources m_resources; ///< before the ImGui context: the font atlas points into its font bytes
+    std::set<std::string> m_loaded;
     ImGuiContext* m_context = nullptr;
     TypeRegistry m_types;
     Renderer m_renderer{m_types};
@@ -128,6 +141,8 @@ namespace imlui::test {
 HeadlessFrame::HeadlessFrame() : HeadlessFrame(Options{}) {}
 
 HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
+    m_resources.mount("imlui:/", std::make_shared<DirectoryMount>(IMLUI_LUA_DIR));
+    m_resources.mount("imlui:/fonts/", std::make_shared<DirectoryMount>(IMLUI_FONT_DIR));
     luaui::clearErrors();
     clearFrameRequests();
     m_context = ImGui::CreateContext();
@@ -140,8 +155,8 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     // Roboto and the icon font in this context's atlas, like the Engine: the Material widgets measure text with
     // them, and icon names (hasIcon) decide whether, e.g., a text field has a trailing button. Every harness loads
     // them, so the font pointers never outlive their context into the next harness.
-    loadFonts(IMLUI_FONT_DIR);
-    loadIcons(IMLUI_FONT_DIR);
+    loadFonts(m_resources);
+    loadIcons(m_resources);
     if (m_options.builtins) {
         registerBuiltinTypes(m_types);
     }
@@ -157,6 +172,8 @@ HeadlessFrame::~HeadlessFrame() {
 
 Renderer& HeadlessFrame::renderer() { return m_renderer; }
 TypeRegistry& HeadlessFrame::types() { return m_types; }
+Resources& HeadlessFrame::resources() { return m_resources; }
+const std::set<std::string>& HeadlessFrame::loadedResources() const { return m_loaded; }
 int HeadlessFrame::frames() const { return m_frames; }
 
 void HeadlessFrame::start() {
@@ -166,8 +183,9 @@ void HeadlessFrame::start() {
     luaui::registerNative(m_state, &m_hooks);
     luaui::registerPainter(m_state);
     m_types.install(m_state);
+    luaui::registerResources(m_state, m_resources, &m_loaded);
     // Returns the code runner, the script environment and ui.__tick.
-    const std::string boot = std::string{"package.path = '"} + IMLUI_LUA_DIR + "/?.lua;' .. package.path\n" + R"(
+    const std::string boot = R"(
         local ui = require("imlui")
         local function run(code)
             local chunk, err = load(code, "=test", "t", ui.env)
@@ -176,7 +194,7 @@ void HeadlessFrame::start() {
         end
         return run, ui.env, ui.__tick)";
     if (lua::loadbuffer(m_state, boot, "=headless_frame") != lua::ok || lua::pcall(m_state, 0, 3, 0) != lua::ok) {
-        luaui::reportError("HeadlessFrame: loading lua/imlui.lua failed: " + lua::toStringAny(m_state, -1));
+        luaui::reportError("HeadlessFrame: loading imlui:/imlui.lua failed: " + lua::toStringAny(m_state, -1));
         lua::settop(m_state, 0);
         return;
     }

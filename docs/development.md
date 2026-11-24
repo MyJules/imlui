@@ -295,6 +295,12 @@ suppressions. Run `clang-asan` before merging larger changes.
   that runs `lua/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `nil` defaults,
   `notify`/`emit`, `__gc` lifetime, singletons (also `shared_ptr` ones), `overload` and reinstalling into a new
   state.
+- `resources_test.cpp` covers the resource system: name normalization and resolving (`..` can't leave a prefix, OS
+  paths are rejected), `DirectoryMount` (read, exists, list, modified, the read cache), mount stacking and mount
+  points in `Resources`, and the Lua side through the harness: `require "imlui"` and components through the
+  searchers, chunk names in errors, and `ui.resource.*` resolving against the calling script. It uses two support
+  modules: `test::TempDir` (`imlui.test.temp_dir`, a temporary folder removed afterwards, with `write` and `touch`)
+  and `test::MemoryMount` (`imlui.test.memory_mount`, an immutable in-memory mount, like an embedded one).
 
 ### The headless frame harness
 
@@ -305,9 +311,10 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 
 | Member | What |
 |---|---|
-| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It loads the Roboto text fonts and the icon font from `IMLUI_FONT_DIR` (`external/fonts`) into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. |
+| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_LUA_DIR` (`lua/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. |
 | `registerType<T>(name)`, `renderer()`, `types()` | Register element types before the Lua state starts; the renderer (window title) and the registry. |
-| `run(code) -> std::string` | Runs Lua in the UI script environment (`ui.env`: constructors, `state`, `bind`, ids, `ui`), starting the state on first use: the registered types, the real `imlui.native` with empty host hooks, the painter library and `lua/imlui.lua`. Returns the error message, `""` on success: `ASSERT_EQ(h.run("..."), "")`. Assignments to free names stay in the environment. |
+| `resources()`, `loadedResources()` | The harness's `Resources`: mount more (`app:/` on a `test::TempDir`) before the state starts. The names the Lua state read or loaded. |
+| `run(code) -> std::string` | Runs Lua in the UI script environment (`ui.env`: constructors, `state`, `bind`, ids, `ui`), starting the state on first use: the registered types, the real `imlui.native` with empty host hooks, the painter library, the resource loader and `imlui:/imlui.lua`. Returns the error message, `""` on success: `ASSERT_EQ(h.run("..."), "")`. Assignments to free names stay in the environment. |
 | `renderFrame(name)`, `renderFrames(name, n)` | One ImGui frame each (time advances by `deltaTime`): runs `ui.__tick` (timers, `onFrame`), then renders the element held by `name` in a full-display window. Events queued before (`native.injectKey`, `native.injectMouse`, `ImGui::GetIO()`) are seen. |
 | `click(root, x, y, framesAfter = 1)` | A left click at `(x, y)` (screen pixels) while rendering `root`: move, press and release through `native.injectMouse`, a frame after each, then `framesAfter - 1` more. Render one frame first on a fresh tree, so the window exists to be hovered. |
 | `instance<T>(name)` | The C++ instance of the element held by `name`, synced like a parent's `Frame::Child::as<T>()`. |

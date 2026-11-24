@@ -1,11 +1,11 @@
 // Engine: owns the native window, the Lua state and the frame loop.
 //
-//  * runs lua/imlui.lua (the declarative DSL) and the user's script,
-//    which returns the root element (usually an ApplicationWindow)
+//  * loads Lua and fonts through Resources: imlui:/imlui.lua (the declarative DSL) and the entry script
+//    (app:/main.lua), which returns the root element (usually an ApplicationWindow)
 //  * renders that tree on demand through the Renderer: after input (for a short
 //    settle period), and while animations, timers or scripts request frames
 //  * keeps the UI scaled to the monitor DPI times the user zoom
-//  * hot-reloads when any .lua file next to the script changes
+//  * hot-reloads when a .lua resource in a mutable mount (a directory) changes
 //  * exposes `imlui.native` to Lua (theme, colors, time, quit, ...)
 //  * owns the TypeRegistry: C++ element types and singletons registered with registerType<T>() and
 //    registerSingleton(), installed into every new Lua state
@@ -22,6 +22,7 @@ module;
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -45,6 +46,9 @@ import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.native;
 import imlui.lua.painter;
+import imlui.lua.resources;
+import imlui.resources;
+import imlui.resources.mount;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
@@ -90,6 +94,9 @@ public:
     /// The registered types and singletons.
     TypeRegistry& types();
 
+    /// The resources the engine loads scripts and fonts from (EngineConfig::resources). Mount more before run().
+    Resources& resources();
+
     /// Runs `fn` on the main thread at the next loop iteration and wakes the loop. The one Engine call
     /// that is safe from any thread: hand results of worker threads to the UI through it.
     void post(std::function<void()> fn);
@@ -102,7 +109,8 @@ public:
     int run();
 
 private:
-    using FileSnapshot = std::map<std::filesystem::path, std::filesystem::file_time_type>;
+    /// Watched resource names and their modification times (nullopt: missing, or in an immutable mount).
+    using FileSnapshot = std::map<std::string, std::optional<ResourceTime>>;
 
     /// One complete frame. Also called from inside event processing while
     /// the window is being resized.
@@ -116,8 +124,9 @@ private:
     void renderTree();
     void drawErrors();
 
-    /// Sets m_reload when a watched .lua file changed (checked at most every 400 ms).
+    /// Sets m_reload when a watched resource changed (checked at most every 400 ms).
     void checkForChanges();
+    /// The times of every .lua file in the mounted prefixes and of every resource Lua has loaded or read.
     [[nodiscard]] FileSnapshot scanFiles() const;
     void reloadNow();
     /// Applies the root element's width/height/title to the native window.
@@ -146,6 +155,7 @@ private:
     bool m_zoomShortcuts = true;
     float m_wheelZoom = 0.0f; ///< Ctrl + wheel notches not yet turned into zoom steps
     FileSnapshot m_snapshot;
+    std::set<std::string> m_loaded; ///< resources the Lua states read or loaded (watched for hot reload)
     std::chrono::steady_clock::time_point m_lastCheck;
     std::mutex m_postMutex;
     std::vector<std::function<void()>> m_posted;
@@ -157,8 +167,6 @@ private:
 module :private;
 
 namespace imlui {
-
-namespace fs = std::filesystem;
 
 namespace {
 
@@ -198,6 +206,7 @@ Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
 Engine::~Engine() { closeState(m_state); }
 
 TypeRegistry& Engine::types() { return m_types; }
+Resources& Engine::resources() { return m_config.resources; }
 
 void Engine::post(std::function<void()> fn) {
     std::scoped_lock lock{m_postMutex};
@@ -233,8 +242,10 @@ int Engine::run() {
         requestFramesFor(settleSeconds);
     });
     setContentScale(m_window.contentScale());
-    loadFonts(m_config.fontDir);
-    loadIcons(m_config.fontDir);
+    for (const auto& line : m_config.resources.describe())
+        log::info("mount {}", line);
+    loadFonts(m_config.resources);
+    loadIcons(m_config.resources);
     setTheme(Theme{});
     applyPendingTheme();
     m_themeScale = dpiScale();
@@ -424,25 +435,29 @@ void Engine::checkForChanges() {
     if (now - m_lastCheck < std::chrono::duration<double>(fileCheckSeconds)) return;
     m_lastCheck = now;
     auto snap = scanFiles();
-    if (snap != m_snapshot) {
-        m_snapshot = std::move(snap);
-        m_reload = true;
+    // A changed time, a removed file, or a new .lua file is a change. A name that is new only because a script
+    // read it since the last check (a reload, ui.resource.read at runtime) is not.
+    bool changed = false;
+    for (const auto& [name, time] : snap) {
+        const auto it = m_snapshot.find(name);
+        if (it == m_snapshot.end() ? !m_loaded.contains(name) : it->second != time) changed = true;
     }
+    for (const auto& [name, time] : m_snapshot)
+        if (!snap.contains(name)) changed = true;
+    m_snapshot = std::move(snap);
+    if (changed) m_reload = true;
 }
 
 Engine::FileSnapshot Engine::scanFiles() const {
+    const Resources& res = m_config.resources;
     FileSnapshot out;
-    std::vector<fs::path> dirs = m_config.luaPaths;
-    dirs.push_back(m_config.script.parent_path());
-    std::error_code ec;
-    for (const auto& dir : dirs) {
-        if (!fs::is_directory(dir, ec)) continue;
-        for (auto it = fs::recursive_directory_iterator(dir, ec); it != fs::recursive_directory_iterator();
-             it.increment(ec)) {
-            if (ec) break;
-            if (it->is_regular_file(ec) && it->path().extension() == ".lua") out[it->path()] = it->last_write_time(ec);
-        }
-    }
+    for (const auto& prefix : res.prefixes())
+        for (auto& name : res.listRecursive(prefix + ":/"))
+            if (name.ends_with(".lua")) out.emplace(std::move(name), std::nullopt);
+    for (const auto& name : m_loaded)
+        out.emplace(name, std::nullopt);
+    for (auto& [name, time] : out)
+        time = res.modified(name);
     return out;
 }
 
@@ -457,28 +472,19 @@ void Engine::reloadNow() {
     luaui::registerPainter(state);
     m_types.install(state); // before the DSL: its constructors look the registered types up
 
-    // package.path: <luaPaths>/?.lua ; <scriptdir>/?.lua ; default
-    std::string path;
-    for (const auto& p : m_config.luaPaths)
-        path += (p / "?.lua").generic_string() + ";" + (p / "?/init.lua").generic_string() + ";";
-    path += (m_config.script.parent_path() / "?.lua").generic_string() + ";";
-    lua::getglobal(state, "package");
-    lua::getfield(state, -1, "path");
-    path += std::string{lua::tostring(state, -1)};
-    lua::pop(state);
-    lua::pushstring(state, path);
-    lua::setfield(state, -2, "path");
-    lua::pop(state);
+    // Lua comes from the resources: `require "imlui"` is imlui:/imlui.lua, components are found next to the
+    // entry script.
+    luaui::registerResources(state, m_config.resources, &m_loaded);
 
     constexpr std::string_view boot = R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
     bool ok = lua::loadbuffer(state, boot, "=imlui.boot") == lua::ok;
     if (!ok) luaui::reportError(std::string{lua::tostring(state, -1)});
     if (ok) {
-        lua::pushstring(state, m_config.script.generic_string());
+        lua::pushstring(state, m_config.entry);
         ok = luaui::safeCall(state, 1, 3);
     }
     if (ok && !lua::istable(state, -3)) {
-        luaui::reportError(m_config.script.generic_string() +
+        luaui::reportError(m_config.entry +
                            ": script must return a root element, e.g. `return ApplicationWindow { ... }`");
         ok = false;
     }
@@ -500,7 +506,7 @@ void Engine::reloadNow() {
     m_rootRef = root;
     m_tickRef = tick;
     m_overlayRef = overlays;
-    log::info("loaded {}", m_config.script.generic_string());
+    log::info("loaded {} ({})", m_config.entry, m_config.resources.origin(m_config.entry));
 }
 
 void Engine::applyRootWindowProps(lua::State* state, int rootRef) {

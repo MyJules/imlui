@@ -75,6 +75,7 @@ A complete, runnable version is the [`imlui_custom_types` example](#the-example-
 - [Singletons](#singletons)
 - [Value conversion](#value-conversion): `LuaConvert<T>` and your own types
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
+- [Resources and the host config](#resources-and-the-host-config): mounts, the entry script
 - [Testing elements](#testing-elements): the headless frame harness
 - [Threading and frame requests](#threading-and-frame-requests), [ticking elements](#ticking-elements)
 - [The built-ins as examples](#the-built-ins-as-examples)
@@ -485,7 +486,9 @@ injects a left click (move, press, release, a frame each). Errors that scripts r
 `tests/support/` also has two small test elements to register under any name: `test::LastItemProbe` (renders its
 children and remembers the last one's rect, to know where to click) and `test::RenderCounter`. See
 `tests/element_test.cpp`, `tests/frame_test.cpp` and the `tests/elements_*_test.cpp` files, and
-[Development](development.md#testing) for more.
+[Development](development.md#testing) for more. The harness has its own `Resources` (`imlui:/` and
+`imlui:/fonts/`); mount `app:/` with `h.resources().mount(...)` before the first `run()` to test scripts that
+`require` components or call `ui.resource` (see `tests/resources_test.cpp`).
 
 ## Hot reload
 
@@ -495,6 +498,24 @@ reload. When the old state closes, every element instance in it is destroyed (`d
 singletons are re-linked to the new state. Singleton handlers (`backend.onTick = ...`) belong to a state, so the
 reloaded script sets them again. If the new script fails to load, the engine keeps the old state and points
 the singletons back at it.
+
+## Resources and the host config
+
+The engine loads every file through `EngineConfig::resources` (see [Architecture](architecture.md#resources)).
+`defaultConfig` mounts `imlui:/` on `lua/`, `imlui:/fonts/` on `fonts/` next to the executable and `app:/` on the
+script's folder, and sets `entry` to `app:/<script file name>`. A host can mount more, before `run()`, on the config
+or through `Engine::resources()`. A later mount overrides files of an earlier one at the same names:
+
+```cpp
+imlui::EngineConfig config = imlui::defaultConfig(argc, argv, IMLUI_SOURCE_DIR);
+config.resources.mount("app:/", std::make_shared<imlui::DirectoryMount>("overrides")); // loose files win
+config.resources.mount("plugin:/", std::make_shared<imlui::DirectoryMount>("plugins/charts"));
+imlui::Engine engine{std::move(config)};
+```
+
+Scripts then use `require` and `ui.resource.read("plugin:/data.json")`. A new kind of file source implements
+`imlui::Mount` (`read`, `exists`, `list`, `modified`, `origin`). Its `read` returns a span that must stay valid as
+long as the mount lives: the font atlas and other long-lived users point into it without copying.
 
 ## Threading and frame requests
 
@@ -584,7 +605,8 @@ build/clang-debug/bin/imlui_custom_types
 - `main.cpp` is an import-only translation unit (per CODE_STYLE). It registers the types and calls
   `defaultConfig(argc, argv, IMLUI_SOURCE_DIR, IMLUI_EXAMPLE_SCRIPT)`. `IMLUI_EXAMPLE_SCRIPT` is set by the
   folder's `CMakeLists.txt` to `examples/custom_types/main.lua`, relative to the root `defaultConfig` picks: the
-  source tree in dev builds, so the script hot-reloads from there, otherwise the binary's folder.
+  source tree in dev builds, so the script hot-reloads from there, otherwise the binary's folder. That folder is
+  mounted as `app:/`, and the entry script is `app:/main.lua`.
 - `gauge.cppm` (module `example.gauge`): **`Gauge`**, a Material arc gauge drawn with `md::strokeArc`,
   `md::textTop` and `md::animate`. Properties `value`, `min`, `max`, `label`, `size`, signal `onPeak` (fired by the
   setter when the value rises past `0.9 * max`), method `reset()`, default property `value`. Clicking a gauge

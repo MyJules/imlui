@@ -127,10 +127,11 @@ inside `fn` are per instance.
 
 ### `require "Name"`
 
-Inside a UI script, `require "Name"` first looks for `Name.lua` **in the script's directory** and runs it in the UI
-environment, the way QML files work as components. Results are cached in `package.loaded` like any `require`.
-`import` is an alias of `require`. If the file isn't found there, the normal `package.path` search runs: the Lua
-path (`lua/`), the script directory, then the Lua defaults.
+Inside a UI script, `require "Name"` first looks for `Name.lua` (then `Name/init.lua`) **in the script's folder**
+(for the entry script, `app:/`) and runs it in the UI environment, the way QML files work as components. `a.b` is
+`a/b.lua`. Results are cached in `package.loaded` like any `require`. `import` is an alias of `require`. If the
+module isn't there, it's looked up in `imlui:/` (in the global environment), then on Lua's default `package.path`.
+Errors and tracebacks name the file as a resource: `app:/StatCard.lua:3: ...`.
 
 ```lua
 -- StatCard.lua
@@ -145,6 +146,35 @@ end)
 local StatCard = require "StatCard"
 StatCard { title = "Frame rate", value = function() return ("%.0f fps"):format(fps()) end }
 ```
+
+## Resources
+
+Scripts, fonts and data files are **resources**, named `prefix:/path`: `app:/main.lua` and the files next to it
+belong to the app, `imlui:/imlui.lua` and `imlui:/fonts/...` to the library. In a dev build `app:/` is the script's
+folder on disk. Names use forward slashes; `.` and `..` work, but `..` can't leave the prefix, and OS paths
+(`C:/x`, `/etc/x`) are not resource names.
+
+A relative name is resolved against the folder of the **script that makes the call**: in `app:/pages/home.lua`,
+`"icons/x.svg"` is `app:/pages/icons/x.svg` and `"../data.json"` is `app:/data.json`. Full names work anywhere.
+
+| Function | Result |
+|---|---|
+| `ui.resource.read(name)` | The file's contents as a string, or `nil` and a message when there is no such file. |
+| `ui.resource.exists(name)` | `true` when `name` is a file or a folder. |
+| `ui.resource.url(name)` | The full, normalized name (`"app:/data.json"`), e.g. to pass on to other code. |
+
+An invalid name (or one that isn't a string) raises an error at the caller.
+
+```lua
+local items = parseJson(ui.resource.read("data/items.json"))
+if ui.resource.exists("theme.lua") then ... end
+```
+
+The calling script is found from the caller's chunk name, which Lua drops in a **tail call**: in
+`return ui.resource.read("x")` a relative name raises an error. Use a full name, a local
+(`local text = ui.resource.read("x"); return text`), or parentheses (`return (ui.resource.read("x"))`).
+
+Every resource a script reads or loads is watched for hot reload when it comes from a folder on disk.
 
 ## Dynamic children
 

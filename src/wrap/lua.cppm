@@ -119,6 +119,10 @@ int pcall(State* state, int nargs, int nresults, int msgh);
 void call(State* state, int nargs, int nresults);
 int loadfile(State* state, const char* path);
 int loadbuffer(State* state, std::string_view code, const char* name);
+/// loadbuffer with a mode: "t" text only, "b" binary only, "bt" both.
+int loadbufferx(State* state, std::string_view code, const char* name, const char* mode);
+/// Pops a value and sets it as upvalue `n` of the function at `funcindex`; nullptr when there is no such upvalue.
+const char* setupvalue(State* state, int funcindex, int n);
 void traceback(State* state, State* thread, const char* msg, int level);
 /// Raises a Lua error with `msg`. Never returns.
 [[noreturn]] void error(State* state, std::string_view msg);
@@ -242,6 +246,10 @@ int loadfile(State* state, const char* path) { return luaL_loadfile(state, path)
 int loadbuffer(State* state, std::string_view code, const char* name) {
     return luaL_loadbuffer(state, code.data(), code.size(), name);
 }
+int loadbufferx(State* state, std::string_view code, const char* name, const char* mode) {
+    return luaL_loadbufferx(state, code.data(), code.size(), name, mode);
+}
+const char* setupvalue(State* state, int funcindex, int n) { return lua_setupvalue(state, funcindex, n); }
 void traceback(State* state, State* thread, const char* msg, int level) { luaL_traceback(state, thread, msg, level); }
 void error(State* state, std::string_view msg) {
     lua_pushlstring(state, msg.data(), msg.size());

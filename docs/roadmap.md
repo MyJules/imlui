@@ -66,6 +66,47 @@ Five groups in parallel, one class per module; the old `Renderer::registerElemen
 - Docs: [Elements](elements.md) rewritten from the classes, extending guide (ticking, the built-ins as examples),
   architecture, development.
 
+## 5. Resource system *(in progress)*
+
+Ship an app as one executable with its Lua scripts, fonts, images and data. Decisions:
+
+- **Names:** each prefix is a namespace: `app:/main.lua` for the app, `imlui:/imlui.lua` and
+  `imlui:/fonts/...` for the library. Libraries and plugins get their own prefix. Paths are normalized, and `..`
+  can't leave a mount.
+- **`imlui.resources` (`Resources`):** prefixes map to stacked mounts, and the last mount wins.
+  - The API is `read` (a zero-copy span when the file is stored uncompressed), `exists`, `list` and `modified`.
+  - **Directory mount:** dev builds and loose overrides. Reports file times for hot reload.
+  - **Embedded mount:** data compiled into the exe.
+  - **`.pak` mount:** an archive next to the exe.
+- **Embedding:** `imlui_add_resources(target PREFIX app BASE dir FILES ... DIRECTORY ...)` generates a module per
+  target that uses `#embed`. The `-Wpedantic` extension warning is turned off only inside that generated file.
+- **Compression:** zstd, vendored. Compression is per file and size-based: a file is stored compressed only when
+  that saves enough (fonts and text, yes; already-compressed data, no). Files are decompressed on first read and
+  cached.
+- **`.pak` format:** imlui's own simple format: a header, an index, then per-file blobs, using the same layout as
+  embedded data. A small `imlui_pack` tool builds it from CMake.
+- **Release default:** with `IMLUI_DEV_PATHS=OFF`, everything is embedded, so the exe is self-contained. A
+  directory or `.pak` next to the exe can still override files. Dev builds mount the source tree over the embedded
+  data, so names resolve the same way and hot reload keeps working.
+- **Lua:**
+  - A `package.searchers` entry finds modules through `Resources`.
+  - `ui.__load` and component loading go through it, with chunk names like `app:/main.lua`.
+  - New calls: `ui.resource.read`, `ui.resource.exists` and `ui.resource.url`.
+- **Fonts:** the library embeds Roboto, Material Icons and the codepoints, and loads them with
+  `AddFontFromMemoryTTF`. Apps can declare their own fonts from Lua (`theme { fonts = { ... } }`).
+- **Images:** an `Image { source = "app:/logo.png" }` element for PNG and JPG, decoded with stb_image (vendored)
+  and uploaded as GL textures. Each image is decoded once and cached per resource name. It is drawn at its
+  natural size × the DPI scale unless `width`/`height` are set, and stays sharp only up to its pixel size.
+
+Order, one commit per step:
+
+1. *(done)* `Resources` with directory mounts, and the engine and Lua switched to it (no visible change).
+2. Embedded mounts, `imlui_add_resources` and zstd. The library embeds its own Lua and fonts.
+3. Self-contained examples, and a test that runs a release build without the source tree.
+4. `.pak` mounts and the `imlui_pack` tool.
+5. Fonts declared from Lua.
+6. The PNG/JPG `Image` element.
+
 ## Next
 
 Follow-ups noticed during the cleanup, not scheduled yet:

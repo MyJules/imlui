@@ -504,22 +504,94 @@ ui.env = setmetatable({ ui = ui }, {
     end,
 })
 
--- `require "MyComponent"` inside a UI script loads MyComponent.lua from the
--- script's directory in the UI environment (like QML files as components).
+-------------------------------------------------------------------------------
+-- Resources
+-------------------------------------------------------------------------------
+
+-- Scripts and data are resources named `prefix:/path` (`app:/main.lua`, `imlui:/imlui.lua`), served by the
+-- engine's mounts. The native library is absent when the library runs without an engine.
+local resourceOk, resource = pcall(require, "imlui.resource")
+if not resourceOk then resource = nil end
+
+local function needResources()
+    if resource == nil then error("ui.resource: no resource system (the library runs without an engine)", 3) end
+end
+
+-- `name` resolved against the folder of the script that called the ui.resource function calling this (its chunk
+-- name is `@prefix:/...`), or of the main script when that code isn't a resource (code loaded from a string).
+-- Errors at that caller on an invalid name. Stack: 1 = resolve, 2 = the ui.resource function, 3 = its caller.
+local function resolve(name)
+    if type(name) ~= "string" then error("resource name must be a string, got " .. type(name), 3) end
+    local base = ui.__script or "app:/"
+    local api = debug.getinfo(2, "t")
+    if api and api.istailcall then
+        -- `return ui.resource.read("x")`: Lua dropped the caller's frame, so its script is unknown.
+        if not name:match("^%a[%w_%-]*:") then
+            error("ui.resource: a relative name in a tail call (`return ui.resource.f(name)`) can't be resolved; " ..
+                  "use a full name or wrap the call in parentheses", 3)
+        end
+    else
+        local caller = debug.getinfo(3, "S")
+        local source = caller and caller.source
+        if source and source:match("^@%l[%w_%-]+:/") then base = source:sub(2) end
+    end
+    local full, err = resource.resolve(base, name)
+    if not full then error(err, 3) end
+    return full
+end
+
+--- ui.resource: files from the app's resources. Names are full (`app:/data/items.json`, `imlui:/...`) or
+--- relative to the folder of the calling script (`data/items.json`, `../shared/x.lua`).
+--- (The results are kept in locals below: a tail call would hide the caller from resolve().)
+ui.resource = {}
+
+--- The full, normalized name of `name`.
+function ui.resource.url(name)
+    needResources()
+    local full = resolve(name)
+    return full
+end
+
+--- The contents of resource `name` as a string, or nil and a message when there is no such file.
+function ui.resource.read(name)
+    needResources()
+    local full = resolve(name)
+    local text, err = resource.read(full)
+    return text, err
+end
+
+--- True when resource `name` is a file or a folder.
+function ui.resource.exists(name)
+    needResources()
+    local full = resolve(name)
+    local found = resource.exists(full)
+    return found
+end
+
+-------------------------------------------------------------------------------
+-- Script loading
+-------------------------------------------------------------------------------
+
+-- `require "MyComponent"` inside a UI script loads MyComponent.lua from the script's folder (a resource
+-- folder such as `app:/`) in the UI environment, like QML files as components. Modules not found there are
+-- looked up in `imlui:/` by the engine's searcher, then on package.path.
 table.insert(package.searchers, 2, function(name)
-    if not ui.__dir then return nil end
-    local path = package.searchpath(name, ui.__dir .. "/?.lua")
-    if not path then return "\n\tno UI component '" .. ui.__dir .. "/" .. name .. ".lua'" end
-    return function()
-        local chunk = assert(loadfile(path, "t", ui.env))
-        return chunk(name)
-    end, path
+    if not ui.__dir or resource == nil then return nil end
+    local full, tried = resource.find(name, ui.__dir)
+    if not full then return tried end
+    local chunk, err = resource.load(full, ui.env)
+    if not chunk then error(err, 0) end
+    return chunk, full
 end)
 ui.import = require
 
-function ui.__load(path)
-    ui.__dir = path:match("^(.*)[/\\]") or "."
-    local chunk, err = loadfile(path, "t", ui.env)
+--- Runs the UI script `name` (a full resource name such as `app:/main.lua`) in the UI environment and returns
+--- its result. Its folder is where `require` finds components.
+function ui.__load(name)
+    if resource == nil then error("ui.__load: no resource system", 0) end
+    ui.__script = name
+    ui.__dir = name:match("^(.*/)") or name
+    local chunk, err = resource.load(name, ui.env)
     if not chunk then error(err, 0) end
     return chunk()
 end

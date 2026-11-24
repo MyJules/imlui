@@ -59,9 +59,9 @@ The window starts hidden. It appears once the script has loaded, with the title 
 
 ## Hot reload
 
-While the app runs, the engine checks every 400 ms for changed `.lua` files. It scans the Lua path (`lua/`) and the
-script's own directory, including subfolders. When a file changes, it builds a **fresh Lua state** and runs the
-script again:
+While the app runs, the engine checks every 400 ms for changed `.lua` files: those in the script's folder
+(`app:/`, including subfolders) and the library (`imlui:/`, `lua/`), and every file a script read through
+`ui.resource`. When a file changes, it builds a **fresh Lua state** and runs the script again:
 
 - Lua state (all `state{}` tables, element-local values, timers) starts over, and the theme resets to the default
   before the script runs.
@@ -82,7 +82,8 @@ cmake --preset clang-debug -DIMLUI_DEV_PATHS=OFF
 | `ON` (default) | The app is compiled with `IMLUI_SOURCE_DIR` set to the source tree. `lua/imlui.lua` and the default script (`examples/gallery/main.lua`) are read from the source tree, and so are relative script paths such as `examples/counter/main.lua`, so editing them hot-reloads without rebuilding. |
 | `OFF` | Everything is read from the copies next to the executable. Use this for a build you move or ship. |
 
-Fonts are always loaded from `fonts/` next to the executable.
+Fonts are always loaded from `fonts/` next to the executable (mounted as `imlui:/fonts/`). The app's files are
+[resources](lua-api.md#resources): the script's folder is `app:/`, `lua/` is `imlui:/`.
 
 ## Your first script
 

@@ -25,24 +25,25 @@ flowchart TD
 | Layer | Responsibility |
 |---|---|
 | **Lua script** | Builds the element tree and returns the root. It owns all state and all decisions, including theme, window title and size. |
-| **DSL prelude** (`lua/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment and the `require` searcher for components. |
+| **DSL prelude** (`lua/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment, the `require` searcher for components and `ui.resource`. |
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. A table's identity (its pointer) is its ImGui ID, so elements keep per-widget state such as animations and focus across frames. |
 | **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type". |
 | **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
 | **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They call Material widgets, write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
+| **Resources** | `imlui.resources`. Every file the engine and the scripts load (Lua, fonts, data) is a resource named `prefix:/path` and served by stacked mounts. See [Resources](#resources). |
 | **ImGui / platform** | Dear ImGui with the GLFW and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. |
 
 ## Frame loop
 
 `Engine::run()` does the following:
 
-1. Creates the window **hidden**, sets the content scale from the monitor, loads Roboto and Material Icons,
-   applies the default theme, and loads the script.
+1. Creates the window **hidden**, sets the content scale from the monitor, logs the mounts, loads Roboto and
+   Material Icons from `imlui:/fonts/`, applies the default theme, and loads the entry script.
 2. Applies the root element's `title` and `width`/`height` (dp, multiplied by the content scale) to the native
    window, centers it and shows it.
 3. Each loop iteration:
-   - Every 400 ms, compares `.lua` modification times (hot reload). A change, or a `reload()` call, triggers
+   - Every 400 ms, compares the modification times of the watched resources (hot reload). A change, or a `reload()` call, triggers
      `reloadNow()`.
    - Computes how long it may sleep: until the next **requested frame** (see below) or the next file check,
      whichever comes first. With nothing pending, that's the 400 ms hot-reload interval (or forever without hot
@@ -181,15 +182,50 @@ Layout notes:
    entry) and the Canvas painter metatable, and installs the registered C++ types and singletons
    (`TypeRegistry::install`: the `imlui.types` library the DSL constructors use, methods tables, singleton
    globals).
-3. Sets `package.path` to `<luaPaths>/?.lua;<luaPaths>/?/init.lua;<scriptDir>/?.lua;` followed by the default.
-4. Runs a boot chunk: `require("imlui")`, `ui.__load(script)` (the script runs in `ui.env`), and returns the
-   root, `ui.__tick` and `ui.__overlays`.
+3. Registers the resource loader (`luaui::registerResources`): the `imlui.resource` library and a
+   `package.searchers` entry that finds modules in `imlui:/`. `package.path` keeps Lua's default, for plain Lua
+   libraries; imlui's own files never go through it.
+4. Runs a boot chunk: `require("imlui")` (`imlui:/imlui.lua`), `ui.__load(entry)` (`app:/main.lua`, run in
+   `ui.env`), and returns the root, `ui.__tick` and `ui.__overlays`.
 5. On failure (syntax error, runtime error, or a non-table return), it closes the new state, points the
    singletons back at the old one, restores the previous theme and keeps the old UI. On success, it replaces the
    old state and applies the window title and size (size only if it changed since the last load). Closing a
    state destroys the C++ instances of its elements and detaches the singletons from it.
 
-The file watcher scans the configured Lua paths and the script's directory recursively for `*.lua`.
+The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`)
+and for every resource a Lua state read or loaded. Only directory mounts report times; files in immutable mounts
+(embedded data, `.pak` archives) never change while the app runs.
+
+## Resources
+
+`Resources` (module `imlui.resources`) maps names to files. A name is `prefix:/path`: the prefix is a namespace
+(`app` for the application, `imlui` for the library, others for libraries and plugins) and the path is
+`/`-separated. Names are normalized (`app:/a/./b//c.lua` is `app:/a/b/c.lua`), and a `..` that would leave the
+prefix's root, a backslash, a `:` in the path or a malformed prefix makes a name invalid. Prefixes are lowercase and
+at least two characters long, so OS paths such as `C:/x` or `/etc/x` are never names (`imlui.resources.name`).
+
+Each prefix has a stack of **mounts** (`Mount`), each at a mount point: the prefix root (`app:/`) or a folder in it
+(`imlui:/fonts/`). A name is served by the newest mount that has it, so a later mount overrides single files of an
+earlier one. `read` returns a span that stays valid as long as the mount lives; `exists`, `list`, `listRecursive`,
+`modified` and `origin` complete the API.
+
+| Mount | Notes |
+|---|---|
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; every buffer it ever read stays alive until the mount is destroyed, so spans (and the font atlas) can point into them. Reports modification times. |
+
+`defaultConfig` mounts `imlui:/` on `<root>/lua`, `imlui:/fonts/` on `fonts/` next to the executable, and `app:/`
+on the entry script's folder. The fonts are added to the ImGui atlas without a copy
+(`FontDataOwnedByAtlas = false`), pointing into the bytes the mount keeps, so the `Resources` in `EngineConfig`
+must outlive the atlas. The Engine keeps it for its whole lifetime, and the atlas dies with the window in `run()`.
+
+Lua sees resources in two ways (`imlui.lua.resources`):
+
+- Module search. `require("imlui")` and `require("a.b")` look in `imlui:/` (`a/b.lua`, then `a/b/init.lua`) through
+  a `package.searchers` entry. `lua/imlui.lua` puts its own searcher in front of it, for components next to the
+  script (`ui.__dir`), loaded in `ui.env`. Chunks are named `@app:/main.lua`, so errors and tracebacks read
+  `app:/main.lua:12: ...`.
+- `ui.resource.read`, `exists` and `url`. A relative name resolves against the folder of the calling script, found
+  from the caller's chunk name.
 
 ## Module map (target layout)
 
@@ -220,8 +256,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.theme.dpi` | `contentScale`/`setContentScale`, `zoom`/`setZoom`, `zoomStep`, `dpiScale` (their product), `dp(v)` |
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
-| `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts`, `font`, `fontSize`, `fontPixels`, `pushFont` |
-| `imlui.theme.icons` | `loadIcons`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
+| `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font`, `fontSize`, `fontPixels`, `pushFont` |
+| `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
 | `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`), `theme()`, `setTheme`, `applyPendingTheme`, `reapplyTheme`, `resolveColor`, `imguiColorIndex`, `isStyleField` |
 | `imlui.theme.font_scope` | `FontScope`: RAII push/pop of a text style's font |
 
@@ -235,6 +271,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |
 | `imlui.lua.native` | `NativeHooks` (quit, reload, title, zoom, window size) and `registerNative`: the `imlui.native` Lua library |
+| `imlui.lua.resources` | `registerResources(state, resources, loaded)`: the `imlui.resource` Lua library (`resolve`, `read`, `exists`, `load`, `find`) and the `package.searchers` entry for `imlui:/` |
 
 ### Widgets (`src/imlui/widgets/`, namespace `imlui::md`)
 
@@ -291,12 +328,21 @@ See [Registering C++ types](extending.md).
 | `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `extends<Base>` (a subclass's declaration extends its base's) |
 | `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state; the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`), so the renderer renders every element through it |
 
+### Resources (`src/imlui/resources/`)
+
+| Module | Purpose |
+|---|---|
+| `imlui.resources.name` | `ResourceName`, `parseName`, `normalizeName`, `normalizePath`, `hasPrefix`, `resolveName(base, name)`, `folderOf` |
+| `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `modified`, `origin`); `ResourceTime` |
+| `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache |
+| `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive`, `modified`, `origin`, `prefixes`, `describe` |
+
 ### App (`src/imlui/app/`)
 
 | Module | Purpose |
 |---|---|
-| `imlui.app.config` | `EngineConfig` (script, Lua paths, font dir, window config, hot reload), `defaultConfig(argc, argv, sourceDir, defaultScript)` |
-| `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
+| `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload), `defaultConfig(argc, argv, sourceDir, defaultScript)` |
+| `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `resources()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
 | `imlui` | Umbrella for apps: `import imlui;` |
 
 `app/main.cpp` is the host. It has no `#include`, only `import imlui;`, and calls
