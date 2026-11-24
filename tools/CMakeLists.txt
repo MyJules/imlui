@@ -42,7 +42,8 @@ target_sources(imlui_pack_lib
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES pack.cppm
 )
-target_link_libraries(imlui_pack_lib PUBLIC imlui imlui_resource_tools)
+# imlui_core, not imlui: the archive format, not the library's own files (so editing them never rebuilds the tool).
+target_link_libraries(imlui_pack_lib PUBLIC imlui_core imlui_resource_tools)
 imlui_set_warnings(imlui_pack_lib)
 imlui_set_hardening(imlui_pack_lib)
 

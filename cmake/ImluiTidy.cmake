@@ -1,6 +1,7 @@
-# The `tidy` target: runs clang-tidy (the naming checks in .clang-tidy) on every module in src/ and tools/ and on the
-# test host (tests/smoke_host/main.cpp), and fails on any finding (--warnings-as-errors=*). Only when imlui is the
-# top-level project (CMakeLists.txt): an app has its own checks.
+# The `tidy` target: runs clang-tidy (the naming checks in .clang-tidy) on every module in src/ and tools/ (and the
+# implementation unit src/imlui/app/default_config.cpp) and on the test host (tests/smoke_host/main.cpp), and fails on
+# any finding (--warnings-as-errors=*). Only when imlui is the top-level project (CMakeLists.txt): an app has its own
+# checks.
 #
 #   cmake --build build/clang-debug --target tidy
 #
@@ -14,7 +15,7 @@ if(NOT IMLUI_CLANG_TIDY)
     return()
 endif()
 
-file(GLOB_RECURSE IMLUI_TIDY_FILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/*.cppm)
+file(GLOB_RECURSE IMLUI_TIDY_FILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/*.cppm ${PROJECT_SOURCE_DIR}/src/*.cpp)
 file(GLOB_RECURSE IMLUI_TIDY_TOOL_FILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/tools/*.cppm)
 list(APPEND IMLUI_TIDY_FILES ${IMLUI_TIDY_TOOL_FILES})
 set(IMLUI_TIDY_DEPENDS imlui imlui_pack)

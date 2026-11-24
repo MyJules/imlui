@@ -1,7 +1,7 @@
 # Package tests (label `package`): the consumer app in consumer/ configured, built and run (run.cmake) with imlui
 # added each way an app can add it (docs/getting-started.md, "Adding imlui to your project"):
 #
-#   package.subdirectory       add_subdirectory(<imlui source>)
+#   package.subdirectory       add_subdirectory(<imlui source>), with the app's own glfw and spdlog (OWN_DEPS)
 #   package.fetchcontent       FetchContent_Declare(imlui SOURCE_DIR <imlui source>) + FetchContent_MakeAvailable
 #   package.install            cmake --install of this build into package/prefix (the fixture of the two below)
 #   package.find_package       find_package(imlui 0.1 CONFIG REQUIRED) on that prefix
@@ -9,15 +9,16 @@
 #
 # Slow the first time (each consumer builds imlui, or rebuilds the installed modules' BMIs: minutes); their build
 # folders are kept, so later runs only rebuild what changed. `ctest -L package` runs only these, `ctest -LE package`
-# everything else. Off with -DIMLUI_PACKAGE_TESTS=OFF, and not added in sanitizer builds (the consumer would need the
-# same instrumentation) or with a multi-config generator (they pass the parent's CMAKE_BUILD_TYPE on).
+# everything else. Off with -DIMLUI_PACKAGE_TESTS=OFF, and not added with a multi-config generator (they pass the
+# parent's CMAKE_BUILD_TYPE on). In a sanitizer build only package.subdirectory is added, with IMLUI_SANITIZERS passed
+# on: the consumer sets nothing else, so it checks that linking imlui::imlui instruments the app's targets to match.
 option(IMLUI_PACKAGE_TESTS "Add the package tests (consumer builds: add_subdirectory, FetchContent, find_package)" ON)
 if(NOT IMLUI_PACKAGE_TESTS)
     return()
 endif()
 get_property(multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-if(IMLUI_SANITIZERS OR multi_config)
-    message(STATUS "imlui: no package tests in a sanitizer or multi-config build")
+if(multi_config)
+    message(STATUS "imlui: no package tests in a multi-config build")
     return()
 endif()
 
@@ -33,7 +34,11 @@ function(imlui_add_package_test mode)
     set_tests_properties(package.${mode} PROPERTIES LABELS package TIMEOUT 1800 RUN_SERIAL ON)
 endfunction()
 
-imlui_add_package_test(subdirectory)
+if(IMLUI_SANITIZERS)
+    imlui_add_package_test(subdirectory -DSANITIZERS=${IMLUI_SANITIZERS})
+    return()
+endif()
+imlui_add_package_test(subdirectory -DOWN_DEPS=ON)
 imlui_add_package_test(fetchcontent)
 
 if(IMLUI_INSTALL)

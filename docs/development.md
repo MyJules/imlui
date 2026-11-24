@@ -50,7 +50,9 @@ const std::string& Example::name() const { return m_name; }
 
 - Function bodies, static/global state and non-exported helpers (in an anonymous namespace) go in the private
   fragment. Templates, `constexpr` functions and `= default`/`= delete` members are the exceptions and stay in
-  the interface.
+  the interface. One function lives in a separate implementation unit instead: `defaultConfig()`
+  (`src/imlui/app/default_config.cpp`, `module imlui.app.config;`), compiled with the library's own files rather than
+  with the modules ([Architecture](architecture.md#embedding-or-not)).
 - **No module re-exports another** (umbrellas aside). Import the module that defines each type you name, for
   example `imlui.theme.scheme` for `Scheme` or `imlui.color` for `Color`.
 - Namespaces: `imlui` (core), `imlui::md` (widgets), `imlui::luaui` (Lua bridge), `imlui::log`,
@@ -277,6 +279,7 @@ Presets (`CMakePresets.json`), all clang + Ninja, build into `build/<preset>/`:
 |---|---|
 | `clang-debug` | Debug, `/MDd` (STL checked iterators), `-ftrapv` on our targets. The everyday build. |
 | `clang-release` | Release. Build it too before merging: optimization can surface other warnings. |
+| `clang-ship` | Release with `IMLUI_DEV_PATHS=OFF`: everything embedded, no source paths, as shipped or installed. |
 | `clang-asan` | Debug code with AddressSanitizer + UndefinedBehaviorSanitizer on every target, vendored ones included. |
 
 ```sh
@@ -287,23 +290,29 @@ ctest --preset clang-debug
 cmake --preset clang-release
 cmake --build --preset clang-release
 
+cmake --preset clang-ship
+cmake --build --preset clang-ship
+ctest --preset clang-ship
+
 cmake --preset clang-asan
 cmake --build --preset clang-asan
 ctest --preset clang-asan           # includes the smoke test: the test host runs under the sanitizers
 ```
 
-The presets are dev builds (`IMLUI_DEV_PATHS=ON`), so `imlui_add_resources` doesn't embed (`IMLUI_EMBED_RESOURCES`
-defaults to `OFF`), except for the library's own files: built on its own, imlui has its install rules on
-(`IMLUI_INSTALL`), and an installable library always embeds them (`src/CMakeLists.txt`). Its source folders are still
-mounted over the embedded copies, so editing `src/resources/` hot-reloads; the next build re-embeds. With
-`-DIMLUI_INSTALL=OFF` the library's `imlui.embedded.imlui` only names `src/resources/` and `external/fonts/`, as in an
-app's dev build, and editing those needs no build. The tests check whichever shape the build has, plus both shapes of the smoke app's manifest in every
-configuration (`imlui.embedded.smoke_embedded`, `EMBED ON`; `imlui.embedded.smoke_sources`, `EMBED OFF`, dev builds
-only). Before merging resource changes, also build and test the embedded configurations, in their own build folders:
+The presets but `clang-ship` are dev builds (`IMLUI_DEV_PATHS=ON`), so `imlui_add_resources` doesn't embed
+(`IMLUI_EMBED_RESOURCES` defaults to `OFF`), the library's own files included: the target `imlui` (what the tests and
+the tools link) has an `imlui.embedded.imlui` that only names `src/resources/` and `external/fonts/`, as in an app's
+dev build. Built on its own, imlui has its install rules on (`IMLUI_INSTALL`), so the build also has an embedded copy
+of those files for the install (`imlui_files_install`, see [Architecture](architecture.md#embedding-or-not)), which
+nothing in the build links: after editing `src/resources/imlui.lua`, a build only re-embeds that copy (embed, compile,
+archive; the always-run file-list checks aside, nothing else runs). The tests check whichever shape the build has,
+plus both shapes of the smoke app's manifest in every configuration (`imlui.embedded.smoke_embedded`, `EMBED ON`;
+`imlui.embedded.smoke_sources`, `EMBED OFF`, dev builds only); the package tests check the install's copy. Before
+merging resource changes, also build and test the embedded configurations:
 
 ```sh
 cmake --preset clang-debug -B build/embed-on -DIMLUI_EMBED_RESOURCES=ON   # dev paths over embedded copies
-cmake --preset clang-release -B build/ship -DIMLUI_DEV_PATHS=OFF          # as shipped: embedded, no source paths
+cmake --preset clang-ship                                                 # as shipped: embedded, no source paths
 ```
 
 Our targets build with a strict warning set and `-Werror`, so any warning fails the build. See
@@ -311,7 +320,11 @@ Our targets build with a strict warning set and `-Werror`, so any warning fails 
 suppressions. Run `clang-asan` before merging larger changes.
 
 **Sanitizers on Windows (`x86_64-pc-windows-msvc`).** `IMLUI_SANITIZERS` (`cmake/ImluiSanitizers.cmake`) adds
-`-fsanitize=address,undefined -fno-sanitize-recover=undefined` to every target. On this target:
+`-fsanitize=address,undefined -fno-sanitize-recover=undefined` to every target of imlui's (vendored ones included), and
+makes the flags usage requirements of the library (`imlui_lua`, `src/CMakeLists.txt`): a module built with them can't
+be imported without them, so an app that adds imlui with `IMLUI_SANITIZERS` set gets them on every target that links
+`imlui::imlui`, with nothing else to do (the package test `package.subdirectory` checks it in a `clang-asan` build).
+On this target:
 
 - ASan needs the release dynamic CRT, so the preset sets `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`. The code
   is still `-O0 -g`, but the STL's debug iterators are off in this preset, since they need `/MDd`. Use
@@ -389,14 +402,15 @@ suppressions. Run `clang-asan` before merging larger changes.
 `tools/` builds two host tools with the same toolchain (see [Architecture](architecture.md#resource-manifests)).
 Both read a Lua resource manifest (`resources.lua`). `imlui_rc`, which `imlui_add_resources(<target> <manifest>)`
 runs, writes the blob, the `imlui.embedded.<name>` module and the dependency file `<name>.d` into
-`build/<preset>/<dir>/imlui_resources/` (without embedding, `imlui_rc --source-dirs` writes only the module, which
-names the groups' folders and depends on the manifest alone); `imlui_rc --list` (target `imlui_resources_<name>_list`, run on every
+`build/<preset>/<dir>/imlui_resources/<target>/` (without embedding, `imlui_rc --source-dirs` writes only the module,
+which names the groups' folders and depends on the manifest alone); `imlui_rc --list` (target
+`imlui_resources_<target>_<name>_list`, run on every
 build, only when embedding) rewrites `<name>.files` when the manifest's set of files changed, so a file added to a globbed folder
 re-embeds even where Ninja misses the folder's new time. `imlui_pack` builds `.pak` archives
 (`imlui_add_pak(<name> <manifest>)`, or by hand: `imlui_pack out.pak app:/ <folder> [files...]`). Their shared code
 is the `imlui_resource_tools` library (`tools/lib/`, links the zstd compressor and `imlui_lua`, the Lua wrapper; it
-doesn't link `imlui`, which is embedded with it), and the archive writer is `imlui_pack_lib` (links `imlui` for
-`imlui.resources.pak_format`). Generated modules are not checked by `tidy`; the generator is. To see what a manifest
+doesn't link `imlui`, which is embedded with it), and the archive writer is `imlui_pack_lib` (links `imlui_core` for
+`imlui.resources.pak_format`, not the library's files). Generated modules are not checked by `tidy`; the generator is. To see what a manifest
 selects, run `build/<preset>/bin/imlui_rc --list <manifest> <file>` and read the file.
 
 ### Package tests
@@ -411,7 +425,7 @@ archive are mounted. It must exit with 0 and log no error.
 
 | Test (label `package`) | imlui added with |
 |---|---|
-| `package.subdirectory` | `add_subdirectory(<this checkout>)` |
+| `package.subdirectory` | `add_subdirectory(<this checkout>)`, in an app that has its own GLFW (added before imlui: imlui must use it) and spdlog (added after: imlui's copy must not be named `spdlog`), `IMLUI_CONSUMER_OWN_DEPS` |
 | `package.fetchcontent` | `FetchContent_Declare(imlui SOURCE_DIR <this checkout>)` + `FetchContent_MakeAvailable` (a `GIT_REPOSITORY` works the same: `-DIMLUI_GIT_REPOSITORY=<url> -DIMLUI_GIT_TAG=<rev>` on the consumer) |
 | `package.install` | not an app: `cmake --install` of this build into `build/<preset>/tests/package/prefix`, the fixture of the two below |
 | `package.find_package` | `find_package(imlui 0.1 CONFIG REQUIRED)` on that prefix; the app is configured with `IMLUI_DEV_PATHS=OFF`, so the executable carries everything |
@@ -421,8 +435,10 @@ They're slow the first time: each consumer builds the whole library (add_subdire
 installed modules' BMIs again (find_package), a few minutes in all. Their build folders
 (`build/<preset>/tests/package/<mode>/`) are kept, so later runs only rebuild what changed. They run one at a time
 (`RUN_SERIAL`). `ctest --preset clang-debug -L package` runs only them, `-LE package` everything else, and
-`-DIMLUI_PACKAGE_TESTS=OFF` leaves them out. They aren't added in sanitizer builds (the consumer would need the same
-instrumentation) or with a multi-config generator, and the two install tests need `IMLUI_INSTALL=ON`.
+`-DIMLUI_PACKAGE_TESTS=OFF` leaves them out. They aren't added with a multi-config generator, and the two install
+tests need `IMLUI_INSTALL=ON`. A sanitizer build (`clang-asan`) has only `package.subdirectory`, without the app's
+own GLFW and spdlog but with `IMLUI_SANITIZERS` passed on: the consumer sets nothing else, so it checks that linking
+`imlui::imlui` gives the app's targets the flags importing imlui's modules needs.
 
 ### The headless frame harness
 

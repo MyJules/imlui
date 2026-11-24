@@ -5,7 +5,7 @@
 #
 #   <prefix>/
 #     bin/                       imlui_rc, imlui_pack                  (imported executables imlui::imlui_rc, ...)
-#     lib/                       imlui, imlui_lua                      (imlui::imlui, imlui::imlui_lua)
+#     lib/                       imlui, imlui_core, imlui_lua          (imlui::imlui, imlui::imlui_core, ...)
 #     lib/imlui/                 the vendored static libraries         (imlui::ext_lua, ext_imgui, ext_glfw, ...)
 #     lib/cmake/imlui/           imluiConfig.cmake, imluiConfigVersion.cmake, imluiTargets*.cmake, the helpers
 #                                (ImluiResources.cmake, ImluiWarnings.cmake) and cxx-modules/ (module metadata)
@@ -17,8 +17,8 @@
 # app's CMake (3.28+, Ninja) rebuilds their BMIs with the app's compiler, from the include folders, definitions and
 # link libraries exported with them. That's why the vendored libraries the wrappers include are exported too, with
 # their headers under include/imlui/ext/ (a private folder: they don't clash with another copy of the same library),
-# and why the library always embeds its own files when installing (src/CMakeLists.txt): the generated module
-# imlui.embedded.imlui and its blob are installed, the source folders aren't.
+# and why an install carries the library's own files embedded (imlui_files_install, src/CMakeLists.txt): the generated
+# module imlui.embedded.imlui and its blob are installed, the source folders aren't.
 include(CMakePackageConfigHelpers)
 
 set(IMLUI_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/imlui)
@@ -31,7 +31,8 @@ set(ext ${PROJECT_SOURCE_DIR}/external)
 install(TARGETS imlui_rc imlui_pack EXPORT imluiTargets RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # ------------------------------------------------------------------ vendored libraries and their headers
-install(TARGETS lua_static imgui_static glfw spdlog stb_image_static zstd_decompress EXPORT imluiTargets
+install(TARGETS imlui_ext_lua imlui_ext_imgui glfw imlui_ext_spdlog imlui_ext_stb_image imlui_ext_zstd
+        EXPORT imluiTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/imlui
 )
 install(FILES ${ext}/lua/lua.h ${ext}/lua/lualib.h ${ext}/lua/lauxlib.h ${ext}/lua/luaconf.h
