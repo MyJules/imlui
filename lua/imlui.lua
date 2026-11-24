@@ -71,11 +71,32 @@ local BUILTIN = {
 }
 for _, name in ipairs(BUILTIN) do ui[name] = ui.element(name) end
 
+--- RadioButtons sharing a `group` value act as one group: the C++ handler
+--- unchecks the other members (through their bindings) when one is clicked.
+--- ui.__radioGroups[group] is a weak-keyed set of the group's elements.
+ui.__radioGroups = {}
+local radioButton = ui.RadioButton
+function ui.RadioButton(props)
+    props = radioButton(props)
+    local group = props.group
+    if group ~= nil then
+        local members = ui.__radioGroups[group]
+        if not members then
+            members = setmetatable({}, { __mode = "k" })
+            ui.__radioGroups[group] = members
+        end
+        members[props] = true
+        props.__radioGroup = members
+    end
+    return props
+end
+
 -------------------------------------------------------------------------------
 -- State & bindings
 -------------------------------------------------------------------------------
 
 local watchers = setmetatable({}, { __mode = "k" }) -- proxy -> { key -> {fn...} }
+local EMPTY_LIST = {}
 local stores = setmetatable({}, { __mode = "k" })   -- proxy -> raw data
 
 --- Observable state table. Reads/writes look like a plain table; writes
@@ -92,22 +113,35 @@ function ui.state(init)
             local old = data[k]
             if old == v then return end
             data[k] = v
+            -- Iterate copies: a watcher may remove itself (or others) while running.
             local w = watchers[proxy]
-            for _, fn in ipairs(w[k] or {}) do fn(v, old, k) end
-            for _, fn in ipairs(w["*"] or {}) do fn(v, old, k) end
+            for _, fn in ipairs({ table.unpack(w[k] or EMPTY_LIST) }) do fn(v, old, k) end
+            for _, fn in ipairs({ table.unpack(w["*"] or EMPTY_LIST) }) do fn(v, old, k) end
         end,
         __pairs = function() return next, data, nil end,
         __len = function() return #data end,
     })
 end
 
+-- Removes fn from list (by identity) if it is still there.
+local function removeFrom(list, fn)
+    for i = #list, 1, -1 do
+        if list[i] == fn then
+            table.remove(list, i)
+            return
+        end
+    end
+end
+
 --- Calls fn(new, old, key) whenever state[key] changes ("*" = any key).
+--- Returns a function that removes the watcher: local stop = ui.watch(...); stop()
 function ui.watch(state, key, fn)
     local w = watchers[state]
     assert(w, "ui.watch: not a ui.state table")
     w[key] = w[key] or {}
     table.insert(w[key], fn)
-    return fn
+    local list = w[key]
+    return function() removeFrom(list, fn) end
 end
 
 --- Raw (non-proxy) contents of a state table, e.g. for serialization.
@@ -272,8 +306,11 @@ function ui.setInterval(fn, ms) return addTimer(fn, ms, true) end
 function ui.clearTimer(id) timers[id] = nil end
 
 local frameCallbacks = {}
---- Calls fn(time) at the start of every frame.
-function ui.onFrame(fn) table.insert(frameCallbacks, fn) end
+--- Calls fn(time) at the start of every frame. Returns a function that removes it.
+function ui.onFrame(fn)
+    table.insert(frameCallbacks, fn)
+    return function() removeFrom(frameCallbacks, fn) end
+end
 
 --- Called by the engine at the start of every frame.
 function ui.__tick(now)
@@ -289,7 +326,8 @@ function ui.__tick(now)
             t.fn()
         end
     end
-    for _, fn in ipairs(frameCallbacks) do fn(now) end
+    -- Iterate a copy: a callback may remove itself while running.
+    for _, fn in ipairs({ table.unpack(frameCallbacks) }) do fn(now) end
 end
 
 -- Snackbar: one app-wide instance, rendered by the engine above everything.
@@ -326,7 +364,10 @@ function ui.print(...)
 end
 
 ui.time = native.time
+ui.deltaTime = native.deltaTime
 ui.fps = native.fps
+ui.isDark = native.isDark
+ui.imguiVersion = native.imguiVersion
 ui.quit = native.quit
 ui.reload = native.reload
 ui.setTitle = native.setTitle

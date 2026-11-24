@@ -74,14 +74,16 @@ local s = state { count = 0, items = {} }
 s.count = s.count + 1
 ```
 
-### `watch(state, key, fn) -> fn`
+### `watch(state, key, fn) -> stop`
 
 Calls `fn(new, old, key)` whenever `state[key]` changes. Use `"*"` for any key. Asserts that `state` was created by
-`state()`. There is no unwatch.
+`state()`. Returns a function that removes the watcher; calling it again does nothing. A watcher may remove itself
+while it runs.
 
 ```lua
 watch(s, "count", function(new, old) log.info("count %d -> %d", old, new) end)
-watch(look, "*", applyTheme)
+local stop = watch(look, "*", applyTheme)
+stop() -- applyTheme no longer runs
 ```
 
 ### `raw(state) -> table`
@@ -220,7 +222,7 @@ Timers run at the start of a frame, so their resolution is one frame. Callbacks 
 | `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds. |
 | `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. |
 | `clearTimer(id)` | Cancels a timeout or interval. |
-| `onFrame(fn)` | Calls `fn(time)` at the start of every frame, after the timers. It can't be removed. |
+| `onFrame(fn) -> stop` | Calls `fn(time)` at the start of every frame, after the timers. Call the returned `stop()` to remove it (also from inside `fn`). |
 
 ```lua
 local id = setInterval(function() s.seconds = s.seconds + 1 end, 1000)
@@ -268,15 +270,18 @@ Script errors are logged at error level automatically.
 | Function | Description |
 |---|---|
 | `time() -> seconds` | Seconds since the app started (`ImGui::GetTime`). |
+| `deltaTime() -> seconds` | Duration of the last frame. |
 | `fps() -> number` | Current frame rate (ImGui's moving average). |
+| `isDark() -> bool` | Whether the current theme is dark. |
+| `imguiVersion() -> string` | Dear ImGui version, for example `"1.92.9b"`. |
 | `quit()` | Ends the frame loop and exits. |
 | `reload()` | Reloads the script before the next frame (like saving a file). |
-| `setTitle(title)` | Sets the native window title. See the note below. |
+| `setTitle(title)` | Sets the native window title, unless the `ApplicationWindow` has a `title` prop. See the note below. |
 | `textSize(text, style?) -> w, h` | Size of `text` in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`). |
 
-> **Note.** While the root is an `ApplicationWindow`, its `title` (default `"imlui"`) is copied to the native
-> window every frame, so a `setTitle()` call only lasts until the next frame. To change the title, bind
-> `ApplicationWindow { title = function() ... end }` instead.
+> **Note.** The native title comes from, in order: the root `ApplicationWindow`'s `title` prop (re-read every
+> frame, so it can be a binding), the last `setTitle()` call, and then the default `"imlui"`. A script that calls
+> `setTitle()` should leave `title` off its `ApplicationWindow`.
 
 ## `native`
 
@@ -288,19 +293,19 @@ it. The ones not wrapped are marked **native only**.
 | `native.setTheme(t) -> scheme` | Backs `theme()`. |
 | `native.schemeFor(t) -> scheme` | Backs `schemeFor()`. |
 | `native.scheme() -> scheme` | Backs `scheme()`. |
-| `native.isDark() -> bool` | **Native only.** Whether the current theme is dark. |
+| `native.isDark() -> bool` | Backs `isDark()`. |
 | `native.color(c) -> hex` | Backs `color.resolve`. |
 | `native.tone(c, t) -> hex` | Backs `color.tone`. |
 | `native.mix(a, b, t) -> hex` | Backs `color.mix`. |
 | `native.alpha(c, a) -> hex` | Backs `color.alpha`. |
 | `native.time() -> seconds` | Backs `time()`. |
-| `native.deltaTime() -> seconds` | **Native only.** Duration of the last frame. |
+| `native.deltaTime() -> seconds` | Backs `deltaTime()`. |
 | `native.fps() -> number` | Backs `fps()`. |
 | `native.dpiScale() -> number` | **Native only.** Current dp → pixel factor. |
 | `native.textSize(text, style?) -> w, h` | Backs `textSize()`. |
 | `native.setTitle(title)` | Backs `setTitle()`. |
 | `native.quit()` | Backs `quit()`. |
 | `native.reload()` | Backs `reload()`. |
-| `native.imguiVersion() -> string` | **Native only.** For example `"1.92.9b"`. |
+| `native.imguiVersion() -> string` | Backs `imguiVersion()`. |
 | `native.log(level, message)` | Backs `log.*`. `level` is `"trace"`, `"debug"`, `"info"`, `"warn"` or `"error"` (anything else logs at info). |
 | `native.injectMouse(x, y, down?, wheel?)` | **Native only.** Feeds ImGui a mouse event for scripted UI tests: position in window coordinates, an optional left-button state, and an optional vertical wheel delta. See [Development](development.md#scripted-ui-tests). |

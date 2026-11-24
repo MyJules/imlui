@@ -48,15 +48,16 @@ tree, so you don't need to rebuild.
 
 | Path | What |
 |---|---|
-| `src/wrap/lua.cppm` | `import lua;` (Lua C API, with its macros turned into functions) |
-| `src/wrap/imgui.cppm` | `import imgui;` (re-exported ImGui API) |
-| `src/wrap/platform.cppm` | `import imlui.platform;` (GLFW + OpenGL3 + ImGui backends) |
-| `src/imlui/color.cppm` | colors, hex, OKLCH tonal palettes |
-| `src/imlui/theme.cppm` | Material 3 scheme from a seed, typography, mapping onto ImGuiStyle |
-| `src/imlui/widgets.cppm` | Material widgets drawn with ImGui (buttons, switch, slider, fields, ...) |
-| `src/imlui/luaui.cppm` | Lua bridge: property bindings, signals, theme parsing |
-| `src/imlui/renderer.cppm` | walks the Lua element tree every frame and renders it |
-| `src/imlui/engine.cppm` | window, Lua state, hot reload, `imlui.native` |
+| `src/wrap/` | third-party wrappers: `lua` (+ `lua.stack_guard`), `imgui`, `imlui.log` (spdlog), `imlui.platform.window` (GLFW + OpenGL3 + ImGui backends) |
+| `src/imlui/color/` | `imlui.color.*`: colors and hex, OKLCH, tonal palettes |
+| `src/imlui/theme/` | `imlui.theme.*`: Material 3 scheme from a seed, typography, icons, DPI, mapping onto ImGuiStyle |
+| `src/imlui/lua/` | `imlui.lua.*`: Lua bridge (`Node` bindings and signals, values, errors, theme tables, Canvas painter, `imlui.native`) |
+| `src/imlui/widgets/` | `imlui.widgets.*`: Material widgets drawn with ImGui (buttons, selection, slider, fields, menus, ...) |
+| `src/imlui/ui/` | `imlui.ui.renderer` (walks the Lua element tree every frame) and `imlui.ui.props` |
+| `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in element handlers, by family, and `registerBuiltinElements` |
+| `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
+| `src/imlui/imlui.cppm` | `import imlui;` umbrella |
+| `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |
 | `lua/imlui.lua` | the DSL: elements, `state`, `bind`, `Repeater`, `theme`, timers |
 | `examples/` | `gallery.lua` (every element and a live theme editor), `counter.lua`, `StatCard.lua` |
 
@@ -70,7 +71,8 @@ tree, so you don't need to rebuild.
 - **Signals** are `on*` handlers called as `handler(self, ...)`, e.g. `onClicked`, `onToggled`,
   `onMoved`, `onTextChanged`, `onAccepted`, `onActivated`, `onTriggered`.
 - **`id`** makes an element reachable by name, QML style: `TextField { id = "name" }`, then `name.text`.
-- **`state{}`** is an observable table. `watch(state, key | "*", fn)` reacts to changes.
+- **`state{}`** is an observable table. `watch(state, key | "*", fn)` reacts to changes and returns a
+  function that removes the watcher (so does `onFrame(fn)`).
 - **Dynamic children**:
   - `Repeater { model, delegate }`, which flows inside its parent (e.g. horizontally in a `Row`)
   - `ListView`, a scrolling repeater
@@ -96,12 +98,12 @@ tree, so you don't need to rebuild.
 
 | Group | Elements |
 |---|---|
-| Windows | `ApplicationWindow` (root; `title`, `width`, `height`, `menuBar`, `padding`), `Window`, `Dialog` (`icon`, `width`) |
-| Layout | `Column`, `Row`, `Grid`, `ScrollView` (`color`, `rounding`, `padding`), `ListView`, `Card` (`variant` = elevated, filled, outlined), `TabBar`/`Tab` (`icon`, `variant` = primary, secondary), `Expander`/`Section`, `TreeNode` |
+| Windows | `ApplicationWindow` (root; `title`, `width`, `height`, `menuBar`, `padding`, `color`, `scrollable`), `Window`, `Dialog` (`icon`, `width`) |
+| Layout | `Column`, `Row`, `Grid`, `ScrollView` (`color`, `rounding`, `padding`, `border`), `ListView`, `Card` (`variant` = elevated, filled, outlined; `width`, `height`, `padding`, `color`, `rounding`), `TabBar`/`Tab` (`icon`, `variant` = primary, secondary), `Expander`/`Section` (`expanded`, default true), `TreeNode` |
 | App bars & navigation | `TopAppBar` (`title`, `navigationIcon`, `variant` = small, center, medium, large; children are actions), `NavigationItem`, `MenuBar`, `Menu`, `MenuItem` (`icon`, `shortcut`, `checked`) |
 | Text | `Text`/`Label` (`style` = Material type scale, `color`, `wrap`, `align`), `Icon`, `Link`, `Divider`, `Separator`, `Spacer` |
-| Controls | `Button` (`variant` = filled, tonal, outlined, text, elevated, fab; `icon`), `IconButton` (`variant` = standard, filled, tonal, outlined; `checked`/`checkedIcon` toggle), `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip` (`variant` = filter, assist, suggestion), `SegmentedButton`, `ListItem` (`icon`, `supportingText`, `trailingText`, `trailingIcon`) |
-| Inputs | `TextField`/`TextArea` (`variant` = filled, outlined; `label`, `placeholderText`, `leadingIcon`, `trailingIcon`, `supportingText`, `error`, `password`), `ComboBox` (Material dropdown), `Slider`, `SpinBox`, `ColorPicker` |
+| Controls | `Button` (`variant` = filled, tonal, outlined, text, elevated, fab; `icon`), `IconButton` (`variant` = standard, filled, tonal, outlined; `checked`/`checkedIcon` toggle), `Checkbox`, `Switch`, `RadioButton` (`group`), `RadioGroup`, `Chip` (`variant` = filter, assist, suggestion, input), `SegmentedButton`, `ListItem` (`icon`, `supportingText`, `trailingText`, `trailingIcon`) |
+| Inputs | `TextField`/`TextArea` (`variant` = filled, outlined; `label`, `placeholderText`, `leadingIcon`, `trailingIcon`, `supportingText`, `error`, `password`), `ComboBox` (Material dropdown), `Slider` (`onMoved`, `onReleased`), `SpinBox`, `ColorPicker` |
 | Feedback & data | `ProgressBar`, `CircularProgress`, `BusyIndicator`, `Plot` (`kind` = lines, bars), `Table`, `Canvas` (draw from Lua with `onPaint(self, p)`; `p:line/rect/circle/text/icon/polyline`) |
 | Other | `Timer`, `ImGuiDemo` |
 
@@ -116,8 +118,8 @@ theme {
     seed = "#6750A4", dark = true,
     spacing = 8, fontScale = 1.0,
     shape  = { extraSmall = 4, small = 8, medium = 12, large = 16, extraLarge = 28 },
-    colors = { primary = "#FF5722" },        -- any Material role
-    imgui  = { WindowBg = "#101010" },       -- any ImGuiCol_*
+    colors = { primary = "#FF5722", surface = "surfaceContainerLow" },  -- any Material role
+    imgui  = { WindowBg = "surface/0.9" },   -- any ImGuiCol_*
     style  = { FrameRounding = 6, ItemSpacing = { 10, 6 } },  -- any ImGuiStyle field
 }
 ```
@@ -127,6 +129,9 @@ Color props accept:
 - a role with alpha (`"onSurface/0.6"`)
 - a hex string
 - `{r, g, b, a}`
+
+So do `seed`, `colors` and `imgui` in the theme table; there, `colors`/`imgui` roles mean the scheme generated
+from that table's seed.
 
 Widgets use Material's disabled colors (container at 12%, content at 38% of `onSurface`) and
 animated state layers for hover and press.

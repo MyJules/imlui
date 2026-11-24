@@ -63,3 +63,11 @@ set(BUILD_GMOCK            OFF CACHE BOOL "" FORCE)
 add_subdirectory(googletest EXCLUDE_FROM_ALL)
 # SYSTEM: consumers see gtest headers as system headers (no warnings from them).
 set_target_properties(gtest gtest_main PROPERTIES CXX_SCAN_FOR_MODULES OFF SYSTEM ON)
+# SYSTEM only helps consumers; gtest's own sources include its headers as user headers,
+# and clang 21+ warns about a char8_t -> char32_t cast in gtest-printers.h.
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag(-Wno-character-conversion IMLUI_HAS_WNO_CHARACTER_CONVERSION)
+if(IMLUI_HAS_WNO_CHARACTER_CONVERSION)
+    target_compile_options(gtest PRIVATE -Wno-character-conversion)
+    target_compile_options(gtest_main PRIVATE -Wno-character-conversion)
+endif()

@@ -1,7 +1,7 @@
 # Elements
 
-Every built-in element, grouped like the root README. Defaults come from the element handlers (`renderer.cppm`,
-moving to `imlui.ui.elements.*`). Sizes are in **dp**. Colors are [color specs](theming.md#color-specs). Any prop
+Every built-in element, grouped like the root README. Defaults come from the element handlers
+(`src/imlui/ui/elements/*.cppm`). Sizes are in **dp**. Colors are [color specs](theming.md#color-specs). Any prop
 can be a plain value, a binding function or a `bind(...)` ([property values](lua-api.md#property-values)).
 **Two-way** props are written back when the user changes them.
 
@@ -43,7 +43,7 @@ It's non-visual. Its children are stacked.
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
-| `title` | string | `"imlui"` | Native window title, updated every frame. |
+| `title` | string | — | Native window title, re-read every frame (so it can be a binding). Without it, the last `setTitle()` call sticks, else `"imlui"`. |
 | `width`, `height` | number | — | Native window size, applied at load if both are `> 0`. On hot reload it's applied again only if it changed. |
 | `padding` | number | `24` | Content padding. |
 | `color` | color | `surface` | Background. |
@@ -353,9 +353,18 @@ Signals: `onToggled(self, checked)`.
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
 | `text` | string | `""` | Label. |
-| `checked` | bool, **two-way** | `false` | Set to `true` when clicked. It's never set back to `false`, so group the buttons yourself or use `RadioGroup`. |
+| `checked` | bool, **two-way** | `false` | Set to `true` when clicked. Without a `group` it's never set back to `false`. |
+| `group` | any value | — | RadioButtons with the same `group` act as one group: clicking one sets the others' `checked` to `false` (through their bindings). |
 
 Signals: `onClicked(self)`.
+
+```lua
+local s = state { size = "m" }
+Row {
+    RadioButton { text = "Small", group = "size", checked = s.size == "s", onClicked = function() s.size = "s" end },
+    RadioButton { text = "Medium", group = "size", checked = s.size == "m", onClicked = function() s.size = "m" end },
+}
+```
 
 ### RadioGroup
 

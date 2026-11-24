@@ -212,3 +212,49 @@ TEST_F(ThemeTableTest, PushedSchemeParsesBackAsColors) {
     EXPECT_TRUE(luaui::errors().empty());
     for (const auto& role : roles()) EXPECT_EQ(toHex(t.scheme.*role.member), toHex(s.*role.member)) << role.name;
 }
+
+TEST_F(ThemeTableTest, ColorOverridesAcceptRolesOfTheNewScheme) {
+    // Roles in `colors` refer to the scheme generated from this table's seed, not the current theme.
+    Theme t = parse(R"(
+        return { seed = "#B3261E", dark = false,
+                 colors = { surface = "surfaceContainerLow", primary = "onSurface/0.5", secondary = "#00FF00" } })");
+    Scheme generated = generateScheme(*parseHex("#B3261E"), false);
+    EXPECT_EQ(t.scheme.surface, generated.surfaceContainerLow);
+    EXPECT_EQ(t.scheme.primary, generated.onSurface.withAlpha(0.5f));
+    EXPECT_EQ(t.scheme.secondary, (Color{0, 1, 0, 1}));
+    EXPECT_NE(generated.surfaceContainerLow, Theme{}.scheme.surfaceContainerLow);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(ThemeTableTest, RolesReferToGeneratedColorsNotOverrides) {
+    // `primary` is overridden, but `secondary = "primary"` still means the generated primary.
+    Theme t = parse(R"(return { seed = "#006A6A", colors = { primary = "#FF0000", secondary = "primary" } })");
+    Scheme generated = generateScheme(*parseHex("#006A6A"), Theme{}.dark);
+    EXPECT_EQ(t.scheme.primary, (Color{1, 0, 0, 1}));
+    EXPECT_EQ(t.scheme.secondary, generated.primary);
+}
+
+TEST_F(ThemeTableTest, ImGuiColorsAcceptRoles) {
+    Theme t = parse(R"(return { seed = "#B3261E", dark = true, imgui = { WindowBg = "surfaceContainer/0.25" } })");
+    Scheme generated = generateScheme(*parseHex("#B3261E"), true);
+    ASSERT_EQ(t.imguiColors.size(), 1u);
+    EXPECT_EQ(t.imguiColors[0].first, ImGuiCol_WindowBg);
+    EXPECT_EQ(t.imguiColors[0].second, generated.surfaceContainer.withAlpha(0.25f));
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(ThemeTableTest, SeedAcceptsRoleNameAndTable) {
+    // The seed has no scheme of its own yet; its roles come from the current theme.
+    Theme fromRole = parse(R"(return { seed = "tertiary" })");
+    EXPECT_EQ(fromRole.seed, theme().scheme.tertiary);
+    Theme fromTable = parse("return { seed = { 0, 0.5, 1 } }");
+    EXPECT_EQ(fromTable.seed, (Color{0, 0.5f, 1, 1}));
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(ThemeTableTest, InvalidImGuiColorIsReported) {
+    Theme t = parse(R"(return { imgui = { WindowBg = "notARole", Text = 42 } })");
+    EXPECT_TRUE(hasError("theme.imgui.WindowBg: invalid color"));
+    EXPECT_TRUE(hasError("theme.imgui.Text: invalid color"));
+    EXPECT_TRUE(t.imguiColors.empty());
+}

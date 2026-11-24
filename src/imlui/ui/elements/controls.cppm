@@ -7,6 +7,7 @@ module;
 
 export module imlui.ui.elements.controls;
 
+import lua;
 import imgui;
 import imlui.theme.dpi;
 import imlui.widgets;
@@ -68,10 +69,31 @@ void switchToggle(Renderer&, const Node& n) {
     }
 }
 
+// Unchecks the other members of the button's `group`. lua/imlui.lua puts the
+// group's member set (a weak-keyed table) in `__radioGroup`.
+void uncheckRadioPeers(const Node& n) {
+    lua::State* state = n.state();
+    const int base = lua::gettop(state);
+    if (n.pushRaw("__radioGroup") == lua::Type::Table) {
+        // Collect first: Node::set may run Lua (bindings) that changes the group.
+        const int group = lua::gettop(state);
+        lua::pushnil(state);
+        while (lua::next(state, group) != 0) {
+            lua::pop(state); // value; the key stays for lua::next
+            // A copy of the key becomes next()'s cursor, leaving the original collected below it.
+            if (lua::istable(state, -1) && lua::topointer(state, -1) != n.ptr() && lua::checkstack(state, 2))
+                lua::pushvalue(state, -1);
+        }
+        for (int i = group + 1; i <= lua::gettop(state); ++i) Node{state, i}.set("checked", false);
+    }
+    lua::settop(state, base);
+}
+
 void radioButton(Renderer&, const Node& n) {
     std::string t = labelId(n.text(), "rb");
     if (md::radio(t.c_str(), n.boolean("checked", false))) {
         n.set("checked", true);
+        uncheckRadioPeers(n);
         n.emit("onClicked");
     }
 }

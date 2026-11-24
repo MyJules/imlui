@@ -6,9 +6,13 @@ The `material-ui` branch, newest first:
 
 | Commit | Change |
 |---|---|
-| `31dc92b` | Code style: an exception for including `<gtest/gtest.h>` in tests. Binding notes from phase A in the refactor spec. |
+| `fixes-1` | **Docs-review fixes.** `ui.setTitle()` sticks unless the `ApplicationWindow` has a `title` prop (default `"imlui"`). Theme tables accept role names and `"role/alpha"` in `seed`, `colors.*` and `imgui.*`; `colors`/`imgui` roles refer to the scheme generated from the same table, and an invalid `imgui.*` color is reported. `RadioButton { group = ... }` unchecks the other buttons of its group. `watch()` and `onFrame()` return a function that removes the callback. New `ui.isDark`, `ui.deltaTime`, `ui.imguiVersion`. `registerBuiltinElements` moved to `imlui.ui.elements.builtin`. No more gtest `-Wcharacter-conversion` warning. README layout and element tables updated; the temporary refactor spec is removed. Tests for theme-table colors and `lua/imlui.lua`. |
+| `afd358a` | **Module refactor phase B** merged: `imlui.widgets.*` modules and viewport-aware anchored popups. |
+| `6d1a447` | **Module refactor phase C** merged: `imlui.ui.renderer`, `imlui.ui.props`, `imlui.ui.elements.*`, `imlui.lua.painter`, `imlui.lua.native`, `imlui.app.*`. |
+| `472974a` | **Unit tests** merged: GoogleTest in `tests/` and a `ctest --preset clang-debug` preset. See [Development](development.md#testing). |
+| `31dc92b` | Code style: an exception for including `<gtest/gtest.h>` in tests. Binding notes from phase A. |
 | `0714daf` | **Module refactor phase A.** Foundation modules split to the code style: `src/wrap/` (`lua`, `lua.stack_guard`, `imgui`, `imlui.log`, `imlui.platform.window`), `imlui.color.*`, `imlui.theme.*`, `imlui.lua.*`. CMake globs `src/*.cppm`. |
-| `1e92ca3` | Temporary module refactor spec (`docs/refactor-spec.md`). |
+| `1e92ca3` | Temporary module refactor spec (since removed). |
 | `af0c076` | C++ code style guide (`CODE_STYLE.md`), `.clang-format`, and a `.clang-tidy` naming config. |
 | `6687027` | Live redraw during window resize: the engine renders from GLFW's refresh and framebuffer-size callbacks while the OS runs its modal resize loop. spdlog 1.15.3 vendored behind `imlui.log`. `ui.log.*` and `print()` route to spdlog. |
 | `2ef54d1` | **Material 3 polish.** Dear ImGui 1.92.9b (dynamic font sizes). Roboto Regular/Medium and Material Icons Round, with the M3 type scale and icons by name. Reworked widgets: icon buttons, extended FAB, filled/outlined text fields with icons, supporting and error text, dropdown menus, spin box, color field, tabs, navigation items, expanders, menus, snackbar, M3 progress indicators, charts and data table. Material disabled colors. `Row { justify }`, fill spacers, `Column { align }`, `menu` props. New elements: `TopAppBar`, `NavigationItem`, `IconButton`, `Icon`, `Divider`, `CircularProgress`, `Expander`, `Snackbar` (`ui.snackbar`). Fixed timer iteration when callbacks schedule timers. Redesigned gallery. `native.injectMouse` for scripted UI tests. |
@@ -28,17 +32,7 @@ The `material-ui` branch, newest first:
 
 The work happens in separate worktrees and branches, which merge into `material-ui`.
 
-- **Module refactor phase B: widgets.** Split `widgets.cppm` into `imlui.widgets.*` modules (common, surface, text,
-  button, selection, slider, progress, field, text_field, menu, dropdown, spin_box, color_field, tabs, navigation,
-  list, card, dialog, snackbar, chart, table) plus the `imlui.widgets` umbrella. This phase also includes a
-  **menu viewport fix**: anchored menus, including the dropdown and color-field popups, will stay inside the main
-  viewport. They shift left when they would overflow the right edge, and open upward when there's no room below.
-- **Module refactor phase C: renderer, elements, engine.** Split `renderer.cppm` into `imlui.ui.renderer`,
-  `imlui.ui.props` and the `imlui.ui.elements.*` groups. Move the Canvas painter to `imlui.lua.painter` and
-  `imlui.native` to `imlui.lua.native` (with `NativeHooks`, so it doesn't depend on `Engine`). Split
-  `engine.cppm` into `imlui.app.config` and `imlui.app.engine`. Behavior stays the same.
-- **Unit tests (GoogleTest).** Add a `tests/` directory and a `ctest --preset clang-debug` preset. See
-  [Development](development.md#testing).
+The module refactor (phases A–C) and the unit tests have landed; see the table above.
 
 ## Planned
 
