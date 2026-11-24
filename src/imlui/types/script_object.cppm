@@ -10,7 +10,9 @@
 //    a frame is requested.
 //  * emit("onPeak", args...) calls the `onPeak` handler.
 //
-// Main thread only, like everything that touches Lua or ImGui.
+// Main thread only, like everything that touches Lua or ImGui. The exception is a Handle (handle()): a weak,
+// copyable token a worker thread holds to post work back to the object, which runs only if the object is still
+// alive by then (Lua may collect an element, or close its state on hot reload, at any time).
 export module imlui.types.script_object;
 
 import std;
@@ -20,11 +22,35 @@ import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.lua_convert;
 import imlui.ui.frame_request;
+import imlui.ui.main_thread;
 
 export namespace imlui {
 
 class ScriptObject {
 public:
+    /// A weak, thread-safe reference to a ScriptObject for worker threads. Copy it freely, to any thread. It
+    /// never keeps the object alive and never gives access to it off the main thread: it only says whether the
+    /// object still lives, and posts functions that run on the main thread while it does.
+    class Handle {
+    public:
+        /// An empty handle: never alive, posts are dropped.
+        Handle() = default;
+
+        /// Thread-safe. True until the object's destructor runs (ScriptObject's, so after a derived destructor);
+        /// false for an empty handle. A worker polls it as its "cancelled" flag.
+        [[nodiscard]] bool alive() const;
+
+        /// Thread-safe: queues `fn` on the main thread (imlui::post, which wakes the loop). There, `fn` runs only if
+        /// the object is still alive; otherwise it is destroyed without running. So `fn` may capture the object's
+        /// `this` and call notify()/emit(). Returns false (and drops `fn`) when the object is already gone.
+        bool post(std::function<void()> fn) const;
+
+    private:
+        friend class ScriptObject;
+        explicit Handle(std::shared_ptr<const std::atomic<bool>> alive);
+        std::shared_ptr<const std::atomic<bool>> m_alive;
+    };
+
     ScriptObject() = default;
     virtual ~ScriptObject();
     ScriptObject(const ScriptObject&) = delete;
@@ -66,6 +92,9 @@ public:
         return ok;
     }
 
+    /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
+    [[nodiscard]] Handle handle();
+
     /// The Lua state this object is linked to, or nullptr.
     [[nodiscard]] lua::State* luaState() const;
     [[nodiscard]] bool isSingleton() const;
@@ -86,6 +115,8 @@ public:
 private:
     lua::State* m_state = nullptr;
     bool m_singleton = false;
+    /// Shared with every Handle, created by the first handle(). Set to false by the destructor.
+    std::shared_ptr<std::atomic<bool>> m_alive;
 };
 
 } // namespace imlui
@@ -124,12 +155,32 @@ std::string changedSignal(std::string_view property) {
 } // namespace
 
 ScriptObject::~ScriptObject() {
+    // Destructors run on the main thread, like the posted functions that check it: none can run past this point.
+    if (m_alive) m_alive->store(false, std::memory_order_release);
     if (!m_state) return;
     // Destroyed while still linked (e.g. a singleton that dies before the engine): forget the link.
     pushLinks(m_state);
     lua::pushnil(m_state);
     lua::rawsetp(m_state, -2, this);
     lua::pop(m_state);
+}
+
+ScriptObject::Handle::Handle(std::shared_ptr<const std::atomic<bool>> alive) : m_alive{std::move(alive)} {}
+
+bool ScriptObject::Handle::alive() const { return m_alive && m_alive->load(std::memory_order_acquire); }
+
+bool ScriptObject::Handle::post(std::function<void()> fn) const {
+    if (!fn || !alive()) return false;
+    imlui::post([alive = m_alive, fn = std::move(fn)] {
+        // On the main thread, where the object is destroyed too: it can't die between this check and fn().
+        if (alive->load(std::memory_order_acquire)) fn();
+    });
+    return true;
+}
+
+ScriptObject::Handle ScriptObject::handle() {
+    if (!m_alive) m_alive = std::make_shared<std::atomic<bool>>(true);
+    return Handle{m_alive};
 }
 
 lua::State* ScriptObject::luaState() const { return m_state; }

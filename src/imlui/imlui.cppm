@@ -24,6 +24,7 @@ export import imlui.ui.props;
 export import imlui.ui.renderer;
 export import imlui.ui.navigation_scope;
 export import imlui.ui.frame_request;
+export import imlui.ui.main_thread;
 export import imlui.types.lua_convert;
 export import imlui.types.script_object;
 export import imlui.types.frame;
