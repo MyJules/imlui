@@ -347,6 +347,30 @@ TEST(ResourceManifest, RunsInASandbox) {
     EXPECT_NE(failure(dir, "\x1bLua"), "");
 }
 
+TEST(ResourceManifest, RunawayManifestsFail) {
+    test::TempDir dir;
+    // An endless loop hits the instruction limit instead of hanging the build.
+    EXPECT_NE(failure(dir, "while true do end").find("runs too long"), std::string::npos);
+    // A runaway string or table hits the memory limit.
+    EXPECT_NE(failure(dir, "local s = 'x'\nfor i = 1, 40 do s = s .. s end").find("not enough memory"),
+              std::string::npos);
+    // Strings that aren't UTF-8 are reported, not thrown on as paths (found by the `manifest` fuzz target).
+    for (const char* group : {"files = 'a\xff.lua'", "base = '\xc0\xaf'", "include = '\xed\xa0\x80/**'",
+                              "files = 'x', compress = { ['\xf4\x90\x80\x80'] = true }", "mount = '\xe2\x82'"})
+        EXPECT_NE(failure(dir, std::string{"return { prefix = 'app', "} + group + " }").find("isn't valid UTF-8"),
+                  std::string::npos)
+            << group;
+    // Both halves of parseManifest, as the fuzz target calls them.
+    std::string error;
+    const auto groups = imlui::tools::evaluateManifest("return { prefix = 'app', base = 'nowhere', files = 'x' }",
+                                                       dir.path() / "resources.lua", error);
+    ASSERT_TRUE(groups) << error;
+    ASSERT_EQ(groups->size(), 1u);
+    EXPECT_EQ((*groups)[0].base, "nowhere");
+    EXPECT_FALSE(imlui::tools::resolveManifest(*groups, dir.path() / "resources.lua", error));
+    EXPECT_NE(error.find("base folder 'nowhere' doesn't exist"), std::string::npos) << error;
+}
+
 TEST(ResourceManifest, BadShapesAreReported) {
     test::TempDir dir;
     dir.write("main.lua", "");

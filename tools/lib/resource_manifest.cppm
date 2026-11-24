@@ -14,7 +14,8 @@
 //
 // The manifest is evaluated in a sandbox: a fresh Lua state with only the base library, without dofile, loadfile,
 // load and collectgarbage (no io, os, require, string, ...), and text chunks only. The manifest file itself is never
-// matched by a pattern (list it in `files` to embed it).
+// matched by a pattern (list it in `files` to embed it). It may run at most manifestMaxInstructions Lua instructions
+// and use at most manifestMaxMemory bytes, so a runaway manifest fails the build instead of hanging it.
 export module imlui.tools.resource_manifest;
 
 import std;
@@ -37,6 +38,17 @@ struct ResourceGroup {
     std::vector<std::string> exclude;
 };
 
+/// The fields of one group as the manifest wrote them, before they're checked against the file system.
+struct ManifestGroupFields {
+    std::string prefix;
+    std::string mount;
+    std::string base = ".";
+    std::vector<std::string> files;
+    std::vector<std::string> include;
+    std::vector<std::string> exclude;
+    std::map<std::string, bool> compress;
+};
+
 /// A parsed manifest.
 struct ResourceManifest {
     std::filesystem::path file; ///< the manifest, absolute
@@ -53,6 +65,22 @@ struct ResourceManifest {
 /// is relative to, the file patterns never match).
 [[nodiscard]] std::optional<ResourceManifest> parseManifest(std::string_view source, const std::filesystem::path& file,
                                                             std::string& error);
+
+/// The first half of parseManifest(): runs the manifest's Lua source in the sandbox and reads the groups it returns,
+/// without looking at the file system. `file` names it in error messages. nullopt, with the reason in `error`, when
+/// it fails to run or returns something that isn't one group table or a list of them.
+[[nodiscard]] std::optional<std::vector<ManifestGroupFields>>
+evaluateManifest(std::string_view source, const std::filesystem::path& file, std::string& error);
+
+/// The second half of parseManifest(): checks `groups` (from evaluateManifest()) and selects their files, relative
+/// to manifest `file`.
+[[nodiscard]] std::optional<ResourceManifest> resolveManifest(std::span<const ManifestGroupFields> groups,
+                                                              const std::filesystem::path& file, std::string& error);
+
+/// The most Lua instructions a manifest may run.
+inline constexpr int manifestMaxInstructions = 10'000'000;
+/// The most memory (bytes) a manifest's Lua state may use.
+inline constexpr std::size_t manifestMaxMemory = std::size_t{64} << 20;
 
 /// What a build of the manifest depends on: the manifest, every file of every group and every scanned folder.
 [[nodiscard]] std::vector<std::filesystem::path> manifestDependencies(const ResourceManifest& manifest);
@@ -71,18 +99,42 @@ namespace fs = std::filesystem;
 
 namespace {
 
-/// The fields of one group, as the manifest wrote them.
-struct GroupFields {
-    std::string prefix;
-    std::string mount;
-    std::string base = ".";
-    std::vector<std::string> files;
-    std::vector<std::string> include;
-    std::vector<std::string> exclude;
-    std::map<std::string, bool> compress;
-};
+using GroupFields = ManifestGroupFields;
 
 using StatePtr = std::unique_ptr<lua::State, void (*)(lua::State*)>;
+
+/// Whether `s` is well-formed UTF-8 (no overlong forms, surrogates or code points past U+10FFFF). The strings become
+/// paths, and converting one that isn't throws on Windows.
+bool validUtf8(std::string_view s) {
+    for (std::size_t i = 0; i < s.size();) {
+        const auto byte = [&](std::size_t at) { return static_cast<unsigned char>(s[at]); };
+        const unsigned lead = byte(i);
+        std::size_t length = 0;
+        unsigned low = 0x80, high = 0xBF; // the allowed range of the second byte
+        if (lead < 0x80) {
+            length = 1;
+        } else if (lead >= 0xC2 && lead <= 0xDF) {
+            length = 2;
+        } else if (lead >= 0xE0 && lead <= 0xEF) {
+            length = 3;
+            if (lead == 0xE0) low = 0xA0;  // overlong
+            if (lead == 0xED) high = 0x9F; // surrogates
+        } else if (lead >= 0xF0 && lead <= 0xF4) {
+            length = 4;
+            if (lead == 0xF0) low = 0x90;  // overlong
+            if (lead == 0xF4) high = 0x8F; // past U+10FFFF
+        } else {
+            return false;
+        }
+        if (length > s.size() - i) return false;
+        for (std::size_t k = 1; k < length; ++k) {
+            const unsigned b = byte(i + k);
+            if (k == 1 ? (b < low || b > high) : (b < 0x80 || b > 0xBF)) return false;
+        }
+        i += length;
+    }
+    return true;
+}
 
 bool readString(lua::State* state, std::string& out) {
     if (lua::type(state, -1) != lua::Type::String) return false;
@@ -169,17 +221,61 @@ bool readGroup(lua::State* state, int t, const std::string& where, GroupFields& 
         error = where + "'prefix' is required (`prefix = \"app\"`)";
         return false;
     }
+    // Every string names a path or a mount point.
+    const auto invalid = [&](std::string_view field) {
+        error = where + "'" + std::string{field} + "' isn't valid UTF-8";
+        return false;
+    };
+    for (const auto& [field, value] :
+         {std::pair{"prefix", &group.prefix}, std::pair{"mount", &group.mount}, std::pair{"base", &group.base}})
+        if (!validUtf8(*value)) return invalid(field);
+    for (const auto& [field, list] :
+         {std::pair{"files", &group.files}, std::pair{"include", &group.include}, std::pair{"exclude", &group.exclude}})
+        for (const auto& value : *list)
+            if (!validUtf8(value)) return invalid(field);
+    for (const auto& [path, compress] : group.compress)
+        if (!validUtf8(path)) return invalid("compress");
     return true;
 }
 
-/// Runs the manifest in a sandbox and reads the groups it returns.
-std::optional<std::vector<GroupFields>> evaluate(std::string_view source, const fs::path& file, std::string& error) {
-    const StatePtr owner{lua::newstate(), lua::close};
+/// The manifest's Lua allocator: at most manifestMaxMemory bytes in all (Lua then raises "not enough memory").
+struct MemoryBudget {
+    std::size_t used = 0;
+};
+
+void* budgetAlloc(void* ud, void* ptr, std::size_t oldSize, std::size_t newSize) {
+    auto& budget = *static_cast<MemoryBudget*>(ud);
+    if (!ptr) oldSize = 0; // a new block: oldSize is the object's type
+    if (newSize == 0) {
+        std::free(ptr);
+        budget.used -= oldSize;
+        return nullptr;
+    }
+    if (newSize > oldSize && newSize - oldSize > manifestMaxMemory - budget.used) return nullptr;
+    void* block = std::realloc(ptr, newSize);
+    if (block) budget.used = budget.used - oldSize + newSize;
+    return block;
+}
+
+/// Runs once the manifest has run manifestMaxInstructions instructions.
+void tooLong(lua::State* state, lua::Debug*) {
+    // A literal: lua::error longjmps, so nothing here may need destroying.
+    static_assert(manifestMaxInstructions == 10'000'000);
+    lua::error(state, "the manifest runs too long (more than 10000000 Lua instructions: an endless loop?)");
+}
+
+} // namespace
+
+std::optional<std::vector<GroupFields>> evaluateManifest(std::string_view source, const fs::path& file,
+                                                         std::string& error) {
+    MemoryBudget budget;
+    const StatePtr owner{lua::newstate(budgetAlloc, &budget), lua::close};
     lua::State* state = owner.get();
     if (!state) {
         error = "can't create a Lua state";
         return std::nullopt;
     }
+    lua::sethook(state, tooLong, lua::maskCount, manifestMaxInstructions);
     lua::openbase(state);
     for (const char* unsafe : {"dofile", "loadfile", "load", "collectgarbage"}) {
         lua::pushnil(state);
@@ -224,6 +320,8 @@ std::optional<std::vector<GroupFields>> evaluate(std::string_view source, const 
     }
     return groups;
 }
+
+namespace {
 
 bool isPrefix(std::string_view prefix) {
     if (prefix.size() < 2 || prefix.front() < 'a' || prefix.front() > 'z') return false;
@@ -421,18 +519,22 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
     return group;
 }
 
+/// `file` absolute and normalized, as the manifest's chunk name and the base of its folders.
+fs::path manifestPath(const fs::path& file) {
+    std::error_code ec;
+    return fs::absolute(file, ec).lexically_normal();
+}
+
 } // namespace
 
-std::optional<ResourceManifest> parseManifest(std::string_view source, const fs::path& file, std::string& error) {
-    std::error_code ec;
+std::optional<ResourceManifest> resolveManifest(std::span<const GroupFields> groups, const fs::path& file,
+                                                std::string& error) {
     ResourceManifest manifest;
-    manifest.file = fs::absolute(file, ec).lexically_normal();
-    const auto groups = evaluate(source, manifest.file, error);
-    if (!groups) return std::nullopt;
-    for (std::size_t i = 0; i < groups->size(); ++i) {
+    manifest.file = manifestPath(file);
+    for (std::size_t i = 0; i < groups.size(); ++i) {
         const std::string where =
-            utf8(manifest.file) + ": " + (groups->size() > 1 ? "group " + std::to_string(i + 1) + ": " : std::string{});
-        auto group = resolveGroup((*groups)[i], manifest.file, where, manifest.scannedFolders, error);
+            utf8(manifest.file) + ": " + (groups.size() > 1 ? "group " + std::to_string(i + 1) + ": " : std::string{});
+        auto group = resolveGroup(groups[i], manifest.file, where, manifest.scannedFolders, error);
         if (!group) return std::nullopt;
         manifest.groups.push_back(std::move(*group));
     }
@@ -440,6 +542,13 @@ std::optional<ResourceManifest> parseManifest(std::string_view source, const fs:
     const auto [first, last] = std::ranges::unique(manifest.scannedFolders);
     manifest.scannedFolders.erase(first, last);
     return manifest;
+}
+
+std::optional<ResourceManifest> parseManifest(std::string_view source, const fs::path& file, std::string& error) {
+    const fs::path absolute = manifestPath(file);
+    const auto groups = evaluateManifest(source, absolute, error);
+    if (!groups) return std::nullopt;
+    return resolveManifest(*groups, absolute, error);
 }
 
 std::optional<ResourceManifest> loadManifest(const fs::path& file, std::string& error) {
