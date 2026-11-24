@@ -126,23 +126,31 @@ and **Reload** buttons. An error in a binding or handler only affects that value
 keeps rendering. Reads and writes of a `bind(t, k)` source go through `safeCall` too (a small C function doing
 `t[k]` / `t[k] = v`), since a `state{}` proxy's `__newindex` runs `watch()` callbacks.
 
-Lua is compiled as C, so an error raised outside any `pcall` would reach the panic handler, and Lua aborts the
-process. As a last line of defence the render pass (step 4, and the overlays in step 5) runs inside
-`luaui::renderProtected` (`imlui.lua.protected_render`): a C function called with `safeCall`, so an unforeseen
-error in it is reported like the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows,
-tables and Push/Pop stacks the pass left open, so the frame still ends. The rest of that pass is skipped and the
-error's `longjmp` skipped the C++ destructors on the way, so this is not error handling: code that calls into
-Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error that
-escapes even that before Lua aborts. C++ exceptions never cross Lua's C frames. Every C function that runs C++
-code which may throw catches them: methods (`TypeBuilder`, a Lua error `Gauge:reset: ...`), the `imlui.native`
-functions (the host's `NativeHooks`, theme and font loading: a Lua error `imlui.native.quit: ...`) and
-`imlui.types.tick`. Property hooks, `componentComplete()`, `tick()` and `destroyed()` (from `__gc`, which must
-never raise) are reported as script errors instead, and `renderProtected` turns one from the render pass into a
-reported error. The pattern (`luaui::catchCxx` / `luaui::reportCxx` in `imlui.lua.errors`): the message is pushed
-in protected mode (`luaui::pushMessage`, which never raises), and the error is raised only after the catch block
-is left, so Lua's `longjmp` never leaves a catch block or skips a live C++ object of that frame. The property sync
+Lua is compiled as C++ (`external/lua_cxx/imlui_lua.cpp`), so a Lua error is a C++ exception (`lua::Raised`)
+instead of a `longjmp`: it unwinds the C++ frames between the raise and the protected call that catches it, and their
+destructors run. Code at the Lua/C++ boundary may hold C++ objects (strings, RAII guards) and raise anywhere,
+including inside a catch block. Two rules remain: C++ code never swallows a `lua::Raised` (a `catch (...)` that may
+see one rethrows it first: `catch (const lua::Raised&) { throw; }`), and a destructor that touches the Lua stack
+doesn't drop the error value on top while one unwinds it (`lua::StackGuard` leaves the stack alone then).
+
+An error raised outside any `pcall` still reaches the panic handler, and Lua aborts the process. As a last line of
+defence the render pass (step 4, and the overlays in step 5) runs inside `luaui::renderProtected`
+(`imlui.lua.protected_render`): a C function called with `safeCall`, so an unforeseen error in it is reported like
+the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows, tables and Push/Pop stacks the pass
+left open, so the frame still ends. The rest of that pass is skipped, so this is not error handling: code that calls
+into Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error
+that escapes even that before Lua aborts.
+
+C++ exceptions become Lua errors with a message at the library's C functions: methods (`TypeBuilder`, a Lua error
+`Gauge:reset: ...`), the `imlui.native` functions (the host's `NativeHooks`, theme and font loading: a Lua error
+`imlui.native.quit: ...`), `imlui.types.tick` and the render pass (`luaui::catchCxx`, which raises
+`<where>: <what>` and lets a Lua error pass). Property hooks, `componentComplete()`, `tick()` and `destroyed()` (from
+`__gc`, which must never raise) are reported as script errors instead (`luaui::reportCxx`), and the `imlui.resource`
+functions return nil and a message. A C++ exception that reaches a protected call without that (a bug) still
+doesn't corrupt anything: the build maps a `std::bad_alloc` to a Lua memory error (`"not enough memory"`), and any
+other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour). The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
-reported and can't leave the element marked as "syncing" (which would skip every later sync).
+reported, not raised.
 
 ## Property resolution
 
@@ -259,7 +267,7 @@ A stored file is served straight from the embedded data or the archive buffer (z
 decompressed on its first read, under that file's own lock (files decompress in parallel, each once), and the
 buffer is kept until the mount is destroyed, so the bytes stay valid as long as the mount. Corrupt compressed data
 reads as a missing file and is logged once (the failure is remembered); a file too large to allocate reads as missing
-and is logged, without an exception (reads come from Lua's C frames).
+and is logged, without an exception (a failed read is "not found").
 
 `defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
 
@@ -572,8 +580,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `lua` | Lua 5.4 C API, with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise` and `openbase` for sandboxes); `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
-| `lua.stack_guard` | `lua::StackGuard`: restores the stack top on scope exit |
+| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise` and `openbase` for sandboxes); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
+| `lua.stack_guard` | `lua::StackGuard`: restores the stack top on a normal scope exit (not while a Lua error unwinds it) |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink), `setLevel` |
@@ -607,7 +615,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`; `pushMessage`, `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions), `toDisplayString` (protected `tostring`) |
+| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`; `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `raiseException`, `toDisplayString` (protected `tostring`) |
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
@@ -743,7 +751,11 @@ project already has `glfw`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is 
   user config (`external/imlui_imconfig.h`). The config routes `IM_ASSERT` to a handler that reports the failing
   expression and the ImGui window it happened in, then aborts. ImGui 1.92 rasterizes glyphs on demand, so every
   text size and icon size stays sharp.
-- **Lua 5.4.8** is compiled as C, without the `lua`/`luac` executables.
+- **Lua 5.4.8** is compiled as C++, as one translation unit (`external/lua_cxx/imlui_lua.cpp` includes Lua's
+  `onelua.c`), without the `lua`/`luac` executables. The vendored sources are unchanged: the file only sets the
+  error-handling hooks `ldo.c` leaves to the build (`LUAI_THROW`/`LUAI_TRY`), so Lua throws `imlui_lua_error`
+  (`external/lua_cxx/imlui_lua_error.h`, `lua::Raised` in the wrapper) and maps a `std::bad_alloc` to a memory error.
+  The API has C++ linkage: `src/wrap/lua.cppm` includes the headers without `extern "C"`.
 - **GLFW 3.4** is built via `add_subdirectory` (its CMake does the per-platform work).
 - **spdlog 1.15.3** is built from its sources as its own CMake would build the static library: `SPDLOG_COMPILED_LIB`
   with the bundled fmt.
