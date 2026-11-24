@@ -17,17 +17,9 @@
 //
 // Errors the scripts report go to luaui::errors() (cleared when the harness is created and destroyed).
 // Main thread only, one harness at a time (ImGui and the error list are global).
-module;
-
-#include <concepts>
-#include <initializer_list>
-#include <memory>
-#include <set>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module imlui.test.headless_frame;
+
+import std;
 
 import lua;
 import imgui;

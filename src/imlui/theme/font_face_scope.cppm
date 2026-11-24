@@ -1,12 +1,7 @@
 // FontFaceScope: RAII override of the type scale's faces with a named font (an element's `font` prop).
-module;
-
-#include <functional>
-#include <set>
-#include <string>
-#include <string_view>
-
 export module imlui.theme.font_face_scope;
+
+import std;
 
 import imgui;
 import imlui.log;

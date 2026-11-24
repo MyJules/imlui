@@ -1,11 +1,8 @@
 // Tab: one page of a TabBar, as a typed element. The TabBar reads its title and icon and
 // renders the content of the current tab; a Tab outside a TabBar renders its content inline.
-module;
-
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.tab;
+
+import std;
 
 import imlui.types.element;
 import imlui.types.frame;

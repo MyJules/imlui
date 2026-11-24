@@ -1,16 +1,8 @@
 // EmbeddedMount: files compiled into the executable. The modules that imlui_add_resources (cmake/ImluiResources.cmake)
 // generates hold the data (`#embed`) and a static table of records, and build their mount with this class.
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.resources.embedded_mount;
+
+import std;
 
 import imlui.resources.packed_mount;
 

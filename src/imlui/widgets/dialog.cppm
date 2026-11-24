@@ -1,9 +1,7 @@
 // Material basic dialog (modal popup centered in the main viewport).
-module;
-
-#include <string_view>
-
 export module imlui.widgets.dialog;
+
+import std;
 
 import imgui;
 import imlui.color;

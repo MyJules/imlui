@@ -1,10 +1,7 @@
 // Header and body cell helpers for Material data tables (inside ImGui::BeginTable).
-module;
-
-#include <optional>
-#include <string_view>
-
 export module imlui.widgets.table;
+
+import std;
 
 import imgui;
 import imlui.color;

@@ -475,7 +475,7 @@ library's own rules in `src/CMakeLists.txt`):
 | `bin/` | `imlui_rc`, `imlui_pack`: imported as `imlui::imlui_rc`, `imlui::imlui_pack`, which the helpers run. |
 | `lib/` | `imlui_core` (the modules, exported as `imlui::imlui`, which an app links), `imlui_files` (the library's own files, embedded, and `defaultConfig()`: `imlui::imlui_files`, linked by `imlui::imlui`), `imlui_lua` (`imlui::imlui_lua`), all static. The build tree's target `imlui` isn't installed. |
 | `lib/imlui/` | The vendored static libraries the library needs: `imlui::ext_lua`, `ext_imgui`, `ext_glfw`, `ext_spdlog` (compiled, `SPDLOG_COMPILED_LIB`, bundled fmt), `ext_stb_image`, `ext_zstd` (the decompressor). Link-only for the app, except through the modules' BMIs. |
-| `lib/cmake/imlui/` | `imluiConfig.cmake` (finds Threads and OpenGL, includes the targets and the helpers), `imluiConfigVersion.cmake` (`SameMinorVersion`: 0.1 accepts 0.1.*, not 0.2), `imluiTargets*.cmake`, `cxx-modules/` (which module each interface unit provides, per configuration), `ImluiResources.cmake`, `ImluiWarnings.cmake`. |
+| `lib/cmake/imlui/` | `imluiConfig.cmake` (finds Threads and OpenGL, includes the targets and the helpers), `imluiConfigVersion.cmake` (`SameMinorVersion`: 0.1 accepts 0.1.*, not 0.2), `imluiTargets*.cmake`, `cxx-modules/` (which module each interface unit provides, per configuration), `ImluiResources.cmake`, `ImluiWarnings.cmake`, `ImluiStd.cmake` (builds the module `std` in the app, below). |
 | `include/imlui/modules/` | The module interface units, as laid out in `src/` (`imlui/...`, `wrap/...`). Not `imlui.embedded.imlui`: in an install it's private to `imlui_files`, whose archive holds the blob. |
 | `include/imlui/ext/<name>/` | The vendored headers the wrappers include in their global module fragments: `lua/` (`lua.h`, `lualib.h`, `lauxlib.h`, `luaconf.h`), `imgui/` (the ImGui headers, the GLFW and OpenGL3 backend headers, `imlui_imconfig.h`), `glfw/GLFW/`, `spdlog/spdlog/` (with the bundled fmt), `stb/stb_image.h`, `zstd/` (`zstd.h`, `zstd_errors.h`). Each is its `imlui::ext_*` target's include folder; under `imlui/` so they never meet another copy of the same library. |
 | `share/imlui/licenses/` | The vendored code's licenses and the fonts'. |
@@ -494,6 +494,14 @@ the BMIs in the app's build. Hence:
   `imlui_lua` (so of `imlui`): clang refuses to import a BMI built with a different overflow setting, so everything
   that imports imlui must be compiled with the same one, in every mode. Sanitizer flags (`IMLUI_SANITIZERS`) are
   interface options of `imlui_lua` the same way, so an installed sanitizer build exports them too.
+- The module `std` isn't installed either. Every imlui module does `import std;`, and the `std` BMI belongs to the
+  compiler and the STL as much as imlui's do, so `imluiConfig.cmake` builds it in the app
+  (`imlui_add_std_module(imlui_std ABI_FROM imlui::imlui_lua)`, `cmake/ImluiStd.cmake`): from the app's standard
+  library's own module source (the MSVC STL's `modules/std.ixx`, or the `std` entry of `libc++.modules.json` /
+  `libstdc++.modules.json`), compiled with `imlui_lua`'s interface options (`-ftrapv` in Debug, the sanitizers). The
+  exported targets link it as `imlui::std`; in the build tree they link `imlui_std`, built the same way. CMake's own
+  `import std` (`CMAKE_CXX_MODULE_STD`) isn't used: it's experimental and doesn't support clang on the MSVC STL.
+  `IMLUI_STD_MODULE_SOURCE` overrides the module source.
 - An app links `imlui::imlui`, which is `imlui_core`, the target holding the modules, not an INTERFACE target over the
   modules and the files: CMake builds BMIs only for the modules of the imported targets an app links directly (and
   those their modules import), so the modules must be in the linked target itself.

@@ -7,15 +7,9 @@
 // space, gives its node, type and stable ImGui ID, remembers its size from the last frame (immediate-mode
 // layouts measure on the previous frame), and gives the C++ instance of a typed child with its properties
 // synced (as<T>()).
-module;
-
-#include <concepts>
-#include <functional>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module imlui.types.frame;
+
+import std;
 
 import lua;
 import imgui;

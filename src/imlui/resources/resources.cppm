@@ -1,14 +1,7 @@
 // Resources: the app's files (scripts, fonts, data) by name, from stacked mounts.
-module;
-
-#include <algorithm>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module imlui.resources;
+
+import std;
 
 export import imlui.resources.data;
 import imlui.resources.mount;

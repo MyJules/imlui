@@ -1,11 +1,7 @@
 // Script error collection and protected calls into Lua.
-module;
-
-#include <string>
-#include <utility>
-#include <vector>
-
 export module imlui.lua.errors;
+
+import std;
 
 import lua;
 import imlui.log;

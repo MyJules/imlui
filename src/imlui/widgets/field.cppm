@@ -1,12 +1,8 @@
 // Shared plumbing of text-field-like controls (text field, dropdown, spin box):
 // container, floating label, icons, indicator and supporting text.
-module;
-
-#include <cstddef>
-#include <string>
-#include <string_view>
-
 export module imlui.widgets.field;
+
+import std;
 
 import imgui;
 import imlui.color;

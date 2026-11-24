@@ -15,21 +15,9 @@
 // The manifest is evaluated in a sandbox: a fresh Lua state with only the base library, without dofile, loadfile,
 // load and collectgarbage (no io, os, require, string, ...), and text chunks only. The manifest file itself is never
 // matched by a pattern (list it in `files` to embed it).
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <filesystem>
-#include <map>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
-#include <vector>
-
 export module imlui.tools.resource_manifest;
+
+import std;
 
 import lua;
 import imlui.tools.glob;

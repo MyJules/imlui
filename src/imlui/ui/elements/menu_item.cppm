@@ -1,9 +1,7 @@
 // MenuItem: one Material menu row, as a typed element.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.menu_item;
+
+import std;
 
 import imlui.widgets;
 import imlui.types.element;

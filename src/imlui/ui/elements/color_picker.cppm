@@ -1,11 +1,7 @@
 // ColorPicker: a Material color field (swatch + hex, opening a picker popup), as a typed element.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.color_picker;
+
+import std;
 
 import imlui.color;
 import imlui.widgets.color_field;

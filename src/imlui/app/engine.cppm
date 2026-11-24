@@ -10,27 +10,9 @@
 //  * exposes `imlui.native` to Lua (theme, colors, time, quit, ...)
 //  * owns the TypeRegistry: C++ element types and singletons registered with registerType<T>() and
 //    registerSingleton(), installed into every new Lua state
-module;
-
-#include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <concepts>
-#include <filesystem>
-#include <functional>
-#include <limits>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <set>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
-#include <vector>
-
 export module imlui.app.engine;
+
+import std;
 
 import lua;
 import imgui;

@@ -1,18 +1,8 @@
 // How a resource file is stored, in embedded data and in .pak archives alike: compressed with zstd when that
 // saves enough, as is otherwise.
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.tools.resource_encoding;
+
+import std;
 
 import zstd.compress;
 

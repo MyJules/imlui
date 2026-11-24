@@ -1,15 +1,7 @@
 // decodeImage(): PNG and JPEG bytes to RGBA pixels, with stb_image.
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <string>
-#include <vector>
-
 export module imlui.image.decode;
+
+import std;
 
 import stb_image;
 

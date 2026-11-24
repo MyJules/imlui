@@ -1,12 +1,7 @@
 // Plot: a Material line / bar chart, as a typed element.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module imlui.ui.elements.plot;
+
+import std;
 
 import imlui.color;
 import imlui.widgets.chart;

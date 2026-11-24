@@ -1,10 +1,7 @@
 // Navigation destinations: drawer items, navigation bar items and navigation rail items.
-module;
-
-#include <algorithm>
-#include <string_view>
-
 export module imlui.widgets.navigation;
+
+import std;
 
 import imgui;
 import imlui.color;

@@ -1,12 +1,7 @@
 // ComboBox: the Material 3 exposed dropdown menu, as a typed element.
-module;
-
-#include <cstddef>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module imlui.ui.elements.combo_box;
+
+import std;
 
 import imlui.widgets.dropdown;
 import imlui.types.element;

@@ -1,20 +1,7 @@
 // Engine configuration and the standard config for an app host.
-module;
-
-#include <algorithm>
-#include <cstdlib>
-#include <filesystem>
-#include <initializer_list>
-#include <functional>
-#include <memory>
-#include <set>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
-#include <vector>
-
 export module imlui.app.config;
+
+import std;
 
 import imlui.log;
 import imlui.platform.window;

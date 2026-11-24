@@ -23,22 +23,9 @@
 // elements (Element::setTicking) are synced and ticked at the start of every frame by tick(now), which
 // ui.__tick calls, rendered or not.
 // Main thread only.
-module;
-
-#include <concepts>
-#include <cstddef>
-#include <exception>
-#include <iterator>
-#include <map>
-#include <memory>
-#include <new>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.types.registry;
+
+import std;
 
 import lua;
 import imlui.lua.errors;

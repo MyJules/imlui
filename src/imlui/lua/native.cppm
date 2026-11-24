@@ -1,15 +1,8 @@
 // The `imlui.native` Lua library: theme, colors, time, text metrics, window size classes, logging
 // and app control (quit / reload / title / window size, through NativeHooks).
-module;
-
-#include <cstddef>
-#include <functional>
-#include <iterator>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module imlui.lua.native;
+
+import std;
 
 import lua;
 import imgui;

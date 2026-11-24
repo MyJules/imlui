@@ -5,13 +5,9 @@
 // path, and moving the element elsewhere in the tree (Responsive picking another layout for a size class)
 // gives it a new path, so ImGui would start the new window at the top. The element remembers its scroll and
 // puts it back when its window appears at another path.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.scroll_view;
+
+import std;
 
 import imgui;
 import imlui.color;

@@ -1,10 +1,7 @@
 // Dialog: the Material 3 basic dialog (a modal popup), as a typed element.
-module;
-
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.dialog;
+
+import std;
 
 import imlui.widgets;
 import imlui.types.element;

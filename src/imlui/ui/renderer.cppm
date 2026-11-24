@@ -5,14 +5,9 @@
 // Renderer reaches through the Renderer::Types interface (the registry implements it; this module can't import
 // the registry, whose Frames render children through the Renderer). render() wraps each element (visible,
 // enabled, layout group, tooltip, ID scope) and lets the registry sync and render its instance.
-module;
-
-#include <algorithm>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module imlui.ui.renderer;
+
+import std;
 
 import lua;
 import imgui;

@@ -1,12 +1,8 @@
 // Section (alias Expander): a Material list header that shows or hides its children, as a typed element
 //.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.section;
+
+import std;
 
 import imgui;
 import imlui.widgets;

@@ -1,11 +1,7 @@
 // SegmentedButton: the Material 3 single-select segmented button, as a typed element.
-module;
-
-#include <cstddef>
-#include <string>
-#include <vector>
-
 export module imlui.ui.elements.segmented_button;
+
+import std;
 
 import imlui.widgets;
 import imlui.types.element;

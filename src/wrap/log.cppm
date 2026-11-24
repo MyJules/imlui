@@ -11,14 +11,9 @@ module;
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
-#include <format>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.log;
+
+import std;
 
 export namespace imlui::log {
 

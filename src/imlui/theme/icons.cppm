@@ -1,15 +1,7 @@
 // Icons: the Material Icons font and its name -> codepoint table.
-module;
-
-#include <charconv>
-#include <cstddef>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
 export module imlui.theme.icons;
+
+import std;
 
 import imgui;
 import imlui.log;

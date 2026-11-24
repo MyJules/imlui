@@ -1,11 +1,7 @@
 // Snackbar: brief message bar at the bottom of the main viewport.
-module;
-
-#include <algorithm>
-#include <string>
-#include <string_view>
-
 export module imlui.widgets.snackbar;
+
+import std;
 
 import imgui;
 import imlui.color;

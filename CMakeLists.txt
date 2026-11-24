@@ -34,6 +34,7 @@ list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 include(ImluiWarnings)
 include(ImluiSanitizers)
 include(ImluiResources)
+include(ImluiStd) # imlui_add_std_module: the module `std` every imlui module imports (src/CMakeLists.txt)
 
 option(IMLUI_BUILD_TESTS "Build the imlui unit and smoke tests" ${PROJECT_IS_TOP_LEVEL})
 # Install rules and the CMake package (find_package(imlui CONFIG), cmake/ImluiInstall.cmake). An installed library

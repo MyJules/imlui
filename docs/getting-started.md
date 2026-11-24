@@ -15,7 +15,7 @@ Clang.
 | **LLVM / clang** | `clang` and `clang++` must be on `PATH` (the presets set `CMAKE_C_COMPILER=clang`, `CMAKE_CXX_COMPILER=clang++`). It needs to be recent enough for C++20 modules with CMake's module scanning. |
 | **CMake ≥ 3.28** | Needed for `FILE_SET CXX_MODULES`. |
 | **Ninja** | The presets use the Ninja generator, which CMake requires for C++ modules. |
-| **Visual Studio or Build Tools, with a Windows SDK** | On Windows, clang uses the MSVC STL and the Windows SDK libraries. If clang can't find them, configure from a *Developer PowerShell for VS*. |
+| **Visual Studio or Build Tools, with a Windows SDK** | On Windows, clang uses the MSVC STL and the Windows SDK libraries. If clang can't find them, configure from a *Developer PowerShell for VS*. imlui's modules `import std;`, built from the STL's `modules/std.ixx` (Visual Studio 2022 17.5 or newer). Elsewhere the standard library must ship its module source (libc++ or libstdc++ with `*.modules.json`), or set `IMLUI_STD_MODULE_SOURCE` to it. |
 | OpenGL | Provided by the system driver (`find_package(OpenGL)`). |
 
 You don't install anything else. Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3, stb_image 2.34 and zstd

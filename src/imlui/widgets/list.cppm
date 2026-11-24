@@ -1,9 +1,7 @@
 // List items and collapsible section headers (expanders).
-module;
-
-#include <string_view>
-
 export module imlui.widgets.list;
+
+import std;
 
 import imgui;
 import imlui.color;

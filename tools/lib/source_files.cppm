@@ -1,19 +1,8 @@
 // The files the resource tools pack: where each one comes from and its path in the mount, plus the file helpers
 // the tools share.
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <vector>
-
 export module imlui.tools.source_files;
+
+import std;
 
 export namespace imlui::tools {
 

@@ -1,11 +1,7 @@
 // Material modal navigation drawer: a sheet that slides in from the left over a scrim, above the app content.
-module;
-
-#include <algorithm>
-#include <format>
-#include <string>
-
 export module imlui.widgets.navigation_drawer;
+
+import std;
 
 import imgui;
 import imlui.color;

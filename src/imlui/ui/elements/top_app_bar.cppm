@@ -1,10 +1,7 @@
 // TopAppBar: the Material 3 top app bar (small, center-aligned, medium, large), as a typed element.
-module;
-
-#include <optional>
-#include <string>
-
 export module imlui.ui.elements.top_app_bar;
+
+import std;
 
 import imgui;
 import imlui.color;

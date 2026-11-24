@@ -1,15 +1,7 @@
 // Color: non-linear sRGB color type, blending and hex parsing/formatting.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <cstdio>
-#include <optional>
-#include <string>
-#include <string_view>
-
 export module imlui.color;
+
+import std;
 
 import imgui;
 

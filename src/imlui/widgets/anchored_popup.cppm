@@ -3,11 +3,9 @@
 //
 // Popups can't draw outside themselves, so the shadow is drawn in the anchor's
 // window, behind the popup, using the popup size recorded on the previous frame.
-module;
-
-#include <algorithm>
-
 export module imlui.widgets.anchored_popup;
+
+import std;
 
 import imgui;
 import imlui.theme.dpi;

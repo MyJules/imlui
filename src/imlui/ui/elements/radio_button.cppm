@@ -1,11 +1,9 @@
 // RadioButton: the Material 3 radio button with an optional label, as a typed element.
 // Buttons sharing a `group` value act as one group: src/resources/imlui.lua wraps the constructor and puts the group's
 // member set in `__radioGroup`; a click unchecks the other members through their bindings.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.radio_button;
+
+import std;
 
 import lua;
 import imlui.widgets;

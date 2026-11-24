@@ -1,10 +1,7 @@
 // Icon: a Material Symbols glyph, as a typed element.
-module;
-
-#include <optional>
-#include <string>
-
 export module imlui.ui.elements.icon;
+
+import std;
 
 import imlui.color;
 import imlui.widgets;

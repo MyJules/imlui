@@ -1,11 +1,7 @@
 // Cards: elevated, filled and outlined containers (ImGui child windows).
-module;
-
-#include <optional>
-#include <string_view>
-#include <vector>
-
 export module imlui.widgets.card;
+
+import std;
 
 import imgui;
 import imlui.color;

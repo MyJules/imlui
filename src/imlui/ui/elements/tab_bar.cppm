@@ -1,12 +1,7 @@
 // TabBar: Material 3 tabs over the content of the current Tab child, as a typed element.
-module;
-
-#include <algorithm>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module imlui.ui.elements.tab_bar;
+
+import std;
 
 import imgui;
 import imlui.widgets;

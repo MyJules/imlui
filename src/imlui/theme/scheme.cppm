@@ -1,11 +1,7 @@
 // Scheme: the Material 3 color roles, and their generation from a seed color.
-module;
-
-#include <array>
-#include <span>
-#include <string_view>
-
 export module imlui.theme.scheme;
+
+import std;
 
 import imlui.color;
 import imlui.color.oklch;

@@ -1,13 +1,8 @@
 // Table: a Material data table with a header row and selectable rows, as a typed element. The
 // rows are Lua data (a sequence of sequences of cell values), read through frame.node() every frame.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module imlui.ui.elements.table;
+
+import std;
 
 import lua;
 import imgui;

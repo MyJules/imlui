@@ -1,10 +1,7 @@
 // Plain values exchanged with Lua, and detection of ui.bind() objects.
-module;
-
-#include <string>
-#include <variant>
-
 export module imlui.lua.value;
+
+import std;
 
 import lua;
 

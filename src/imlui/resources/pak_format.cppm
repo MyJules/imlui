@@ -9,18 +9,9 @@
 //   index    per file: u32 path length, path (UTF-8, normalized), u64 offset (from the start of the archive),
 //            u64 stored size, u64 size once decompressed, u32 flags (bit 0: zstd-compressed)
 //   blobs    each file's stored bytes, at its offset
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.resources.pak_format;
+
+import std;
 
 import imlui.resources.name;
 

@@ -7,10 +7,15 @@ These rules apply to all C++ in `src/`, `tools/` and `tests/`, and to apps built
 ## Language and modules
 
 - C++20, **modules only**. Headers are included only in the global module fragment
-  (`module;` ... `export module x;`) of a module, and only third-party headers or the standard library.
+  (`module;` ... `export module x;`) of a module, and only third-party headers.
+- The standard library is **`import std;`**, never `#include <string>` and the like: the first import after the module
+  declaration (`cmake/ImluiStd.cmake` builds the module). `import std` exports no macros and nothing in the global
+  namespace, so a file that needs a C macro (`EOF`, `SIZE_MAX`) or a non-standard C function (`_putenv_s`,
+  `setenv`) includes the C header for it (`<stdio.h>`, `<stdlib.h>`) in its global module fragment and says why.
 - An app's `main.cpp`, `tests/smoke_host/main.cpp` and every other non-module file use `import` only. They never `#include`.
   **Exception:** test files in `tests/` include `<gtest/gtest.h>`, because GoogleTest's `TEST`/`EXPECT_*` macros
-  can't be exported from a module. They include nothing else and import everything they test.
+  can't be exported from a module. They include nothing else and import everything they test (`import std;` after
+  the include: clang can merge a header's declarations into an imported `std`, not the other way round).
 - Third-party libraries are reached through wrapper modules in `src/wrap/` (`lua`, `imgui`, `imlui.log`,
   `imlui.platform.window`). Other code imports the wrapper, never the library header.
 
@@ -30,10 +35,9 @@ If a module starts to hold two unrelated things, split it. Umbrella modules (`im
 Each module is a single file:
 
 ```cpp
-module;
-#include <string>               // global module fragment: third-party / std headers only
+export module imlui.example;  // a global module fragment (`module;` + #include) only for third-party headers
 
-export module imlui.example;
+import std;
 
 import imlui.log;
 

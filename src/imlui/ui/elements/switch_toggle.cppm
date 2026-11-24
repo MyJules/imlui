@@ -1,9 +1,7 @@
 // Switch: the Material 3 switch with an optional label, as a typed element.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.switch_toggle;
+
+import std;
 
 import imlui.widgets;
 import imlui.types.element;

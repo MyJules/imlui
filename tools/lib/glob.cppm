@@ -2,13 +2,9 @@
 // `/`, `**` any characters including `/` (as a whole segment, `**/` also matches no folder at all: `**/*.lua`
 // matches `main.lua` and `ui/Card.lua`). Everything else matches itself. Patterns and paths are `/`-separated and
 // relative.
-module;
-
-#include <cstddef>
-#include <string>
-#include <string_view>
-
 export module imlui.tools.glob;
+
+import std;
 
 export namespace imlui::tools {
 

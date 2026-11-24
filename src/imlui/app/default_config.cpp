@@ -3,13 +3,9 @@
 // the build tree, imlui_files_install for an install: src/CMakeLists.txt), not into imlui_core. So imlui_core never
 // refers to the library's files: one compiled imlui_core serves both variants, and an app's link line (imlui, then
 // imlui_core) has no reference back. Module-only translation unit (headers only in the global module fragment).
-module;
-
-#include <initializer_list>
-#include <utility>
-#include <vector>
-
 module imlui.app.config;
+
+import std;
 
 import imlui.embedded.imlui;
 import imlui.resources.package;

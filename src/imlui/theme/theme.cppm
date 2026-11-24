@@ -4,17 +4,9 @@
 // A Theme is plain data. Lua builds one (see imlui.lua.theme_table and
 // src/resources/imlui.lua `ui.theme{}`), can override any color role, any raw ImGui
 // color and any ImGuiStyle field, or pick a non-material preset entirely.
-module;
-
-#include <cstdlib>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <variant>
-#include <vector>
-
 export module imlui.theme.theme;
+
+import std;
 
 import imgui;
 import imlui.color;

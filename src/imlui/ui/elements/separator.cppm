@@ -1,9 +1,7 @@
 // Separator: a Divider, or with `text` a titleSmall heading followed by a rule, as a typed element.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.separator;
+
+import std;
 
 import imgui;
 import imlui.theme.typography;

@@ -1,10 +1,7 @@
 // Material text field (filled or outlined) with floating label, icons and supporting text.
-module;
-
-#include <string>
-#include <string_view>
-
 export module imlui.widgets.text_field;
+
+import std;
 
 import imgui;
 import imlui.color;

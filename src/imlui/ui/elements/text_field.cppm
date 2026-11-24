@@ -1,11 +1,8 @@
 // TextField: the Material 3 text field (filled or outlined), as a typed element. TextArea
 // (imlui.ui.elements.text_area) is the multi-line subclass.
-module;
-
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.text_field;
+
+import std;
 
 import imlui.widgets.text_field;
 import imlui.types.element;

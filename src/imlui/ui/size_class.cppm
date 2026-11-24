@@ -1,10 +1,7 @@
 // Material 3 window size classes: compact, medium, expanded, large and extra-large, by window width in dp.
-module;
-
-#include <optional>
-#include <string_view>
-
 export module imlui.ui.size_class;
+
+import std;
 
 export namespace imlui {
 

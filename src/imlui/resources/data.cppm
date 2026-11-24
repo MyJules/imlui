@@ -1,13 +1,7 @@
 // ResourceData: the bytes of one resource file as a mount returned them, and what keeps them alive.
-module;
-
-#include <cstddef>
-#include <memory>
-#include <span>
-#include <string_view>
-#include <utility>
-
 export module imlui.resources.data;
+
+import std;
 
 export namespace imlui {
 

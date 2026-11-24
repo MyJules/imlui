@@ -1,9 +1,7 @@
 // ListItem: the Material 3 one- or two-line list item, as a typed element.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.list_item;
+
+import std;
 
 import imlui.widgets;
 import imlui.types.element;

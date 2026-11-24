@@ -10,22 +10,9 @@
 // below it (groups at `imlui:/` and `imlui:/fonts/` make an archive at `imlui:/` with `fonts/Roboto-Regular.ttf`).
 // Each file is stored compressed with zstd when that saves enough, like embedded data
 // (imlui.tools.resource_encoding), unless the manifest's `compress` says otherwise.
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
-#include <vector>
-
 export module imlui.tools.pack;
+
+import std;
 
 import imlui.resources.name;
 import imlui.resources.pak_format;

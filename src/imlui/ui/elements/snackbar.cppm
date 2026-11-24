@@ -1,12 +1,8 @@
 // Snackbar: the Material 3 snackbar, as a typed element. Normally there is one, driven by
 // ui.snackbar() and rendered by the engine as an overlay above everything (ui.__overlays).
-module;
-
-#include <algorithm>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.snackbar;
+
+import std;
 
 import imgui;
 import imlui.widgets;

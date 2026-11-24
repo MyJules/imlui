@@ -1,15 +1,7 @@
 // Line / bar chart with "nice" axis, grid, gradient area and hover readout.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdio>
-#include <optional>
-#include <string_view>
-#include <vector>
-
 export module imlui.widgets.chart;
+
+import std;
 
 import imgui;
 import imlui.color;

@@ -5,19 +5,9 @@
 // stb_truetype reads when a font is added (stbtt_GetFontOffsetForIndex, stbtt_InitFont) and when a glyph is looked
 // up (the character map, glyph locations, metrics, the CFF indexes), and rejects data that would make it read out of
 // bounds or assert. It doesn't decode the glyph outlines themselves.
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <set>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module imlui.theme.font_check;
+
+import std;
 
 export namespace imlui {
 

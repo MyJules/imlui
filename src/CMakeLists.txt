@@ -10,6 +10,15 @@
 # imported target holds itself, so that's the target an app must link), imlui_lua as imlui::imlui_lua and an embedded
 # copy of the files (imlui_files_install, below) as imlui::imlui_files, which imlui::imlui links.
 
+# ------------------------------------------------------------------ the standard library (module `std`)
+# Every module imports std instead of including the standard headers (cmake/ImluiStd.cmake). Built from the standard
+# library's own module source, with imlui_lua's ABI flags (-ftrapv in Debug, the sanitizers): a BMI compiled
+# differently can't be imported. Not installed: imluiConfig.cmake builds it again in the app, with the app's compiler,
+# STL and flags. Everything links it through imlui_lua (IMLUI_STD_LINK keeps the installed targets pointing at the
+# app's copy, imlui::std).
+imlui_add_std_module(imlui_std ABI_FROM imlui_lua)
+set(IMLUI_STD_LINK $<BUILD_INTERFACE:imlui_std> $<INSTALL_INTERFACE:imlui::std>)
+
 # ------------------------------------------------------------------ Lua wrapper (module `lua`)
 # Its own library: the resource tools evaluate manifests with it, and imlui_rc can't depend on the imlui library,
 # which embeds its own files with imlui_rc.
@@ -20,7 +29,7 @@ target_sources(imlui_lua
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES wrap/lua.cppm
 )
-target_link_libraries(imlui_lua PRIVATE ext::lua)
+target_link_libraries(imlui_lua PUBLIC ${IMLUI_STD_LINK} PRIVATE ext::lua)
 target_compile_features(imlui_lua PUBLIC cxx_std_20)
 set_target_properties(imlui_lua PROPERTIES EXPORT_NAME imlui_lua)
 imlui_set_warnings(imlui_lua)

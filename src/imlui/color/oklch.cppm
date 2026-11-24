@@ -1,10 +1,7 @@
 // OKLCH: perceptual lightness / chroma / hue, and conversion to and from sRGB.
-module;
-
-#include <algorithm>
-#include <cmath>
-
 export module imlui.color.oklch;
+
+import std;
 
 import imlui.color;
 

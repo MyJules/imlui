@@ -1,20 +1,8 @@
 // PackedMount: an immutable mount over a fixed table of files whose bytes are stored, each one either as is or
 // zstd-compressed, in memory that outlives the mount. The shared base of EmbeddedMount and PakMount.
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.resources.packed_mount;
+
+import std;
 
 import zstd;
 import imlui.log;

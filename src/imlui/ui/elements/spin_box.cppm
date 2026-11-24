@@ -1,10 +1,7 @@
 // SpinBox: a Material numeric field with decrement / increment buttons, as a typed element.
-module;
-
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.spin_box;
+
+import std;
 
 import imlui.widgets.spin_box;
 import imlui.types.element;

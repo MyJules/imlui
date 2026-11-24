@@ -1,19 +1,9 @@
 // PakMount: a .pak archive (see imlui.resources.pak_format) as a resource mount, e.g. `data.pak` next to the
 // executable. The archive is read into memory once, when it's opened; stored files are served from that buffer,
 // compressed ones are decompressed on first read (see PackedMount).
-module;
-
-#include <cstddef>
-#include <filesystem>
-#include <fstream>
-#include <memory>
-#include <span>
-#include <string>
-#include <system_error>
-#include <utility>
-#include <vector>
-
 export module imlui.resources.pak_mount;
+
+import std;
 
 import imlui.resources.packed_mount;
 import imlui.resources.pak_format;

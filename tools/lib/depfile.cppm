@@ -1,14 +1,9 @@
 // Make-style dependency files (`<target>: <dependency>...`), as Ninja reads them through add_custom_command(DEPFILE):
 // imlui_rc and imlui_pack list the manifest, every packed file and every folder they scanned, so editing, adding or
 // removing a file reruns them.
-module;
-
-#include <filesystem>
-#include <fstream>
-#include <span>
-#include <string>
-
 export module imlui.tools.depfile;
+
+import std;
 
 import imlui.tools.source_files;
 

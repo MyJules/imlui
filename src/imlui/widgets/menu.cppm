@@ -1,10 +1,7 @@
 // Material menus: popup styling, menu rows, dividers and anchored (dropdown-style) menus.
-module;
-
-#include <algorithm>
-#include <string_view>
-
 export module imlui.widgets.menu;
+
+import std;
 
 import imgui;
 import imlui.color;

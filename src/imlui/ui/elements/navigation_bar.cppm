@@ -1,10 +1,7 @@
 // NavigationBar: the Material 3 bottom navigation bar, as a typed element.
-module;
-
-#include <cmath>
-#include <optional>
-
 export module imlui.ui.elements.navigation_bar;
+
+import std;
 
 import imgui;
 import imlui.color;

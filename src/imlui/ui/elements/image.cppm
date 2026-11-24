@@ -1,13 +1,7 @@
 // Image: a PNG or JPEG resource, as a typed element.
-module;
-
-#include <algorithm>
-#include <optional>
-#include <set>
-#include <string>
-#include <string_view>
-
 export module imlui.ui.elements.image;
+
+import std;
 
 import imgui;
 import imlui.color;

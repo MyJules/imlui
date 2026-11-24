@@ -19,18 +19,9 @@
 //   };
 //
 // Templates, so everything lives in the interface (CODE_STYLE: templates are the exception).
-module;
-
-#include <concepts>
-#include <cstddef>
-#include <limits>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <vector>
-
 export module imlui.types.lua_convert;
+
+import std;
 
 import lua;
 import imlui.color;

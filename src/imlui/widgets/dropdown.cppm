@@ -1,11 +1,7 @@
 // Exposed dropdown menu: a text-field-looking anchor that opens a menu of items.
-module;
-
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module imlui.widgets.dropdown;
+
+import std;
 
 import imgui;
 import imlui.color;

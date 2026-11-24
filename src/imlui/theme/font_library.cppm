@@ -4,20 +4,9 @@
 // and fallback list, created on first use and reused while the resource returns the same bytes. Fonts are
 // size-independent (ImGui 1.92 rasterizes glyphs on demand), so one atlas font per face is enough. A theme
 // declares its faces as a FontSet (Lua: `ui.theme { fonts = { ... } }`); useFontSet() makes it current.
-module;
-
-#include <cstddef>
-#include <functional>
-#include <map>
-#include <optional>
-#include <set>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.theme.font_library;
+
+import std;
 
 import imgui;
 import imlui.log;

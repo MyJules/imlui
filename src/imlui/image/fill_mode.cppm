@@ -1,14 +1,8 @@
 // How an image fills its element: the element's size from the image's natural size, and the quads (screen rect and
 // texture coordinates) that draw it for each fill mode.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <optional>
-#include <string_view>
-#include <vector>
-
 export module imlui.image.fill_mode;
+
+import std;
 
 import imgui;
 

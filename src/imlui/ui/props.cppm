@@ -1,10 +1,7 @@
 // Shared property readers for element handlers.
-module;
-
-#include <string>
-#include <string_view>
-
 export module imlui.ui.props;
+
+import std;
 
 import imlui.theme.dpi;
 import imlui.lua.node;

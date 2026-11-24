@@ -2,15 +2,9 @@
 // canvas' ImGui draw list, in dp relative to the canvas origin. Lines, rects and
 // circles use the Material shape helpers (imlui.widgets.common): true radii, smooth
 // arcs and pixel-snapped strokes.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module imlui.lua.painter;
+
+import std;
 
 import lua;
 import imgui;

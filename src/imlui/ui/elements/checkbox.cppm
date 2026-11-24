@@ -1,9 +1,7 @@
 // Checkbox: the Material 3 checkbox with an optional label, as a typed element.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.checkbox;
+
+import std;
 
 import imlui.widgets;
 import imlui.types.element;

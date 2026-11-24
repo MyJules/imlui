@@ -1,10 +1,7 @@
 // Validation of printf formats that scripts pass for displaying a number (the Slider's `format` prop).
-module;
-
-#include <cstddef>
-#include <string_view>
-
 export module imlui.widgets.value_format;
+
+import std;
 
 export namespace imlui::md {
 

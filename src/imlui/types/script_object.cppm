@@ -11,12 +11,9 @@
 //  * emit("onPeak", args...) calls the `onPeak` handler.
 //
 // Main thread only, like everything that touches Lua or ImGui.
-module;
-
-#include <string>
-#include <string_view>
-
 export module imlui.types.script_object;
+
+import std;
 
 import lua;
 import imlui.lua.errors;

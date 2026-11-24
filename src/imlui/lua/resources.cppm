@@ -1,13 +1,7 @@
 // The `imlui.resource` Lua library and the package.searchers entry that loads Lua modules from Resources.
-module;
-
-#include <iterator>
-#include <optional>
-#include <set>
-#include <string>
-#include <string_view>
-
 export module imlui.lua.resources;
+
+import std;
 
 import lua;
 import imlui.resources;
@@ -56,15 +50,15 @@ int fail(lua::State* state, std::string_view message) {
     return 2;
 }
 
-std::string quoted(std::string_view name) { return "'" + std::string{name} + "'"; }
+std::string quotedName(std::string_view name) { return "'" + std::string{name} + "'"; }
 
 /// Loads resource `name` as a text chunk named `@name`, with the table at `envIndex` (0: none) as its
 /// environment. Pushes the function, or nil and a message; returns the number of values pushed.
 int loadChunk(lua::State* state, const Context& ctx, std::string_view name, int envIndex) {
     const auto canonical = normalizeName(name);
-    if (!canonical) return fail(state, "invalid resource name " + quoted(name));
+    if (!canonical) return fail(state, "invalid resource name " + quotedName(name));
     const auto code = ctx.resources->read(*canonical); // Lua copies the text it needs
-    if (!code) return fail(state, "resource " + quoted(*canonical) + " not found");
+    if (!code) return fail(state, "resource " + quotedName(*canonical) + " not found");
     remember(ctx, *canonical);
     const std::string chunkName = "@" + *canonical;
     if (lua::loadbufferx(state, code->text(), chunkName.c_str(), "t") != lua::ok) {
@@ -89,11 +83,11 @@ std::optional<std::string> findModule(const Context& ctx, std::string_view modul
     for (const char* suffix : {".lua", "/init.lua"}) {
         const auto name = resolveName(folder, path + suffix);
         if (!name) {
-            tried += "\n\tno resource " + quoted(path + suffix) + " in " + quoted(folder);
+            tried += "\n\tno resource " + quotedName(path + suffix) + " in " + quotedName(folder);
             continue;
         }
         if (ctx.resources->exists(*name)) return name;
-        tried += "\n\tno resource " + quoted(*name);
+        tried += "\n\tno resource " + quotedName(*name);
     }
     return std::nullopt;
 }
@@ -102,7 +96,7 @@ int resolveFn(lua::State* state) {
     const std::string_view base = lua::tostring(state, 1);
     const std::string_view name = lua::tostring(state, 2);
     const auto full = resolveName(base, name);
-    if (!full) return fail(state, "invalid resource name " + quoted(name));
+    if (!full) return fail(state, "invalid resource name " + quotedName(name));
     lua::pushstring(state, *full);
     return 1;
 }
@@ -111,9 +105,9 @@ int readFn(lua::State* state) {
     const Context ctx = context(state);
     const std::string_view name = lua::tostring(state, 1);
     const auto canonical = normalizeName(name);
-    if (!canonical) return fail(state, "invalid resource name " + quoted(name));
+    if (!canonical) return fail(state, "invalid resource name " + quotedName(name));
     const auto bytes = ctx.resources->read(*canonical);
-    if (!bytes) return fail(state, "resource " + quoted(*canonical) + " not found");
+    if (!bytes) return fail(state, "resource " + quotedName(*canonical) + " not found");
     remember(ctx, *canonical);
     lua::pushstring(state, bytes->text()); // a copy
     return 1;
@@ -151,7 +145,8 @@ int search(lua::State* state) {
     if (loadChunk(state, ctx, *name, 0) != 1) {
         const std::string message = lua::toStringAny(state, -1);
         lua::pop(state, 2);
-        lua::pushstring(state, "error loading module " + quoted(module) + " from " + quoted(*name) + ":\n\t" + message);
+        lua::pushstring(state, "error loading module " + quotedName(module) + " from " + quotedName(*name) + ":\n\t" +
+                                   message);
         return -1;
     }
     lua::pushstring(state, *name);

@@ -3,16 +3,9 @@
 // base folder, the sandbox), the dependency file and file listing, merging groups into one .pak, and end to end: the
 // modules imlui_add_resources generates match their manifest, embedded (the library's in release builds, a forced
 // EMBED ON copy of the smoke app's) and not embedded (the library's in dev builds, a forced EMBED OFF copy).
-#include <algorithm>
-#include <filesystem>
-#include <map>
-#include <optional>
-#include <span>
-#include <string>
-#include <vector>
-
 #include <gtest/gtest.h>
 
+import std;
 import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.packed_mount;

@@ -1,11 +1,7 @@
 // Color field: swatch + hex value that opens a color picker popup.
-module;
-
-#include <algorithm>
-#include <string>
-#include <string_view>
-
 export module imlui.widgets.color_field;
+
+import std;
 
 import imgui;
 import imlui.color;

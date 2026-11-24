@@ -14,21 +14,9 @@
 // overloaded set with imlui::overload<Args...>(&T::fn) (imlui.types.overload).
 //
 // A template, so it lives in the interface (CODE_STYLE).
-module;
-
-#include <concepts>
-#include <cstddef>
-#include <exception>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-
 export module imlui.types.type_builder;
+
+import std;
 
 import lua;
 import imlui.types.lua_convert;

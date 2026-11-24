@@ -1,10 +1,7 @@
 // TreeNode: a collapsible ImGui tree node, as a typed element.
-module;
-
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.tree_node;
+
+import std;
 
 import imgui;
 import imlui.theme.typography;

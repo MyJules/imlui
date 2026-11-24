@@ -10,12 +10,9 @@ module;
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
-#include <algorithm>
-#include <functional>
-#include <string>
-#include <utility>
-
 export module imlui.platform.window;
+
+import std;
 
 import imlui.log;
 

@@ -4,12 +4,9 @@ module;
 
 #include <zstd.h>
 
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <span>
-
 export module zstd;
+
+import std;
 
 export namespace zstd {
 

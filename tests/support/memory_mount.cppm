@@ -1,19 +1,8 @@
 // MemoryMount: an immutable mount over a fixed set of files held in memory, like an embedded or .pak mount
 // (modified() is always nullopt). Test-only (built into imlui_tests).
-module;
-
-#include <cstddef>
-#include <filesystem>
-#include <initializer_list>
-#include <map>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.test.memory_mount;
+
+import std;
 
 import imlui.resources.mount;
 

@@ -1,9 +1,7 @@
 // Chip: the Material 3 chip (filter, assist, suggestion, input), as a typed element.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.chip;
+
+import std;
 
 import imlui.widgets;
 import imlui.types.element;

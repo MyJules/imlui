@@ -1,10 +1,7 @@
 // Text, standalone icons, tooltips and dividers.
-module;
-
-#include <optional>
-#include <string_view>
-
 export module imlui.widgets.text;
+
+import std;
 
 import imgui;
 import imlui.color;

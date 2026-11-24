@@ -1,16 +1,8 @@
 // TypeInfo: the type-erased description of a registered C++ type, filled in by TypeBuilder<T>
 // (properties, signals, methods, visual flag, factory) and used by TypeRegistry to bind it to Lua.
-module;
-
-#include <functional>
-#include <memory>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.types.type_info;
+
+import std;
 
 import lua;
 import imlui.types.script_object;

@@ -1,10 +1,7 @@
 // Text (alias Label): a line or paragraph in a Material type-scale style, as a typed element.
-module;
-
-#include <optional>
-#include <string>
-
 export module imlui.ui.elements.text;
+
+import std;
 
 import imlui.color;
 import imlui.theme.font_face_scope;

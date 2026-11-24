@@ -1,14 +1,7 @@
 // Material slider with value label while dragging.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <string>
-#include <unordered_set>
-
 export module imlui.widgets.slider;
+
+import std;
 
 import imgui;
 import imlui.color;

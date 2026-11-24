@@ -1,10 +1,7 @@
 // IconButton: the Material 3 icon button (optionally a toggle), as a typed element.
-module;
-
-#include <optional>
-#include <string>
-
 export module imlui.ui.elements.icon_button;
+
+import std;
 
 import imlui.color;
 import imlui.widgets;

@@ -1,12 +1,7 @@
 // NavigationRail: the Material 3 navigation rail, as a typed element.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <optional>
-#include <string>
-
 export module imlui.ui.elements.navigation_rail;
+
+import std;
 
 import imgui;
 import imlui.color;

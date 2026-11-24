@@ -1,11 +1,7 @@
 // Numeric field with decrement / increment icon buttons.
-module;
-
-#include <algorithm>
-#include <cstdio>
-#include <string_view>
-
 export module imlui.widgets.spin_box;
+
+import std;
 
 import imgui;
 import imlui.color;

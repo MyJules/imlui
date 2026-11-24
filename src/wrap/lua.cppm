@@ -13,11 +13,9 @@ extern "C" {
 #include "lauxlib.h"
 }
 
-#include <cstddef>
-#include <string>
-#include <string_view>
-
 export module lua;
+
+import std;
 
 export namespace lua {
 

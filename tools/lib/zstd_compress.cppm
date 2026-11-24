@@ -4,12 +4,9 @@ module;
 
 #include <zstd.h>
 
-#include <cstddef>
-#include <optional>
-#include <span>
-#include <vector>
-
 export module zstd.compress;
+
+import std;
 
 export namespace zstd {
 

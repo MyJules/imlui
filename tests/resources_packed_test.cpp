@@ -4,11 +4,9 @@
 // defaultConfig: release-style (embedded data only), archives and prefix folders next to the executable, dev source
 // folders on top, packages without files (IMLUI_EMBED_RESOURCES=OFF) mounting their source folder, a script argument
 // replacing the app; and the headless harness without src/resources/.
-#include <filesystem>
-#include <fstream>
-
 #include <gtest/gtest.h>
 
+import std;
 import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.directory_mount;

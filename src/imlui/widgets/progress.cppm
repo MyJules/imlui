@@ -1,10 +1,7 @@
 // Linear and circular progress indicators (determinate and indeterminate).
-module;
-
-#include <algorithm>
-#include <cmath>
-
 export module imlui.widgets.progress;
+
+import std;
 
 import imgui;
 import imlui.color;

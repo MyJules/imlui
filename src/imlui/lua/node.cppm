@@ -9,16 +9,9 @@
 //   * two-way bindings       value = ui.bind(state, "volume")
 // `Node` reads/writes properties honouring those three forms and emits
 // signals (on* handlers) safely.
-module;
-
-#include <cstddef>
-#include <initializer_list>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module imlui.lua.node;
+
+import std;
 
 import lua;
 import imlui.color;

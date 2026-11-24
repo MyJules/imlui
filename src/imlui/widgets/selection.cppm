@@ -1,13 +1,7 @@
 // Selection controls: checkbox, radio button, switch, chips and segmented buttons.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module imlui.widgets.selection;
+
+import std;
 
 import imgui;
 import imlui.color;

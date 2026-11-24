@@ -1,10 +1,8 @@
 // Menu: a menu-bar menu with Material menu styling, as a typed element. The same element is the popup of a
 // `menu` prop (Frame::attachMenu renders its children in an anchored menu).
-module;
-
-#include <string>
-
 export module imlui.ui.elements.menu;
+
+import std;
 
 import imgui;
 import imlui.widgets;

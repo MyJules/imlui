@@ -1,12 +1,11 @@
 // ScopedEnv: sets an environment variable for one test and restores it on destruction. Test-only.
 module;
 
-#include <cstdlib>
-#include <optional>
-#include <string>
-#include <utility>
+#include <stdlib.h> // _putenv_s, setenv, unsetenv: not in `import std`
 
 export module imlui.test.scoped_env;
+
+import std;
 
 export namespace imlui::test {
 

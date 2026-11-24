@@ -1,12 +1,7 @@
 // Typography: the Material 3 type scale and the Roboto text fonts.
-module;
-
-#include <array>
-#include <cstddef>
-#include <optional>
-#include <string_view>
-
 export module imlui.theme.typography;
+
+import std;
 
 import imgui;
 import imlui.resources;

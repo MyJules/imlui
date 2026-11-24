@@ -1,11 +1,9 @@
 // NavigationItem: the one destination element of every navigation container, as a typed element. It draws in the
 // style of the current NavigationScope (imlui.ui.navigation_scope): a drawer pill by default, a bar or rail
 // destination inside a NavigationBar or NavigationRail.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.navigation_item;
+
+import std;
 
 import imlui.widgets;
 import imlui.ui.navigation_scope;

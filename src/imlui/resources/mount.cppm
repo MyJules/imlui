@@ -1,13 +1,7 @@
 // Mount: one source of resource files (a directory, data embedded in the executable, a .pak archive).
-module;
-
-#include <filesystem>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module imlui.resources.mount;
+
+import std;
 
 export import imlui.resources.data;
 

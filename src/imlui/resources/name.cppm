@@ -4,13 +4,9 @@
 // segments. Normalizing drops empty and `.` segments and resolves `..`; a `..` that would leave the prefix's root,
 // a backslash, a `:` inside the path, a NUL or a malformed prefix makes the name invalid. Prefixes are lowercase
 // and at least two characters long, so an absolute OS path such as `C:/x` or `/etc/x` is never a resource name.
-module;
-
-#include <optional>
-#include <string>
-#include <string_view>
-
 export module imlui.resources.name;
+
+import std;
 
 export namespace imlui {
 

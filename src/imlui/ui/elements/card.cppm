@@ -1,11 +1,7 @@
 // Card: a Material 3 card container (md::beginCard), as a typed element.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.card;
+
+import std;
 
 import imlui.color;
 import imlui.widgets;

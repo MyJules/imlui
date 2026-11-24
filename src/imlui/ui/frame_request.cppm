@@ -5,17 +5,9 @@
 // or code that calls requestFrame(). All times are on a monotonic clock
 // private to this module; callers pass relative delays in seconds.
 // Main thread only.
-module;
-
-#include <algorithm>
-#include <chrono>
-#include <cstddef>
-#include <functional>
-#include <limits>
-#include <utility>
-#include <vector>
-
 export module imlui.ui.frame_request;
+
+import std;
 
 export namespace imlui {
 

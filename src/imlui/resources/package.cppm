@@ -1,11 +1,7 @@
 // ResourcePackage: a block of embedded files and where it belongs, as defaultConfig() mounts it.
-module;
-
-#include <memory>
-#include <string>
-#include <vector>
-
 export module imlui.resources.package;
+
+import std;
 
 import imlui.resources.mount;
 

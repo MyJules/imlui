@@ -1,11 +1,9 @@
 // Canvas: custom drawing from Lua, as a typed element. Every frame it calls the `onPaint`
 // handler with the painter object (imlui.lua.painter, registry "imlui.painter"), which draws into the canvas
 // area in dp relative to its top-left corner.
-module;
-
-#include <algorithm>
-
 export module imlui.ui.elements.canvas;
+
+import std;
 
 import lua;
 import imgui;

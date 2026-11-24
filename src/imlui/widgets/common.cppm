@@ -5,15 +5,9 @@
 // Disabled state: widgets detect ImGui::BeginDisabled() through the item
 // flags and switch to Material's disabled colors (onSurface @ 12% container,
 // @ 38% content) instead of ImGui's global alpha.
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <string>
-#include <string_view>
-
 export module imlui.widgets.common;
+
+import std;
 
 import imgui;
 import imlui.color;

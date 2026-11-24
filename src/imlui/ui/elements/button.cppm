@@ -1,9 +1,7 @@
 // Button: the Material 3 common button, as a typed element.
-module;
-
-#include <string>
-
 export module imlui.ui.elements.button;
+
+import std;
 
 import imlui.theme.font_face_scope;
 import imlui.widgets;

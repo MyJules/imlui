@@ -1,11 +1,7 @@
 // Window: a floating ImGui window (movable, resizable, closable), as a typed element.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.window;
+
+import std;
 
 import imgui;
 import imlui.theme.scheme;

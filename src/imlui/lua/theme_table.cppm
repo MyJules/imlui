@@ -1,11 +1,7 @@
 // Conversion between Lua theme tables and imlui::Theme / Scheme.
-module;
-
-#include <optional>
-#include <string>
-#include <string_view>
-
 export module imlui.lua.theme_table;
+
+import std;
 
 import lua;
 import lua.stack_guard;

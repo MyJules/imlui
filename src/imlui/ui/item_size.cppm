@@ -1,10 +1,8 @@
 // resolveSize(): the one rule for size values (`width`, `height`, `size` props and the widths the Material widgets
 // take), so every element fills, fills minus and falls back to its own size the same way.
-module;
-
-#include <algorithm>
-
 export module imlui.ui.item_size;
+
+import std;
 
 export namespace imlui {
 

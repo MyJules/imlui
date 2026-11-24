@@ -7,12 +7,9 @@
 //
 // An element can also ask for tick() at the start of every frame (setTicking(true)), whether or not it is
 // rendered, e.g. a Timer on a hidden page. Its properties are synced before each tick().
-module;
-
-#include <algorithm>
-#include <vector>
-
 export module imlui.types.element;
+
+import std;
 
 import imlui.types.frame;
 import imlui.types.script_object;

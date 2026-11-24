@@ -1,14 +1,9 @@
 // Row: children side by side, as a typed element.
 //
 // Sizes are measured on the previous frame (immediate mode), so a layout settles within one frame.
-module;
-
-#include <algorithm>
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.row;
+
+import std;
 
 import imgui;
 import imlui.types.element;

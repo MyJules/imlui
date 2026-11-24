@@ -1,23 +1,7 @@
 // DirectoryMount: a folder on disk as a resource mount (dev builds, loose overrides next to the executable).
-module;
-
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <set>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
-#include <vector>
-
 export module imlui.resources.directory_mount;
+
+import std;
 
 import imlui.resources.mount;
 import imlui.resources.name;

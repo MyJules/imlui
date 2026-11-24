@@ -1,11 +1,7 @@
 // Material tabs header (primary and secondary) with a sliding indicator.
-module;
-
-#include <algorithm>
-#include <string>
-#include <vector>
-
 export module imlui.widgets.tabs;
+
+import std;
 
 import imgui;
 import imlui.color;

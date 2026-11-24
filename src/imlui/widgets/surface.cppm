@@ -1,10 +1,8 @@
 // Surface stack: the background color widgets are currently drawn on, so
 // cutouts (e.g. chart markers) can match it.
-module;
-
-#include <vector>
-
 export module imlui.widgets.surface;
+
+import std;
 
 import imgui;
 import imlui.color;

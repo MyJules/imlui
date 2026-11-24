@@ -6,8 +6,10 @@ The full rules are in [`CODE_STYLE.md`](../CODE_STYLE.md). `.clang-format` and `
 them. In short:
 
 - **C++20 modules only.** `#include` appears only in a module's global module fragment, and only for third-party
-  or standard headers. `tests/smoke_host/main.cpp` (and an app's `main.cpp`) uses `import` only. Test files in `tests/` are the one exception: they
-  include `<gtest/gtest.h>`, because the GoogleTest macros can't cross a module boundary, and nothing else.
+  headers. The standard library is `import std;` (built by `cmake/ImluiStd.cmake`), never a standard header; a C
+  header only for a macro or a non-standard function `import std` doesn't export. `tests/smoke_host/main.cpp` (and
+  an app's `main.cpp`) uses `import` only. Test files in `tests/` are the one exception: they include
+  `<gtest/gtest.h>`, because the GoogleTest macros can't cross a module boundary, and nothing else.
 - **Third-party code goes through wrappers** in `src/wrap/` (`lua`, `imgui`, `imlui.log`,
   `imlui.platform.window`).
 - **One thing per module**: one class with its nested types, or one family of free functions with their
@@ -23,10 +25,9 @@ Each module is one file. The interface comes first and holds declarations only. 
 `module :private;`:
 
 ```cpp
-module;
-#include <string>                 // global module fragment: std / third-party only
+export module imlui.example;    // a global module fragment (`module;` + #include) only for third-party headers
 
-export module imlui.example;
+import std;
 
 import imlui.log;
 
@@ -342,8 +343,8 @@ On this target:
 ## Testing
 
 - Tests live in `tests/` and are ordinary (non-module) `.cpp` files. They may `#include <gtest/gtest.h>` and
-  nothing else, and `import` the modules they test. Run them with `ctest --preset clang-debug` (and
-  `ctest --preset clang-asan`).
+  nothing else, and `import` the modules they test (and `import std;`, after the include). Run them with
+  `ctest --preset clang-debug` (and `ctest --preset clang-asan`).
 - Good candidates are the pure modules: `imlui.color*` (hex parsing, OKLCH round trips), `imlui.theme.scheme`
   (role lookup, generation), `imlui.theme.theme` (`resolveColor`), and `imlui.lua.*` against a bare `lua::State`
   (prop resolution, `bind` write-back, `themeFromTable`).

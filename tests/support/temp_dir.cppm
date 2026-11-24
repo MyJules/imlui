@@ -1,16 +1,8 @@
 // TempDir: a fresh folder under the system temp directory, removed with everything in it on destruction.
 // Test-only (built into imlui_tests).
-module;
-
-#include <atomic>
-#include <chrono>
-#include <filesystem>
-#include <fstream>
-#include <string>
-#include <string_view>
-#include <system_error>
-
 export module imlui.test.temp_dir;
+
+import std;
 
 export namespace imlui::test {
 

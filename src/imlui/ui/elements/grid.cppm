@@ -1,9 +1,7 @@
 // Grid: children in a table with `columns` cells per row, as a typed element.
-module;
-
-#include <algorithm>
-
 export module imlui.ui.elements.grid;
+
+import std;
 
 import lua;
 import imgui;

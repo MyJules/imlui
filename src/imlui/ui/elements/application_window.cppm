@@ -1,11 +1,7 @@
 // ApplicationWindow: the root window that fills the main viewport, as a typed element.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.application_window;
+
+import std;
 
 import imgui;
 import imlui.color;

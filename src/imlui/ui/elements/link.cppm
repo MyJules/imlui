@@ -1,10 +1,7 @@
 // Link: a text hyperlink that opens a URL, as a typed element.
-module;
-
-#include <optional>
-#include <string>
-
 export module imlui.ui.elements.link;
+
+import std;
 
 import imgui;
 import imlui.theme.typography;

@@ -1,20 +1,7 @@
 // ImageCache: images decoded from resources once and kept as ImGui textures, keyed by resource name.
-module;
-
-#include <chrono>
-#include <cstddef>
-#include <cstring>
-#include <filesystem>
-#include <functional>
-#include <map>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module imlui.image.image_cache;
+
+import std;
 
 import imgui;
 import imlui.image.decode;

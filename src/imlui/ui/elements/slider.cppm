@@ -1,11 +1,7 @@
 // Slider: the Material 3 slider, as a typed element.
-module;
-
-#include <optional>
-#include <string>
-#include <utility>
-
 export module imlui.ui.elements.slider;
+
+import std;
 
 import imgui;
 import imlui.widgets.slider;
