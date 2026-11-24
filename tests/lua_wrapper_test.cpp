@@ -1,5 +1,8 @@
-// Tests for the lua wrapper, lua.stack_guard, imlui.lua.errors and imlui.lua.value.
+// Tests for the lua wrapper (Lua compiled as C++: errors are C++ exceptions), lua.stack_guard, imlui.lua.errors and
+// imlui.lua.value.
 #include <gtest/gtest.h>
+
+import std;
 
 import lua;
 import lua.stack_guard;
@@ -41,6 +44,113 @@ bool contains(std::string_view text, std::string_view part) { return text.find(p
 
 } // namespace
 
+// ------------------------------------------------------------------ Lua errors are C++ exceptions
+
+namespace {
+
+/// Sets `*flag` when destroyed.
+struct SetOnDestroy {
+    bool* flag;
+    explicit SetOnDestroy(bool* f) : flag{f} {}
+    ~SetOnDestroy() { *flag = true; }
+    SetOnDestroy(const SetOnDestroy&) = delete;
+    SetOnDestroy& operator=(const SetOnDestroy&) = delete;
+};
+
+bool destroyed = false;
+
+/// A C function with a live C++ object (a std::string too) that raises a Lua error.
+int raiseWithLiveObject(lua::State* state) {
+    const SetOnDestroy guard{&destroyed};
+    const std::string message = "raised with " + std::string{"a live object"};
+    lua::error(state, message);
+}
+
+/// Arg 1: a function. Calls it unprotected, with a live C++ object in this frame.
+int callWithLiveObject(lua::State* state) {
+    const SetOnDestroy guard{&destroyed};
+    lua::pushvalue(state, 1);
+    lua::call(state, 0, 0);
+    return 0;
+}
+
+int throwBadAlloc(lua::State*) { throw std::bad_alloc{}; }
+
+/// Raises after pushing values under a StackGuard: the guard must leave the error value on top.
+int raiseUnderStackGuard(lua::State* state) {
+    const lua::StackGuard guard{state};
+    lua::pushinteger(state, 1);
+    lua::pushinteger(state, 2);
+    lua::error(state, "raised under a guard");
+}
+
+} // namespace
+
+// The property this build exists for: a Lua error unwinds a C function's frame like a C++ exception, running the
+// destructors of its live objects, and the protected call still gets the error message.
+TEST_F(LuaWrapperTest, ALuaErrorRunsTheDestructorsOfTheFramesItUnwinds) {
+    destroyed = false;
+    lua::pushcfunction(m_state, &raiseWithLiveObject);
+    ASSERT_NE(lua::pcall(m_state, 0, 0, 0), lua::ok);
+    EXPECT_TRUE(destroyed);
+    EXPECT_EQ(lua::tostring(m_state, -1), "raised with a live object");
+}
+
+// Through Lua frames too: C function -> Lua function -> C function that raises; both C frames are unwound.
+TEST_F(LuaWrapperTest, ALuaErrorUnwindsCFramesAcrossLuaFrames) {
+    destroyed = false;
+    lua::pushcfunction(m_state, &raiseWithLiveObject);
+    lua::setglobal(m_state, "raiser");
+    lua::pushcfunction(m_state, &callWithLiveObject);
+    load("raiser()");
+    ASSERT_NE(lua::pcall(m_state, 1, 0, 0), lua::ok);
+    EXPECT_TRUE(destroyed);
+    EXPECT_EQ(lua::tostring(m_state, -1), "raised with a live object");
+}
+
+// C++ code can see the error pass as lua::Raised (and must rethrow it).
+TEST_F(LuaWrapperTest, ALuaErrorIsRaisedThroughCxx) {
+    lua::pushcfunction(m_state, [](lua::State* state) -> int {
+        try {
+            lua::error(state, "boom");
+        } catch (const lua::Raised&) {
+            lua::pushboolean(state, true);
+            lua::setglobal(state, "seen");
+            throw;
+        }
+    });
+    ASSERT_NE(lua::pcall(m_state, 0, 0, 0), lua::ok);
+    EXPECT_EQ(lua::tostring(m_state, -1), "boom");
+    lua::getglobal(m_state, "seen");
+    EXPECT_TRUE(lua::toboolean(m_state, -1));
+}
+
+// A std::bad_alloc that reaches a protected call is a Lua memory error, with Lua's own message.
+TEST_F(LuaWrapperTest, BadAllocUnderAProtectedCallIsAMemoryError) {
+    lua::pushcfunction(m_state, &throwBadAlloc);
+    EXPECT_NE(lua::pcall(m_state, 0, 0, 0), lua::ok);
+    EXPECT_EQ(lua::tostring(m_state, -1), "not enough memory");
+    load("return pcall(...)"); // from Lua as well
+    lua::pushcfunction(m_state, &throwBadAlloc);
+    ASSERT_EQ(lua::pcall(m_state, 1, 2, 0), lua::ok);
+    EXPECT_FALSE(lua::toboolean(m_state, -2));
+    EXPECT_EQ(lua::tostring(m_state, -1), "not enough memory");
+}
+
+// catchCxx turns a C++ exception into a Lua error with its message, and lets a Lua error raised inside pass.
+TEST_F(LuaWrapperTest, CatchCxxConvertsCxxExceptionsAndPassesLuaErrors) {
+    lua::pushcfunction(m_state, [](lua::State* state) -> int {
+        return luaui::catchCxx(state, []() -> int { throw std::runtime_error{"bad"}; }, "where", ".detail");
+    });
+    ASSERT_NE(lua::pcall(m_state, 0, 0, 0), lua::ok);
+    EXPECT_EQ(lua::tostring(m_state, -1), "where.detail: bad");
+    lua::pushcfunction(m_state, [](lua::State* state) -> int {
+        return luaui::catchCxx(state, [state]() -> int { lua::error(state, "a Lua error"); }, "where");
+    });
+    ASSERT_NE(lua::pcall(m_state, 0, 0, 0), lua::ok);
+    EXPECT_EQ(lua::tostring(m_state, -1), "a Lua error");
+}
+
 // ------------------------------------------------------------------ StackGuard
 
 TEST_F(LuaWrapperTest, StackGuardRestoresTop) {
@@ -66,6 +176,13 @@ TEST_F(LuaWrapperTest, StackGuardsNest) {
         lua::pushnil(m_state);
     }
     EXPECT_EQ(lua::gettop(m_state), 1);
+}
+
+// A Lua error unwinding a StackGuard leaves the stack alone: its message stays on top for the protected call.
+TEST_F(LuaWrapperTest, StackGuardKeepsTheErrorOfALuaErrorThatUnwindsIt) {
+    lua::pushcfunction(m_state, &raiseUnderStackGuard);
+    ASSERT_NE(lua::pcall(m_state, 0, 0, 0), lua::ok);
+    EXPECT_EQ(lua::tostring(m_state, -1), "raised under a guard");
 }
 
 // ------------------------------------------------------------------ safeCall

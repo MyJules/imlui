@@ -279,14 +279,7 @@ void syncProperties(lua::State* state, int tbl, Box& b) {
 /// protected; a C++ exception it throws becomes a Lua error.
 int syncPropertiesFn(lua::State* state) {
     Box& b = *static_cast<Box*>(lua::touserdata(state, 1));
-    const int n = luaui::catchCxx(
-        state,
-        [&] {
-            syncProperties(state, 2, b);
-            return 0;
-        },
-        b.type->name(), " property sync");
-    if (n < 0) lua::raise(state);
+    luaui::catchCxx(state, [&] { syncProperties(state, 2, b); }, b.type->name(), " property sync");
     return 0;
 }
 
@@ -298,8 +291,8 @@ void syncInstance(lua::State* state, int tbl, Box& b) {
     if (b.syncing || !b.element) return;
     tbl = lua::absindex(state, tbl);
     b.syncing = true;
-    // Protected, so a Lua error in the loop can't longjmp past the reset below: `syncing` left set would skip
-    // every later sync of the element. (The table at `tbl` keeps `b` alive meanwhile.)
+    // Protected: an error in the loop is reported, not raised, and can't skip the reset below (`syncing` left set
+    // would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.)
     lua::checkstack(state, 4);
     lua::pushcfunction(state, &syncPropertiesFn);
     lua::pushlightuserdata(state, &b);
@@ -313,22 +306,14 @@ void syncInstance(lua::State* state, int tbl, Box& b) {
     }
 }
 
-/// Pushes an error message for a missing property, or the property's value. True on error.
-bool pushProperty(lua::State* state, const Box& b, std::string_view key) {
-    const TypeInfo::Property* p = b.type->findProperty(key);
-    if (!p) {
-        lua::pushstring(state, b.type->name() + " has no property '" + std::string{key} + "'");
-        return true;
-    }
-    p->push(state, *b.object);
-    return false;
-}
-
 /// __get(box, name): the getter's value. ScriptObject::notify reads the current value through it.
 int boxGet(lua::State* state) {
     Box* b = boxAt(state, 1);
     if (!b || !b->object) lua::error(state, "__get: not a live imlui object");
-    if (pushProperty(state, *b, lua::tostring(state, 2))) lua::raise(state);
+    const std::string_view key = lua::tostring(state, 2);
+    const TypeInfo::Property* p = b->type->findProperty(key);
+    if (!p) lua::error(state, b->type->name() + " has no property '" + std::string{key} + "'");
+    p->push(state, *b->object);
     return 1;
 }
 
@@ -339,20 +324,15 @@ int methodTrampoline(lua::State* state) {
     Box* b = selfBox(state, 1);
     if (!b || b->type != info || !b->object) lua::error(state, "method called without its object (use obj:method())");
     const TypeInfo::Method& method = info->methods()[index];
-    const int n = luaui::catchCxx(
+    return luaui::catchCxx(
         state,
         [&] {
             // An element that hasn't rendered yet (or not since its props changed) gets its current values first.
             if (b->element && lua::istable(state, 1)) syncInstance(state, 1, *b);
-            if (!b->object) {
-                luaui::pushMessage(state, "method called on a destroyed object");
-                return -1;
-            }
+            if (!b->object) lua::error(state, "method called on a destroyed object");
             return method.call(state, *b->object, 2);
         },
         info->name(), " method"); // (TypeBuilder methods report their own exceptions, with the method name)
-    if (n < 0) lua::raise(state);
-    return n;
 }
 
 /// singleton.key
@@ -376,43 +356,28 @@ int singletonIndex(lua::State* state) {
     return 1;
 }
 
-/// Does the work of singleton.key = value. Pushes an error message and returns true on error.
-bool assignSingleton(lua::State* state, Box& b) {
-    const std::string key{lua::tostring(state, 2)};
-    if (const TypeInfo::Property* p = b.type->findProperty(key)) {
-        if (!p->assign) {
-            lua::pushstring(state, b.type->name() + "." + key + " is read-only");
-            return true;
-        }
-        if (lua::isnil(state, 3) && !p->nullable) {
-            resetProperty(b, static_cast<std::size_t>(p - b.type->properties().data()));
-            return false;
-        }
-        if (p->assign(state, 3, *b.object) == TypeInfo::Assign::TypeMismatch) {
-            lua::pushstring(state, b.type->name() + "." + key + ": " + std::string{p->typeName} + " expected, got " +
-                                       lua::typeName(state, 3));
-            return true;
-        }
-        return false;
-    }
-    if (key.starts_with("on") && (lua::isfunction(state, 3) || lua::isnil(state, 3))) {
-        lua::getiuservalue(state, 1, 1);
-        lua::pushvalue(state, 2);
-        lua::pushvalue(state, 3);
-        lua::rawset(state, -3);
-        lua::pop(state);
-        return false;
-    }
-    lua::pushstring(state, b.type->name() + " has no property '" + key + "'" +
-                               (key.starts_with("on") ? " (signal handlers must be functions)" : ""));
-    return true;
-}
-
+/// singleton.key = value
 int singletonNewIndex(lua::State* state) {
     Box* b = boxAt(state, 1);
     if (!b || !b->object) lua::error(state, "singleton is gone");
     if (lua::type(state, 2) != lua::Type::String) lua::error(state, "singleton keys are strings");
-    if (assignSingleton(state, *b)) lua::raise(state);
+    const std::string key{lua::tostring(state, 2)};
+    if (const TypeInfo::Property* p = b->type->findProperty(key)) {
+        if (!p->assign) lua::error(state, b->type->name() + "." + key + " is read-only");
+        if (lua::isnil(state, 3) && !p->nullable)
+            resetProperty(*b, static_cast<std::size_t>(p - b->type->properties().data()));
+        else if (p->assign(state, 3, *b->object) == TypeInfo::Assign::TypeMismatch)
+            lua::error(state, b->type->name() + "." + key + ": " + std::string{p->typeName} + " expected, got " +
+                                  lua::typeName(state, 3));
+        return 0;
+    }
+    if (!key.starts_with("on") || !(lua::isfunction(state, 3) || lua::isnil(state, 3)))
+        lua::error(state, b->type->name() + " has no property '" + key + "'" +
+                              (key.starts_with("on") ? " (signal handlers must be functions)" : ""));
+    lua::getiuservalue(state, 1, 1); // signal handlers
+    lua::pushvalue(state, 2);
+    lua::pushvalue(state, 3);
+    lua::rawset(state, -3);
     return 0;
 }
 
@@ -559,14 +524,7 @@ void tickElements(lua::State* state, double now) {
 
 int libTick(lua::State* state) {
     const double now = lua::tonumber(state, 1);
-    const int n = luaui::catchCxx(
-        state,
-        [&] {
-            tickElements(state, now);
-            return 0;
-        },
-        "imlui.types.tick");
-    if (n < 0) lua::raise(state);
+    luaui::catchCxx(state, [&] { tickElements(state, now); }, "imlui.types.tick");
     return 0;
 }
 

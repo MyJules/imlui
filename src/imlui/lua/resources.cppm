@@ -43,16 +43,8 @@ void remember(const Context& ctx, std::string_view name) {
     if (ctx.loaded) ctx.loaded->emplace(name);
 }
 
-// Lua is compiled as C: its errors (a memory error while pushing a string, too) longjmp, which is undefined
-// behaviour past a frame with a live non-trivial C++ object, and a C++ exception mustn't cross its frames. So the
-// library functions do their work in guarded(), which catches exceptions, and push strings through pushValues(), a
-// protected call; a failed push is raised once guarded()'s work and its objects are gone.
-
-using Values = std::span<const std::optional<std::string_view>>;
-
-/// pushValues()' protected part: pushes the Values that light userdata 1 points to.
-int pushValuesFn(lua::State* state) {
-    const auto& values = *static_cast<const Values*>(lua::touserdata(state, 1));
+/// Pushes `values` (nil for nullopt) and returns how many.
+int pushValues(lua::State* state, std::initializer_list<std::optional<std::string_view>> values) {
     for (const auto& value : values)
         if (value)
             lua::pushstring(state, *value);
@@ -61,44 +53,29 @@ int pushValuesFn(lua::State* state) {
     return static_cast<int>(values.size());
 }
 
-/// Pushes `values` (nil for nullopt) and returns how many, or -1 with Lua's error on the stack when that failed (out
-/// of memory). Protected, so it never raises past the caller's C++ objects.
-int pushValues(lua::State* state, std::initializer_list<std::optional<std::string_view>> values) {
-    const Values list{values.begin(), values.size()};
-    lua::pushcfunction(state, &pushValuesFn);
-    lua::pushlightuserdata(state, const_cast<Values*>(&list)); // only read through
-    if (lua::pcall(state, 1, lua::multRet, 0) != lua::ok) return -1;
-    return static_cast<int>(list.size());
-}
-
-/// Pushes nil and `message`; returns 2 (-1: see pushValues()).
+/// Pushes nil and `message`; returns 2.
 int fail(lua::State* state, std::string_view message) { return pushValues(state, {std::nullopt, message}); }
 
-/// Runs `work`, which returns how many values it pushed or -1 (see pushValues()), and returns that count; a C++
-/// exception becomes nil and a message (pushed protected by fail(), so nothing raises inside the catch blocks).
-/// Raises the error a failed push left, after the catch blocks. Called with no live non-trivial object in the
-/// caller's frame.
+/// Runs `work`, which returns how many values it pushed, and returns that count; a C++ exception becomes nil and a
+/// message instead (the library's functions don't raise). A Lua error (out of memory while pushing) passes through.
 template <class Work>
 int guarded(lua::State* state, const Work& work) {
-    int results = -1;
     try {
-        results = work();
+        return work();
+    } catch (const lua::Raised&) {
+        throw;
     } catch (const std::bad_alloc&) {
-        results = fail(state, "out of memory");
-    } catch (const std::exception&) {
-        results = fail(state, "internal error");
-    } catch (...) { // nothing may unwind through Lua's C frames
-        results = fail(state, "internal error");
+        return fail(state, "out of memory");
+    } catch (...) {
+        return fail(state, "internal error");
     }
-    if (results < 0) lua::raise(state);
-    return results;
 }
 
 std::string quotedName(std::string_view name) { return "'" + std::string{name} + "'"; }
 
 /// Loads resource `name` as a text chunk named `@name`, with the table at `envIndex` (0: none) as its
-/// environment. Pushes the function, or nil and a message; returns the number of values pushed (-1: see
-/// pushValues()). Loading is protected (lua_load returns its errors), so nothing here raises.
+/// environment. Pushes the function, or nil and a message; returns the number of values pushed. Loading is
+/// protected (lua_load returns its errors), so only a memory error raises.
 int loadChunk(lua::State* state, const Context& ctx, std::string_view name, int envIndex) {
     const auto canonical = normalizeName(name);
     if (!canonical) return fail(state, "invalid resource name " + quotedName(name));
@@ -188,37 +165,28 @@ int findFn(lua::State* state) {
     });
 }
 
-/// The searcher's work. Pushes the loader and its name (returns 2) or the "not found" lines (returns 1), or leaves
-/// the error to raise on the stack (returns -1).
+/// The searcher's work. Pushes the loader and its name (returns 2) or the "not found" lines (returns 1), or raises
+/// the error that loading the module's chunk returned.
 int search(lua::State* state, std::string_view module) {
     const Context ctx = context(state);
     std::string tried;
     const auto name = findModule(ctx, module, "imlui:/", tried);
     if (!name) return pushValues(state, {tried});
-    const int loaded = loadChunk(state, ctx, *name, 0);
-    if (loaded < 0) return -1;
-    if (loaded != 1) {
-        const std::string message{lua::tostring(state, -1)}; // loadChunk's messages are strings
-        lua::pop(state, 2);
-        // On success the message is on top, on failure Lua's error: either is raised.
-        pushValues(state,
-                   {"error loading module " + quotedName(module) + " from " + quotedName(*name) + ":\n\t" + message});
-        return -1;
-    }
-    return pushValues(state, {*name}) < 0 ? -1 : 2;
+    if (loadChunk(state, ctx, *name, 0) != 1) // nil, message (loadChunk's messages are strings)
+        lua::error(state, "error loading module " + quotedName(module) + " from " + quotedName(*name) + ":\n\t" +
+                              std::string{lua::tostring(state, -1)});
+    return pushValues(state, {*name}) + 1;
 }
 
 int searcher(lua::State* state) {
     const std::string_view module = lua::tostring(state, 1);
-    int results = -1;
     try {
-        results = search(state, module);
-    } catch (const std::exception&) {
-        pushValues(state, {"error loading module: out of memory"}); // raised, like a failed push
-        results = -1;
+        return search(state, module);
+    } catch (const lua::Raised&) {
+        throw;
+    } catch (...) {
+        lua::error(state, "error loading module: out of memory");
     }
-    if (results < 0) lua::raise(state); // no C++ object is alive here
-    return results;
 }
 
 constexpr struct {

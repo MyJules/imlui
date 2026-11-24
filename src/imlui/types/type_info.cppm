@@ -40,7 +40,7 @@ public:
     struct Method {
         std::string name;
         /// Calls the method with the Lua arguments starting at `firstArg`. Returns the number of results
-        /// pushed, or -1 with an error message pushed instead.
+        /// pushed; raises a Lua error for a bad argument or a C++ exception.
         std::function<int(lua::State*, ScriptObject&, int firstArg)> call;
     };
 

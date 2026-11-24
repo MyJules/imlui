@@ -43,15 +43,17 @@ function(_imlui_use_app_library name app_target)
     message(STATUS "imlui: using the project's ${app_target}")
 endfunction()
 
-# ---------------------------------------------------------------- Lua 5.4 (C)
-file(GLOB LUA_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/lua/*.c)
-list(FILTER LUA_SOURCES EXCLUDE REGEX ".*/(lua|luac|onelua|ltests)\\.c$")
-add_library(imlui_ext_lua STATIC ${LUA_SOURCES})
-target_include_directories(imlui_ext_lua PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lua>
-                                                $<INSTALL_INTERFACE:${ext_include}/lua>)
+# ---------------------------------------------------------------- Lua 5.4 (as C++)
+# Compiled as C++ in one translation unit (lua_cxx/imlui_lua.cpp includes Lua's onelua.c): a Lua error is a C++
+# exception (imlui_lua_error, lua_cxx/imlui_lua_error.h) instead of a longjmp, so the C++ frames it unwinds run their
+# destructors. The Lua API therefore has C++ linkage: its headers are included without extern "C" (src/wrap/lua.cppm).
+add_library(imlui_ext_lua STATIC ${CMAKE_CURRENT_SOURCE_DIR}/lua_cxx/imlui_lua.cpp)
+target_include_directories(imlui_ext_lua PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lua;${CMAKE_CURRENT_SOURCE_DIR}/lua_cxx>"
+    $<INSTALL_INTERFACE:${ext_include}/lua>)
 # SYSTEM: our targets see the vendored headers as system headers, so our warning flags
 # (cmake/ImluiWarnings.cmake) don't fire inside them. Same for every ext target below.
-set_target_properties(imlui_ext_lua PROPERTIES LINKER_LANGUAGE C SYSTEM ON EXPORT_NAME ext_lua)
+set_target_properties(imlui_ext_lua PROPERTIES CXX_SCAN_FOR_MODULES OFF SYSTEM ON EXPORT_NAME ext_lua)
 if(WIN32)
     target_compile_definitions(imlui_ext_lua PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()

@@ -9,6 +9,8 @@
 #     STL's debug iterators.
 #   - The `undefined` group drops `vptr` on this target (no RTTI-based vptr checks for the MSVC ABI).
 #   - LeakSanitizer is not available on Windows.
+#   - ASan is built without stack-use-after-return instrumentation (-fsanitize-address-use-after-return=never): it
+#     breaks throwing from a catch block, which Lua errors (C++ exceptions, external/lua_cxx) do.
 #   - The ASan runtime DLL is copied next to the executables (CMAKE_RUNTIME_OUTPUT_DIRECTORY) so tests and apps run
 #     without PATH edits.
 #
@@ -32,6 +34,12 @@ if(IMLUI_SANITIZERS)
     if(IMLUI_SANITIZERS MATCHES "undefined")
         # Abort on the first UB report instead of logging and carrying on, so ctest fails.
         list(APPEND IMLUI_SANITIZER_COMPILE_OPTIONS -fno-sanitize-recover=undefined)
+    endif()
+    if(WIN32 AND IMLUI_SANITIZERS MATCHES "address")
+        # ASan's stack-use-after-return instrumentation (a fake stack; off at run time by default anyway) breaks
+        # throwing from a catch block on Windows: `throw;` or a new throw in a handler crashes ("stack-overflow").
+        # Lua is compiled as C++, so a Lua error raised in a handler, or rethrown past one, is such a throw.
+        list(APPEND IMLUI_SANITIZER_COMPILE_OPTIONS -fsanitize-address-use-after-return=never)
     endif()
     add_compile_options(${IMLUI_SANITIZER_COMPILE_OPTIONS})
     add_link_options(${IMLUI_SANITIZER_LINK_OPTIONS})

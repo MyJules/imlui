@@ -321,11 +321,8 @@ constexpr NativeFn nativeFns[] = {
      [](lua::State* state) -> int {
          if (lua::type(state, 1) != lua::Type::String) lua::error(state, "injectKey expects a key name");
          const ImGuiKey key = keyFromName(lua::tostring(state, 1));
-         if (key == ImGuiKey_None) {
-             // Built on the Lua stack: lua::raise longjmps past C++ destructors.
-             lua::pushstring(state, "injectKey: unknown key '" + std::string{lua::tostring(state, 1)} + "'");
-             lua::raise(state);
-         }
+         if (key == ImGuiKey_None)
+             lua::error(state, "injectKey: unknown key '" + std::string{lua::tostring(state, 1)} + "'");
          ImGuiIO& io = ImGui::GetIO();
          io.AddKeyEvent(ImGuiMod_Ctrl, lua::toboolean(state, 3));
          io.AddKeyEvent(ImGuiMod_Shift, lua::toboolean(state, 4));
@@ -337,12 +334,10 @@ constexpr NativeFn nativeFns[] = {
 };
 
 /// Upvalue 1: the index of the function in nativeFns. Runs it with C++ exceptions (from the host's NativeHooks, the
-/// theme or font loading, ...) turned into Lua errors: none may unwind through Lua's C frames.
+/// theme or font loading, ...) turned into Lua errors that name the function ("imlui.native.setTheme: what").
 int callNative(lua::State* state) {
     const NativeFn& f = nativeFns[static_cast<std::size_t>(lua::tointeger(state, lua::upvalueindex(1)))];
-    const int n = catchCxx(state, [&] { return f.fn(state); }, "imlui.native.", f.name);
-    if (n < 0) lua::raise(state);
-    return n;
+    return catchCxx(state, [&] { return f.fn(state); }, "imlui.native.", f.name);
 }
 
 int openNative(lua::State* state) {
