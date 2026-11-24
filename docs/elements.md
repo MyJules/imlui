@@ -430,7 +430,7 @@ A 44dp-tall Material slider. A value label appears above the handle while you dr
 | `value` | number, **two-way** | `0` | |
 | `from`, `to` | number | `0`, `1` | Range. |
 | `stepSize` | number | `0` | `0` means continuous. Tick marks are drawn when there are at most 40 steps. |
-| `format` | printf string | `"%.0f"` if `stepSize >= 1`, else `"%.2f"` | Value label. |
+| `format` | printf string | `"%.0f"` if `stepSize >= 1`, else `"%.2f"` | Value label. Exactly one `%f`, `%e` or `%g` conversion (flags, width and precision allowed), plus any `%%`. Anything else logs a warning and uses `"%.2f"`. |
 | `width` | number | fill | |
 
 Signals: `onMoved(self, value)` while dragging, `onReleased(self, value)` when the handle is released.

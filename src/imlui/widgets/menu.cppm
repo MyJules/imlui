@@ -93,7 +93,7 @@ void menuDivider() {
     ImVec2 p = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
     ImGui::Dummy({w, dp(17)});
-    ImGui::GetWindowDrawList()->AddLine({p.x, p.y + dp(8)}, {p.x + w, p.y + dp(8)}, col(s.outlineVariant), dp(1));
+    hLine(ImGui::GetWindowDrawList(), p.x, p.x + w, p.y + dp(8), s.outlineVariant, dp(1));
 }
 
 bool beginAnchoredMenu(const char* popupId, ImVec2 a, ImVec2 b, float minWidth) {

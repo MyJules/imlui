@@ -77,6 +77,14 @@ using `imlui.widgets.common`:
 - `animate(id, target)` for transitions. It requests frames while the value moves. Anything else that changes on
   its own over time must call `requestFrame()` from `imlui.ui.frame_request` (frames are rendered on demand).
 - `itemWidth(requested, natural)` so `width`/`fillWidth` behave like the other widgets.
+- The shape helpers for anything rounded or outlined: `fillRoundRect`/`strokeRoundRect` (with optional
+  `ImDrawFlags_RoundCorners*`), `fillCircle`/`strokeCircle`, `strokeArc`, and `hLine`/`vLine` for dividers. Don't
+  use `ImDrawList::AddRect`/`AddRectFilled` with a rounding, or `AddCircle*`: ImGui shrinks the radius (a pill gets
+  flat ends), uses few segments at small radii, and draws 1px strokes at fractional positions, so they look soft.
+  The helpers use the true radius (clamped to half the side, so `radius = h / 2` is an exact pill), tessellate by
+  arc length, snap to whole pixels, and keep strokes whole-pixel wide and inside the shape.
+- `drawTextV(style, x, cy, ...)`, or `textTop(style, cy)` for the y of `drawText`, to center a label vertically.
+  It centers the cap height on a whole pixel, so labels line up the same way in every widget.
 
 Return what happened (`bool` changed/clicked, or a result struct).
 

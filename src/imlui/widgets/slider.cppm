@@ -4,6 +4,8 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
+#include <unordered_set>
 
 export module imlui.widgets.slider;
 
@@ -12,11 +14,14 @@ import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
 import imlui.theme.typography;
+import imlui.log;
 import imlui.widgets.common;
+import imlui.widgets.value_format;
 
 export namespace imlui::md {
 
-/// Material slider. `step` <= 0 means continuous. Returns true when the value changed.
+/// Material slider. `step` <= 0 means continuous. `valueFormat` is checked with isValidFloatFormat(); an invalid
+/// one is reported once and replaced by defaultValueFormat. Returns true when the value changed.
 bool slider(const char* id, float* v, float vmin, float vmax, float step = 0.0f, float width = 0.0f,
             const char* valueFormat = "%.2f");
 
@@ -25,6 +30,21 @@ bool slider(const char* id, float* v, float vmin, float vmax, float step = 0.0f,
 module :private;
 
 namespace imlui::md {
+
+namespace {
+
+/// Formats already reported as invalid, so each is logged once rather than every frame.
+std::unordered_set<std::string> reportedFormats;
+
+const char* checkedFormat(const char* format) {
+    if (isValidFloatFormat(format)) return format;
+    if (reportedFormats.emplace(format).second)
+        log::warn("Slider: invalid format \"{}\" (expected one %f, %e or %g conversion); using \"{}\"", format,
+                  defaultValueFormat);
+    return defaultValueFormat;
+}
+
+} // namespace
 
 bool slider(const char* id, float* v, float vmin, float vmax, float step, float width, const char* valueFormat) {
     const Scheme& s = scheme();
@@ -54,33 +74,36 @@ bool slider(const char* id, float* v, float vmin, float vmax, float step, float 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float cy = p.y + h * 0.5f, th = dp(4);
     const float hx = x0 + (x1 - x0) * tv;
-    dl->AddRectFilled({x0, cy - th * 0.5f}, {x1, cy + th * 0.5f}, col(inactive), th);
-    if (hx > x0) dl->AddRectFilled({x0, cy - th * 0.5f}, {hx, cy + th * 0.5f}, col(active), th);
+    fillRoundRect(dl, {x0, cy - th * 0.5f}, {x1, cy + th * 0.5f}, th * 0.5f, inactive);
+    if (hx > x0) fillRoundRect(dl, {x0, cy - th * 0.5f}, {hx, cy + th * 0.5f}, th * 0.5f, active);
     if (step > 0 && vmax > vmin && (vmax - vmin) / step <= 40) {
         for (float sv = vmin; sv <= vmax + step * 0.5f; sv += step) {
             float sx = x0 + (x1 - x0) * ((sv - vmin) / (vmax - vmin));
-            dl->AddCircleFilled({sx, cy}, dp(1),
-                                col(sx <= hx ? s.onPrimary.withAlpha(0.7f) : s.onSecondaryContainer.withAlpha(0.7f)));
+            fillCircle(dl, {sx, cy}, dp(1),
+                       sx <= hx ? s.onPrimary.withAlpha(0.7f) : s.onSecondaryContainer.withAlpha(0.7f));
         }
     }
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
-    if (layer > 0) dl->AddCircleFilled({hx, cy}, dp(20), col(s.primary.withAlpha(layer * 1.5f)));
-    dl->AddCircleFilled({hx, cy}, r * (act ? 1.1f : 1.0f), col(active));
+    if (layer > 0) fillCircle(dl, {hx, cy}, dp(20), s.primary.withAlpha(layer * 1.5f));
+    fillCircle(dl, {hx, cy}, r * (act ? 1.1f : 1.0f), active);
 
     if (act && valueFormat && *valueFormat) {
-        char buf[64];
-        // The format is the Slider's `format` prop: a printf format chosen by the script, the same contract as
-        // ImGui::SliderFloat's `format`. It can't be a literal, so -Wformat-nonliteral is off for this call only.
+        char buf[64] = {};
+        const char* format = checkedFormat(valueFormat);
+        // The format is the Slider's `format` prop, chosen by the script, so it can't be a literal. checkedFormat()
+        // only lets through a format with exactly one floating conversion (and `%%`), which matches the one double
+        // argument, so -Wformat-nonliteral is off for this call only.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
-        std::snprintf(buf, sizeof buf, valueFormat, static_cast<double>(*v));
+        if (std::snprintf(buf, sizeof buf, format, static_cast<double>(*v)) < 0) buf[0] = char{};
 #pragma clang diagnostic pop
         ImVec2 ts = measure(TextStyle::LabelMedium, buf);
         ImDrawList* fg = ImGui::GetForegroundDrawList();
         float bw = std::max(ts.x + dp(16), dp(28)), bh = dp(28);
         ImVec2 ba{hx - bw * 0.5f, cy - r - dp(8) - bh};
-        fg->AddRectFilled(ba, {ba.x + bw, ba.y + bh}, col(s.inverseSurface), bh * 0.5f);
-        drawText(fg, TextStyle::LabelMedium, {hx - ts.x * 0.5f, ba.y + (bh - ts.y) * 0.5f}, s.inverseOnSurface, buf);
+        fillRoundRect(fg, ba, {ba.x + bw, ba.y + bh}, bh * 0.5f, s.inverseSurface);
+        drawText(fg, TextStyle::LabelMedium, {hx - ts.x * 0.5f, textTop(TextStyle::LabelMedium, ba.y + bh * 0.5f)},
+                 s.inverseOnSurface, buf);
     }
     return changed;
 }

@@ -76,7 +76,7 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
         float bw = measure(TextStyle::LabelLarge, action).x + dp(24);
         clicked = ImGui::InvisibleButton(a.c_str(), {bw, dp(40)});
         float layer = stateLayer(ImGui::GetItemID(), ImGui::IsItemHovered(), ImGui::IsItemActive());
-        if (layer > 0) dl->AddRectFilled(bp, {bp.x + bw, bp.y + dp(40)}, col(s.inversePrimary.withAlpha(layer)), dp(20));
+        if (layer > 0) fillRoundRect(dl, bp, {bp.x + bw, bp.y + dp(40)}, dp(20), s.inversePrimary.withAlpha(layer));
         drawTextV(dl, TextStyle::LabelLarge, bp.x + dp(12), bp.y + dp(20), s.inversePrimary.withAlpha(ease), action);
     }
     if (closeIcon) {

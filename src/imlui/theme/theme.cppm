@@ -238,6 +238,13 @@ void applyNow(const Theme& t) {
     for (const auto& [idx, col] : t.imguiColors)
         if (idx >= 0 && idx < ImGuiCol_COUNT) st.Colors[idx] = col.vec4();
 
+    // Geometry quality, for every preset: smoother ImGui-drawn circles and roundings (child windows, cards,
+    // scrollbars, popups) than the default 0.30px error, and anti-aliasing on (ImGuiStyle's default, made explicit).
+    st.CircleTessellationMaxError = 0.10f;
+    st.AntiAliasedLines = true;
+    st.AntiAliasedLinesUseTex = true;
+    st.AntiAliasedFill = true;
+
     const float scale = dpiScale();
     st.ScaleAllSizes(scale);
     st.FontSizeBase = 16.0f;

@@ -81,8 +81,8 @@ void divider(float insetStart, float insetEnd) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
     ImGui::Dummy({w, dp(1)});
-    ImGui::GetWindowDrawList()->AddLine({p.x + dp(insetStart), p.y}, {p.x + w - dp(insetEnd), p.y},
-                                        col(scheme().outlineVariant), dp(1));
+    hLine(ImGui::GetWindowDrawList(), p.x + dp(insetStart), p.x + w - dp(insetEnd), p.y, scheme().outlineVariant,
+          dp(1));
 }
 
 } // namespace imlui::md

@@ -19,6 +19,7 @@ export using ::ImWchar;
 export using ::ImTextureID;
 export using ::ImFont;
 export using ::ImFontBaked;
+export using ::ImFontGlyph;
 export using ::ImTextureRef;
 export using ::ImFontAtlas;
 export using ::ImFontConfig;
@@ -275,7 +276,13 @@ export using ::ImDrawFlags_RoundCornersAll;
 export using ::ImDrawFlags_RoundCornersLeft;
 export using ::ImDrawFlags_RoundCornersRight;
 export using ::ImDrawFlags_RoundCornersTop;
+export using ::ImDrawFlags_RoundCornersBottom;
+export using ::ImDrawFlags_RoundCornersTopLeft;
+export using ::ImDrawFlags_RoundCornersTopRight;
+export using ::ImDrawFlags_RoundCornersBottomLeft;
+export using ::ImDrawFlags_RoundCornersBottomRight;
 export using ::ImDrawFlags_RoundCornersNone;
+export using ::ImDrawFlags_RoundCornersMask_;
 export using ::ImDrawFlags_Closed;
 
 // --------------------------------------------------------------- functions

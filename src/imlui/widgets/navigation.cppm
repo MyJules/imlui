@@ -41,13 +41,13 @@ bool navigationItem(const char* id, std::string_view iconName, std::string_view 
     if (t > 0.01f) {
         // Indicator grows from the center.
         float inset = (1.0f - t) * w * 0.15f;
-        dl->AddRectFilled({p.x + inset, p.y}, {p.x + w - inset, p.y + h}, col(s.secondaryContainer.withAlpha(t)), rnd);
+        fillRoundRect(dl, {p.x + inset, p.y}, {p.x + w - inset, p.y + h}, rnd, s.secondaryContainer.withAlpha(t));
     }
     Color fg = dis ? disabledContent() : (selected ? s.onSecondaryContainer : s.onSurfaceVariant);
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
     if (layer > 0)
-        dl->AddRectFilled(p, {p.x + w, p.y + h},
-                          col((selected ? s.onSecondaryContainer : s.onSurface).withAlpha(layer)), rnd);
+        fillRoundRect(dl, p, {p.x + w, p.y + h}, rnd,
+                      (selected ? s.onSecondaryContainer : s.onSurface).withAlpha(layer));
     float x = p.x + dp(16);
     const float cy = p.y + h * 0.5f;
     if (hasIcon(iconName)) {

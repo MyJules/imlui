@@ -65,7 +65,7 @@ void drawFieldDecor(const FieldFrame& f, std::string_view label, bool focused, b
         float lineH = focused ? dp(2) : dp(1);
         Color lc = dis ? s.onSurface.withAlpha(0.38f)
                        : (focused || error ? accent : (hovered ? s.onSurface : s.onSurfaceVariant));
-        dl->AddRectFilled({p.x, q.y - lineH}, q, col(lc));
+        fillRoundRect(dl, {p.x, q.y - lineH}, q, 0.0f, lc);
     }
 
     // Label: floats from the middle (bodyLarge) to the top (bodySmall).
@@ -95,16 +95,16 @@ void drawFieldDecor(const FieldFrame& f, std::string_view label, bool focused, b
         if (labelGapX1 > labelGapX0) {
             // Border with a notch where the floating label sits.
             dl->PushClipRect({p.x - dp(4), p.y - dp(4)}, {labelGapX0, q.y + dp(4)}, true);
-            dl->AddRect(p, q, col(bc), rnd, th);
+            strokeRoundRect(dl, p, q, rnd, bc, th);
             dl->PopClipRect();
             dl->PushClipRect({labelGapX1, p.y - dp(4)}, {q.x + dp(4), q.y + dp(4)}, true);
-            dl->AddRect(p, q, col(bc), rnd, th);
+            strokeRoundRect(dl, p, q, rnd, bc, th);
             dl->PopClipRect();
             dl->PushClipRect({labelGapX0, p.y + dp(6)}, {labelGapX1, q.y + dp(4)}, true);
-            dl->AddRect(p, q, col(bc), rnd, th);
+            strokeRoundRect(dl, p, q, rnd, bc, th);
             dl->PopClipRect();
         } else {
-            dl->AddRect(p, q, col(bc), rnd, th);
+            strokeRoundRect(dl, p, q, rnd, bc, th);
         }
     }
 
@@ -122,10 +122,10 @@ void drawFieldBackground(const FieldFrame& f, bool focused, bool hovered, bool d
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 q{f.p.x + f.w, f.p.y + f.h};
     const float rnd = dp(shape().extraSmall);
-    dl->AddRectFilled(f.p, q, col(dis ? s.onSurface.withAlpha(0.04f) : s.surfaceContainerHighest), rnd,
-                      ImDrawFlags_RoundCornersTop);
+    fillRoundRect(dl, f.p, q, rnd, dis ? s.onSurface.withAlpha(0.04f) : s.surfaceContainerHighest,
+                  ImDrawFlags_RoundCornersTop);
     if (hovered && !focused && !dis)
-        dl->AddRectFilled(f.p, q, col(s.onSurface.withAlpha(0.08f)), rnd, ImDrawFlags_RoundCornersTop);
+        fillRoundRect(dl, f.p, q, rnd, s.onSurface.withAlpha(0.08f), ImDrawFlags_RoundCornersTop);
 }
 
 void drawSupporting(ImVec2 at, float w, std::string_view text, bool error, bool dis) {

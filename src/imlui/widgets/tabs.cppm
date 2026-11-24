@@ -57,7 +57,7 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
         Color fg = dis ? disabledContent() : (sel ? (secondary ? s.onSurface : s.primary) : s.onSurfaceVariant);
         float layer = dis ? 0.0f : stateLayer(tid, hov, act);
         if (layer > 0)
-            dl->AddRectFilled(a, {a.x + tw, a.y + h}, col((sel ? s.primary : s.onSurface).withAlpha(layer)));
+            fillRoundRect(dl, a, {a.x + tw, a.y + h}, 0.0f, (sel ? s.primary : s.onSurface).withAlpha(layer));
         const auto& t = items[static_cast<std::size_t>(i)];
         ImVec2 ts = measure(TextStyle::TitleSmall, t.label);
         const bool ic = hasIcon(t.icon);
@@ -70,7 +70,7 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
             contentW = ts.x + iw;
             float x = a.x + (tw - contentW) * 0.5f;
             if (ic) drawIcon(dl, t.icon, {x + dp(12), a.y + h * 0.5f}, 24.0f, fg);
-            drawText(dl, TextStyle::TitleSmall, {x + iw, a.y + (h - ts.y) * 0.5f}, fg, t.label);
+            drawText(dl, TextStyle::TitleSmall, {x + iw, textTop(TextStyle::TitleSmall, a.y + h * 0.5f)}, fg, t.label);
         }
         if (sel) {
             contentW = std::max(contentW, dp(24));
@@ -78,14 +78,14 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
             else { indX0 = a.x + (tw - contentW) * 0.5f; indX1 = indX0 + contentW; }
         }
     }
-    dl->AddLine({p.x, p.y + h - dp(0.5f)}, {p.x + w, p.y + h - dp(0.5f)}, col(s.surfaceVariant), dp(1));
+    hLine(dl, p.x, p.x + w, p.y + h - dp(1), s.surfaceVariant, dp(1));
     // Sliding indicator.
     const ImGuiID k = ImGui::GetID("##ind");
     float x0 = animate(k, indX0, 16.0f), x1 = animate(k + 1, indX1, 16.0f);
     if (x1 > x0) {
         float ih = secondary ? dp(2) : dp(3);
-        dl->AddRectFilled({x0, p.y + h - ih}, {x1, p.y + h}, col(s.primary), secondary ? 0.0f : dp(3),
-                          ImDrawFlags_RoundCornersTop);
+        fillRoundRect(dl, {x0, p.y + h - ih}, {x1, p.y + h}, secondary ? 0.0f : dp(3), s.primary,
+                      ImDrawFlags_RoundCornersTop);
     }
     ImGui::PopID();
     ImGui::SetCursorScreenPos(p);

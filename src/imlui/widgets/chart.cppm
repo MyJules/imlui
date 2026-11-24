@@ -77,7 +77,7 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
     for (int i = 0; i <= divisions; ++i) {
         float t = static_cast<float>(i) / static_cast<float>(divisions);
         float y = bottom - (bottom - top) * t;
-        dl->AddLine({x0, y}, {x1, y}, col(s.outlineVariant.withAlpha(i == 0 ? 1.0f : 0.5f)), dp(1));
+        hLine(dl, x0, x1, y, s.outlineVariant.withAlpha(i == 0 ? 1.0f : 0.5f), dp(1));
         char buf[32];
         std::snprintf(buf, sizeof buf, "%g", std::round(static_cast<double>(mn + (mx - mn) * t) * 1000.0) / 1000.0);
         ImVec2 ts = measure(TextStyle::LabelSmall, buf);
@@ -105,8 +105,8 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
             float x = px(i);
             float y = py(values[static_cast<std::size_t>(i)]), y0 = py(std::max(mn, 0.0f));
             Color bc = i == hoverIdx ? mix(c, s.onSurface, 0.15f) : c;
-            dl->AddRectFilled({x - bw * 0.5f, std::min(y, y0)}, {x + bw * 0.5f, std::max(y, y0)}, col(bc),
-                              std::min(bw * 0.5f, dp(6)), ImDrawFlags_RoundCornersTop);
+            fillRoundRect(dl, {x - bw * 0.5f, std::min(y, y0)}, {x + bw * 0.5f, std::max(y, y0)},
+                          std::min(bw * 0.5f, dp(6)), bc, ImDrawFlags_RoundCornersTop);
         }
     } else {
         std::vector<ImVec2> pts(static_cast<std::size_t>(n));
@@ -136,17 +136,18 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
     if (hoverIdx >= 0) {
         float x = px(hoverIdx), y = py(values[static_cast<std::size_t>(hoverIdx)]);
         if (!o.bars) {
-            dl->AddLine({x, top}, {x, bottom}, col(s.outline.withAlpha(0.6f)), dp(1));
-            dl->AddCircleFilled({x, y}, dp(5), col(c));
-            dl->AddCircle({x, y}, dp(5), col(surfaceColor()), 0, dp(2));
+            vLine(dl, x, top, bottom, s.outline.withAlpha(0.6f), dp(1));
+            fillCircle(dl, {x, y}, dp(5), c);
+            strokeCircle(dl, {x, y}, dp(6), surfaceColor(), dp(2));
         }
         char buf[48];
         std::snprintf(buf, sizeof buf, "%.3g", static_cast<double>(values[static_cast<std::size_t>(hoverIdx)]));
         ImVec2 ts = measure(TextStyle::LabelMedium, buf);
         float bw = ts.x + dp(16), bh = dp(24);
         float bx = std::clamp(x - bw * 0.5f, p.x, p.x + w - bw), by = std::max(p.y, y - bh - dp(10));
-        dl->AddRectFilled({bx, by}, {bx + bw, by + bh}, col(s.inverseSurface), dp(shape().extraSmall));
-        drawText(dl, TextStyle::LabelMedium, {bx + dp(8), by + (bh - ts.y) * 0.5f}, s.inverseOnSurface, buf);
+        fillRoundRect(dl, {bx, by}, {bx + bw, by + bh}, dp(shape().extraSmall), s.inverseSurface);
+        drawText(dl, TextStyle::LabelMedium, {bx + dp(8), textTop(TextStyle::LabelMedium, by + bh * 0.5f)},
+                 s.inverseOnSurface, buf);
     }
 }
 

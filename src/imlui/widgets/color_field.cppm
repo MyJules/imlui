@@ -46,13 +46,13 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float rnd = dp(shape().medium);
-    dl->AddRect(p, {p.x + w, p.y + h}, col(dis ? disabledContainer() : (open ? s.primary : s.outlineVariant)), rnd,
-                open ? dp(2) : dp(1));
+    strokeRoundRect(dl, p, {p.x + w, p.y + h}, rnd, dis ? disabledContainer() : (open ? s.primary : s.outlineVariant),
+                    open ? dp(2) : dp(1));
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
-    if (layer > 0) dl->AddRectFilled(p, {p.x + w, p.y + h}, col(s.onSurface.withAlpha(layer)), rnd);
+    if (layer > 0) fillRoundRect(dl, p, {p.x + w, p.y + h}, rnd, s.onSurface.withAlpha(layer));
     const ImVec2 sw{p.x + dp(8), p.y + dp(8)};
-    dl->AddRectFilled(sw, {sw.x + dp(40), sw.y + dp(40)}, col(c->withAlpha(1.0f)), dp(shape().small));
-    dl->AddRect(sw, {sw.x + dp(40), sw.y + dp(40)}, col(s.outlineVariant), dp(shape().small), dp(1));
+    fillRoundRect(dl, sw, {sw.x + dp(40), sw.y + dp(40)}, dp(shape().small), c->withAlpha(1.0f));
+    strokeRoundRect(dl, sw, {sw.x + dp(40), sw.y + dp(40)}, dp(shape().small), s.outlineVariant, dp(1));
     const float tx = sw.x + dp(40) + dp(16);
     if (!label.empty()) {
         drawText(dl, TextStyle::BodySmall, {tx, p.y + dp(9)}, dis ? disabledContent() : s.onSurfaceVariant, label);

@@ -2,6 +2,7 @@
 module;
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
@@ -80,12 +81,11 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
     switch (variant) {
     case ButtonVariant::Filled:   bg = s.primary; fg = s.onPrimary; break;
     case ButtonVariant::Tonal:    bg = s.secondaryContainer; fg = s.onSecondaryContainer; break;
-    case ButtonVariant::Outlined: border = s.outlineVariant; fg = s.primary; break;
+    case ButtonVariant::Outlined: border = s.outline; fg = s.primary; break;
     case ButtonVariant::Text:     break;
     case ButtonVariant::Elevated: bg = s.surfaceContainerLow; elevation = 1.0f; break;
     case ButtonVariant::Fab:      bg = s.primaryContainer; fg = s.onPrimaryContainer; elevation = 2.0f; break;
     }
-    if (variant == ButtonVariant::Outlined) border = s.outline;
     if (dis) {
         fg = disabledContent();
         if (bg.a > 0) bg = disabledContainer();
@@ -97,9 +97,9 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
     const ImVec2 q{p.x + w, p.y + h};
     float layer = dis ? 0.0f : stateLayer(id, hov, act);
     drawShadow(dl, p, q, rounding, elevation + (hov ? 0.6f : 0.0f));
-    if (bg.a > 0) dl->AddRectFilled(p, q, col(bg), rounding);
-    if (layer > 0) dl->AddRectFilled(p, q, col(fg.withAlpha(layer)), rounding);
-    if (border.a > 0) dl->AddRect(p, q, col(border), rounding, dp(1));
+    fillRoundRect(dl, p, q, rounding, bg);
+    if (layer > 0) fillRoundRect(dl, p, q, rounding, fg.withAlpha(layer));
+    strokeRoundRect(dl, p, q, rounding, border, dp(1));
 
     float x = p.x + (w - content) * 0.5f;
     const float cy = p.y + h * 0.5f;
@@ -107,7 +107,7 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
         drawIcon(dl, iconName, {x + dp(iconSz) * 0.5f, cy}, iconSz, fg);
         x += dp(iconSz) + gap;
     }
-    if (!text.empty()) drawText(dl, TextStyle::LabelLarge, {x, cy - ts.y * 0.5f}, fg, text);
+    if (!text.empty()) drawText(dl, TextStyle::LabelLarge, {x, textTop(TextStyle::LabelLarge, cy)}, fg, text);
     return clicked;
 }
 
@@ -154,11 +154,12 @@ bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v, 
         if (border.a > 0) border = disabledContainer();
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 c{p.x + target * 0.5f, p.y + target * 0.5f};
-    if (bg.a > 0) dl->AddCircleFilled(c, box * 0.5f, col(bg));
-    if (border.a > 0) dl->AddCircle(c, box * 0.5f - dp(0.5f), col(border), 0, dp(1));
+    // Whole-pixel center: the 40dp circle and its 1dp ring then sit symmetrically on the pixel grid.
+    const ImVec2 c{std::round(p.x + target * 0.5f), std::round(p.y + target * 0.5f)};
+    fillCircle(dl, c, box * 0.5f, bg);
+    strokeCircle(dl, c, box * 0.5f, border, dp(1));
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
-    if (layer > 0) dl->AddCircleFilled(c, box * 0.5f, col(fg.withAlpha(layer)));
+    if (layer > 0) fillCircle(dl, c, box * 0.5f, fg.withAlpha(layer));
     drawIcon(dl, iconName, c, 24.0f, fg);
     return clicked;
 }

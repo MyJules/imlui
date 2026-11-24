@@ -35,13 +35,13 @@ void progress(float fraction, float width) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float y = p.y + dp(4), x1 = p.x + w;
     auto seg = [&](float a, float b, Color c) {
-        if (b - a > 0.5f) dl->AddRectFilled({a, y}, {b, y + h}, col(c), h * 0.5f);
+        if (b - a > 0.5f) fillRoundRect(dl, {a, y}, {b, y + h}, h * 0.5f, c);
     };
     if (fraction >= 0.0f) {
         float ax = p.x + w * std::clamp(fraction, 0.0f, 1.0f);
         seg(p.x, ax, s.primary);
         seg(fraction > 0.0f ? ax + gap : p.x, x1, s.secondaryContainer);
-        if (fraction < 1.0f) dl->AddCircleFilled({x1 - h * 0.5f, y + h * 0.5f}, h * 0.5f, col(s.primary));
+        if (fraction < 1.0f) fillCircle(dl, {x1 - h * 0.5f, y + h * 0.5f}, h * 0.5f, s.primary);
     } else {
         requestFrame(); // indeterminate: animates continuously
         float t = static_cast<float>(std::fmod(ImGui::GetTime() * 0.55, 1.0));
@@ -71,8 +71,7 @@ void circularProgress(float fraction, float diameter, float thickness) {
     const float top = -pi * 0.5f;
     auto arc = [&](float a0, float a1, Color cl) {
         if (a1 - a0 < 0.01f) return;
-        dl->PathArcTo(c, r, a0, a1, 48);
-        dl->PathStroke(col(cl), th);
+        strokeArc(dl, c, r, a0, a1, cl, th);
     };
     if (fraction >= 0.0f) {
         float f = std::clamp(fraction, 0.0f, 1.0f);

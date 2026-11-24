@@ -46,9 +46,9 @@ bool listItem(const char* id, const ListItemOptions& o) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float rnd = dp(shape().medium);
     float st = animate(iid + 3, o.selected ? 1.0f : 0.0f, 18.0f);
-    if (st > 0.01f) dl->AddRectFilled(p, {p.x + w, p.y + h}, col(s.secondaryContainer.withAlpha(st)), rnd);
+    if (st > 0.01f) fillRoundRect(dl, p, {p.x + w, p.y + h}, rnd, s.secondaryContainer.withAlpha(st));
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
-    if (layer > 0) dl->AddRectFilled(p, {p.x + w, p.y + h}, col(s.onSurface.withAlpha(layer)), rnd);
+    if (layer > 0) fillRoundRect(dl, p, {p.x + w, p.y + h}, rnd, s.onSurface.withAlpha(layer));
 
     const float cy = p.y + h * 0.5f;
     float x = p.x + dp(16);
@@ -92,7 +92,7 @@ bool expander(const char* id, std::string_view title, std::string_view supportin
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float rnd = dp(shape().medium);
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
-    if (layer > 0) dl->AddRectFilled(p, {p.x + w, p.y + h}, col(s.onSurface.withAlpha(layer)), rnd);
+    if (layer > 0) fillRoundRect(dl, p, {p.x + w, p.y + h}, rnd, s.onSurface.withAlpha(layer));
     const float cy = p.y + h * 0.5f;
     const Color fg = dis ? disabledContent() : s.onSurface;
     if (two) {
