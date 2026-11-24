@@ -108,13 +108,16 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 
 Non-visual children are rendered in place and don't count for the spacing.
 
-How `align` knows a child's width before drawing it: `Text` (unwrapped, start-aligned), `Icon`, `Button`,
-`IconButton` and `Spacer` know their size up front (their *intrinsic size*), so they're in place on every frame.
-Any other child is placed by its width on the last frame; when that changed, another frame follows right away, so
-the layout settles by itself even when nothing else is redrawing (a `Timer` changing a label, a script setting a
-prop). On a child's very first frame, when neither is known, it is laid out but not shown, and appears in place on
-the next frame. The same goes for `Row` (see there: only where a wrong width would shift its siblings), `TopAppBar`
-actions and `NavigationRail` destinations. A size, once measured, is kept while the child is hidden (another tab, an
+How `align` knows a child's width before drawing it: every built-in element whose size follows from its props, the
+font and the theme knows it up front (its *intrinsic size*: `Text`, `Icon`, `Button`, `Checkbox`, `Chip`,
+`TextField`, `ProgressBar`, `Image`, ... see [what still lags](architecture.md#layout-notes)), and so do `Column`,
+`Row`, `Card`, `Section`, `TopAppBar` and `NavigationBar` when all their children do, so they're in place on every
+frame, the first included. Any other child (a custom element without an intrinsic size, a stack holding one, a
+`ScrollView`, `Grid`, `Table`, `TabBar`, `TreeNode`) is placed by its width on the last frame; when that changed,
+another frame follows right away, so the layout settles by itself even when nothing else is redrawing (a `Timer`
+changing a label, a script setting a prop). On a child's very first frame, when neither is known, it is laid out but
+not shown, and appears in place on the next frame. The same goes for `Row` (see there: only where a wrong width
+would shift its siblings), `TopAppBar` actions and `NavigationRail` destinations. A size, once measured, is kept while the child is hidden (another tab, an
 `If` branch, a collapsed section, for at least a minute), so a child that comes back is in place on its first frame.
 A fill or fill-minus child needs no measured width: it is as wide as the stack, less its `-N`.
 
@@ -275,17 +278,19 @@ A vertical stack. `Item` is an alias.
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child, by its width ([how it knows it](#stacking-containers)). |
 | `padding` | number | `0` | Inset on every side: the children start `padding` in and, without a `width`, fill up to `padding` from the right edge. |
-| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the children's available width. They fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. |
+| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the children's available width. They fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. Unset, a column that holds a child that fills is as wide as the available width, so it fills itself: a `Row` gives it a share. |
 
 ### Row
 
 Children side by side, as a flex row. Children that **fill** share the width the others leave, in equal parts:
 a fill or fill-minus `width` (`fillWidth = true`, `width = -16`), an element that fills by default (`0 (fill)` in
-its table: `TextField`, `Card`, `Slider`, `Grid`, `ScrollView`, ...), wrapping text (`Text { wrap = true }`) and
-`Spacer { fill = true }`. Each fill is laid out in its share: it fills it, a fill-minus width is its share minus
-`|v|`, wrapping text wraps at it. The other children keep their own width (their intrinsic size, else their width
-on the previous frame, settling within a frame) and are bounded by the children after them, so a fill nested inside
-one stops there. `align` centers (or bottom-aligns) each child against the tallest, by the same sizes.
+its table: `TextField`, `Card`, `Slider`, `Grid`, `ScrollView`, ...), wrapping or aligned text (`Text { wrap = true }`,
+`Text { align = "center" }`), `Spacer { fill = true }`, and, by their content, a `Column` (without a `width`) that
+holds a fill and a `Row` that has fills or a `justify`. Each fill is laid out in its share: it fills it, a fill-minus
+width is its share minus `|v|`, wrapping text wraps at it, aligned text aligns in it. The other children keep their
+own width (their intrinsic size, else their width on the previous frame, settling within a frame) and are bounded by
+the children after them, so a fill nested inside one stops there. `align` centers (or bottom-aligns) each child
+against the tallest, by the same sizes, on whole pixels.
 
 On a child's very first frame its size may not be known yet (no intrinsic size, never rendered). When the row needs
 its **width** (the row has fills, or `justify` isn't `"start"`), a guess would shift its siblings far, so the row is
@@ -629,7 +634,7 @@ ApplicationWindow { menuBar = MenuBar {
 | `style` | style | `"bodyLarge"` | Type-scale role. Unknown names draw as `bodyLarge`. |
 | `color` | color | — | Text color. Unset: the theme's text color (`onSurface`). |
 | `wrap` | bool | `false` | Wraps at the available width (a fixed `Column`'s, a `Grid` cell's, ...). In a `Row`, wrapping text takes a share of the free width and wraps at it. |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. Aligned text fills: it is as wide as the available width (its offset and its line), and takes a share of a `Row`. |
 | `font` | string | `""` | A [font the theme declares](theming.md#fonts) (`"mono"`, or `"regular"` / `"medium"`), drawn at the style's size. `""` or an undeclared name: the style's own face. |
 
 ### Icon
@@ -690,6 +695,7 @@ A 1dp `outlineVariant` line across the available width. `Separator` extends `Div
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `inset`, `insetEnd` | number | `0`, `0` | Start and end insets (dp), on the plain rule. |
+| `width` | size | `0` (fill) | *Raw.* The plain rule's width. |
 | `text` | string | `""` | **`Separator` only.** Positional. With text, a labeled separator: the text in `titleSmall` `onSurfaceVariant` followed by a rule (the insets don't apply). |
 
 ### Spacer
