@@ -105,7 +105,7 @@ std::optional<ResourceData> PackedMount::read(std::string_view path) const {
             try {
                 bytes.resize(static_cast<std::size_t>(entry.size));
             } catch (const std::bad_alloc&) {
-                // Not thrown (read() is called from Lua's C frames), not remembered (it may fit later).
+                // Not thrown (a failed read is "not found"), not remembered (it may fit later).
                 log::error("resource '{}' ({}): out of memory decompressing {} bytes", path, origin(), entry.size);
                 return std::nullopt;
             }

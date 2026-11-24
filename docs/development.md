@@ -212,7 +212,9 @@ creates the Lua state. App actions (`quit`, `reload`, `setTitle`) go through `Na
 doesn't depend on `Engine`.
 
 1. Add an entry `{"name", [](lua::State* state) -> int { ...; return nResults; }}` to the function table. Use
-   `lua::error(state, "...")` for bad arguments. If the function needs the app, add a hook to `NativeHooks`.
+   `lua::error(state, "...")` for bad arguments. A C++ exception it throws becomes the Lua error
+   `imlui.native.name: what`. Lua is compiled as C++, so a Lua error unwinds like an exception: the function may raise
+   with C++ objects alive (a `std::string` message, ...). If the function needs the app, add a hook to `NativeHooks`.
 2. Expose it from the prelude if scripts should call it directly: `ui.name = native.name` in `src/resources/imlui.lua`.
    Scripts can always reach it as `native.name`.
 3. Document it in [Lua API](lua-api.md#native).
@@ -338,6 +340,9 @@ On this target:
   `clang-debug` for those.
 - The ASan runtime DLL (`clang_rt.asan_dynamic-x86_64.dll`) is copied to `build/clang-asan/bin` at configure
   time, so the tests and the app run without changing `PATH`.
+- ASan is built without its stack-use-after-return instrumentation (`-fsanitize-address-use-after-return=never`,
+  also a usage requirement): with it, throwing from a catch block (`throw;`, or a Lua error raised in a handler:
+  Lua is compiled as C++) crashes with a bogus "stack-overflow". The check is off at run time by default anyway.
 - Covered: ASan (heap, stack and global buffer overflows, use-after-free, double free), and the UBSan `undefined`
   group (signed overflow, shifts, null, alignment, bounds, enum/bool loads, float-cast overflow, unreachable,
   `function`, and more). UB aborts the process, so a test with UB fails.
@@ -356,6 +361,9 @@ On this target:
   `docs/elements.md` and the element classes' doc comments (read from the source tree through the
   `IMLUI_DOCS_DIR` and `IMLUI_ELEMENTS_DIR` compile definitions) against the declared members (see
   [Writing a built-in element](#writing-a-built-in-element)).
+- `lua_wrapper_test.cpp` covers the Lua wrapper and the error boundary: a Lua error runs the destructors of the C++
+  frames it unwinds (also across Lua frames), a `std::bad_alloc` under a protected call is a memory error,
+  `catchCxx` converts C++ exceptions and passes Lua errors, `StackGuard` keeps an error's value on top.
 - `types_test.cpp` covers the C++ type system without a window. It installs a `TypeRegistry` into a Lua state
   that runs `src/resources/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `nil` defaults,
   `notify`/`emit`, `__gc` lifetime, singletons (also `shared_ptr` ones), `overload` and reinstalling into a new

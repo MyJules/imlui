@@ -37,6 +37,7 @@ install(TARGETS imlui_ext_lua imlui_ext_imgui glfw imlui_ext_spdlog imlui_ext_st
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/imlui
 )
 install(FILES ${ext}/lua/lua.h ${ext}/lua/lualib.h ${ext}/lua/lauxlib.h ${ext}/lua/luaconf.h
+              ${ext}/lua_cxx/imlui_lua_error.h
         DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/lua)
 install(FILES ${ext}/imgui/imgui.h ${ext}/imgui/imconfig.h ${ext}/imgui/imgui_internal.h
               ${ext}/imgui/imstb_rectpack.h ${ext}/imgui/imstb_textedit.h ${ext}/imgui/imstb_truetype.h

@@ -297,7 +297,7 @@ TEST(DirectoryMount, ServesThePreviousVersionWhileAChangedFileCantBeRead) {
     EXPECT_TRUE(mount.modified("b.lua"));
 }
 
-// Mounts are called from Lua's C frames, so a DirectoryMount never throws: a name that isn't valid UTF-8 (which the
+// A DirectoryMount never throws (a failure reads as "not found"): a name that isn't valid UTF-8 (which the
 // file system can't convert) is simply not found, also below an existing file.
 TEST(DirectoryMount, NeverThrows) {
     test::TempDir dir;
@@ -607,7 +607,7 @@ public:
 
 } // namespace
 
-// A C++ exception never crosses Lua's C frames: the library functions return nil and a message (exists, false).
+// A C++ exception from a mount doesn't raise: the library functions return nil and a message (exists, false).
 TEST_F(LuaResourcesTest, ExceptionsBecomeFailuresNotCrashes) {
     m_frame.resources().mount("app:/boom/", std::make_shared<ThrowingMount>());
     run(R"(

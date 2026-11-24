@@ -46,15 +46,15 @@ inline constexpr bool isOptional = false;
 template <class V>
 inline constexpr bool isOptional<std::optional<V>> = true;
 
-/// "bad argument #2 to 'Gauge:setRange' (number expected, got string)". Pushed protected (pushMessage): a memory
-/// error must not longjmp past `msg`.
-inline void pushArgError(lua::State* s, const std::string& where, int arg, std::string_view expected, int idx) {
+/// Raises "bad argument #2 to 'Gauge:setRange' (number expected, got string)".
+[[noreturn]] inline void argError(lua::State* s, const std::string& where, int arg, std::string_view expected,
+                                  int idx) {
     std::string msg = "bad argument #" + std::to_string(arg) + " to '" + where + "' (";
     msg += expected;
     msg += " expected, got ";
     msg += lua::typeName(s, idx);
     msg += ")";
-    luaui::pushMessage(s, msg);
+    lua::error(s, msg);
 }
 
 template <class T, class Fn, class... A, std::size_t... I>
@@ -64,9 +64,7 @@ int invokeMethod(const Fn& fn, T& self, lua::State* s, int first, const std::str
     for (std::size_t i = 0; i < sizeof...(A); ++i) {
         if (!ok[i]) {
             constexpr std::string_view names[] = {LuaConvert<A>::name..., {}};
-            const int idx = first + static_cast<int>(i);
-            pushArgError(s, where, static_cast<int>(i) + 1, names[i], idx);
-            return -1;
+            argError(s, where, static_cast<int>(i) + 1, names[i], first + static_cast<int>(i));
         }
     }
     std::tuple<A...> args{LuaConvert<A>::get(s, first + static_cast<int>(I))...};
@@ -81,12 +79,14 @@ int invokeMethod(const Fn& fn, T& self, lua::State* s, int first, const std::str
 }
 
 /// Runs `f()` and returns its result; a C++ exception is reported as a script error ("where: what") and
-/// `fallback` returned instead. Property hooks run inside Lua C functions, and an exception unwinding
-/// through Lua's C frames is undefined behaviour, so none may escape.
+/// `fallback` returned instead: a property hook that throws doesn't stop the property sync of the other properties.
+/// A Lua error (lua::Raised, e.g. out of memory while pushing a value) passes through.
 template <class R, class F>
 R guarded(const std::string& where, R fallback, const F& f) {
     try {
         return f();
+    } catch (const lua::Raised&) {
+        throw;
     } catch (const std::exception& e) {
         luaui::reportError(where + ": " + e.what());
     } catch (...) {
@@ -162,7 +162,7 @@ public:
     TypeBuilder& method(std::string name, Fn fn) {
         using Args = typename detail::MethodTraits<Fn>::Args;
         std::string where = m_info.name() + ":" + name;
-        // A C++ exception becomes "Gauge:reset: what" on the stack and -1; the caller raises it (catchCxx).
+        // A C++ exception becomes the Lua error "Gauge:reset: what".
         m_info.addMethod({std::move(name), [fn, where](lua::State* s, ScriptObject& o, int first) -> int {
                               return luaui::catchCxx(
                                   s,

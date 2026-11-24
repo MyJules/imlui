@@ -122,7 +122,7 @@ std::string joined(std::string_view folder, std::string_view name) {
 }
 
 /// Runs `f`; on an exception (out of memory, a file name the file system can't convert), logs it and returns
-/// `fallback`. The mounts are called from Lua's C frames, which an exception mustn't cross.
+/// `fallback`. A mount reports a failure as "not found" (Lua's resource functions return nil and a message).
 template <class R, class F>
 R guarded(const DirectoryMount& mount, std::string_view what, std::string_view path, R fallback, F&& f) {
     try {

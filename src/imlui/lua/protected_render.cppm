@@ -5,9 +5,9 @@
 // protected call: the error is reported like any script error (luaui::errors(), the error overlay), and the ImGui
 // stacks the pass left open (Begin/End, BeginChild, tables, Push/Pop) are unwound, so the frame can still end.
 //
-// It is a last resort, not a way of handling errors: Lua is compiled as C, so its error longjmps past the C++
-// frames of the pass without running their destructors. Everything that calls into Lua while rendering should
-// still go through luaui::safeCall.
+// It is a last resort, not a way of handling errors: the rest of the pass is skipped (Lua is compiled as C++, so the
+// error unwinds the C++ frames of the pass, running their destructors, up to here). Everything that calls into Lua
+// while rendering should still go through luaui::safeCall.
 export module imlui.lua.protected_render;
 
 import std;
@@ -34,25 +34,11 @@ namespace {
 
 using RenderFn = std::function<void(lua::State*)>;
 
-/// Upvalue 1: the RenderFn (light userdata). A C++ exception becomes a Lua error: it must not unwind through
-/// lua::pcall's C frames.
+/// Upvalue 1: the RenderFn (light userdata). A C++ exception becomes a Lua error ("C++ exception while rendering:
+/// what"), reported like the others.
 int renderTrampoline(lua::State* state) {
     auto* fn = static_cast<RenderFn*>(lua::touserdata(state, lua::upvalueindex(1)));
-    bool failed = false;
-    {
-        std::string message;
-        try {
-            (*fn)(state);
-        } catch (const std::exception& e) {
-            message = std::string{"C++ exception while rendering: "} + e.what();
-            failed = true;
-        } catch (...) {
-            message = "unknown C++ exception while rendering";
-            failed = true;
-        }
-        if (failed) lua::pushstring(state, message);
-    }
-    if (failed) lua::raise(state); // after `message` is destroyed: raise doesn't return
+    catchCxx(state, [&] { (*fn)(state); }, "C++ exception while rendering");
     return 0;
 }
 

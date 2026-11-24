@@ -5,13 +5,16 @@
 // which cannot cross a module boundary, so every call we use is re-exposed as
 // a real function in namespace `lua`. Nothing else in the project includes
 // Lua headers.
+//
+// Lua is compiled as C++ (external/lua_cxx/imlui_lua.cpp): its API has C++ linkage (so no extern "C" here), and a
+// Lua error is a C++ exception, lua::Raised, which unwinds the C++ frames between the raise and the protected call
+// that catches it, running their destructors.
 module;
 
-extern "C" {
+#include "imlui_lua_error.h"
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
-}
 
 export module lua;
 
@@ -23,6 +26,12 @@ using State = ::lua_State;
 using CFunction = ::lua_CFunction;
 using Integer = ::lua_Integer;
 using Number = ::lua_Number;
+
+/// The C++ exception that carries a Lua error (lua::error, lua::raise, luaL_check*, a memory error ...) to the
+/// protected call that catches it, which takes the error value from the Lua stack (the exception itself is empty).
+/// C++ code may let it pass, or catch it to rethrow it (`catch (const lua::Raised&) { throw; }` before a
+/// `catch (...)`), but must never swallow it: Lua expects it to reach its protected call.
+using Raised = ::imlui_lua_error;
 
 // ---------------------------------------------------------------- constants
 inline constexpr int ok = LUA_OK;
@@ -129,9 +138,9 @@ int loadbufferx(State* state, std::string_view code, const char* name, const cha
 /// Pops a value and sets it as upvalue `n` of the function at `funcindex`; nullptr when there is no such upvalue.
 const char* setupvalue(State* state, int funcindex, int n);
 void traceback(State* state, State* thread, const char* msg, int level);
-/// Raises a Lua error with `msg`. Never returns.
+/// Raises a Lua error with `msg` (throws lua::Raised). Never returns.
 [[noreturn]] void error(State* state, std::string_view msg);
-/// Raises the value on top of the stack as a Lua error. Never returns.
+/// Raises the value on top of the stack as a Lua error (throws lua::Raised). Never returns.
 [[noreturn]] void raise(State* state);
 
 // ---------------------------------------------------------------- refs
@@ -269,8 +278,7 @@ void traceback(State* state, State* thread, const char* msg, int level) { luaL_t
 void error(State* state, std::string_view msg) {
     lua_pushlstring(state, msg.data(), msg.size());
     lua_error(state);
-    // lua_error longjmps; this is unreachable.
-    for (;;) {}
+    for (;;) {} // lua_error throws: never reached
 }
 void raise(State* state) {
     lua_error(state);

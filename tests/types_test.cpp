@@ -426,7 +426,7 @@ TEST_F(TypesTest, SyncReportsTypeMismatches) {
 }
 
 // A Lua error during the sync (here the element table's own __index) is reported, and doesn't leave the
-// element "syncing": the next sync runs. (It used to longjmp past the reset of the flag.)
+// element "syncing": the next sync runs. (It once skipped the reset of the flag.)
 TEST_F(TypesTest, ALuaErrorDuringTheSyncDoesntFreezeTheElement) {
     run(R"(
         boom = true
@@ -684,8 +684,7 @@ TEST_F(TypesTest, ClosingTheStateDetachesSingletons) {
 
 // ------------------------------------------------------------------ C++ exceptions in property hooks
 
-// A property hook runs inside a Lua C function; an exception unwinding through Lua's C frames is undefined
-// behaviour, so setters and getters that throw are reported as script errors, like methods.
+// Setters and getters that throw are reported as script errors (the sync of the other properties goes on).
 TEST(PropertyExceptionTest, ThrowingSettersAndGettersAreReported) {
     luaui::clearErrors();
     TypeRegistry types;

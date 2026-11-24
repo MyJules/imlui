@@ -1,5 +1,5 @@
 // C++ code reached from Lua that fails: exceptions from element hooks (componentComplete, tick, destroyed),
-// from the host's NativeHooks and from methods never unwind through Lua's C frames; argument checks of the
+// from the host's NativeHooks and from methods become script errors or Lua errors with a message; argument checks of the
 // native library; a Lua error during a property sync doesn't freeze the element; setInterval's checks.
 #include <gtest/gtest.h>
 
