@@ -140,6 +140,9 @@ Both repositories share one layout: the top-level `CMakeLists.txt` sets the proj
 lists). imlui's Lua side moved from `lua/` to `src/resources/`, its manifest from the root to
 `src/resources/resources.lua`; the gallery's `app/` became `src/resources/`.
 
+Later, the gallery became **imlui-example**: a minimal app (one window with a button, a manifest that lists its files
+by name), executable `imlui_example`. The full gallery is kept at its tag `full-gallery`.
+
 ## 7. CMake package *(done)*
 
 imlui is consumable three ways, all giving `imlui::imlui`, `imlui::imlui_rc`, `imlui::imlui_pack`, the helpers and

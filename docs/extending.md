@@ -64,7 +64,7 @@ Text { text = function() return ("load %.0f%%"):format(backend.load * 100) end }
 backend.onLoadChanged = function(v) print("load", v) end
 ```
 
-A complete, runnable version is in the [example app](#the-example-app), imlui-gallery.
+A complete, runnable version is described in [A complete example](#a-complete-example).
 
 ## Contents
 
@@ -633,13 +633,15 @@ two-way props. Good places to start:
 
 Registering a type under a built-in's name replaces the built-in: the last registration of a name wins.
 
-## The example app
+## A complete example
 
-The example lives in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery) repository, an app that
-vendors imlui as a submodule. Its C++ is in `src/`, and its *C++ types* page (`src/resources/pages/cpp_types.lua`) uses both types:
+The [imlui-example](getting-started.md#the-example-app-imlui-example) repository is a minimal app without C++ types; its tag
+`full-gallery` keeps the earlier gallery, which registers two. Its C++ is in `src/`, and its *C++ types* page
+(`src/resources/pages/cpp_types.lua`) uses both types:
 
 ```sh
-cmake --preset clang-debug && cmake --build build/clang-debug    # in imlui-gallery
+git checkout full-gallery && git submodule update                 # in imlui-example
+cmake --preset clang-debug && cmake --build build/clang-debug
 build/clang-debug/bin/imlui_gallery                               # the last page: C++ types
 ```
 

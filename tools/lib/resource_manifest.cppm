@@ -4,7 +4,7 @@
 //
 //     return {
 //         prefix = "app",                     -- required: `app`, `imlui`, a library's own
-//         mount = "gallery",                  -- optional folder under the prefix: app:/gallery/
+//         mount = "ui",                       -- optional folder under the prefix: app:/ui/
 //         base = ".",                         -- the folder paths are relative to, relative to the manifest
 //         files = { "main.lua" },             -- explicit files
 //         include = { "**/*.lua", "*.png" },  -- glob patterns (imlui.tools.glob), relative to base

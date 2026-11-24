@@ -3,7 +3,7 @@
 imlui is a library. An app adds it to its CMake build in one of three ways (a git submodule with `add_subdirectory`,
 `FetchContent`, or `find_package` on an installed copy), links `imlui::imlui`, and is then a few lines of C++ host
 (`main.cpp`) plus its Lua scripts, embedded from a resource manifest (`src/resources/resources.lua`). The
-[imlui-gallery](#the-example-app-imlui-gallery) repository is the complete example.
+[imlui-example](#the-example-app-imlui-example) repository is a minimal complete app.
 
 ## Prerequisites
 
@@ -62,7 +62,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 
 followed by one of these, then `add_subdirectory(src)`.
 
-**a) Git submodule and `add_subdirectory`** (what imlui-gallery does). The app's repository pins the imlui commit,
+**a) Git submodule and `add_subdirectory`** (what imlui-example does). The app's repository pins the imlui commit,
 and changing `vendor/imlui` while working on the app is a normal edit-build loop.
 
 ```sh
@@ -213,31 +213,31 @@ build/clang-debug/bin/my_app
 The executable carries everything inside: the library's Lua and fonts, and the app's files. It runs on its own,
 copied anywhere.
 
-## The example app: imlui-gallery
+## The example app: imlui-example
 
-The `imlui-gallery` repository (a separate repository, usually checked out next to this one as `../imlui-gallery`)
-is the example app, laid out as above:
+The `imlui-example` repository (a separate repository, usually checked out next to this one as `../imlui-example`)
+is the smallest complete app, laid out as above: one window with a button that counts its clicks.
 
-- `src/resources/main.lua`: the app shell: the theme, adaptive navigation (drawer, rail, modal drawer by window
-  size class) and the page list.
-- `src/resources/pages/*.lua`: one file per page, together showing every built-in element and a live theme editor;
-  `layout.lua` and `theme_state.lua` are shared by the pages, `StatCard.lua` is a component and `landscape.png` an
-  image, all listed in `src/resources/resources.lua`.
-- `src/CMakeLists.txt`: the `imlui_gallery` target and its embedded resources (module `imlui.embedded.gallery`).
-- `src/gauge.cppm` and `src/system_info.cppm`: a C++ element type (`Gauge`) and a singleton (`backend`), shown on
-  the gallery's *C++ types* page. See [Registering C++ types](extending.md#the-example-app).
+- `src/main.cpp`: `defaultConfig` with the embedded app (module `imlui.embedded.example`), then `run()`.
+- `src/CMakeLists.txt`: the `imlui_example` target and its embedded resources.
+- `src/resources/resources.lua`: the manifest, which lists each resource by name (`files = { "main.lua" }`) instead
+  of patterns.
+- `src/resources/main.lua`: the UI: an `ApplicationWindow` with a click count and a `Button` that adds one and shows
+  a snackbar.
+- `CMakePresets.json`: `clang-debug`, `clang-release`, `clang-ship`, `clang-asan`, like imlui's.
 - `vendor/imlui`: this repository as a submodule.
 
 ```sh
-git clone --recursive <imlui-gallery URL>
-cd imlui-gallery
+git clone --recursive <imlui-example URL>
+cd imlui-example
 cmake --preset clang-debug
 cmake --build build/clang-debug
-build/clang-debug/bin/imlui_gallery
+build/clang-debug/bin/imlui_example
 ```
 
-Set `GALLERY_PAGE=n` to open page `n` at startup, which helps for screenshots and tests. Its README covers updating
-the submodule and pointing it at another imlui checkout.
+Its README covers updating the submodule and pointing it at another imlui checkout. The repository's tag
+`full-gallery` keeps the earlier, larger app: every built-in element on its own page, a live theme editor, and C++
+types (see [Registering C++ types](extending.md#a-complete-example)).
 
 The window starts hidden. It appears once the script has loaded, with the title and size taken from the root
 `ApplicationWindow`.
@@ -247,7 +247,7 @@ The window starts hidden. It appears once the script has loaded, with the title 
 `my_app [script.lua]`: a script argument replaces the app's own `app:/` files. Its folder is mounted at `app:/`
 and it becomes the entry script. A relative path is taken relative to the current directory, and when no such file
 exists there, relative to the executable's folder. Any imlui app can so run another script, which is handy for
-trying one out: `build/clang-debug/bin/imlui_gallery path/to/hello.lua`.
+trying one out: `build/clang-debug/bin/imlui_example path/to/hello.lua`.
 
 ## Hot reload
 
@@ -261,7 +261,7 @@ When a file changes, it builds a **fresh Lua state** and runs the script again:
 - If the new script fails to load, the **previous UI keeps running**. The error appears in an overlay at the
   bottom of the window, with **Dismiss** and **Reload** buttons.
 
-You can also reload from Lua with `reload()`, as the gallery's *More → Reload script* menu does.
+You can also reload from Lua with `reload()`, from a menu item for example.
 
 ## Dev and ship builds
 
@@ -350,8 +350,8 @@ How it works:
   global in the script. See [Lua API](lua-api.md).
 - `function() ... end` property values are **bindings** that are evaluated again every frame. `bind(s, "name")`
   is a **two-way binding**: typing in the field writes `s.name`.
-- To reuse a piece of UI, put it in its own file next to the script and `require` it. See the gallery's
-  `src/resources/StatCard.lua` and [components](lua-api.md#components-and-require).
+- To reuse a piece of UI, put it in its own file next to the script and `require` it. See
+  [components](lua-api.md#components-and-require).
 
 Next: [Elements](elements.md) for all props, and [Theming](theming.md) for colors and typography.
 

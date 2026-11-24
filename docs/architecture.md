@@ -315,7 +315,7 @@ What a resource package holds is described in Lua, like Qt's `.qrc` files: a **m
 ```lua
 return {
     prefix = "app",                        -- required: `app`, `imlui`, a library's own prefix
-    mount = "gallery",                     -- optional folder under the prefix: app:/gallery/ (default: the root)
+    mount = "ui",                          -- optional folder under the prefix: app:/ui/ (default: the root)
     base = ".",                            -- the folder paths are relative to, relative to the manifest (default ".")
     files = { "main.lua", "data/a.json" }, -- explicit files
     include = { "**/*.lua", "*.png" },     -- glob patterns, relative to base
@@ -449,7 +449,7 @@ already covers every folder of that prefix.
 
 imlui is a library repository; apps live in their own repositories and add it with `add_subdirectory` (a git
 submodule), `FetchContent`, or `find_package` on an installed copy (see
-[Getting started](getting-started.md#1-adding-imlui-to-your-project); [imlui-gallery](getting-started.md#the-example-app-imlui-gallery),
+[Getting started](getting-started.md#1-adding-imlui-to-your-project); [imlui-example](getting-started.md#the-example-app-imlui-example),
 which uses a submodule, is the example).
 
 | Path | What |

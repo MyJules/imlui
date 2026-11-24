@@ -29,8 +29,8 @@ Full docs are in [`docs/`](docs/README.md): [getting started](docs/getting-start
 
 imlui is a library (CMake package `imlui`, version 0.1.0): an app adds it with `add_subdirectory` (e.g. a git
 submodule), `FetchContent`, or `find_package` on an installed copy, and links `imlui::imlui`. The
-[imlui-gallery](docs/getting-started.md#the-example-app-imlui-gallery) repository is the example app (every element,
-a live theme editor, and C++ types). In short ([Getting started](docs/getting-started.md#1-adding-imlui-to-your-project)
+[imlui-example](docs/getting-started.md#the-example-app-imlui-example) repository is a minimal example app (a window with a
+button). In short ([Getting started](docs/getting-started.md#1-adding-imlui-to-your-project)
 has the details):
 
 ```cmake

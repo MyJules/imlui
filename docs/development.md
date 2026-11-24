@@ -152,9 +152,8 @@ a constructor, but a `BUILTIN` entry makes it a real `ui.*` field, so an element
 shadow it. The type registry is installed before the DSL loads, so `BUILTIN` constructors of typed elements create their
 C++ instances too.
 
-**4. Docs and gallery.** Add the element to [Elements](elements.md) and the README element table, and a demo to a
-page of the gallery (`src/resources/pages/<page>.lua` in the imlui-gallery repository; see [Trying changes in an
-app](#trying-changes-in-an-app)), committed there along with the submodule update.
+**4. Docs.** Add the element to [Elements](elements.md) and the README element table, and try it in a real window
+(see [Trying changes in an app](#trying-changes-in-an-app)).
 
 **5. Tests.** A test file `tests/elements_<family>_test.cpp` renders it through the
 [headless frame harness](#the-headless-frame-harness): defaults, props reaching the instance, `nil` resets, two-way
@@ -196,8 +195,9 @@ conventions they share, and new built-ins follow them:
    its own members. A subclass without its own `declare` doesn't compile.
 7. **Shared state between elements** goes through a small module of its own, like `imlui.ui.navigation_scope`
    (`NavigationScope`: the navigation containers tell `NavigationItem` which style to draw in).
-8. **Test it** with the harness (`tests/elements_<family>_test.cpp`) and **compare the gallery** (imlui-gallery,
-   built against your checkout) with the screenshots from before the change, every page and a phone-sized window. Animated content (progress, canvas,
+8. **Test it** with the harness (`tests/elements_<family>_test.cpp`) and **compare it in an app** built against your checkout
+   (see [Trying changes in an app](#trying-changes-in-an-app)) with screenshots from before the change, at desktop and
+   phone size. The tag `full-gallery` of imlui-example has a page for every built-in element. Animated content (progress, canvas,
    chart) and timer texts differ by nature.
 
 ## Adding a native function
@@ -256,17 +256,19 @@ conventions they share, and new built-ins follow them:
 ## Trying changes in an app
 
 The library has no runner of its own: the tests cover it headlessly, and the smoke test runs `imlui_smoke_host`.
-To see a change in a real UI, build an app against your working copy. The gallery is the usual one:
+To see a change in a real UI, build an app against your working copy, usually imlui-example. Its `main.lua` is
+one window with a button; run another script with `imlui_example path/to/try.lua`, or check out its tag
+`full-gallery` for a page of every element:
 
-- **Edit inside the app's submodule.** In `imlui-gallery/vendor/imlui`, check out a branch, work and commit there, and
-  push to (or fetch from) this repository. The gallery's build picks up every change, and with `IMLUI_DEV_PATHS=ON` the
+- **Edit inside the app's submodule.** In `imlui-example/vendor/imlui`, check out a branch, work and commit there, and
+  push to (or fetch from) this repository. The app's build picks up every change, and with `IMLUI_DEV_PATHS=ON` the
   library's `src/resources/` (`vendor/imlui/src/resources/`) hot-reloads like the app's own scripts.
-- **Point the submodule folder at this checkout.** In the gallery, `git submodule deinit -f vendor/imlui` (empties the
+- **Point the submodule folder at this checkout.** In the app, `git submodule deinit -f vendor/imlui` (empties the
   folder), `rmdir vendor\imlui`, then `cmd /c mklink /J vendor\imlui <path to this checkout>` (a symlink elsewhere) and
-  build. Edits here, including `src/resources/`, show up in the running gallery at once. Before committing in the
-  gallery, put the submodule back: `rmdir vendor\imlui` (removes only the junction), then `git submodule update --init`.
+  build. Edits here, including `src/resources/`, show up in the running app at once. Before committing in the
+  app, put the submodule back: `rmdir vendor\imlui` (removes only the junction), then `git submodule update --init`.
 
-imlui is built inside the app's build tree (`imlui-gallery/build/<preset>/vendor/imlui`), so this repository's own
+imlui is built inside the app's build tree (`imlui-example/build/<preset>/vendor/imlui`), so this repository's own
 `build/` isn't involved. Once the library change is committed, update the app: `git submodule update --remote
 vendor/imlui` (or check out the commit in `vendor/imlui`), build, run, and commit the new submodule commit in the
 app.
@@ -395,7 +397,6 @@ On this target:
 |---|---|
 | `IMLUI_EXIT_AFTER_FRAMES=n` | Quit after `n` rendered frames, with exit code 1 when a script error was reported (`EngineConfig::exitAfterFrames`, read by `defaultConfig`). For smoke runs. |
 | `IMLUI_DEV_PATHS=0` | Ignore the source folders compiled into a dev build's embedded packages (`ResourcePackage::sourceDir`): run from the embedded data and the files next to the executable, like a release build. Packages that aren't embedded (`IMLUI_EMBED_RESOURCES=OFF`) still mount their folder, their only copy. |
-| `GALLERY_PAGE=n` | Open the gallery (imlui-gallery) on page `n`. Read by its `main.lua`, not by imlui. |
 
 ### Resource tools
 
@@ -481,7 +482,6 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 left-button state, and an optional vertical wheel delta. `native.injectKey(key, down, ctrl?, shift?, alt?)` feeds
 a key event by name (`"Escape"`, `"Enter"`, `"Tab"`, `"A"`, `"Equal"`, ...), with the modifier states;
 `native.injectKey("Escape", true); native.injectKey("Escape", false)` presses and releases Escape over two frames. Combine it with timers to drive the real UI from a script.
-Use the `GALLERY_PAGE` environment variable to start the gallery (imlui-gallery) on a given page.
 
 ```lua
 -- click at (200, 150) half a second after start, then check the result

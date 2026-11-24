@@ -299,8 +299,8 @@ Row { align = "top", spacing = 0,
 }
 ```
 
-The gallery shell (`src/resources/main.lua` in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery)
-repository) shows the full pattern: a modal drawer opened from the top app bar on compact windows, a rail on medium
+The former gallery's shell (`src/resources/main.lua` at the tag `full-gallery` of the
+[imlui-example](getting-started.md#the-example-app-imlui-example) repository) shows the full pattern: a modal drawer opened from the top app bar on compact windows, a rail on medium
 ones, the standard drawer from expanded up, and grids whose `columns` follow the width.
 
 ## Theme
@@ -386,7 +386,7 @@ Ctrl + mouse wheel zooms in and out. The steps are 50, 67, 75, 80, 90, 100, 110,
 Slider { value = bind(zoom, setZoom), from = 0.5, to = 2, stepSize = 0.1 }
 ```
 
-The gallery's slider applies the zoom on release instead, because zooming moves the slider under the mouse while
+Applying the zoom on release instead avoids a jump: zooming moves the slider under the mouse while
 you drag it.
 
 ## Snackbar
