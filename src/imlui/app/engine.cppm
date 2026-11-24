@@ -37,6 +37,7 @@ import imlui.resources.mount;
 import imlui.resources.name;
 import imlui.image.image_cache;
 import imlui.ui.frame_request;
+import imlui.ui.layout_box;
 import imlui.ui.main_thread;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
@@ -423,8 +424,11 @@ void Engine::drawErrors() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {16 * d, 16 * d});
     ImGui::Begin("##imlui_errors", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    // The window fits its content, 60-90% of the viewport wide: the list takes the minimum, not the window's
+    // current width (which would keep the window as wide as it ever was).
+    layout::pushBox(layout::shrinkToFitBox(vp->WorkSize.x * 0.6f - 32 * d, vp->WorkSize.x * 0.9f - 32 * d));
     md::text("Lua error", TextStyle::TitleMedium);
-    ImGui::BeginChild("##errlist", {0, 0}, ImGuiChildFlags_AutoResizeY);
+    ImGui::BeginChild("##errlist", {layout::availableWidth(), 0}, ImGuiChildFlags_AutoResizeY);
     for (const auto& e : errs) {
         md::text(e, TextStyle::BodySmall, std::nullopt, true);
         ImGui::Spacing();
@@ -433,6 +437,7 @@ void Engine::drawErrors() {
     if (md::button("Dismiss", md::ButtonVariant::Text)) luaui::clearErrors();
     ImGui::SameLine();
     if (md::button("Reload", md::ButtonVariant::Text)) m_reload = true;
+    layout::popBox();
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(2);

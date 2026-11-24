@@ -180,8 +180,8 @@ when the title changes.
 | `title` | string | `"Window"` | Title bar text. |
 | `open` | bool | `true` | **two-way.** `false` hides the window. When the prop is present the window has a close button, which writes `open = false`. |
 | `x`, `y` | number | `60`, `60` | Position, applied when the window first appears. |
-| `width`, `height` | number | `0` | Size, applied when the window first appears (if either is `> 0`). |
-| `autoResize` | bool | — | Fits the window to its content. Unset: `true` when neither `width` nor `height` is set. |
+| `width`, `height` | number | `0` | Size, applied when the window first appears (if either is `> 0`). With `autoResize`, the minimum size. |
+| `autoResize` | bool | — | Fits the window to its content, every frame: it grows and shrinks back with it. Unset: `true` when neither `width` nor `height` is set. Inside, a fill (`width = -1`, a `TextField`, a `Divider`, ...) is `width` wide less the padding, or 240dp when `width` is unset, never the window's current width (which follows the content); text wraps where the window would reach the viewport's right edge. |
 | `titleBar`, `resizable`, `movable` | bool | `true` | Window chrome. |
 | `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem). |
 | `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
@@ -202,7 +202,7 @@ nested in one another) show one at a time: one whose `open` turns true while ano
 | `open` | bool | `false` | **two-way.** Shows the dialog. Closing it (Escape) writes `false`. |
 | `title` | string | `""` | Headline. |
 | `icon` | icon | `""` | Hero icon above the title, which is then centered. |
-| `width` | size | — | *Raw.* A fixed width. Unset: 280–560dp, fitting the content. |
+| `width` | size | — | *Raw.* A fixed width. Unset: 280–560dp, fitting the content: the dialog grows with its widest child and shrinks back with it, and wrapping text wraps at 560dp. A fill inside (`width = -1`, a `TextField`, a `Divider`, ...) is as wide as the minimum (232dp, inside the 24dp padding) or the title, whichever is wider, never the dialog's current width; `align` places the children in the widest of them. |
 | `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 
 **Signals:** `onClosed(self)` when the dialog closes.
@@ -232,6 +232,9 @@ create one. Non-visual.
 | `shownAt` | number | `-1` | Time it was shown (`ui.time()`, seconds); `< 0` hides it. Written back as `-1` once it has faded out; the action and the close icon move it back to start the fade. |
 | `duration` | number | `4000` | Visible time in ms, after a 0.18s slide-in and before a 0.15s fade. |
 | `closable` | bool | `false` | Shows a close icon. |
+
+The bar is as wide as its content (the message, the action, the close icon and 16dp padding on each side), 344–672dp,
+and at most the viewport less 16dp on each side; the action and the close icon sit at its right edge.
 
 **Signals:** `onAction(self)` when the action is clicked (the snackbar then fades out).
 **Two-way:** `shownAt`.
@@ -563,6 +566,9 @@ a title that opens its children as a Material menu; a `Menu` inside a menu is a 
 `Repeater`, nested `Menu`, ...
 
 `MenuBar` has no props of its own.
+
+A menu is as wide as its widest row (at least 112dp; a row is at least 160dp): every row, and a `Divider`, spans that
+width, and the menu shrinks back when its rows get shorter.
 
 | `Menu` prop | Type | Default | Notes |
 |---|---|---|---|

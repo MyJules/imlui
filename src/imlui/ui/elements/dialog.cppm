@@ -9,14 +9,14 @@ import imlui.ui.frame_request;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
-import imlui.ui.layout_box;
 
 export namespace imlui {
 
 /// The Material basic dialog: modal and centered over a scrim; it stacks its children. Non-visual.
 ///
 /// Props:   open = false, title = "", icon = ""
-/// Raw:     width (unset: 280-560dp, fitting the content), spacing, align
+/// Raw:     width (unset: 280-560dp, fitting the content; a fill inside is the minimum or the title's width),
+///          spacing, align
 /// Signals: onClosed(self)
 /// Two-way: open
 ///
@@ -95,10 +95,7 @@ void Dialog::render(Frame& frame) {
         }
     }
     if (md::beginDialog(title.c_str(), &open, frame.size("width"), m_icon)) {
-        {
-            const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
-            frame.renderStack();
-        }
+        frame.renderStack(); // in the dialog's shrink-to-fit box (md::beginDialog)
         md::endDialog();
     }
     if (open != m_open) {

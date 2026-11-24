@@ -76,7 +76,7 @@ void ApplicationWindow::render(Frame& frame) {
     ImGui::PopStyleVar(2);
     if (menu) frame.renderElementProp("menuBar");
     {
-        const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
+        const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
         frame.renderStack();
     }
     ImGui::End();

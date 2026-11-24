@@ -68,7 +68,7 @@ void Card::render(Frame& frame) {
     md::beginCard("##card", md::cardVariant(m_variant), frame.size("width"), m_padding, frame.resolvedHeight(0.0f),
                   m_color, m_rounding.value_or(-1.0f));
     {
-        const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
+        const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
         frame.renderStack();
     }
     md::endCard();

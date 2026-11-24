@@ -167,8 +167,13 @@ void Columns::render(imlui::Frame& frame) {
 Layout boxes (module `imlui.ui.layout_box`, namespace `imlui::layout`) are what `available()` reads. To give all
 your children a narrower width, push one around them: `const layout::BoxScope box{layout::boxTo(right)};` (for one
 child, `child.render(right)` does it). An element that opens its own region (`ImGui::BeginChild`, a popup) can push
-`layout::BoxScope{layout::regionBox(), layout::BoxScope::Mirror::None}` after it; without one, its children measure
-that window's content region anyway. A box also sets ImGui's item width and text wrap position, so **raw ImGui
+`layout::BoxScope{layout::regionBox(), layout::Mirror::None}` after it; without one, its children measure
+that window's content region anyway. A region that **takes its content's size** (an `ImGuiWindowFlags_AlwaysAutoResize`
+window, a popup) must push `layout::BoxScope{layout::shrinkToFitBox(minWidth, maxWidth)}` instead: there a fill is
+`minWidth`, never the window's current width (which would keep the window from ever shrinking), and text wraps at
+`maxWidth`. An item that spans the window but needs its own width (a menu row) takes `layout::claimWidth(natural)`:
+the fill width, which grows to the widest claim from the next frame on. For begin/end APIs, `layout::pushBox(box)`
+and `layout::popBox()` do the same as a `BoxScope`; pop before `ImGui::End()`/`EndPopup()`. A box also sets ImGui's item width and text wrap position, so **raw ImGui
 widgets follow it**: `ImGui::SliderFloat` takes the box's width and `ImGui::TextWrapped` wraps at its edge, inside a
 fixed `Column` too. (Plain `ImGui::Text` wraps there as well while a box is pushed; `md::text` without `wrap` stays on
 one line.)

@@ -23,9 +23,14 @@ export namespace imlui {
 ///
 /// It has a close button when the `open` prop exists (closing writes open = false, then emits onClosed). x, y,
 /// width and height (dp) apply when the window first appears; `autoResize` defaults to true when neither width
-/// nor height is set.
+/// nor height is set. An auto-resized window takes its content's size, at least width x height; a fill inside it
+/// is `width` wide (240dp when unset), never the window's current width, so the window shrinks back with its
+/// content.
 class Window final : public Element {
 public:
+    /// The width of a fill in an auto-resized window without a `width` (dp).
+    static constexpr float defaultFillWidth = 240.0f;
+
     static void declare(TypeBuilder<Window>& type);
 
     void render(Frame& frame) override;
@@ -90,10 +95,16 @@ void Window::render(Frame& frame) {
     if (!m_open) return;
     const std::string title = md::scopedWindowName(m_title, "win");
     ImGui::SetNextWindowPos({frame.dp(m_x), frame.dp(m_y)}, ImGuiCond_FirstUseEver);
-    if (m_width > 0 || m_height > 0)
+    const bool autoResize = m_autoResize.value_or(m_width <= 0 && m_height <= 0);
+    if (autoResize) {
+        // `width` / `height` are the minimum size.
+        ImGui::SetNextWindowSizeConstraints({frame.dp(std::max(0.0f, m_width)), frame.dp(std::max(0.0f, m_height))},
+                                            {md::hugeExtent, md::hugeExtent});
+    } else if (m_width > 0 || m_height > 0) {
         ImGui::SetNextWindowSize({frame.dp(m_width), frame.dp(m_height)}, ImGuiCond_FirstUseEver);
+    }
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
-    if (m_autoResize.value_or(m_width <= 0 && m_height <= 0)) flags |= ImGuiWindowFlags_AlwaysAutoResize;
+    if (autoResize) flags |= ImGuiWindowFlags_AlwaysAutoResize;
     if (!m_titleBar) flags |= ImGuiWindowFlags_NoTitleBar;
     if (!m_resizable) flags |= ImGuiWindowFlags_NoResize;
     if (!m_movable) flags |= ImGuiWindowFlags_NoMove;
@@ -113,8 +124,20 @@ void Window::render(Frame& frame) {
     if (shown) {
         md::pushSurface(s.surfaceContainerLow);
         if (menu) frame.renderElementProp("menuBar");
-        const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
-        frame.renderStack();
+        if (autoResize) {
+            // The window takes its content's width: a fill is the minimum width (`width`, else defaultFillWidth),
+            // not the window's current width, and content may grow up to the viewport's right edge, where text
+            // wraps.
+            const ImGuiViewport* vp = ImGui::GetMainViewport();
+            const float pad = ImGui::GetStyle().WindowPadding.x, x = ImGui::GetCursorScreenPos().x;
+            const float fill = m_width > 0 ? frame.dp(m_width) - 2.0f * pad : frame.dp(defaultFillWidth);
+            const float max = vp->WorkPos.x + vp->WorkSize.x - pad - x;
+            const layout::BoxScope box{layout::shrinkToFitBox(fill, max)};
+            frame.renderStack();
+        } else {
+            const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
+            frame.renderStack();
+        }
         md::popSurface();
     }
     ImGui::End();

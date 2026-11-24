@@ -18,11 +18,20 @@ export namespace imlui::md {
 /// show animation. Returns true when the action was clicked.
 bool snackbar(std::string_view message, std::string_view action, float t, bool closeIcon, bool* closed);
 
+/// The snackbar's width for `content` pixels (the message, the actions and the padding) on a viewport
+/// `viewportWidth` wide: within 344-672dp, and at most the viewport less 16dp on each side, which wins.
+[[nodiscard]] float snackbarWidth(float content, float viewportWidth);
+
 } // namespace imlui::md
 
 module :private;
 
 namespace imlui::md {
+
+float snackbarWidth(float content, float viewportWidth) {
+    const float most = std::min(dp(672), viewportWidth - dp(32));
+    return std::max(1.0f, std::min(most, std::max(dp(344), content)));
+}
 
 bool snackbar(std::string_view message, std::string_view action, float t, bool closeIcon, bool* closed) {
     if (t <= 0.001f) return false;
@@ -32,16 +41,26 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
     ImGui::SetNextWindowPos(
         {vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y - dp(16) + dp(24) * (1 - ease)},
         ImGuiCond_Always, {0.5f, 1.0f});
-    ImGui::SetNextWindowSizeConstraints({dp(344), 0}, {std::min(dp(672), vp->WorkSize.x - dp(32)), hugeExtent});
+    // The width comes from the content, not from the window: the message, then the gaps and the actions (`right`;
+    // the gaps are explicit, not the theme's ItemSpacing), plus the padding, within 344-672dp (less on a narrow
+    // viewport, which wins). A spacer pushes the actions to the right edge.
+    const float padX = dp(16);
+    const float actionGap = dp(8), closeGap = 0.0f; // the close button's 48 dp target already has its inset
+    const float msgW = measure(TextStyle::BodyMedium, message).x;
+    float right = 0;
+    if (!action.empty()) right += actionGap + measure(TextStyle::LabelLarge, action).x + dp(24);
+    if (closeIcon) right += closeGap + dp(48);
+    const float width = snackbarWidth(msgW + right + 2.0f * padX, vp->WorkSize.x);
+    ImGui::SetNextWindowSize({width, 0.0f}); // 0: the height fits the content
     ImGui::PushStyleColor(ImGuiCol_WindowBg, s.inverseSurface.vec4());
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ease);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, dp(shape().extraSmall));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {dp(16), dp(4)});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {padX, dp(4)});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {dp(8), 0});
     const std::string name = scopedWindowName("", "snackbar");
     ImGui::Begin(name.c_str(), nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
     ImGui::PopStyleVar(5);
     ImGui::PopStyleColor();
@@ -50,18 +69,9 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float h = dp(48);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float msgW = measure(TextStyle::BodyMedium, message).x;
     ImGui::Dummy({msgW, h});
     drawTextV(dl, TextStyle::BodyMedium, p.x, p.y + h * 0.5f, s.inverseOnSurface.withAlpha(ease), message);
-    // Push the actions to the right edge of the (min-width) bar. The gaps before them are explicit (not the
-    // theme's ItemSpacing, popped with the window's style above) and counted in `right`, so the content width is
-    // exactly `avail` and the auto-resized window keeps its width from frame to frame.
-    const float actionGap = dp(8), closeGap = 0.0f; // the close button's 48 dp target already has its inset
-    float right = 0;
-    if (!action.empty()) right += actionGap + measure(TextStyle::LabelLarge, action).x + dp(24);
-    if (closeIcon) right += closeGap + dp(48);
-    float avail = std::max(dp(344) - dp(32), ImGui::GetWindowWidth() - dp(32));
-    float spacer = avail - msgW - right;
+    const float spacer = width - 2.0f * padX - msgW - right;
     if (spacer > 0) {
         ImGui::SameLine(0, 0);
         ImGui::Dummy({spacer, 1});

@@ -11,6 +11,7 @@ import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.widgets.common;
 import imlui.widgets.anchored_popup;
+import imlui.ui.layout_box;
 
 export namespace imlui::md {
 
@@ -18,17 +19,25 @@ export namespace imlui::md {
 void pushMenuStyle();
 void popMenuStyle();
 
-/// One menu row (48dp). Must be inside a popup/menu. Returns true when chosen.
+/// One menu row (48dp). Must be inside a popup/menu. Returns true when chosen. Every row is as wide as the widest
+/// (layout::claimWidth in the menu's shrink-to-fit box), so the menu shrinks back when its rows get shorter.
 bool menuItem(const char* id, std::string_view label, std::string_view leadingIcon = {}, std::string_view trailing = {},
               bool selected = false, bool closeOnClick = true, bool reserveIcon = false);
 
 /// Full-width divider between menu rows.
 void menuDivider();
 
-/// Begins a dropdown-style popup anchored to [a, b] (below it, kept inside the main viewport).
-/// Returns true while open; then call endAnchoredMenu().
+/// Begins a dropdown-style popup anchored to [a, b] (below it, kept inside the main viewport), at least `minWidth`
+/// wide. Returns true while open; then call endAnchoredMenu(). Its content is in a shrink-to-fit layout box
+/// (pushMenuBox()).
 bool beginAnchoredMenu(const char* popupId, ImVec2 a, ImVec2 b, float minWidth);
 void endAnchoredMenu();
+
+/// Pushes the layout box of a menu's content, right after its popup began (endAnchoredMenu() pops it; a
+/// BeginMenu() caller calls popMenuBox()): the menu takes its content's width, at least `minWidth`, and a fill (a
+/// row, a divider) is the widest row, never the menu's current width.
+void pushMenuBox(float minWidth);
+void popMenuBox();
 
 } // namespace imlui::md
 
@@ -59,7 +68,7 @@ bool menuItem(const char* id, std::string_view label, std::string_view leadingIc
     float natural = dp(12) + (lead ? dp(24) + dp(12) : 0.0f) + measure(TextStyle::BodyLarge, label).x + dp(12);
     if (!trailing.empty()) natural += dp(32) + measure(TextStyle::LabelLarge, trailing).x;
     natural = std::max(natural, dp(160));
-    const float w = std::max(natural, ImGui::GetContentRegionAvail().x);
+    const float w = layout::claimWidth(natural);
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::PushStyleColor(ImGuiCol_Header, s.secondaryContainer.vec4());
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, s.onSurface.withAlpha(0.08f).vec4());
@@ -73,7 +82,8 @@ bool menuItem(const char* id, std::string_view label, std::string_view leadingIc
     float x = p.x + dp(12);
     Color fg = dis ? disabledContent() : (selected ? s.onSecondaryContainer : s.onSurface);
     if (lead) {
-        drawIcon(dl, leadingIcon, {x + dp(12), cy}, 24.0f, dis ? disabledContent() : (selected ? fg : s.onSurfaceVariant));
+        drawIcon(dl, leadingIcon, {x + dp(12), cy}, 24.0f,
+                 dis ? disabledContent() : (selected ? fg : s.onSurfaceVariant));
         x += dp(24) + dp(12);
     }
     drawTextV(dl, TextStyle::BodyLarge, x, cy, fg, label);
@@ -88,7 +98,7 @@ bool menuItem(const char* id, std::string_view label, std::string_view leadingIc
 void menuDivider() {
     const Scheme& s = scheme();
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float w = ImGui::GetContentRegionAvail().x;
+    const float w = layout::availableWidth();
     ImGui::Dummy({w, dp(17)});
     hLine(ImGui::GetWindowDrawList(), p.x, p.x + w, p.y + dp(8), s.outlineVariant, dp(1));
 }
@@ -100,13 +110,24 @@ bool beginAnchoredMenu(const char* popupId, ImVec2 a, ImVec2 b, float minWidth) 
     bool open = ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
     popMenuStyle();
     trackAnchoredPopup(popup, open);
-    if (open) ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
+    if (open) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
+        pushMenuBox(minWidth);
+    }
     return open;
 }
 
 void endAnchoredMenu() {
+    popMenuBox();
     ImGui::PopStyleVar();
     ImGui::EndPopup();
 }
+
+void pushMenuBox(float minWidth) {
+    // The menu style has no horizontal window padding: the content is the menu's width.
+    layout::pushBox(layout::shrinkToFitBox(minWidth, hugeExtent));
+}
+
+void popMenuBox() { layout::popBox(); }
 
 } // namespace imlui::md

@@ -58,15 +58,15 @@ void Column::render(Frame& frame) {
     const bool sized = frame.size("width") != 0;
     if (sized || pad > 0) {
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        float right = layout::boxRight() - pad; // the padding on the right
+        layout::Box inner = layout::insetBox(pad); // the padding on the right (still shrink-to-fit in a Dialog)
         if (sized) {
             // A fixed or fill width: reserve it (the column is at least that wide), and make it the children's box.
             const float w = frame.resolvedWidth(0.0f);
             ImGui::Dummy({w, 0});
             ImGui::SetCursorScreenPos(p);
-            right = p.x + w;
+            inner = layout::boxTo(p.x + w);
         }
-        const layout::BoxScope box{layout::boxTo(right)};
+        const layout::BoxScope box{inner};
         frame.renderStack();
     } else {
         frame.renderStack(); // the parent's box

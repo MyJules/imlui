@@ -18,6 +18,9 @@ export namespace imlui {
 /// Props:   title = ""
 class Menu final : public Element {
 public:
+    /// The menu's minimum width (dp), Material's.
+    static constexpr float minWidth = 112.0f;
+
     static void declare(TypeBuilder<Menu>& type);
 
     void render(Frame& frame) override;
@@ -46,7 +49,9 @@ void Menu::render(Frame& frame) {
     ImGui::PopStyleColor(2);
     if (open) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
+        md::pushMenuBox(frame.dp(minWidth));
         frame.renderChildren();
+        md::popMenuBox();
         ImGui::PopStyleVar();
         ImGui::EndMenu();
     }

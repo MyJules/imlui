@@ -218,6 +218,19 @@ Layout notes:
   widgets in a custom element follow it. A box belongs to the ImGui window it was pushed in: in another window (a
   popup, a child window without a box of its own) the queries read that window's content region, and where ImGui
   narrows the region under a box (a table cell), the narrower edge wins. No ImGui internals are touched.
+- **Auto-sized windows** (a `Window` with `autoResize`, a `Dialog`, menus, anchored popups, the error overlay) take
+  their content's width, so nothing inside may size itself by the window's width: a fill would keep the window as
+  wide as it ever was (ImGui fits the window to last frame's content, which the fill made as wide as the window).
+  Their root box is **shrink-to-fit** (`layout::shrinkToFitBox(min, max)`): a fill (`availableWidth()`) resolves to
+  the minimum content width, widened by `layout::claimWidth(natural)` to the widest claim of the last frame (menu
+  rows claim their natural width, a `Dialog` its title), never to the window's width. Content may grow past it up to
+  the maximum, where text wraps (`Box::wrapRight`). The stack `align` in such a box places children in the widest
+  child of the last frame. So the window's width is a function of its content: stable frame to frame, and it
+  shrinks back when the content gets shorter. When a claim or the widest child changes, a frame is requested so it
+  settles. Sizes: `Window` fills `width` (240dp when unset) and wraps at the viewport's right edge; `Dialog` 280–560dp
+  (or its `width`); menus at least 112dp, as wide as the widest row. The `Snackbar` doesn't auto-size at all: it
+  computes its width (`md::snackbarWidth`: message + actions + padding within 344–672dp, at most the viewport less
+  32dp) and sets it.
 - **`Row` is a flex row.** Before rendering it asks each child whether it fills (`Frame::Child::fillsWidth()`: a
   fill width, a type declared `fillsWidth()` / `fillsWidthWhen()` such as `Card`, `TextField`, wrapping `Text`,
   `Spacer { fill }`), gives the fills equal shares of the width the others left last frame, and renders each fill in
@@ -682,7 +695,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs) |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
-| `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom; `shrinkToFit`/`minW`/`maxW` reserved for auto-sized windows), `BoxScope` (pushes a box, mirrored to ImGui's item width and text wrap position), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `regionBox`, `boxTo`: the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
+| `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `isVisual`, `fillsWidth`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
