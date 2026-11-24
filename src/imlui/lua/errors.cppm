@@ -27,6 +27,55 @@ int panicHandler(lua::State* state);
 /// the error (with traceback) and leaves nothing.
 bool safeCall(lua::State* state, int nargs, int nresults);
 
+/// Pushes exactly one value: `message` as a string, or Lua's memory-error message when Lua is out of memory. The
+/// push runs in protected mode, so it never raises: safe inside a catch block, or with C++ objects alive.
+void pushMessage(lua::State* state, std::string_view message) noexcept;
+
+/// Pushes "<where><detail>: <what>" (`what` null: "unknown C++ exception") with pushMessage. Never raises or
+/// throws.
+void pushExceptionMessage(lua::State* state, std::string_view where, std::string_view detail,
+                          const char* what) noexcept;
+
+/// Reports "<where><detail>: <what>" (see pushExceptionMessage) as a script error. Never raises or throws.
+void reportException(std::string_view where, std::string_view detail, const char* what) noexcept;
+
+/// For a Lua C function that runs C++ code which may throw: returns fn(), an int (a negative result means "the
+/// error message is on top of the stack"). A C++ exception becomes "<where><detail>: <what>" on top of the stack
+/// and -1. The caller raises it with lua::raise once this returned, so Lua never longjmps out of a catch block or
+/// past a live C++ object here, and no C++ exception crosses Lua's C frames. A Lua error raised inside fn passes
+/// through (fn must not have C++ objects alive when it raises).
+template <class F>
+int catchCxx(lua::State* state, const F& fn, std::string_view where, std::string_view detail = {}) {
+    try {
+        return fn();
+    } catch (const std::exception& e) {
+        pushExceptionMessage(state, where, detail, e.what());
+    } catch (...) {
+        pushExceptionMessage(state, where, detail, nullptr);
+    }
+    return -1;
+}
+
+/// For C++ code called from Lua that must not raise (a __gc, an element's tick or componentComplete): runs fn()
+/// and reports a C++ exception it throws as a script error ("<where><detail>: <what>") instead of letting it
+/// unwind. Returns false after an exception.
+template <class F>
+bool reportCxx(const F& fn, std::string_view where, std::string_view detail = {}) noexcept {
+    try {
+        fn();
+        return true;
+    } catch (const std::exception& e) {
+        reportException(where, detail, e.what());
+    } catch (...) {
+        reportException(where, detail, nullptr);
+    }
+    return false;
+}
+
+/// The value at `idx` as text, like Lua's tostring(): a `__tostring` metamethod runs in protected mode, so one that
+/// raises (or returns a non-string) is reported as a script error and yields "" instead of raising.
+[[nodiscard]] std::string toDisplayString(lua::State* state, int idx);
+
 } // namespace imlui::luaui
 
 module :private;
@@ -34,7 +83,34 @@ module :private;
 namespace imlui::luaui {
 
 namespace {
+
 std::vector<std::string> recorded;
+
+/// Arg 1: a std::string_view (light userdata). Pushes it.
+int pushMessageFn(lua::State* state) {
+    lua::pushstring(state, *static_cast<const std::string_view*>(lua::touserdata(state, 1)));
+    return 1;
+}
+
+/// Arg 1: any value. Pushes luaL_tolstring's result (runs __tostring).
+int toStringFn(lua::State* state) {
+    lua::pushToString(state, 1);
+    return 1;
+}
+
+/// "<where><detail>: <what>", or "out of memory" when even that can't be built.
+std::string describeException(std::string_view where, std::string_view detail, const char* what) noexcept {
+    try {
+        std::string msg{where};
+        msg += detail;
+        msg += ": ";
+        msg += what ? what : "unknown C++ exception";
+        return msg;
+    } catch (...) {
+        return {};
+    }
+}
+
 } // namespace
 
 void reportError(std::string msg) {
@@ -76,6 +152,40 @@ bool safeCall(lua::State* state, int nargs, int nresults) {
         return false;
     }
     return true;
+}
+
+void pushMessage(lua::State* state, std::string_view message) noexcept {
+    lua::checkstack(state, 2);
+    lua::pushcfunction(state, &pushMessageFn);
+    lua::pushlightuserdata(state, &message);
+    // Success leaves the string; a memory error leaves Lua's (preallocated) memory-error message. One value either way.
+    lua::pcall(state, 1, 1, 0);
+}
+
+void pushExceptionMessage(lua::State* state, std::string_view where, std::string_view detail,
+                          const char* what) noexcept {
+    const std::string msg = describeException(where, detail, what);
+    pushMessage(state, msg.empty() ? std::string_view{"out of memory"} : std::string_view{msg});
+}
+
+void reportException(std::string_view where, std::string_view detail, const char* what) noexcept {
+    try {
+        std::string msg = describeException(where, detail, what);
+        reportError(msg.empty() ? std::string{"out of memory"} : std::move(msg));
+    } catch (...) { // out of memory while reporting: nothing more to do
+    }
+}
+
+std::string toDisplayString(lua::State* state, int idx) {
+    if (lua::type(state, idx) == lua::Type::String) return std::string{lua::tostring(state, idx)};
+    idx = lua::absindex(state, idx);
+    lua::checkstack(state, 3);
+    lua::pushcfunction(state, &toStringFn);
+    lua::pushvalue(state, idx);
+    if (!safeCall(state, 1, 1)) return {};
+    std::string out{lua::tostring(state, -1)};
+    lua::pop(state);
+    return out;
 }
 
 } // namespace imlui::luaui

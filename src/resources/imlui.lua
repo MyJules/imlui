@@ -214,7 +214,7 @@ local EMPTY = {}
 
 local function resolve(self, v)
     if type(v) == "function" then return v(self) end
-    if type(v) == "table" and v.__bind then
+    if type(v) == "table" and rawget(v, "__bind") then -- raw, like the C++ side: an __index doesn't run
         if v.t then return v.t[v.k] end
         return v.get()
     end
@@ -434,7 +434,15 @@ local function addTimer(fn, ms, rep)
     return nextTimer
 end
 function ui.setTimeout(fn, ms) return addTimer(fn, ms, false) end
-function ui.setInterval(fn, ms) return addTimer(fn, ms, true) end
+--- `ms` must be a positive, finite number: an interval of 0 (or nil) would run every frame and keep the app
+--- rendering continuously.
+function ui.setInterval(fn, ms)
+    if type(ms) ~= "number" or not (ms > 0 and ms < math.huge) then
+        error("setInterval: the interval must be a positive, finite number of milliseconds, got "
+            .. (type(ms) == "number" and tostring(ms) or type(ms)), 2)
+    end
+    return addTimer(fn, ms, true)
+end
 function ui.clearTimer(id) timers[id] = nil end
 
 local frameCallbacks = {}

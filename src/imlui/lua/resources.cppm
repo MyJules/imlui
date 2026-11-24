@@ -75,8 +75,9 @@ int pushValues(lua::State* state, std::initializer_list<std::optional<std::strin
 int fail(lua::State* state, std::string_view message) { return pushValues(state, {std::nullopt, message}); }
 
 /// Runs `work`, which returns how many values it pushed or -1 (see pushValues()), and returns that count; a C++
-/// exception becomes nil and a message. Raises the error a failed push left, after `work` returned. Called with no
-/// live non-trivial object in the caller's frame.
+/// exception becomes nil and a message (pushed protected by fail(), so nothing raises inside the catch blocks).
+/// Raises the error a failed push left, after the catch blocks. Called with no live non-trivial object in the
+/// caller's frame.
 template <class Work>
 int guarded(lua::State* state, const Work& work) {
     int results = -1;
@@ -85,6 +86,8 @@ int guarded(lua::State* state, const Work& work) {
     } catch (const std::bad_alloc&) {
         results = fail(state, "out of memory");
     } catch (const std::exception&) {
+        results = fail(state, "internal error");
+    } catch (...) { // nothing may unwind through Lua's C frames
         results = fail(state, "internal error");
     }
     if (results < 0) lua::raise(state);

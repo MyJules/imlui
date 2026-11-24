@@ -76,6 +76,8 @@ void* touserdata(State* state, int idx);
 std::string_view tostring(State* state, int idx);
 /// Like tostring but converts any value (uses __tostring); pushes nothing.
 std::string toStringAny(State* state, int idx);
+/// luaL_tolstring: converts any value (runs __tostring, which may raise) and pushes the result; returns it.
+std::string_view pushToString(State* state, int idx);
 
 // ---------------------------------------------------------------- push
 void pushnil(State* state);
@@ -211,6 +213,11 @@ std::string toStringAny(State* state, int idx) {
     std::string out{s, len};
     lua_pop(state, 1);
     return out;
+}
+std::string_view pushToString(State* state, int idx) {
+    std::size_t len = 0;
+    const char* s = luaL_tolstring(state, idx, &len);
+    return {s, len};
 }
 
 // ---------------------------------------------------------------- push

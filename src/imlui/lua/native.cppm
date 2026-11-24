@@ -253,6 +253,8 @@ constexpr NativeFn nativeFns[] = {
      }},
     {"textSize",
      [](lua::State* state) -> int {
+         // Checked: a non-string has no text, and CalcTextSizeA would take a null range as a C string.
+         if (!lua::isstring(state, 1)) lua::error(state, "textSize expects a string");
          std::string_view s = lua::tostring(state, 1);
          TextStyle st = TextStyle::BodyLarge;
          if (lua::type(state, 2) == lua::Type::String)
@@ -334,11 +336,21 @@ constexpr NativeFn nativeFns[] = {
      }},
 };
 
+/// Upvalue 1: the index of the function in nativeFns. Runs it with C++ exceptions (from the host's NativeHooks, the
+/// theme or font loading, ...) turned into Lua errors: none may unwind through Lua's C frames.
+int callNative(lua::State* state) {
+    const NativeFn& f = nativeFns[static_cast<std::size_t>(lua::tointeger(state, lua::upvalueindex(1)))];
+    const int n = catchCxx(state, [&] { return f.fn(state); }, "imlui.native.", f.name);
+    if (n < 0) lua::raise(state);
+    return n;
+}
+
 int openNative(lua::State* state) {
     lua::createtable(state, 0, static_cast<int>(std::size(nativeFns)));
-    for (const auto& f : nativeFns) {
-        lua::pushcfunction(state, f.fn);
-        lua::setfield(state, -2, f.name);
+    for (std::size_t i = 0; i < std::size(nativeFns); ++i) {
+        lua::pushinteger(state, static_cast<lua::Integer>(i));
+        lua::pushcclosure(state, &callNative, 1);
+        lua::setfield(state, -2, nativeFns[i].name);
     }
     return 1;
 }

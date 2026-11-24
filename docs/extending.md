@@ -86,8 +86,10 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 ## Element types
 
 An element type derives from `imlui::Element` (module `imlui.types.element`), is default-constructible, and
-registers with `Engine::registerType<T>(name)` before `engine.run()`. The name must start with a capital letter,
-like every element constructor.
+registers with `Engine::registerType<T>(name)`, usually before `engine.run()`. A registration takes effect at
+once, in a running Lua state too: elements created from then on get the type (registering a name again replaces
+it, and elements that already have an instance keep it). The name must start with a capital letter, like every
+element constructor.
 
 ```cpp
 class Element : public ScriptObject {
@@ -305,7 +307,10 @@ is synced when something needs it:
 - when a **parent or another element** asks for it: `Frame::Child::as<T>()` and `TypeRegistry::sync(node)`.
 
 `componentComplete()` runs once, right after the first sync, wherever that happens (first render, first method
-call, or a parent's `as<T>()`). A binding that calls a method of its own element
+call, or a parent's `as<T>()`). An exception thrown by `componentComplete()`, `tick()` or `destroyed()` is
+reported as a script error (`Gauge.componentComplete(): ...`) and the element carries on (or is deleted anyway,
+for `destroyed()`). A Lua error during the sync itself is reported too, and the next sync runs normally. A binding
+that calls a method of its own element
 (`text = function(self) return self:describe() end`) doesn't sync it again from inside its sync. Lua never reads an
 element's property through the instance (it reads the element table), so that needs no sync.
 

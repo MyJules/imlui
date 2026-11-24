@@ -133,8 +133,16 @@ error in it is reported like the others, and `ImGui::ErrorRecoveryTryToRecoverSt
 tables and Push/Pop stacks the pass left open, so the frame still ends. The rest of that pass is skipped and the
 error's `longjmp` skipped the C++ destructors on the way, so this is not error handling: code that calls into
 Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error that
-escapes even that before Lua aborts. C++ exceptions never cross Lua's C frames: methods and property hooks
-(`TypeBuilder`) and `renderProtected` catch them and report them as script errors.
+escapes even that before Lua aborts. C++ exceptions never cross Lua's C frames. Every C function that runs C++
+code which may throw catches them: methods (`TypeBuilder`, a Lua error `Gauge:reset: ...`), the `imlui.native`
+functions (the host's `NativeHooks`, theme and font loading: a Lua error `imlui.native.quit: ...`) and
+`imlui.types.tick`. Property hooks, `componentComplete()`, `tick()` and `destroyed()` (from `__gc`, which must
+never raise) are reported as script errors instead, and `renderProtected` turns one from the render pass into a
+reported error. The pattern (`luaui::catchCxx` / `luaui::reportCxx` in `imlui.lua.errors`): the message is pushed
+in protected mode (`luaui::pushMessage`, which never raises), and the error is raised only after the catch block
+is left, so Lua's `longjmp` never leaves a catch block or skips a live C++ object of that frame. The property sync
+of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
+reported and can't leave the element marked as "syncing" (which would skip every later sync).
 
 ## Property resolution
 
@@ -153,7 +161,12 @@ shows current data. No dependency tracking is needed. `watch()` is only for side
 every *rendered* frame: state changed by input handlers or timers is shown because those render a frame anyway.
 Only a binding whose value changes by itself (for example from `time()`) needs `requestFrame()`.
 
-Type coercion: numbers read where strings are expected are converted. Colors accept a role name, `role/alpha`,
+A bind object is recognized by a raw `__bind` field, and its `t`, `k`, `get` and `set` fields are read raw too
+(here and in the DSL): a value with an `__index` metamethod (a proxy, an object) is a plain value, and its
+`__index` doesn't run.
+
+Type coercion: numbers read where strings are expected are converted. Other values convert like `tostring()`; a
+`__tostring` that raises is reported for that value (which reads as `""`) instead of cutting the pass short. Colors accept a role name, `role/alpha`,
 hex, or `{r, g, b, a}` (see [Theming](theming.md#color-specs)). `Node::text()` returns the `text` prop, or the
 first positional string: `Button { "OK" }` is the same as `Button { text = "OK" }`.
 
@@ -572,7 +585,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall` |
+| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`; `pushMessage`, `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions), `toDisplayString` (protected `tostring`) |
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |

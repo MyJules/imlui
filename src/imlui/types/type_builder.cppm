@@ -46,14 +46,15 @@ inline constexpr bool isOptional = false;
 template <class V>
 inline constexpr bool isOptional<std::optional<V>> = true;
 
-/// "bad argument #2 to 'Gauge:setRange' (number expected, got string)"
+/// "bad argument #2 to 'Gauge:setRange' (number expected, got string)". Pushed protected (pushMessage): a memory
+/// error must not longjmp past `msg`.
 inline void pushArgError(lua::State* s, const std::string& where, int arg, std::string_view expected, int idx) {
     std::string msg = "bad argument #" + std::to_string(arg) + " to '" + where + "' (";
     msg += expected;
     msg += " expected, got ";
     msg += lua::typeName(s, idx);
     msg += ")";
-    lua::pushstring(s, msg);
+    luaui::pushMessage(s, msg);
 }
 
 template <class T, class Fn, class... A, std::size_t... I>
@@ -161,15 +162,16 @@ public:
     TypeBuilder& method(std::string name, Fn fn) {
         using Args = typename detail::MethodTraits<Fn>::Args;
         std::string where = m_info.name() + ":" + name;
+        // A C++ exception becomes "Gauge:reset: what" on the stack and -1; the caller raises it (catchCxx).
         m_info.addMethod({std::move(name), [fn, where](lua::State* s, ScriptObject& o, int first) -> int {
-                              try {
-                                  return detail::invokeMethod(
-                                      fn, static_cast<T&>(o), s, first, where, static_cast<Args*>(nullptr),
-                                      std::make_index_sequence<std::tuple_size_v<Args>>{});
-                              } catch (const std::exception& e) {
-                                  lua::pushstring(s, where + ": " + e.what());
-                                  return -1;
-                              }
+                              return luaui::catchCxx(
+                                  s,
+                                  [&] {
+                                      return detail::invokeMethod(
+                                          fn, static_cast<T&>(o), s, first, where, static_cast<Args*>(nullptr),
+                                          std::make_index_sequence<std::tuple_size_v<Args>>{});
+                                  },
+                                  where);
                           }});
         return *this;
     }

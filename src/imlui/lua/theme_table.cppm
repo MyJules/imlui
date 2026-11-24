@@ -59,7 +59,7 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
     // The seed has no scheme of its own yet, so its roles come from the current theme.
     if (lua::getfield(state, idx, "seed") != lua::Type::Nil) {
         if (auto c = colorAt(lua::gettop(state), theme().scheme)) t.seed = *c;
-        else reportError("theme: invalid seed color '" + lua::toStringAny(state, -1) + "'");
+        else reportError("theme: invalid seed color '" + toDisplayString(state, -1) + "'");
     }
     lua::pop(state);
     if (lua::getfield(state, idx, "dark") != lua::Type::Nil) t.dark = lua::toboolean(state, -1);

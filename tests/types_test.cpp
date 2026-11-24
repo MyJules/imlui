@@ -3,6 +3,8 @@
 // Runs src/resources/imlui.lua in a plain Lua state with a stub `imlui.native`; no window or ImGui frame.
 #include <gtest/gtest.h>
 
+import std;
+
 import lua;
 import imlui.color;
 import imlui.lua.errors;
@@ -421,6 +423,56 @@ TEST_F(TypesTest, SyncReportsTypeMismatches) {
     EXPECT_EQ(p->name(), "ok");
     ASSERT_EQ(luaui::errors().size(), 1u);
     EXPECT_NE(luaui::errors()[0].find("Probe.value: number expected, got string"), std::string::npos);
+}
+
+// A Lua error during the sync (here the element table's own __index) is reported, and doesn't leave the
+// element "syncing": the next sync runs. (It used to longjmp past the reset of the flag.)
+TEST_F(TypesTest, ALuaErrorDuringTheSyncDoesntFreezeTheElement) {
+    run(R"(
+        boom = true
+        p = Probe { name = "a" }
+        setmetatable(p, { __index = function() if boom then error("index exploded") end end }))");
+    Probe* p = sync("p");
+    ASSERT_NE(p, nullptr);
+    EXPECT_TRUE(std::ranges::any_of(
+        luaui::errors(), [](const std::string& e) { return e.find("index exploded") != std::string::npos; }));
+    run("boom = false; p.value = 5; p.name = 'b'");
+    p = sync("p");
+    EXPECT_DOUBLE_EQ(p->value(), 5);
+    EXPECT_EQ(p->name(), "b");
+}
+
+// Bind objects are recognized by a raw `__bind` field: a value whose __index answers anything (or raises) is
+// a plain value, not a bind, and its __index never runs.
+TEST_F(TypesTest, ValuesWithAnIndexMetamethodArentBinds) {
+    run(R"(
+        calls = 0
+        p = Probe { name = setmetatable({}, { __index = function() calls = calls + 1; error("index exploded") end }) })");
+    sync("p");
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find("Probe.name: string expected, got table"), std::string::npos);
+    run("assert(calls == 0, calls)");
+}
+
+// A type registered after the state was installed works at once (its methods too), and an element created
+// before its name was registered again keeps its instance.
+TEST_F(TypesTest, TypesRegisteredAfterInstallTakeEffectRightAway) {
+    run("old = Probe { value = 1 }; assert(old:add(1, 1) == 3)");
+    m_types.registerType<Probe>("Late");
+    m_types.registerType<Probe>("Probe"); // replaces the registration `old` was created with
+    run(R"(
+        late = ui.env.Late { value = 2 }
+        assert(late:add(1, 2) == 5)
+        assert(old:add(1, 1) == 3)
+        local names = ui.types()
+        assert(#names == 2 and names[1] == "Late", table.concat(names, ","))
+    )");
+    EXPECT_NE(sync("late"), nullptr);
+    run("old.value = 4");
+    Probe* old = sync("old");
+    ASSERT_NE(old, nullptr);
+    EXPECT_DOUBLE_EQ(old->value(), 4);
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
 // ------------------------------------------------------------------ notify & emit
