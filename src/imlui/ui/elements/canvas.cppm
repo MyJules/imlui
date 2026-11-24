@@ -47,7 +47,7 @@ void Canvas::declare(TypeBuilder<Canvas>& type) {
 
 void Canvas::render(Frame& frame) {
     // Unset: the available width, 200dp high.
-    const float w = frame.resolvedWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x));
+    const float w = frame.resolvedWidth(std::max(1.0f, frame.available().x));
     const float h = frame.resolvedHeight(frame.dp(200));
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::InvisibleButton("##canvas", {w, h});

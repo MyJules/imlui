@@ -84,7 +84,9 @@ available width (or height) everywhere:
 | `0` (or unset) | Automatic: the element's own default, given in its table. |
 | `fillWidth = true` | Counts as `width = -1`. |
 
-A fill is at least 1px. Heights fill the space left below the element in its window or scroll region.
+The available width is the space the parent gives: the width of a `Column` with `width` (less its `padding`), a
+`Grid` cell, the content of a `Card` or `ScrollView`, else the window's. A fill is at least 1px. Heights fill the
+space left below the element in its window or scroll region.
 
 Only the elements whose table lists `width` / `height` read them. `Window`'s `width`/`height` and
 `ModalNavigationDrawer`'s `width` are plain dp numbers instead (no fill values, no `fillWidth`).
@@ -256,8 +258,8 @@ A vertical stack. `Item` is an alias.
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child. |
-| `padding` | number | `0` | Inset at the top, bottom and start. |
-| `width` | size | `0` (auto) | *Raw.* A fixed or fill width. It is the children's available width: they fill it (`fillWidth`, fill-minus widths), `align` within it and wrap text at it, also inside a `Row`. |
+| `padding` | number | `0` | Inset on every side: the children start `padding` in and, without a `width`, fill up to `padding` from the right edge. |
+| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the children's available width. They fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. |
 
 ### Row
 

@@ -21,6 +21,7 @@ import imlui.lua.node;
 import imlui.types.script_object;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
+import imlui.ui.layout_box;
 import imlui.ui.props;
 import imlui.ui.renderer;
 
@@ -41,6 +42,9 @@ public:
         /// hidden or of an unknown type. A rendered visual child is the last ImGui item afterwards (its group),
         /// and its size is stored for lastWidth()/lastHeight() on the next frame.
         bool render();
+        /// Renders the child inside a layout box that ends at screen x `right`: its available width (fills, `align`,
+        /// text wrapping, raw ImGui item widths) is `right - cursor x` instead of its parent's.
+        bool render(float right);
 
         /// False for non-visual types (Timer, Dialog, ...): they take no layout space. Layouts render them
         /// where they are and don't place, count or space them.
@@ -142,8 +146,12 @@ public:
     [[nodiscard]] float size(const char* key) const;
     /// The same, with `ifAuto` in place of 0 (auto): `size("width", -1)` fills unless a width is set.
     [[nodiscard]] float size(const char* key, float ifAuto) const;
-    /// The `width` / `height` prop resolved to pixels against the available width / height (ImGui's content
-    /// region) by resolveSize(), the rule every element follows: fixed, fill, fill minus, or `natural` when unset.
+    /// The space available at the cursor: the width to the right edge of the layout box the parent gave (a fixed
+    /// Column's width, a Row's share, a Grid cell, else the window's content region), and the height left in the
+    /// window or scroll region.
+    [[nodiscard]] ImVec2 available() const;
+    /// The `width` / `height` prop resolved to pixels against available() by resolveSize(), the rule every element
+    /// follows: fixed, fill, fill minus, or `natural` when unset.
     [[nodiscard]] float resolvedWidth(float natural) const;
     [[nodiscard]] float resolvedHeight(float natural) const;
     /// "Label###id": the visible text may change every frame without changing the ImGui ID.
@@ -213,6 +221,11 @@ bool Frame::Child::render() {
     return rendered;
 }
 
+bool Frame::Child::render(float right) {
+    const layout::BoxScope box{layout::boxTo(right)};
+    return render();
+}
+
 bool Frame::Child::isVisual() const { return m_visual; }
 const luaui::Node& Frame::Child::node() const { return m_node; }
 std::string Frame::Child::type() const { return m_node.type(); }
@@ -251,11 +264,12 @@ float Frame::size(const char* key, float ifAuto) const {
     const float v = sizeProp(m_node, key);
     return v == 0.0f ? ifAuto : v;
 }
+ImVec2 Frame::available() const { return {layout::availableWidth(), layout::availableHeight()}; }
 float Frame::resolvedWidth(float natural) const {
-    return resolveSize(sizeProp(m_node, "width"), ImGui::GetContentRegionAvail().x, natural);
+    return resolveSize(sizeProp(m_node, "width"), layout::availableWidth(), natural);
 }
 float Frame::resolvedHeight(float natural) const {
-    return resolveSize(sizeProp(m_node, "height"), ImGui::GetContentRegionAvail().y, natural);
+    return resolveSize(sizeProp(m_node, "height"), layout::availableHeight(), natural);
 }
 std::string Frame::labelId(std::string_view text, const char* id) { return imlui::labelId(text, id); }
 float Frame::alignFactor(std::string_view align) { return imlui::alignFactor(align); }

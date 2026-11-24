@@ -8,6 +8,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.layout_box;
 
 export namespace imlui {
 
@@ -65,7 +66,10 @@ void Card::declare(TypeBuilder<Card>& type) {
 void Card::render(Frame& frame) {
     md::beginCard("##card", md::cardVariant(m_variant), frame.size("width"), m_padding, frame.resolvedHeight(0.0f),
                   m_color, m_rounding.value_or(-1.0f));
-    frame.renderStack();
+    {
+        const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
+        frame.renderStack();
+    }
     md::endCard();
 }
 

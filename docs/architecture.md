@@ -206,6 +206,18 @@ Layout notes:
 - **Non-visual** elements (`ApplicationWindow`, `Window`, `Dialog`, `ModalNavigationDrawer`, `Snackbar`, `Timer`,
   `ImGuiDemo`, any registered with `visual = false`, and typed elements declared `nonVisual()`) take no layout
   space or spacing.
+- **Constraints go down through layout boxes** (`imlui.ui.layout_box`). A container that gives its children less
+  than the ImGui window's content region pushes a box (`layout::BoxScope`, a right edge in screen coordinates): a
+  `Column` with a `width` or `padding`, each `Grid` cell. Containers that open a region (`Card`, `ScrollView`,
+  `Window`, `Dialog`, `ApplicationWindow`) push a root box for it. Everything that sizes, aligns or wraps by "the
+  available width" reads the box, never `ImGui::GetContentRegionAvail()`: `resolveSize` through
+  `Frame::resolvedWidth/resolvedHeight` and `md::itemWidth`, `md::text` (`align`, `wrap`), `md::divider`, the stack
+  `align`, and the containers that fill by default (`Grid`, `Table`, `ScrollView`, `TopAppBar`, `NavigationBar`,
+  `Canvas`). The available width is `box right - cursor x`, so `Indent`, `SameLine` and a layout's x positions shrink
+  it. A box also sets ImGui's item width and text wrap position (`PushItemWidth`, `PushTextWrapPos`), so raw ImGui
+  widgets in a custom element follow it. A box belongs to the ImGui window it was pushed in: in another window (a
+  popup, a child window without a box of its own) the queries read that window's content region, and where ImGui
+  narrows the region under a box (a table cell), the narrower edge wins. No ImGui internals are touched.
 - Immediate-mode layout uses *last frame's* sizes for `Row` alignment, `justify`, fill spacers, `Column { align }`
   and `TopAppBar` actions. A layout settles within one frame.
 
@@ -666,6 +678,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs) |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
+| `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom; `shrinkToFit`/`minW`/`maxW` reserved for auto-sized windows), `BoxScope` (pushes a box, mirrored to ImGui's item width and text wrap position), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `regionBox`, `boxTo`: the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `isVisual`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |

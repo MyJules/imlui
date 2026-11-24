@@ -15,6 +15,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.layout_box;
 
 export namespace imlui {
 
@@ -110,8 +111,8 @@ void ScrollView::render(Frame& frame) {
         if (m_restoreFrames > 0) ImGui::SetNextWindowScroll(m_scroll);
     }
 
-    // Unset (0) is ImGui's default: the remaining space.
-    ImGui::BeginChild("##scroll", {frame.resolvedWidth(0.0f), frame.resolvedHeight(0.0f)}, cf);
+    // Unset: the available width (the layout box), and ImGui's default height (0: the remaining space).
+    ImGui::BeginChild("##scroll", {frame.resolvedWidth(frame.available().x), frame.resolvedHeight(0.0f)}, cf);
     ImGui::PopStyleVar();
     if (m_color) ImGui::PopStyleColor();
     if (pad > 0) ImGui::PopStyleVar();
@@ -133,7 +134,10 @@ void ScrollView::render(Frame& frame) {
     }
 
     if (m_color) md::pushSurface(*m_color);
-    frame.renderStack();
+    {
+        const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
+        frame.renderStack();
+    }
     if (m_color) md::popSurface();
     ImGui::EndChild();
 }

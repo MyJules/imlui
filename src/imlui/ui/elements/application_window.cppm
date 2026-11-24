@@ -8,6 +8,7 @@ import imlui.color;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.layout_box;
 
 export namespace imlui {
 
@@ -74,7 +75,10 @@ void ApplicationWindow::render(Frame& frame) {
     if (m_color) ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
     if (menu) frame.renderElementProp("menuBar");
-    frame.renderStack();
+    {
+        const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
+        frame.renderStack();
+    }
     ImGui::End();
 }
 

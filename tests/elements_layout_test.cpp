@@ -55,9 +55,42 @@ private:
     int m_renders = 0;
 };
 
+/// Raw ImGui inside an element: wrapped text and the item width ImGui gives, like a custom element would draw.
+class RawImGui final : public Element {
+public:
+    static void declare(TypeBuilder<RawImGui>&) {}
+    void render(Frame&) override {
+        m_itemWidth = ImGui::CalcItemWidth();
+        ImGui::TextWrapped("%s", "The quick brown fox jumps over the lazy dog, again and again and again.");
+        m_text = ImGui::GetItemRectSize();
+    }
+    [[nodiscard]] float itemWidth() const { return m_itemWidth; }
+    [[nodiscard]] ImVec2 text() const { return m_text; }
+
+private:
+    float m_itemWidth = 0.0f;
+    ImVec2 m_text{};
+};
+
 class LayoutTest : public ::testing::Test {
 protected:
-    void SetUp() override { m_h.registerType<Probe>("Probe"); }
+    void SetUp() override {
+        m_h.registerType<Probe>("Probe");
+        m_h.registerType<test::LastItemProbe>("Last");
+        m_h.registerType<RawImGui>("Raw");
+    }
+    [[nodiscard]] ImVec2 lastSize(std::string_view name) {
+        test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
+        EXPECT_NE(p, nullptr) << name;
+        return p ? p->size() : ImVec2{};
+    }
+    [[nodiscard]] ImVec2 lastMin(std::string_view name) {
+        test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
+        EXPECT_NE(p, nullptr) << name;
+        return p ? p->min() : ImVec2{};
+    }
+    /// The headless window's content width (800 px wide, 8 px padding).
+    [[nodiscard]] static float contentWidth() { return 800.0f - 2.0f * ImGui::GetStyle().WindowPadding.x; }
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
     void check(std::string_view lua) { EXPECT_EQ(m_h.run("assert(" + std::string{lua} + ")"), "") << lua; }
     Probe& probe(std::string_view name) {
@@ -133,6 +166,77 @@ TEST_F(LayoutTest, AFixedWidthColumnRestoresTheRegion) {
                         Last { id = "after", ProgressBar { fillWidth = true } } })");
     m_h.renderFrames("root", 2);
     EXPECT_GT(m_h.instance<test::LastItemProbe>("after")->size().x, 500.0f);
+}
+
+// Wrapping text measures the column too: md::text (Text { wrap }) and raw ImGui::TextWrapped in a custom element,
+// which also gets the column's width as its item width.
+TEST_F(LayoutTest, AFixedWidthColumnWrapsText) {
+    run(R"(
+        local long = "The quick brown fox jumps over the lazy dog, again and again and again."
+        rawText = Raw {}
+        root = Column { Last { id = "line", Text { long } },
+                        Column { width = 150, Last { id = "wrapped", Text { long, wrap = true } } },
+                        Column { width = 120, rawText } })");
+    m_h.renderFrames("root", 2);
+    const ImVec2 line = lastSize("line"), wrapped = lastSize("wrapped");
+    EXPECT_GT(line.x, 150.0f);
+    EXPECT_LE(wrapped.x, 150.0f);
+    EXPECT_GT(wrapped.x, 100.0f);
+    EXPECT_GE(wrapped.y, 3.0f * line.y - 1.0f); // at least three lines
+    RawImGui* raw = m_h.instance<RawImGui>("rawText");
+    ASSERT_NE(raw, nullptr);
+    EXPECT_FLOAT_EQ(raw->itemWidth(), 120.0f);
+    EXPECT_LE(raw->text().x, 120.0f);
+    EXPECT_GT(raw->text().y, 2.0f * line.y);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A padded Column without a width keeps the padding on the right too; with a width, the width is the content's.
+TEST_F(LayoutTest, ColumnPaddingBoundsFillsOnBothSides) {
+    run(R"(
+        root = Column { Column { padding = 10, Last { id = "padded", ProgressBar { fillWidth = true } } },
+                        Column { padding = 10, width = 200, Last { id = "sized", ProgressBar { fillWidth = true } } } })");
+    m_h.renderFrames("root", 2);
+    EXPECT_FLOAT_EQ(lastSize("padded").x, contentWidth() - 20.0f);
+    EXPECT_FLOAT_EQ(lastMin("padded").x, ImGui::GetStyle().WindowPadding.x + 10.0f);
+    EXPECT_FLOAT_EQ(lastSize("sized").x, 200.0f);
+}
+
+// The containers that size from the available width take a fixed Column's: Grid (a table), ScrollView (a child
+// window), Card, Table, TopAppBar, NavigationBar, Divider, TabBar and Section.
+TEST_F(LayoutTest, ContainersInAFixedWidthColumnTakeItsWidth) {
+    const std::string elements[] = {
+        "Grid { Probe {} }",
+        "ScrollView { height = 40, Probe {} }",
+        "Card { Probe {} }",
+        "Table { columns = { 'A' }, rows = { { 1 } } }",
+        "Table { outlined = false, columns = { 'A' }, rows = { { 1 } } }",
+        "TopAppBar { title = 'x' }",
+        "NavigationBar {}",
+        "Divider {}",
+        "TabBar { Tab { title = 'One' } }",
+        "Section { title = 'S' }",
+    };
+    for (const std::string& e : elements) {
+        run("root = Column { width = 300, Last { id = 'it', " + e + " } }");
+        m_h.renderFrames("root", 2);
+        EXPECT_FLOAT_EQ(lastSize("it").x, 300.0f) << e;
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Inside a Card (a child window) and a Grid cell (a table cell in the same window), fills measure the card's content
+// and the cell, also when the Card or Grid is in a fixed Column.
+TEST_F(LayoutTest, CardsAndGridCellsAreTheirChildrensBox) {
+    run(R"(
+        root = Column { width = 300,
+                        Card { padding = 10, Last { id = "inCard", ProgressBar { fillWidth = true } } },
+                        Grid { columns = 2, spacing = 0, Last { id = "cell", ProgressBar { fillWidth = true } },
+                               Probe {} } })");
+    m_h.renderFrames("root", 3);
+    EXPECT_FLOAT_EQ(lastSize("inCard").x, 300.0f - 20.0f);
+    EXPECT_NEAR(lastSize("cell").x, 150.0f, 2.0f);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // ------------------------------------------------------------ Row

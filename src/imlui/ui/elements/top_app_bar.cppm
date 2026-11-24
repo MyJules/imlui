@@ -65,7 +65,7 @@ void TopAppBar::render(Frame& frame) {
     const float barH = frame.dp(64);
     const float h = medium ? frame.dp(112) : large ? frame.dp(152) : barH;
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = frame.resolvedWidth(ImGui::GetContentRegionAvail().x);
+    const float w = frame.resolvedWidth(frame.available().x);
     ImDrawList* dl = frame.drawList();
     const Color bg = m_color.value_or(md::surfaceColor());
     dl->AddRectFilled(p, {p.x + w, p.y + h}, ImGui::ColorConvertFloat4ToU32(bg.vec4()));

@@ -16,6 +16,7 @@ import imlui.widgets;
 import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.ui.layout_box;
 import imlui.ui.props;
 
 export namespace imlui {
@@ -102,7 +103,7 @@ public:
     [[nodiscard]] bool isVisual(lua::State* state, int idx) const;
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
-    /// between visible items; `align` positions them horizontally.
+    /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box).
     void renderStack(const luaui::Node& node);
 
     /// Pops up `node.menu` (a Menu element) anchored to the last item when
@@ -168,7 +169,7 @@ void Renderer::renderStack(const Node& node) {
     const float align = alignFactor(node.string("align", "start"));
     lua::State* state = node.state();
     ImGuiStorage* st = ImGui::GetStateStorage();
-    const float avail = ImGui::GetContentRegionAvail().x;
+    const float avail = layout::availableWidth();
     const float x0 = ImGui::GetCursorScreenPos().x;
     bool first = true;
     forEachChild(node, [&](int idx) {
