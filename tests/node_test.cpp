@@ -312,7 +312,76 @@ TEST_F(NodeTest, FailingGetterAndSetterAreReported) {
 }
 
 TEST_F(NodeTest, ColorFromTableDefaultsAlphaToOne) {
-    element("return { 0.1, 0.2 }");
-    EXPECT_EQ(Node::colorFromTable(m_state, -1), (Color{0.1f, 0.2f, 0.0f, 1.0f}));
+    element("return { 0.1, 0.2, 0.3 }");
+    EXPECT_EQ(Node::colorFromTable(m_state, -1), (Color{0.1f, 0.2f, 0.3f, 1.0f}));
     expectBalanced();
+}
+
+TEST_F(NodeTest, ColorFromTableNeedsRedGreenAndBlue) {
+    for (const char* code : {"return {}", "return { 'x' }", "return { 0.1, 0.2 }", "return { 0.1, 'g', 0.3 }"}) {
+        element(code);
+        EXPECT_FALSE(Node::colorFromTable(m_state, -1).has_value()) << code;
+        expectBalanced();
+        lua::pop(m_state);
+    }
+    Node n = element("return { color = { 1, 0 } }");
+    EXPECT_FALSE(n.color("color").has_value());
+    expectBalanced();
+}
+
+// ------------------------------------------------------------------ errors in bind sources
+
+// A two-way bind's source is read and written with its metamethods (a ui.state proxy's __newindex runs the
+// watchers). An error in one is reported, not raised: unprotected, it would reach Lua's panic handler (abort).
+TEST_F(NodeTest, BindSourceMetamethodErrorsAreReportedNotRaised) {
+    Node n = element(R"(
+        local source = setmetatable({}, {
+            __index = function() error("index exploded") end,
+            __newindex = function() error("newindex exploded") end })
+        return { value = { __bind = true, t = source, k = "v" } })");
+    EXPECT_FALSE(n.number("value").has_value());
+    expectBalanced();
+    n.set("value", Value{1.0});
+    expectBalanced();
+    ASSERT_EQ(luaui::errors().size(), 2u);
+    EXPECT_TRUE(contains(luaui::errors()[0], "index exploded")) << luaui::errors()[0];
+    EXPECT_TRUE(contains(luaui::errors()[1], "newindex exploded")) << luaui::errors()[1];
+}
+
+// Like Lua's resolve(), any truthy `t` is a source, indexed with its metamethods (a string's are the string
+// library's); one that can't be indexed reports an error.
+TEST_F(NodeTest, BindSourcesNeedNotBeTables) {
+    Node n = element(R"(return { len = { __bind = true, t = "abc", k = "len" },
+                                 bad = { __bind = true, t = 5, k = "v" } })");
+    EXPECT_EQ(n.push("len"), lua::Type::Function); // ("abc").len is string.len
+    lua::pop(m_state);
+    EXPECT_FALSE(n.number("bad").has_value());
+    n.set("bad", Value{2.0});
+    expectBalanced();
+    ASSERT_EQ(luaui::errors().size(), 1u); // the read's and the write's errors are the same message, recorded once
+    EXPECT_TRUE(contains(luaui::errors()[0], "attempt to index a number value")) << luaui::errors()[0];
+}
+
+// ------------------------------------------------------------------ pushValue
+
+TEST_F(NodeTest, PushValueKeepsNonIntegralNumbersFloat) {
+    const double inf = std::numeric_limits<double>::infinity();
+    for (double d : {std::numeric_limits<double>::quiet_NaN(), inf, -inf, 1e300, -1e300, 9223372036854775808.0, 0.5}) {
+        luaui::pushValue(m_state, Value{d});
+        EXPECT_FALSE(lua::isinteger(m_state, -1)) << d;
+        const double back = lua::tonumber(m_state, -1);
+        if (d != d) {
+            EXPECT_NE(back, back); // NaN
+        } else {
+            EXPECT_EQ(back, d);
+        }
+        lua::pop(m_state);
+    }
+    luaui::pushValue(m_state, Value{-9223372036854775808.0}); // the smallest Integer is exact
+    EXPECT_TRUE(lua::isinteger(m_state, -1));
+    lua::pop(m_state);
+    luaui::pushValue(m_state, Value{42.0});
+    EXPECT_TRUE(lua::isinteger(m_state, -1));
+    EXPECT_EQ(lua::tointeger(m_state, -1), 42);
+    lua::pop(m_state);
 }

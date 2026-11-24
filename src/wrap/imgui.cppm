@@ -7,7 +7,7 @@
 module;
 
 #include "imgui.h"
-#include "imgui_internal.h" // RegisterUserTexture / UnregisterUserTexture (images)
+#include "imgui_internal.h" // RegisterUserTexture / UnregisterUserTexture (images), ErrorRecovery* (Lua errors)
 
 export module imgui;
 
@@ -36,6 +36,7 @@ export using ::ImGuiStyle;
 export using ::ImGuiStorage;
 export using ::ImGuiViewport;
 export using ::ImGuiContext;
+export using ::ImGuiErrorRecoveryState;
 export using ::ImGuiInputTextCallback;
 export using ::ImGuiInputTextCallbackData;
 
@@ -331,6 +332,11 @@ using ImGui::GetPlatformIO;
 // user textures (images): ImGui's texture list, uploaded and destroyed by the renderer backend
 using ImGui::RegisterUserTexture;
 using ImGui::UnregisterUserTexture;
+
+// recovery after a Lua error escaped mid-frame (imlui.lua.protected_render): unwinds Begin/Push left open
+using ImGui::ErrorRecoveryStoreState;
+using ImGui::ErrorRecoveryTryToRecoverState;
+
 using ImGui::GetStyle;
 using ImGui::NewFrame;
 using ImGui::Render;

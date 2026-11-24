@@ -19,6 +19,7 @@ export module imlui.types.type_builder;
 import std;
 
 import lua;
+import imlui.lua.errors;
 import imlui.types.lua_convert;
 import imlui.types.script_object;
 import imlui.types.type_info;
@@ -78,6 +79,21 @@ int invokeMethod(const Fn& fn, T& self, lua::State* s, int first, const std::str
     }
 }
 
+/// Runs `f()` and returns its result; a C++ exception is reported as a script error ("where: what") and
+/// `fallback` returned instead. Property hooks run inside Lua C functions, and an exception unwinding
+/// through Lua's C frames is undefined behaviour, so none may escape.
+template <class R, class F>
+R guarded(const std::string& where, R fallback, const F& f) {
+    try {
+        return f();
+    } catch (const std::exception& e) {
+        luaui::reportError(where + ": " + e.what());
+    } catch (...) {
+        luaui::reportError(where + ": unknown exception");
+    }
+    return fallback;
+}
+
 } // namespace imlui::detail
 
 export namespace imlui {
@@ -100,8 +116,11 @@ public:
         using V = ValueOf<Getter>;
         TypeInfo::Property p = readWrite(std::move(name), getter, setter);
         if constexpr (!detail::isOptional<V> && std::copy_constructible<V>) {
-            p.captureDefault = [getter](const ScriptObject& o) -> std::shared_ptr<const void> {
-                return std::make_shared<const V>(std::invoke(getter, static_cast<const T&>(o)));
+            std::string where = m_info.name() + "." + p.name;
+            p.captureDefault = [getter, where](const ScriptObject& o) -> std::shared_ptr<const void> {
+                return detail::guarded(where, std::shared_ptr<const void>{}, [&]() -> std::shared_ptr<const void> {
+                    return std::make_shared<const V>(std::invoke(getter, static_cast<const T&>(o)));
+                });
             };
         }
         m_info.addProperty(std::move(p));
@@ -191,13 +210,18 @@ private:
         static_assert(std::is_invocable_v<const Setter&, T&, V&&>, "the setter must accept the getter's type");
         TypeInfo::Property p = readOnly<Getter>(std::move(name), getter);
         p.nullable = detail::isOptional<V>;
-        p.assign = [getter, setter](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
+        std::string where = m_info.name() + "." + p.name;
+        p.assign = [getter, setter, where](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
             if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
-            return store(getter, setter, static_cast<T&>(o), LuaConvert<V>::get(s, idx));
+            return detail::guarded(where, TypeInfo::Assign::Unchanged, [&] {
+                return store(getter, setter, static_cast<T&>(o), LuaConvert<V>::get(s, idx));
+            });
         };
         if constexpr (!detail::isOptional<V> && std::copy_constructible<V>) {
-            p.reset = [getter, setter](const void* value, ScriptObject& o) -> TypeInfo::Assign {
-                return store(getter, setter, static_cast<T&>(o), V(*static_cast<const V*>(value)));
+            p.reset = [getter, setter, where](const void* value, ScriptObject& o) -> TypeInfo::Assign {
+                return detail::guarded(where, TypeInfo::Assign::Unchanged, [&] {
+                    return store(getter, setter, static_cast<T&>(o), V(*static_cast<const V*>(value)));
+                });
             };
         }
         return p;
@@ -220,8 +244,16 @@ private:
         TypeInfo::Property p;
         p.name = std::move(name);
         p.typeName = LuaConvert<V>::name;
-        p.push = [getter](lua::State* s, const ScriptObject& o) {
-            LuaConvert<V>::push(s, std::invoke(getter, static_cast<const T&>(o)));
+        p.push = [getter, where = m_info.name() + "." + p.name](lua::State* s, const ScriptObject& o) {
+            const int top = lua::gettop(s);
+            const bool pushed = detail::guarded(where, false, [&] {
+                LuaConvert<V>::push(s, std::invoke(getter, static_cast<const T&>(o)));
+                return true;
+            });
+            if (!pushed) { // a getter that threw reads as nil
+                lua::settop(s, top);
+                lua::pushnil(s);
+            }
         };
         return p;
     }

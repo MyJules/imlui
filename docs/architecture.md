@@ -100,14 +100,15 @@ theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself wh
    theme in the middle of a frame without breaking that frame's ImGui style stack. If only the scale changed, the
    current theme is re-applied.
 2. `window.beginFrame()`, which starts a new ImGui frame. Then the zoom shortcuts are handled.
-3. `ui.__tick(now)`: runs due `setTimeout`/`setInterval` timers, then ticks the C++ ticking elements (`Timer`;
+3. `ui.__tick(now)`: runs due `setTimeout`/`setInterval` timers (each in `xpcall`, so one failing callback is
+   reported and doesn't skip the rest), then ticks the C++ ticking elements (`Timer`;
    `require("imlui.types").tick(now)`, synced first, rendered or not), then the `onFrame` callbacks, and returns
    the seconds until the next timer. If an inline container dropped children on the last frame (a rebuilt or
    removed `Repeater` delegate, a replaced `Loader` / `Responsive` item) and ticking elements exist, it runs a full
    garbage collection before ticking, so a dropped `Timer` that nothing references stops now.
-4. Renders the root element.
-5. Renders **overlays**: the children of `ui.__overlays`. Today that's the app-wide `Snackbar` element driven by
-   `snackbar()`. Overlays draw above everything else.
+4. Renders the root element, inside `luaui::renderProtected` (see the error overlay below).
+5. Renders **overlays**: the children of `ui.__overlays`, protected the same way. Today that's the app-wide
+   `Snackbar` element driven by `snackbar()`. Overlays draw above everything else.
 6. Draws the **error overlay** if any script errors were recorded (see below).
 7. `window.endFrame()`: clears to the current `WindowBg` color, renders the ImGui draw data and swaps buffers.
 8. Copies `Renderer::windowTitle()` to the native window: the root `ApplicationWindow`'s `title` prop if it has
@@ -122,7 +123,18 @@ GLFW calls it from its refresh and framebuffer-size callbacks. The UI then lays 
 Errors are logged with the source tag `lua`, deduplicated, and capped at the last 32. While any are recorded, a
 panel with the `errorContainer` color sits at the bottom center of the window, with **Dismiss** (clears the list)
 and **Reload** buttons. An error in a binding or handler only affects that value or call, and the rest of the UI
-keeps rendering.
+keeps rendering. Reads and writes of a `bind(t, k)` source go through `safeCall` too (a small C function doing
+`t[k]` / `t[k] = v`), since a `state{}` proxy's `__newindex` runs `watch()` callbacks.
+
+Lua is compiled as C, so an error raised outside any `pcall` would reach the panic handler, and Lua aborts the
+process. As a last line of defence the render pass (step 4, and the overlays in step 5) runs inside
+`luaui::renderProtected` (`imlui.lua.protected_render`): a C function called with `safeCall`, so an unforeseen
+error in it is reported like the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows,
+tables and Push/Pop stacks the pass left open, so the frame still ends. The rest of that pass is skipped and the
+error's `longjmp` skipped the C++ destructors on the way, so this is not error handling: code that calls into
+Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error that
+escapes even that before Lua aborts. C++ exceptions never cross Lua's C frames: methods and property hooks
+(`TypeBuilder`) and `renderProtected` catch them and report them as script errors.
 
 ## Property resolution
 
@@ -555,7 +567,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `safeCall` |
+| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall` |
+| `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |

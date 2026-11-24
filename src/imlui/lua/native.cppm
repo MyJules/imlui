@@ -243,10 +243,12 @@ constexpr NativeFn nativeFns[] = {
          if (auto& fn = hostHooks(state).setWindowSize) fn(static_cast<int>(w + 0.5), static_cast<int>(h + 0.5));
          return 0;
      }},
-    // requestFrame([seconds]): render a frame now, or after `seconds`.
+    // requestFrame([seconds]): render a frame now, or after `seconds` (a finite number).
     {"requestFrame",
      [](lua::State* state) -> int {
-         requestFrameAfter(lua::isnumber(state, 1) ? lua::tonumber(state, 1) : 0.0);
+         const double seconds = lua::isnumber(state, 1) ? lua::tonumber(state, 1) : 0.0;
+         if (!std::isfinite(seconds)) lua::error(state, "requestFrame: the delay must be a finite number");
+         requestFrameAfter(seconds);
          return 0;
      }},
     {"textSize",

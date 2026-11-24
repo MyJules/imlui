@@ -25,9 +25,13 @@ void pushValue(lua::State* state, const Value& v) {
     if (const auto* b = std::get_if<bool>(&v)) {
         lua::pushboolean(state, *b);
     } else if (const auto* d = std::get_if<double>(&v)) {
-        double i = static_cast<double>(static_cast<long long>(*d));
-        if (i == *d) lua::pushinteger(state, static_cast<lua::Integer>(*d));
-        else lua::pushnumber(state, *d);
+        // Whole numbers push as integers. The range check comes first: casting NaN, an infinity or a value
+        // outside lua::Integer's range is undefined behaviour (same check as LuaConvert<floating>::push).
+        constexpr auto limit = static_cast<lua::Number>(std::numeric_limits<lua::Integer>::max());
+        if (*d >= -limit && *d < limit && static_cast<lua::Number>(static_cast<lua::Integer>(*d)) == *d)
+            lua::pushinteger(state, static_cast<lua::Integer>(*d));
+        else
+            lua::pushnumber(state, *d);
     } else if (const auto* s = std::get_if<std::string>(&v)) {
         lua::pushstring(state, *s);
     } else {

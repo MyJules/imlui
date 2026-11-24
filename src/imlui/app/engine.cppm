@@ -30,6 +30,7 @@ import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.native;
 import imlui.lua.painter;
+import imlui.lua.protected_render;
 import imlui.lua.resources;
 import imlui.resources;
 import imlui.resources.mount;
@@ -401,14 +402,15 @@ void Engine::renderTree() {
         if (luaui::safeCall(m_state, 1, 1) && lua::isnumber(m_state, -1)) requestFrameAfter(lua::tonumber(m_state, -1));
         lua::settop(m_state, 0);
     }
+    // Protected: a Lua error that escapes an unprotected call while rendering is reported, not a panic (abort).
     lua::rawgeti(m_state, lua::registryIndex, m_rootRef);
-    m_renderer.render(m_state, -1);
+    luaui::renderProtected(m_state, 1, [this](lua::State* state) { m_renderer.render(state, 1); });
     lua::settop(m_state, 0);
     if (m_overlayRef != lua::noRef) {
         // ui.__overlays: snackbars and other app-level overlays
         lua::rawgeti(m_state, lua::registryIndex, m_overlayRef);
-        luaui::Node o{m_state, -1};
-        m_renderer.renderChildren(o);
+        luaui::renderProtected(m_state, 1,
+                               [this](lua::State* state) { m_renderer.renderChildren(luaui::Node{state, 1}); });
     }
 }
 
@@ -484,6 +486,7 @@ void Engine::reloadNow() {
     setTheme(Theme{}); // scripts start from the default theme
 
     lua::State* state = lua::newstate();
+    lua::atpanic(state, &luaui::panicHandler); // an error outside every protected call: log why before the abort
     lua::openlibs(state);
     luaui::registerNative(state, &m_hooks);
     luaui::registerPainter(state);
