@@ -59,6 +59,21 @@ std::size_t recordOf(const std::string& s, std::string_view tag) {
     return 0;
 }
 
+/// The glyph `codepoint` maps to in the single font `s` whose last character map is a format 12 one (Roboto's, the
+/// one stb_truetype picks); 0 when it maps to none.
+std::size_t glyphOf(const std::string& s, std::uint32_t codepoint) {
+    const std::size_t cmap = readU32(s, recordOf(s, "cmap") + 8);
+    const std::size_t count = readU32(s, cmap) & 0xFFFF;
+    const std::size_t subtable = cmap + readU32(s, cmap + 4 + 8 * (count - 1) + 4);
+    EXPECT_EQ(readU32(s, subtable) >> 16, 12u);
+    for (std::size_t i = 0; i < readU32(s, subtable + 12); ++i) {
+        const std::size_t group = subtable + 16 + 12 * i;
+        if (codepoint >= readU32(s, group) && codepoint <= readU32(s, group + 4))
+            return readU32(s, group + 8) + codepoint - readU32(s, group);
+    }
+    return 0;
+}
+
 /// Medium's l, i and r are wider than Regular's (by about 3px over this text at bodyLarge), so the two faces are
 /// told apart by width.
 constexpr const char* sample = "llllllllll rrrrrrrrrr";
@@ -397,16 +412,20 @@ TEST(FontCheck, RejectsDamagedFonts) {
     writeU16(font, iconsHhea + 6, 0);
     EXPECT_NE(problem(font).find("is far larger than the font"), std::string::npos) << problem(font);
 
-    // A TrueType outline (glyph 0, .notdef) whose contour count sends stb_truetype past its end.
+    // A TrueType outline whose contour count sends stb_truetype past its end: in the glyph of 'A'. In glyph 0
+    // (.notdef) it does no harm: ImGui never draws glyph 0, and none of Roboto's composite glyphs uses it.
     {
         const std::size_t head = readU32(roboto, recordOf(roboto, "head") + 8);
         ASSERT_EQ(static_cast<unsigned char>(roboto[head + 51]), 1); // long loca offsets
         const std::size_t loca = readU32(roboto, recordOf(roboto, "loca") + 8);
         const std::size_t glyf = readU32(roboto, recordOf(roboto, "glyf") + 8);
-        ASSERT_LT(readU32(roboto, loca), readU32(roboto, loca + 4));
-        font = roboto;
-        writeU16(font, glyf + readU32(roboto, loca), 0x7FFF);
-        EXPECT_EQ(problem(font), "the outline of glyph 0 is broken");
+        for (const std::size_t glyph : {glyphOf(roboto, 'A'), std::size_t{0}}) {
+            ASSERT_LT(readU32(roboto, loca + 4 * glyph), readU32(roboto, loca + 4 * glyph + 4)) << glyph;
+            font = roboto;
+            writeU16(font, glyf + readU32(roboto, loca + 4 * glyph), 0x7FFF);
+            EXPECT_EQ(problem(font),
+                      glyph == 0 ? "(accepted)" : "the outline of glyph " + std::to_string(glyph) + " is broken");
+        }
     }
 
     // CFF outlines (the icon font): stb_truetype asserts on an INDEX offset size outside 1-4.
@@ -421,7 +440,8 @@ TEST(FontCheck, RejectsDamagedFonts) {
 
     // A charstring stb_truetype can't run (found by the `font` fuzz target): its last operator is a hintmask whose
     // mask bytes would lie past the end of the glyph's program, so stbtt_GetGlyphBox, which ImGui calls for every
-    // glyph it loads, asserts. Glyph 1's program is overwritten in place with stems, then that hintmask.
+    // glyph it loads, asserts. The program of glyph 1 (an icon the character map reaches) is overwritten in place
+    // with stems, then that hintmask; in glyph 0, which ImGui never loads, it does no harm.
     {
         const auto byte = [&](std::size_t at) -> std::size_t { return static_cast<unsigned char>(icons[at]); };
         const auto number = [&](std::size_t at, std::size_t size) {
@@ -461,21 +481,23 @@ TEST(FontCheck, RejectsDamagedFonts) {
             }
         }
         ASSERT_NE(charStrings, 0u);
-        const auto [begin, end] = element(cff + charStrings, 1);
-        ASSERT_GE(end - begin, 3u);
-        font = icons;
-        // 0 0 hstem ... (each one mask bit), any spare bytes as leading zeros, then hintmask as the last byte.
-        const std::size_t stems = (end - begin - 1) / 3, spare = (end - begin - 1) % 3;
-        std::size_t i = begin;
-        for (std::size_t k = 0; k < spare; ++k)
-            font[i++] = static_cast<char>(139);
-        for (std::size_t k = 0; k < stems; ++k) {
-            font[i++] = static_cast<char>(139);
-            font[i++] = static_cast<char>(139);
-            font[i++] = 1; // hstem
+        for (const std::size_t glyph : {std::size_t{1}, std::size_t{0}}) {
+            const auto [begin, end] = element(cff + charStrings, glyph);
+            ASSERT_GE(end - begin, 3u);
+            font = icons;
+            // 0 0 hstem ... (each one mask bit), any spare bytes as leading zeros, then hintmask as the last byte.
+            const std::size_t stems = (end - begin - 1) / 3, spare = (end - begin - 1) % 3;
+            std::size_t i = begin;
+            for (std::size_t k = 0; k < spare; ++k)
+                font[i++] = static_cast<char>(139);
+            for (std::size_t k = 0; k < stems; ++k) {
+                font[i++] = static_cast<char>(139);
+                font[i++] = static_cast<char>(139);
+                font[i++] = 1; // hstem
+            }
+            font[i] = 0x13; // hintmask
+            EXPECT_EQ(problem(font), glyph == 0 ? "(accepted)" : "the CFF charstring of glyph 1 is broken");
         }
-        font[i] = 0x13; // hintmask
-        EXPECT_EQ(problem(font), "the CFF charstring of glyph 1 is broken");
     }
 
     // Every truncation is caught (the last table ends the file, padding aside).
@@ -742,13 +764,29 @@ std::string compositeGlyph(const std::vector<std::uint32_t>& parts, std::uint32_
 
 } // namespace
 
+namespace {
+
+/// A format 6 character map: code points from 'A' on map to `glyphs` in turn.
+std::string format6(const std::vector<std::uint32_t>& glyphs) {
+    Bytes b;
+    b.u16(6).u16(static_cast<std::uint32_t>(10 + 2 * glyphs.size())).u16(0).u16('A');
+    b.u16(static_cast<std::uint32_t>(glyphs.size()));
+    for (const auto glyph : glyphs)
+        b.u16(glyph);
+    return b.s;
+}
+
+} // namespace
+
 TEST(FontCheck, GlyphOutlinesAreReadLikeStbTruetype) {
     // stb_truetype decodes a glyph's outline when ImGui rasterizes it, trusting every count and offset, and fetches
-    // the parts of a composite glyph by recursion.
-    const std::string cmap = Bytes{}.u16(6).u16(12).u16(0).u16('A').u16(1).u16(1).s; // 'A' -> glyph 1
+    // the parts of a composite glyph by recursion. Every glyph but 0 is drawn here: 'A' maps to glyph 1, 'B' to 2...
     const auto problem = [&](const std::vector<std::string>& outlines) {
         const auto glyphs = static_cast<std::uint32_t>(std::max<std::size_t>(outlines.size(), 2));
-        return checkFont(bytesOf(minimalFont(cmap, glyphs, outlines))).value_or("(accepted)");
+        std::vector<std::uint32_t> mapped;
+        for (std::uint32_t glyph = 1; glyph < glyphs; ++glyph)
+            mapped.push_back(glyph);
+        return checkFont(bytesOf(minimalFont(format6(mapped), glyphs, outlines))).value_or("(accepted)");
     };
     const std::string accepted = "(accepted)", broken = "the outline of glyph 1 is broken";
     const std::string triangle = simpleGlyph({2});
@@ -790,7 +828,7 @@ TEST(FontCheck, GlyphOutlinesAreReadLikeStbTruetype) {
     // Parts that contain the glyph itself: stb_truetype would recurse until the stack overflows.
     EXPECT_EQ(problem({"", compositeGlyph({1})}), "the outline of glyph 1 contains itself");
     EXPECT_EQ(problem({"", compositeGlyph({2}), compositeGlyph({1})}), "the outline of glyph 1 contains itself");
-    EXPECT_EQ(problem({compositeGlyph({0})}), "the outline of glyph 0 contains itself");
+    EXPECT_EQ(problem({compositeGlyph({0}), compositeGlyph({0})}), "the outline of glyph 0 contains itself");
 
     // Composite glyphs inside composite glyphs: at most 16 levels.
     const auto chain = [&](std::uint32_t last) {
@@ -839,6 +877,44 @@ TEST(FontCheck, GlyphOutlinesAreReadLikeStbTruetype) {
     EXPECT_EQ(problem({"", riser}), accepted); // its box doesn't end below the baseline
     EXPECT_EQ(problem({"", riser, glyphHeader(-1, below).s + compositeGlyph({1}).substr(10)}),
               "the outline of glyph 2 rises above its box");
+}
+
+TEST(FontCheck, OnlyGlyphsImGuiCanDrawAreChecked) {
+    // ImGui asks for glyphs by code point alone (stbtt_FindGlyphIndex), and loads nothing for glyph 0, a code point
+    // the font lacks. So a glyph nothing maps to is never measured, decoded or drawn, unless a composite glyph that
+    // is drawn uses it: real fonts have broken glyphs nothing reaches (Linux Biolinum's glyph 349).
+    const std::string triangle = simpleGlyph({2});
+    const std::string lone = simpleGlyph({2, 3}, {true, true, true, false}); // reads past stb_truetype's vertices
+    const std::string cut = triangle.substr(0, triangle.size() - 2);         // a y coordinate short
+    const std::string inverted = glyphHeader(1, {100, 0, 0, 100}).s + triangle.substr(10);
+    const std::string riser = contourGlyph({{0, -100, true}, {100, -300, true}, {200, 10, true}}, {0, -300, 300, 0});
+    const auto problem = [](const std::vector<std::uint32_t>& mapped, const std::vector<std::string>& outlines) {
+        const auto glyphs = static_cast<std::uint32_t>(outlines.size());
+        return checkFont(bytesOf(minimalFont(format6(mapped), glyphs, outlines))).value_or("(accepted)");
+    };
+    const std::string accepted = "(accepted)";
+
+    // Glyph 2 is broken in each way the outline checks catch: harmless while nothing maps to it.
+    for (const auto& broken : {lone, cut, inverted, riser, compositeGlyph({2}), compositeGlyph({7, 2})})
+        EXPECT_EQ(problem({1}, {"", triangle, broken}), accepted);
+    // Mapped from a code point, it is rejected.
+    EXPECT_EQ(problem({1, 2}, {"", triangle, lone}), "the outline of glyph 2 is broken");
+    EXPECT_EQ(problem({1, 2}, {"", triangle, cut}), "the outline of glyph 2 is broken");
+    EXPECT_EQ(problem({1, 2}, {"", triangle, inverted}), "the outline of glyph 2 has an inverted box");
+    EXPECT_EQ(problem({1, 2}, {"", triangle, riser}), "the outline of glyph 2 rises above its box");
+    EXPECT_EQ(problem({1, 2}, {"", triangle, compositeGlyph({2})}), "the outline of glyph 2 contains itself");
+    // So it is when only a drawn composite glyph uses it (its box and its rise don't matter there: a part's box is
+    // never used, and the composite glyph's outline is what is drawn).
+    EXPECT_EQ(problem({1}, {"", compositeGlyph({2}), cut}), "the outline of glyph 2 is broken");
+    EXPECT_EQ(problem({1}, {"", compositeGlyph({2}), lone}), "the outline of glyph 1 is broken");
+    EXPECT_EQ(problem({1}, {"", compositeGlyph({3}), "", compositeGlyph({2, 3})}),
+              "the outline of glyph 3 contains itself");
+    EXPECT_EQ(problem({1}, {"", compositeGlyph({2}), inverted}), accepted);
+
+    // Glyph 0: never drawn by itself, even when the character map names it, only as a part.
+    EXPECT_EQ(problem({1}, {cut, triangle}), accepted);
+    EXPECT_EQ(problem({0, 1, 0}, {lone, triangle}), accepted);
+    EXPECT_EQ(problem({1}, {cut, compositeGlyph({0})}), "the outline of glyph 0 is broken");
 }
 
 TEST_F(FontsTest, DamagedFontsAreReportedInsteadOfAborting) {

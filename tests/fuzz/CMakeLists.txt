@@ -17,7 +17,7 @@ target_sources(imlui_fuzz_support
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/support
         FILES support/truetype.cppm
 )
-target_link_libraries(imlui_fuzz_support PUBLIC imlui_lua PRIVATE ext::imgui)
+target_link_libraries(imlui_fuzz_support PUBLIC imlui_core PRIVATE ext::imgui)
 imlui_set_warnings(imlui_fuzz_support)
 imlui_set_hardening(imlui_fuzz_support)
 

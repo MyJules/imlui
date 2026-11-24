@@ -424,33 +424,42 @@ checks its structure: ImGui parses fonts with stb_truetype, which trusts the dat
 checks and aborts through `IM_ASSERT_USER_ERROR`/`STBTT_assert` on data it doesn't expect. The check walks what
 stb_truetype reads when a font is added, when glyphs are looked up and when they are rasterized (the table directory,
 `head`, `hhea`, `hmtx`, `maxp`, the Unicode `cmap` subtable it picks, `loca`, or the CFF header, INDEXes, DICTs,
-Private DICTs and FDSelect). **TrueType outlines** (`glyf`) are decoded for every glyph the way `stbtt_GetGlyphShape`
-decodes them when ImGui rasterizes one (class `Outlines`): `loca` offsets ascending and inside `glyf`; for a simple
-glyph, the end points, the instruction length, the flags with their repeat counts and the 1- or 2-byte x and y
-coordinates all inside the glyph's bytes; for a composite glyph, every part's flags, offset and scale inside the
-glyph, no part placed by matching points (an `STBTT_assert`), no part that contains the glyph itself (stb_truetype
-recurses without a limit: a stack overflow), at most 16 levels of nesting, at most 2^18 vertices and a bounded
-amount of copying per glyph (parts used many times over), and every transformed coordinate within 16 bits
+Private DICTs and FDSelect). Those tables are checked whole, but **glyphs only as far as ImGui can reach them**: ImGui
+asks stb_truetype for a glyph by code point alone (`FontSrcContainsGlyph` and `FontBakedLoadGlyph` call
+`stbtt_FindGlyphIndex`; the fallback and ellipsis characters are code points too), only for code points an `ImWchar`
+holds (16 bits: `lastCodepoint`, 0xFFFF), and `FontBakedLoadGlyph` loads nothing for glyph 0, which stands for a
+code point the font lacks. So the glyphs it can draw are those `stbtt_FindGlyphIndex` returns for code points 0 to
+0xFFFF, except 0, and, through composite glyphs, their parts (glyph 0 included). `checkFont` asks its own copy of
+stb_truetype for that set (`drawableGlyphs`), so the subtable and its search are stb_truetype's own, and checks those
+glyphs' outlines, boxes and charstrings; the `font` fuzz target reads exactly that set the way ImGui does. Fonts
+carry glyphs nothing maps to (alternates, ligature parts, placeholders), and a flaw there harms nothing, so it doesn't
+cost the app the font. `loca` offsets must be ascending and inside `glyf` for every glyph. **TrueType outlines**
+(`glyf`) of the glyphs ImGui can draw are decoded the way `stbtt_GetGlyphShape` decodes them when ImGui rasterizes
+one (class `Outlines`): for a simple glyph, the end points, the instruction length, the flags with their repeat counts
+and the 1- or 2-byte x and y coordinates all inside the glyph's bytes; for a composite glyph, every part's flags, offset
+and scale inside the glyph, no part placed by matching points (an `STBTT_assert`), no part that contains the glyph
+itself (stb_truetype recurses without a limit: a stack overflow), at most 16 levels of nesting, at most 2^18 vertices
+and a bounded amount of copying per glyph (parts used many times over), and every transformed coordinate within 16 bits
 (stb_truetype converts it from float to `short`, undefined out of range). A last contour of one point off the curve
 makes stb_truetype read one vertex past its array; real fonts (Calibri, Consolas) have such placeholder glyphs with a
-box of zeros, which ImGui never draws, so it is rejected only in a glyph that can be drawn (its box isn't 0 wide or
-high at 0) or in a part of one. It mirrors stb_truetype's parser rather than running it under a bounds-checking
-reader, because stb_truetype reads glyph data through raw pointers (`ttUSHORT(p)`, `*points++`) that a reader can't
-intercept. **What ImGui does with the result** is checked too: `hhea` must give the font a positive height
-(ascender > descender: ImGui scales by its inverse, and a negative scale turns the rasterizer's edges upside down,
-which trips its `STBTT_assert`s); a glyph's box (from its header, or for CFF from its charstring) must not be inverted
-or more than 16 font heights wide or high (ImGui sizes the glyph's bitmap by it and `IM_ASSERT`s on a size <= 0 or
-one its atlas can't hold); and a TrueType glyph whose box ends at or below the baseline must not have an outline that
-rises above the baseline, curves included: its bitmap can then start at the baseline, and stb_truetype's rasterizer
-asserts on an edge wholly above a bitmap's first row (it clamps such edges only elsewhere). That last check takes the
-glyph's vertices from `stbtt_GetGlyphShape` itself, through the private copy below, once the outlines are known to be
-sound. CFF outlines are programs: stb_truetype runs a glyph's charstring to get its box, which ImGui does for every
-glyph it loads, so once the structure is sound `checkFont` runs every charstring through its own static copy of
-stb_truetype, whose `STBTT_assert` records the failure (in `errno`) instead of aborting, and rejects the font if one
-trips it (its CFF buffer reads are bounds-checked, so that is safe). Of the 283 fonts in a Windows 11 `Fonts` folder,
-`checkFont` rejects the four symbol fonts without a Unicode character map, one that isn't a font, and Linux Biolinum
-Regular (a drawn glyph with a lone off-curve point as its last contour). A damaged font is reported like a missing
-one and the built-in face is used.
+box of zeros, which ImGui never rasterizes, so it is rejected only in a glyph it rasterizes (its box isn't 0 wide or
+high at 0) or in a part of one. It mirrors stb_truetype's parser rather than running it under a bounds-checking reader,
+because stb_truetype reads glyph data through raw pointers (`ttUSHORT(p)`, `*points++`) that a reader can't intercept.
+**What ImGui does with the result** is checked too: `hhea` must give the font a positive height (ascender > descender:
+ImGui scales by its inverse, and a negative scale turns the rasterizer's edges upside down, which trips its
+`STBTT_assert`s); a glyph's box (from its header, or for CFF from its charstring) must not be inverted or more than 16
+font heights wide or high (ImGui sizes the glyph's bitmap by it and `IM_ASSERT`s on a size <= 0 or one its atlas can't
+hold); and a TrueType glyph whose box ends at or below the baseline must not have an outline that rises above the
+baseline, curves included: its bitmap can then start at the baseline, and stb_truetype's rasterizer asserts on an edge
+wholly above a bitmap's first row (it clamps such edges only elsewhere). That last check takes the glyph's vertices from
+`stbtt_GetGlyphShape` itself, through the private copy below, once the outlines are known to be sound. CFF outlines are
+programs: stb_truetype runs a glyph's charstring to get its box, which ImGui does for every glyph it loads, so once the
+structure is sound `checkFont` runs those glyphs' charstrings through its own static copy of stb_truetype, whose
+`STBTT_assert` records the failure (in `errno`) instead of aborting, and rejects the font if one trips it (its CFF
+buffer reads are bounds-checked, so that is safe). Of the 283 fonts in a Windows 11 `Fonts` folder, `checkFont` rejects
+the four symbol fonts without a Unicode character map, one that isn't a font, and Linux Biolinum Regular: its glyph 349,
+which U+019B (ƛ) maps to, ends in a contour of one point off the curve, and drawing it makes stb_truetype read past its
+vertex array (ASan confirms it). A damaged font is reported like a missing one and the built-in face is used.
 
 Lua sees resources in two ways (`imlui.lua.resources`):
 
@@ -736,7 +745,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
 | `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font` (the scope's face override, else the theme's face for the weight), `fontSize`, `fontPixels`, `pushFont` |
 | `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount` |
-| `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, TrueType outlines decoded like `stbtt_GetGlyphShape`, then every CFF charstring run through stb_truetype |
+| `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
 | `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `resolveColor`, `imguiColorIndex`, `isStyleField` |

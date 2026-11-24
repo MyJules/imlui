@@ -17,16 +17,20 @@ export module imlui.fuzz.truetype;
 
 import std;
 
+import imlui.theme.font_check;
+
 export namespace imlui::fuzz {
 
 /// Does with font `bytes` what ImGui does with a font checkFont() accepted: FontSrcInit (stbtt_GetFontOffsetForIndex,
 /// stbtt_InitFont, the scale), FontBakedInit (the vertical metrics), FontSrcContainsGlyph and FontBakedLoadGlyph
-/// (stbtt_FindGlyphIndex for every code point an ImWchar holds, the glyph's box and horizontal metrics, and its
-/// bitmap: stbtt_MakeGlyphBitmapSubpixelPrefilter with 2x horizontal oversampling, at a size from 4 to 64px picked by
-/// the input's length). Aborts when stb_truetype fails to load the font, asserts, or maps a code point to a glyph the
-/// font doesn't have, or when ImGui would refuse a glyph's bitmap size: checkFont() promises none of that happens.
-/// To keep each run short, it decodes the outline of every glyph ImGui could draw (stbtt_GetGlyphShape, up to 8192
-/// glyphs) but rasterizes only up to 64 of the glyphs found, spread over the font.
+/// (stbtt_FindGlyphIndex for every code point an ImWchar holds, up to imlui::lastCodepoint; for a glyph other than 0,
+/// its box and horizontal metrics, and its bitmap: stbtt_MakeGlyphBitmapSubpixelPrefilter with 2x horizontal
+/// oversampling, at a size from 4 to 64px picked by the input's length). Those glyphs are the ones checkFont() checks,
+/// and ImGui reaches no other: glyph 0 (a code point the font lacks) it never loads. Aborts when stb_truetype fails to
+/// load the font, asserts, or maps a code point to a glyph the font doesn't have, or when ImGui would refuse a glyph's
+/// bitmap size: checkFont() promises none of that happens. To keep each run short, it decodes the outline of every
+/// glyph found that ImGui would rasterize (stbtt_GetGlyphShape, up to 8192 glyphs) but rasterizes only up to 64 of
+/// them, spread over the font.
 void readFontLikeImGui(std::span<const std::byte> bytes);
 
 } // namespace imlui::fuzz
@@ -53,10 +57,11 @@ void readFontLikeImGui(std::span<const std::byte> bytes) {
         stbtt_GetGlyphBitmapBoxSubpixel(&font, glyph, scale, scale, 0, 0, &x0, &y0, &x1, &y1);
         stbtt_GetGlyphHMetrics(&font, glyph, &advance, &lsb);
     };
-    // ImWchar is 16 bits (no IMGUI_USE_WCHAR32): these are all the code points ImGui asks a font for.
+    // All the code points ImGui asks a font for. It loads nothing for glyph 0 (FontBakedLoadGlyph returns false), so
+    // the glyphs found are all it ever reaches (glyph 0 included, as a part of a composite one).
     std::vector<bool> loaded(glyphs);
     std::vector<int> found;
-    for (int codepoint = 0; codepoint <= 0xFFFF; ++codepoint) {
+    for (int codepoint = 0; codepoint <= imlui::lastCodepoint; ++codepoint) {
         const int glyph = stbtt_FindGlyphIndex(&font, codepoint);
         if (glyph < 0 || glyph >= font.numGlyphs) std::abort();
         if (glyph == 0 || loaded[static_cast<std::size_t>(glyph)]) continue;
@@ -64,17 +69,16 @@ void readFontLikeImGui(std::span<const std::byte> bytes) {
         found.push_back(glyph);
         loadGlyph(glyph);
     }
-    loadGlyph(0); // .notdef, for code points the font lacks
 
-    // Every outline ImGui could draw, as stbtt_MakeGlyphBitmap* decodes it (checkFont() checks every glyph, mapped or
-    // not). Not glyphs whose box is 0 wide or high at 0: ImGui never draws them, and checkFont() lets their outline
-    // make stb_truetype read one vertex past its array (placeholders, a lone point off the curve, as in Calibri).
-    for (std::size_t glyph = 0; glyph < std::min<std::size_t>(glyphs, 8192); ++glyph) {
+    // The outline of every glyph found that ImGui rasterizes, as stbtt_MakeGlyphBitmap* decodes it. Not those whose
+    // box is 0 wide or high at 0: ImGui never rasterizes them, and checkFont() lets their outline make stb_truetype
+    // read one vertex past its array (placeholders, a lone point off the curve, as in Calibri).
+    for (std::size_t i = 0; i < std::min<std::size_t>(found.size(), 8192); ++i) {
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-        stbtt_GetGlyphBox(&font, static_cast<int>(glyph), &x0, &y0, &x1, &y1);
+        stbtt_GetGlyphBox(&font, found[i], &x0, &y0, &x1, &y1);
         if ((x0 == 0 && x1 == 0) || (y0 == 0 && y1 == 0)) continue;
         stbtt_vertex* vertices = nullptr;
-        static_cast<void>(stbtt_GetGlyphShape(&font, static_cast<int>(glyph), &vertices));
+        static_cast<void>(stbtt_GetGlyphShape(&font, found[i], &vertices));
         stbtt_FreeShape(&font, vertices);
     }
 
