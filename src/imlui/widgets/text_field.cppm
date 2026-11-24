@@ -63,8 +63,7 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
     f.inputW = w - (f.inputX - f.p.x) - (trail ? dp(52) : dp(16));
 
     ImGui::BeginGroup();
-    field::drawFieldBackground(f, focused, ImGui::IsMouseHoveringRect(f.p, {f.p.x + w, f.p.y + h}),
-                               field::scopeDisabled());
+    field::drawFieldBackground(f, focused, field::containerHovered(f), field::scopeDisabled());
     // Body text at bodyLarge, vertically placed per variant.
     pushFont(TextStyle::BodyLarge);
     const float lineH = ImGui::GetFontSize();
@@ -87,9 +86,11 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
         ImGui::SetKeyboardFocusHere();
     }
     if (o.multiline) {
-        res.changed = ImGui::InputTextMultiline("##input", value.data(), value.capacity() + 1,
-                                                {f.inputW, h - inputY - dp(8)}, flags, field::inputResizeCallback,
-                                                &value);
+        // At least a line, also in a short field: ImGui takes a height <= 0 as "the available height minus that",
+        // which would grow the input to the window's height.
+        const float inputH = std::max(h - inputY - dp(8), lineH);
+        res.changed = ImGui::InputTextMultiline("##input", value.data(), value.capacity() + 1, {f.inputW, inputH},
+                                                flags, field::inputResizeCallback, &value);
     } else {
         flags |= ImGuiInputTextFlags_EnterReturnsTrue;
         ImGui::SetNextItemWidth(f.inputW);
@@ -107,7 +108,7 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
     st->SetBool(focusKey, active);
 
     // Clicking anywhere in the container (but the trailing icon) focuses the input, on the next frame.
-    if (!active && !dis && ImGui::IsMouseHoveringRect(f.p, {f.p.x + w, f.p.y + h})) {
+    if (!active && !dis && field::containerHovered(f)) {
         hovered = true;
         const bool onTrailing = trail && ImGui::GetMousePos().x >= f.p.x + w - dp(50);
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive() && !onTrailing &&

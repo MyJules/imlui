@@ -53,10 +53,13 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
     float msgW = measure(TextStyle::BodyMedium, message).x;
     ImGui::Dummy({msgW, h});
     drawTextV(dl, TextStyle::BodyMedium, p.x, p.y + h * 0.5f, s.inverseOnSurface.withAlpha(ease), message);
-    // Push the actions to the right edge of the (min-width) bar.
+    // Push the actions to the right edge of the (min-width) bar. The gaps before them are explicit (not the
+    // theme's ItemSpacing, popped with the window's style above) and counted in `right`, so the content width is
+    // exactly `avail` and the auto-resized window keeps its width from frame to frame.
+    const float actionGap = dp(8), closeGap = 0.0f; // the close button's 48 dp target already has its inset
     float right = 0;
-    if (!action.empty()) right += measure(TextStyle::LabelLarge, action).x + dp(24) + dp(8);
-    if (closeIcon) right += dp(48);
+    if (!action.empty()) right += actionGap + measure(TextStyle::LabelLarge, action).x + dp(24);
+    if (closeIcon) right += closeGap + dp(48);
     float avail = std::max(dp(344) - dp(32), ImGui::GetWindowWidth() - dp(32));
     float spacer = avail - msgW - right;
     if (spacer > 0) {
@@ -64,7 +67,7 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
         ImGui::Dummy({spacer, 1});
     }
     if (!action.empty()) {
-        ImGui::SameLine();
+        ImGui::SameLine(0, actionGap);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (h - dp(40)) * 0.5f);
         std::string a{action};
         a += "###snack_action";
@@ -77,8 +80,7 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
         drawTextV(dl, TextStyle::LabelLarge, bp.x + dp(12), bp.y + dp(20), s.inversePrimary.withAlpha(ease), action);
     }
     if (closeIcon) {
-        ImGui::SameLine();
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY());
+        ImGui::SameLine(0, closeGap);
         if (iconButton("##snack_close", "close", IconButtonVariant::Standard, false, false, s.inverseOnSurface) &&
             closed)
             *closed = true;

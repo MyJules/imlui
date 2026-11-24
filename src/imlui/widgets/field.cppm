@@ -35,8 +35,13 @@ void drawFieldBackground(const FieldFrame& f, bool focused, bool hovered, bool d
 /// Supporting / error text below a field of width `w` whose bottom-left is `at`.
 void drawSupporting(ImVec2 at, float w, std::string_view text, bool error, bool dis);
 
-/// True inside ImGui::BeginDisabled() (usable before the item is submitted).
+/// True inside ImGui::BeginDisabled() (usable before the item is submitted): the disabled item flag, not the style
+/// alpha, which a theme may lower (Alpha) or leave at 1 when disabled (DisabledAlpha).
 [[nodiscard]] bool scopeDisabled();
+
+/// True when the mouse is over the field's container in its window or a child of it (a multiline input), and not
+/// under a popup or another window, nor while another item is held: the field's hover before its input is submitted.
+[[nodiscard]] bool containerHovered(const FieldFrame& f);
 
 /// ImGui InputText resize callback for a `std::string*` passed as user data.
 int inputResizeCallback(ImGuiInputTextCallbackData* data);
@@ -134,7 +139,13 @@ void drawSupporting(ImVec2 at, float w, std::string_view text, bool error, bool 
     dl->PopClipRect();
 }
 
-bool scopeDisabled() { return ImGui::GetStyle().Alpha < 0.99f; }
+bool scopeDisabled() { return (ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0; }
+
+bool containerHovered(const FieldFrame& f) {
+    // Child windows (a multiline input) count, but not popups opened from this window (a menu over the field).
+    return ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_NoPopupHierarchy) &&
+           ImGui::IsMouseHoveringRect(f.p, {f.p.x + f.w, f.p.y + f.h});
+}
 
 int inputResizeCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {

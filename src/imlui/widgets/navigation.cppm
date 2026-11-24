@@ -49,7 +49,9 @@ bool navigationItem(const char* id, std::string_view iconName, std::string_view 
     if (t > 0.01f) {
         // Indicator grows from the center.
         float inset = (1.0f - t) * w * 0.15f;
-        fillRoundRect(dl, {p.x + inset, p.y}, {p.x + w - inset, p.y + h}, rnd, s.secondaryContainer.withAlpha(t));
+        // Disabled: the disabled container, faded in with its own (12%) alpha like the enabled one.
+        const Color ind = dis ? disabledContainer() : s.secondaryContainer;
+        fillRoundRect(dl, {p.x + inset, p.y}, {p.x + w - inset, p.y + h}, rnd, ind.withAlpha(ind.a * t));
     }
     Color fg = dis ? disabledContent() : (selected ? s.onSecondaryContainer : s.onSurfaceVariant);
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
@@ -62,8 +64,7 @@ bool navigationItem(const char* id, std::string_view iconName, std::string_view 
         drawIcon(dl, iconName, {x + dp(12), cy}, 24.0f, fg);
         x += dp(24) + dp(12);
     }
-    drawTextV(dl, TextStyle::LabelLarge, x, cy,
-              selected ? s.onSecondaryContainer : (dis ? disabledContent() : s.onSurfaceVariant), label);
+    drawTextV(dl, TextStyle::LabelLarge, x, cy, fg, label);
     if (!badge.empty()) {
         float bw = measure(TextStyle::LabelLarge, badge).x;
         drawTextV(dl, TextStyle::LabelLarge, p.x + w - dp(24) - bw, cy, fg, badge);
@@ -111,8 +112,8 @@ bool destination(const char* id, std::string_view iconName, std::string_view lab
     const float t = animate(iid + 3, selected ? 1.0f : 0.0f, 18.0f);
     if (t > 0.01f) {
         const float half = iw * 0.5f * (0.5f + 0.5f * t);
-        fillRoundRect(dl, {cx - half, ia.y}, {cx + half, ib.y}, ih * 0.5f,
-                      (dis ? disabledContainer() : s.secondaryContainer).withAlpha(t));
+        const Color ind = dis ? disabledContainer() : s.secondaryContainer;
+        fillRoundRect(dl, {cx - half, ia.y}, {cx + half, ib.y}, ih * 0.5f, ind.withAlpha(ind.a * t));
     }
     // M3 puts the hover / press layer on the indicator, not on the whole target.
     const float layer = dis ? 0.0f : stateLayer(iid, hov, act);

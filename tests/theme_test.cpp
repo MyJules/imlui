@@ -43,6 +43,17 @@ TEST_F(ThemeTest, ResolveColorRoleWithAlpha) {
     EXPECT_EQ(*c, theme().scheme.onSurface.withAlpha(0.6f));
 }
 
+TEST_F(ThemeTest, ResolveColorRejectsABadAlpha) {
+    // The alpha must be a whole number in 0..1: a typo or an out-of-range value is no color (reported by the caller
+    // like an unknown role) instead of a silent 0 or 2.
+    for (const char* spec : {"onSurface/O.6", "primary/2", "primary/-0.1", "primary/", "primary/0.5x", "primary/ 0.5",
+                             "primary/nan", "primary/inf"})
+        EXPECT_FALSE(resolveColor(spec).has_value()) << spec;
+    EXPECT_EQ(resolveColor("primary/0"), theme().scheme.primary.withAlpha(0.0f));
+    EXPECT_EQ(resolveColor("primary/1"), theme().scheme.primary.withAlpha(1.0f));
+    EXPECT_EQ(resolveColor("primary/.25"), theme().scheme.primary.withAlpha(0.25f));
+}
+
 TEST_F(ThemeTest, ResolveColorHexWithoutHash) {
     // Not a role name, so it falls back to hex parsing.
     EXPECT_EQ(resolveColor("0000FF"), (Color{0, 0, 1, 1}));

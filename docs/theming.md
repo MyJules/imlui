@@ -124,7 +124,7 @@ Element color props (`color = ...`), Canvas painter colors and `color.*` functio
 | Spec | Example |
 |---|---|
 | role name | `"primary"` |
-| role with alpha | `"onSurface/0.6"` |
+| role with alpha (a number in 0..1; anything else, such as `"onSurface/O.6"` or `"primary/2"`, is an invalid color) | `"onSurface/0.6"` |
 | hex: `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA` (`#` optional) | `"#FF5722"`, `"#00000080"` |
 | table `{r, g, b[, a]}` in 0..1 | `{ 1, 0.34, 0.13, 1 }` |
 

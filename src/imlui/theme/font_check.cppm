@@ -281,8 +281,53 @@ Problem checkCff(const Reader& r, Table table, std::size_t glyphs) {
 
 // ------------------------------------------------------------------ TrueType tables
 
-/// The character map stb_truetype picks (the last Unicode one) and its subtable.
-Problem checkCmap(const Reader& r, Table cmap) {
+/// Format 4 (segment mapping to delta values), as stbtt_FindGlyphIndex reads it: the binary search over the segments
+/// trusts the header's searchRange / entrySelector / rangeShift, and a segment with an idRangeOffset reads the glyph
+/// from glyphIdArray at an offset nothing checks. Every glyph a segment can map to must be below `glyphs`.
+Problem checkCmap4(const Reader& r, std::size_t at, std::size_t length, std::size_t glyphs) {
+    const std::string broken = "the character map is broken";
+    const std::size_t segments = r.u16(at + 6) >> 1;
+    if (segments == 0) return broken; // the search reads segment 0 anyway
+    // stb_truetype starts at segment rangeShift (in segments) when the code point lies past it, then steps forward
+    // by searchRange / 2, / 4, ... entrySelector times: the furthest segment it can reach must exist. (Exactly
+    // segments - 1 for the values the spec prescribes.)
+    std::size_t furthest = r.u16(at + 12) >> 1;
+    const std::size_t searchRange = r.u16(at + 8) >> 1;
+    const std::size_t steps = std::min<std::size_t>(r.u16(at + 10), 16); // further steps add 0
+    for (std::size_t k = 1; k <= steps; ++k)
+        furthest += searchRange >> k;
+    if (furthest >= segments) return broken;
+
+    // The glyphIdArray entries with a glyph index past the font's, counted per byte offset and parity, so each
+    // segment's run of entries is checked at once: bad(q0, q1) = entries at q0, q0 + 2, ..., q1.
+    std::vector<std::uint32_t> badBefore(length + 2, 0); // badBefore[q + 2] = badBefore[q] + (entry at q is bad)
+    for (std::size_t q = 0; q + 2 <= length; ++q)
+        badBefore[q + 2] = badBefore[q] + (r.u16(at + q) >= glyphs ? 1u : 0u);
+    const std::size_t ends = 14, starts = 16 + 2 * segments, deltas = 16 + 4 * segments,
+                      rangeOffsets = 16 + 6 * segments;
+    for (std::size_t i = 0; i < segments; ++i) {
+        const std::size_t first = r.u16(at + starts + 2 * i), last = r.u16(at + ends + 2 * i);
+        if (first > last) continue; // no code point matches it
+        const std::size_t span = last - first;
+        const std::size_t rangeOffset = r.u16(at + rangeOffsets + 2 * i);
+        if (rangeOffset == 0) {
+            // glyph = (code point + idDelta) mod 65536: a contiguous run that may wrap past 0xFFFF.
+            const std::size_t low = (first + r.u16(at + deltas + 2 * i)) & 0xFFFF;
+            const std::size_t high = low + span > 0xFFFF ? 0xFFFF : low + span;
+            if (high >= glyphs) return "the character map maps to glyphs the font doesn't have";
+            continue;
+        }
+        // The entries for first..last start rangeOffset bytes past this segment's idRangeOffset.
+        const std::size_t q0 = rangeOffsets + 2 * i + rangeOffset, q1 = q0 + 2 * span;
+        if (q1 + 2 > length) return broken;
+        if (badBefore[q1 + 2] != badBefore[q0]) return "the character map maps to glyphs the font doesn't have";
+    }
+    return std::nullopt;
+}
+
+/// The character map stb_truetype picks (the last Unicode one) and its subtable. Every glyph index it can return
+/// must be below `glyphs`: the metrics (hmtx) and CFF lookups use it without a check.
+Problem checkCmap(const Reader& r, Table cmap, std::size_t glyphs) {
     if (cmap.length < 4) return "table 'cmap' is broken";
     const std::uint32_t count = r.u16(cmap.offset + 2);
     if (4 + 8 * std::size_t{count} > cmap.length) return "table 'cmap' is broken";
@@ -311,6 +356,29 @@ Problem checkCmap(const Reader& r, Table cmap) {
     default: return "character map format " + std::to_string(format) + " isn't supported";
     }
     if (needed > length || length > room) return "the character map is broken";
+
+    const std::string missingGlyphs = "the character map maps to glyphs the font doesn't have";
+    switch (format) {
+    case 0: // one byte per code point below length - 6
+        for (std::size_t i = 6; i < length; ++i)
+            if (r.u8(at + i) >= glyphs) return missingGlyphs;
+        break;
+    case 4: return checkCmap4(r, at, length, glyphs);
+    case 6:
+        for (std::size_t i = 0; i < r.u16(at + 8); ++i)
+            if (r.u16(at + 10 + 2 * i) >= glyphs) return missingGlyphs;
+        break;
+    default: // 12 and 13: groups of (first code point, last code point, glyph)
+        for (std::size_t i = 0; i < r.u32(at + 12); ++i) {
+            const std::size_t group = at + 16 + 12 * i;
+            const std::uint64_t first = r.u32(group), last = r.u32(group + 4), glyph = r.u32(group + 8);
+            if (first > last) continue; // no code point matches it
+            // Format 12 maps the run to consecutive glyphs, 13 all of it to one.
+            const std::uint64_t highest = format == 12 ? glyph + (last - first) : glyph;
+            if (highest >= glyphs) return missingGlyphs;
+        }
+        break;
+    }
     return std::nullopt;
 }
 
@@ -346,11 +414,13 @@ Problem checkSfnt(const Reader& r, std::size_t font) {
     for (const auto* t : {&*cmap, &*head, &*hhea, &*hmtx, &*maxp})
         if (t->offset == 0) return "the table directory is broken";
     const std::size_t glyphs = r.u16(maxp->offset + 4);
+    // Glyph 0 (.notdef) is looked up for every character the font lacks.
+    if (glyphs == 0) return "the font has no glyphs";
     const std::size_t longMetrics = r.u16(hhea->offset + 34);
     if (longMetrics == 0 && glyphs > 0) return "table 'hhea' is broken";
     const std::size_t shortMetrics = glyphs > longMetrics ? glyphs - longMetrics : 0;
     if (4 * longMetrics + 2 * shortMetrics > hmtx->length) return "table 'hmtx' is truncated";
-    if (auto p = checkCmap(r, *cmap)) return p;
+    if (auto p = checkCmap(r, *cmap, glyphs)) return p;
 
     if (const auto glyf = findTable(r, font, "glyf"); glyf && glyf->offset != 0) {
         const auto loca = findTable(r, font, "loca");

@@ -115,6 +115,7 @@ private:
     float m_scale = 1.0f;
     std::string m_title;
     std::optional<std::pair<std::array<float, 3>, std::array<float, 3>>> m_titleBarColors;
+    std::optional<bool> m_titleBarDark; ///< the dark mode last set on the title bar
 };
 
 } // namespace imlui::platform
@@ -296,9 +297,18 @@ void Window::setTitleBarColors(std::array<float, 3> background, std::array<float
     const float luma = 0.2126f * background[0] + 0.7152f * background[1] + 0.0722f * background[2];
     // DWMWA_USE_IMMERSIVE_DARK_MODE is 20 from Windows 10 20H1 on and was 19 before; the SDK may lack either.
     constexpr DWORD useImmersiveDarkMode = 20, useImmersiveDarkModeBefore20H1 = 19;
-    const BOOL dark = luma < 0.5f ? TRUE : FALSE;
+    const bool isDark = luma < 0.5f;
+    const bool darkChanged = m_titleBarDark != isDark;
+    m_titleBarDark = isDark;
+    const BOOL dark = isDark ? TRUE : FALSE;
     if (FAILED(DwmSetWindowAttribute(hwnd, useImmersiveDarkMode, &dark, sizeof dark)))
         DwmSetWindowAttribute(hwnd, useImmersiveDarkModeBefore20H1, &dark, sizeof dark);
+    // Windows 10 doesn't repaint the caption of a visible window when its dark mode changes (only on the next
+    // resize or activation): a frame change forces the non-client repaint. Only on an actual change, as the
+    // Engine calls this every frame (unchanged colors return above anyway).
+    if (darkChanged && IsWindowVisible(hwnd))
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     // DWMWA_CAPTION_COLOR / DWMWA_TEXT_COLOR: Windows 11 only; earlier versions fail the call, which is fine.
     constexpr DWORD captionColor = 35, textColor = 36;
     const auto colorRef = [](std::array<float, 3> c) {

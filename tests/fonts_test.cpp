@@ -416,6 +416,161 @@ TEST(FontCheck, SurvivesGarbledBytes) {
     }
 }
 
+namespace {
+
+/// A big-endian byte string under construction.
+struct Bytes {
+    std::string s;
+    Bytes& u16(std::uint32_t v) {
+        s += static_cast<char>((v >> 8) & 0xFF);
+        s += static_cast<char>(v & 0xFF);
+        return *this;
+    }
+    Bytes& u32(std::uint32_t v) { return u16(v >> 16).u16(v & 0xFFFF); }
+};
+
+/// A format 4 segment: code points first..last map to (code point + delta) mod 65536, or, with `rangeOffset`, to the
+/// glyphIdArray entry that many bytes past the segment's idRangeOffset field.
+struct Segment {
+    std::uint32_t first, last, delta, rangeOffset;
+};
+
+/// The parts of a format 4 subtable, with the search fields the spec prescribes unless overridden.
+struct Format4 {
+    std::vector<Segment> segments;
+    std::vector<std::uint32_t> glyphIds;
+    std::optional<std::uint32_t> searchRange, entrySelector, rangeShift;
+
+    [[nodiscard]] std::string bytes() const {
+        const auto count = static_cast<std::uint32_t>(segments.size());
+        std::uint32_t power = 1, log = 0;
+        while (power * 2 <= count) {
+            power *= 2;
+            ++log;
+        }
+        Bytes b;
+        const auto length = static_cast<std::uint32_t>(16 + 8 * segments.size() + 2 * glyphIds.size());
+        b.u16(4).u16(length).u16(0).u16(2 * count);
+        b.u16(searchRange.value_or(2 * power))
+            .u16(entrySelector.value_or(log))
+            .u16(rangeShift.value_or(2 * count - 2 * power));
+        for (const auto& seg : segments)
+            b.u16(seg.last);
+        b.u16(0);
+        for (const auto& seg : segments)
+            b.u16(seg.first);
+        for (const auto& seg : segments)
+            b.u16(seg.delta & 0xFFFF);
+        for (const auto& seg : segments)
+            b.u16(seg.rangeOffset);
+        for (const auto id : glyphIds)
+            b.u16(id);
+        return b.s;
+    }
+};
+
+/// A minimal TrueType font with `glyphs` empty glyphs and `subtable` as its (Windows Unicode) character map.
+std::string minimalFont(const std::string& subtable, std::uint32_t glyphs) {
+    std::vector<std::pair<std::string, std::string>> tables;
+    tables.emplace_back("cmap", Bytes{}.u16(0).u16(1).u16(3).u16(1).u32(12).s + subtable);
+    std::string head(54, '\0'); // indexToLocFormat (at 50) 0: short offsets
+    tables.emplace_back("head", head);
+    std::string hhea(36, '\0');
+    writeU16(hhea, 34, glyphs); // numberOfHMetrics
+    tables.emplace_back("hhea", hhea);
+    tables.emplace_back("hmtx", std::string(4 * std::size_t{glyphs}, '\0'));
+    tables.emplace_back("maxp", Bytes{}.u32(0x00005000).u16(glyphs).s);
+    tables.emplace_back("loca", std::string(2 * (std::size_t{glyphs} + 1), '\0')); // every glyph empty
+    tables.emplace_back("glyf", std::string(4, '\0'));
+    Bytes font;
+    font.u32(0x00010000).u16(static_cast<std::uint32_t>(tables.size())).u16(0).u16(0).u16(0);
+    std::size_t offset = 12 + 16 * tables.size();
+    std::string data;
+    for (const auto& [tag, bytes] : tables) {
+        font.s += tag;
+        font.u32(0).u32(static_cast<std::uint32_t>(offset + data.size())).u32(static_cast<std::uint32_t>(bytes.size()));
+        data += bytes;
+        data.resize((data.size() + 3) & ~std::size_t{3}, '\0');
+    }
+    return font.s + data;
+}
+
+/// 0-1 -> glyphs 1-2 (by delta), A-C -> glyphs 1-3 (from glyphIdArray), and the closing 0xFFFF segment -> glyph 0.
+Format4 validFormat4() {
+    Format4 f;
+    f.segments = {{'0', '1', 1u - '0', 0}, {'A', 'C', 0, 4}, {0xFFFF, 0xFFFF, 1, 0}};
+    f.glyphIds = {1, 2, 3};
+    return f;
+}
+
+} // namespace
+
+TEST(FontCheck, CharacterMapsMapOnlyToGlyphsTheFontHas) {
+    constexpr std::uint32_t glyphs = 4;
+    const auto problem = [](const Format4& cmap, std::uint32_t count = glyphs) {
+        return checkFont(bytesOf(minimalFont(cmap.bytes(), count))).value_or("(accepted)");
+    };
+    const std::string broken = "the character map is broken";
+    const std::string missing = "the character map maps to glyphs the font doesn't have";
+    EXPECT_EQ(problem(validFormat4()), "(accepted)");
+    EXPECT_EQ(problem(validFormat4(), 0), "the font has no glyphs");
+
+    // Format 4, idRangeOffset: the glyphIdArray entries for A-C must lie inside the subtable and name real glyphs.
+    Format4 f = validFormat4();
+    f.glyphIds[2] = glyphs;
+    EXPECT_EQ(problem(f), missing);
+    f = validFormat4();
+    f.segments[1].rangeOffset = 6; // C's entry is past the end
+    EXPECT_EQ(problem(f), broken);
+    f.segments[1].rangeOffset = 0x7000;
+    EXPECT_EQ(problem(f), broken);
+    f = validFormat4();
+    f.segments[1].first = 'D'; // first > last: never matched, so its offset doesn't matter
+    f.segments[1].rangeOffset = 0x7000;
+    EXPECT_EQ(problem(f), "(accepted)");
+
+    // Format 4, idDelta: 0-1 map to glyphs 3-4, and 4 is past the last glyph; a wrap past 0xFFFF reaches it too.
+    f = validFormat4();
+    f.segments[0].delta = 3u - '0';
+    EXPECT_EQ(problem(f), missing);
+    f = validFormat4();
+    f.segments[0].delta = 0x10000u - '1'; // '0' -> 0xFFFF, '1' -> 0
+    EXPECT_EQ(problem(f), missing);
+
+    // Format 4 search fields: stb_truetype's binary search trusts them, so they must not reach past the segments.
+    f = validFormat4();
+    f.rangeShift = 6; // starts at segment 3 of 3
+    EXPECT_EQ(problem(f), broken);
+    f = validFormat4();
+    f.searchRange = 8;
+    f.entrySelector = 2; // segment 1 + 2 + 1
+    EXPECT_EQ(problem(f), broken);
+    f = validFormat4();
+    f.segments.clear();
+    f.glyphIds.clear();
+    f.rangeShift = 0;
+    EXPECT_EQ(problem(f), broken);
+
+    // Formats 6, 12 and 13.
+    const auto check = [](const std::string& subtable) {
+        return checkFont(bytesOf(minimalFont(subtable, glyphs))).value_or("(accepted)");
+    };
+    const auto format6 = [](std::uint32_t glyph) {
+        return Bytes{}.u16(6).u16(14).u16(0).u16('A').u16(2).u16(1).u16(glyph).s;
+    };
+    EXPECT_EQ(check(format6(3)), "(accepted)");
+    EXPECT_EQ(check(format6(glyphs)), missing);
+    const auto format12 = [](std::uint32_t format, std::uint32_t first, std::uint32_t last, std::uint32_t glyph) {
+        return Bytes{}.u16(format).u16(0).u32(28).u32(0).u32(1).u32(first).u32(last).u32(glyph).s;
+    };
+    EXPECT_EQ(check(format12(12, 'A', 'C', 1)), "(accepted)");     // glyphs 1-3
+    EXPECT_EQ(check(format12(12, 'A', 'D', 1)), missing);          // glyphs 1-4
+    EXPECT_EQ(check(format12(12, 'A', 'A', 0xFFFFFFFF)), missing); // no wrap to a negative index
+    EXPECT_EQ(check(format12(12, 'D', 'A', 9)), "(accepted)");     // first > last: never matched
+    EXPECT_EQ(check(format12(13, 'A', 0x10FFFF, 3)), "(accepted)");
+    EXPECT_EQ(check(format12(13, 'A', 'A', glyphs)), missing);
+}
+
 TEST_F(FontsTest, DamagedFontsAreReportedInsteadOfAborting) {
     std::string garbled = fileOf(m_h, "app:/fonts/Roboto-Medium.ttf");
     garbled.replace(recordOf(garbled, "cmap"), 4, "xmap");

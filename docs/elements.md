@@ -949,7 +949,7 @@ A line or bar chart with a grid, a gradient area and a hover readout.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `values` | list of numbers | `{}` | Data. |
+| `values` | list of numbers | `{}` | Data. Non-finite values (NaN, ±inf) are gaps: no point, bar or readout, the line breaks around them, and the automatic range ignores them. |
 | `kind` | `"lines"` \| `"bars"` \| `"histogram"` | `"lines"` | `histogram` is the same as `bars`. |
 | `fill` | bool | `true` | Gradient area under lines. |
 | `title` | string | — | Chart title. Unset: `label`. |
