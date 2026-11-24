@@ -2,8 +2,8 @@
 
 imlui is a library. An app vendors this repository as a git submodule, adds it to its CMake build with
 `add_subdirectory`, and links the `imlui` target: a few lines of C++ host (`main.cpp`) plus the app's Lua scripts,
-embedded from a resource manifest (`resources.lua`). The [imlui-gallery](#the-example-app-imlui-gallery) repository
-is the complete example.
+embedded from a resource manifest (`src/resources/resources.lua`). The [imlui-gallery](#the-example-app-imlui-gallery)
+repository is the complete example.
 
 ## Prerequisites
 
@@ -28,13 +28,20 @@ An app's repository looks like this (the names other than `vendor/imlui` are up 
 
 ```
 my_app/
-  CMakeLists.txt
-  CMakePresets.json   clang-debug, clang-release, clang-asan (copy imlui's)
-  resources.lua       the resource manifest: which files are embedded as app:/
-  app/                main.lua (the entry script), components, images, data
-  src/                main.cpp, and the app's own C++ modules (registered types)
-  vendor/imlui/       this repository, as a git submodule
+  CMakeLists.txt        project setup, add_subdirectory(vendor/imlui), add_subdirectory(src)
+  CMakePresets.json     clang-debug, clang-release, clang-asan (copy imlui's)
+  src/
+    CMakeLists.txt      the app's targets and imlui_add_resources
+    main.cpp            the host, and the app's own C++ modules (registered types)
+    resources/
+      resources.lua     the resource manifest: which files are embedded as app:/
+      main.lua          the entry script, plus components, images, data
+  vendor/imlui/         this repository, as a git submodule
 ```
+
+imlui is laid out the same way: its targets are in `src/CMakeLists.txt` and its own resources in `src/resources/`.
+Keeping the resources in their own folder means a manifest pattern like `**` can't pick up C++ sources, and the
+module globs (`*.cppm`) don't see the scripts.
 
 ### 1. Add imlui as a submodule
 
@@ -45,7 +52,7 @@ git submodule add -b material-ui <imlui repository URL> vendor/imlui
 A clone of the app then needs `git clone --recursive`, or `git submodule update --init` after a plain clone. To
 move to a newer imlui: `git submodule update --remote vendor/imlui`, build, and commit the new submodule commit.
 
-### 2. CMakeLists.txt
+### 2. CMakeLists.txt and src/CMakeLists.txt
 
 ```cmake
 cmake_minimum_required(VERSION 3.28)
@@ -61,20 +68,24 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 include(vendor/imlui/cmake/ImluiSanitizers.cmake)
 
 add_subdirectory(vendor/imlui)
+add_subdirectory(src)
+```
 
-add_executable(my_app src/main.cpp)
-target_sources(my_app PRIVATE FILE_SET CXX_MODULES BASE_DIRS src FILES src/my_type.cppm) # if it has modules
+```cmake
+# src/CMakeLists.txt: paths are relative to src/
+add_executable(my_app main.cpp)
+target_sources(my_app PRIVATE FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES my_type.cppm) # if any
 target_link_libraries(my_app PRIVATE imlui)
 imlui_set_warnings(my_app)   # imlui's warning policy: strict flags, -Werror
 imlui_set_hardening(my_app)  # -ftrapv in Debug
-imlui_add_resources(my_app resources.lua NAME my_app)  # generates module imlui.embedded.my_app
+imlui_add_resources(my_app resources/resources.lua NAME my_app)  # generates module imlui.embedded.my_app
 ```
 
 `add_subdirectory(vendor/imlui)` gives the parent project:
 
 | What | Notes |
 |---|---|
-| target `imlui` | The library, with its C++20 modules (`import imlui;`, also `imgui` and the other wrappers) and its own embedded files (`lua/imlui.lua`, the fonts). Linking it is enough, also for modules that `import imgui;`. |
+| target `imlui` | The library, with its C++20 modules (`import imlui;`, also `imgui` and the other wrappers) and its own embedded files (`src/resources/imlui.lua`, the fonts). Linking it is enough, also for modules that `import imgui;`. |
 | `imlui_add_resources(<target> <manifest> [NAME <name>])` | Embeds the files a manifest lists into `<target>` as module `imlui.embedded.<name>` ([Shipping an app](#shipping-an-app)). |
 | `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` | A target that builds a `.pak` archive (default: `<name>.pak` in `CMAKE_RUNTIME_OUTPUT_DIRECTORY`). |
 | `imlui_set_warnings(<target>)`, `imlui_set_hardening(<target>)` | imlui's warning policy and Debug hardening ([CODE_STYLE.md](../CODE_STYLE.md#warnings-and-compiler-checks)). |
@@ -107,17 +118,17 @@ int main(int argc, char** argv) {
 ### 4. resources.lua and the scripts
 
 ```lua
--- resources.lua: the app's files, embedded as app:/ (app:/main.lua is the entry script)
+-- src/resources/resources.lua: the app's files, embedded as app:/ (app:/main.lua is the entry script)
 return {
     prefix = "app",
-    base = "app",
+    base = ".", -- this folder; the manifest itself is never matched by a pattern
     include = { "**/*.lua", "**/*.png", "**/*.jpg" },
 }
 ```
 
-`app/main.lua` returns the root element; see [Your first script](#your-first-script). A file added under `app/` is
-embedded on the next build; no CMake change. The manifest format (groups, mount folders, `exclude`, `compress`) is
-in [Architecture](architecture.md#resource-manifests).
+`src/resources/main.lua` returns the root element; see [Your first script](#your-first-script). A file added under
+`src/resources/` is embedded on the next build; no CMake change. The manifest format (groups, mount folders, `exclude`,
+`compress`) is in [Architecture](architecture.md#resource-manifests).
 
 ### 5. Build and run
 
@@ -135,8 +146,10 @@ copied anywhere.
 The `imlui-gallery` repository (a separate repository, usually checked out next to this one as `../imlui-gallery`)
 is the example app, laid out as above:
 
-- `app/main.lua`: every built-in element, adaptive navigation (drawer, rail, modal drawer by window size class)
-  and a live theme editor, with the `StatCard.lua` component and `landscape.png`.
+- `src/resources/main.lua`: every built-in element, adaptive navigation (drawer, rail, modal drawer by window size
+  class) and a live theme editor, with the `StatCard.lua` component and `landscape.png`, listed in
+  `src/resources/resources.lua`.
+- `src/CMakeLists.txt`: the `imlui_gallery` target and its embedded resources (module `imlui.embedded.gallery`).
 - `src/gauge.cppm` and `src/system_info.cppm`: a C++ element type (`Gauge`) and a singleton (`backend`), shown on
   the gallery's *C++ types* page. See [Registering C++ types](extending.md#the-example-app).
 - `vendor/imlui`: this repository as a submodule.
@@ -165,7 +178,7 @@ trying one out: `build/clang-debug/bin/imlui_gallery path/to/hello.lua`.
 ## Hot reload
 
 While the app runs, the engine checks every 400 ms for changed `.lua` files: those in the app's folders (`app:/`,
-including subfolders) and the library (`imlui:/`, `lua/`), and every file a script read through `ui.resource`.
+including subfolders) and the library (`imlui:/`, `src/resources/`), and every file a script read through `ui.resource`.
 When a file changes, it builds a **fresh Lua state** and runs the script again:
 
 - Lua state (all `state{}` tables, element-local values, timers) starts over, and the theme resets to the default
@@ -184,7 +197,7 @@ cmake --preset clang-debug -DIMLUI_DEV_PATHS=OFF
 
 | `IMLUI_DEV_PATHS` | Effect |
 |---|---|
-| `ON` (default) | Every embedded package remembers the folder it was embedded from (the `base` of its group in the resource manifest: the app's `app/`, imlui's `lua/` and `external/fonts/`, ...), and `defaultConfig` mounts those folders over the embedded copies, so editing them hot-reloads without rebuilding. In an app that's the app's own source folder, and `vendor/imlui/lua/` for the library. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime. |
+| `ON` (default) | Every embedded package remembers the folder it was embedded from (the `base` of its group in the resource manifest: the app's `src/resources/`, imlui's `src/resources/` and `external/fonts/`, ...), and `defaultConfig` mounts those folders over the embedded copies, so editing them hot-reloads without rebuilding. In an app that's the app's own `src/resources/`, and `vendor/imlui/src/resources/` and `vendor/imlui/external/fonts/` for the library. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime. |
 | `OFF` | No source paths are compiled in: the app runs from its embedded files. Use this for a build you move or ship. |
 
 Either way, files next to the executable override the embedded ones: any `*.pak` archive, which mounts itself where
@@ -206,7 +219,7 @@ folders override both (see [Architecture](architecture.md#embedding-and-archives
 
 ## Your first script
 
-`app/main.lua` of a new app, or a script anywhere, run with `my_app path/to/hello.lua`:
+`src/resources/main.lua` of a new app, or a script anywhere, run with `my_app path/to/hello.lua`:
 
 ```lua
 -- hello.lua
@@ -245,7 +258,7 @@ How it works:
 - `function() ... end` property values are **bindings** that are evaluated again every frame. `bind(s, "name")`
   is a **two-way binding**: typing in the field writes `s.name`.
 - To reuse a piece of UI, put it in its own file next to the script and `require` it. See the gallery's
-  `app/StatCard.lua` and [components](lua-api.md#components-and-require).
+  `src/resources/StatCard.lua` and [components](lua-api.md#components-and-require).
 
 Next: [Elements](elements.md) for all props, and [Theming](theming.md) for colors and typography.
 
@@ -265,6 +278,6 @@ ctest --preset clang-debug
 | `clang-release` | `build/clang-release` | Release |
 | `clang-asan` | `build/clang-asan` | Debug + AddressSanitizer + UBSan |
 
-Every `src/**/*.cppm` file is picked up by a `CONFIGURE_DEPENDS` glob, so adding or removing a module needs no
-CMake edits. `compile_commands.json` is exported, which clangd, clice and clang-tidy use. To try a library change in
-a real app, see [Development](development.md#trying-changes-in-an-app).
+Every `src/**/*.cppm` file is picked up by a `CONFIGURE_DEPENDS` glob (in `src/CMakeLists.txt`), so adding or removing a
+module needs no CMake edits. `compile_commands.json` is exported, which clangd, clice and clang-tidy use. To try a
+library change in a real app, see [Development](development.md#trying-changes-in-an-app).

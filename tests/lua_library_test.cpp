@@ -1,4 +1,4 @@
-// Tests for lua/imlui.lua itself, loaded in a plain Lua state with a stub `imlui.native`.
+// Tests for src/resources/imlui.lua itself, loaded in a plain Lua state with a stub `imlui.native`.
 #include <gtest/gtest.h>
 
 import lua;
@@ -11,7 +11,7 @@ protected:
         m_state = lua::newstate();
         lua::openlibs(m_state);
         // Only what imlui.lua touches outside of callbacks; the rest may stay nil.
-        std::string boot = std::string{"package.path = '"} + IMLUI_LUA_DIR + "/?.lua;' .. package.path\n" +
+        std::string boot = std::string{"package.path = '"} + IMLUI_RESOURCES_DIR + "/?.lua;' .. package.path\n" +
                            R"(package.preload["imlui.native"] = function()
                                   local now = 0
                                   reported = {}

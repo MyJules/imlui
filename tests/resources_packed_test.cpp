@@ -2,7 +2,7 @@
 // concurrent reads), .pak archives (written by the imlui_pack code, read by PakMount; corrupt and truncated archives
 // rejected), the override order embedded < .pak < directory, the library's own embedded files and packages, and
 // defaultConfig: release-style (embedded data only), archives and prefix folders next to the executable, dev source
-// folders on top, a script argument replacing the app; and the headless harness without lua/.
+// folders on top, a script argument replacing the app; and the headless harness without src/resources/.
 #include <filesystem>
 #include <fstream>
 
@@ -300,7 +300,7 @@ TEST(PackedResources, EmbeddedThenPakThenDirectory) {
 TEST(EmbeddedLibrary, CarriesTheLuaSideAndTheFonts) {
     Resources res;
     embedded::imlui::mount(res);
-    EXPECT_EQ(text(res.read("imlui:/imlui.lua")), readSource(std::string{IMLUI_LUA_DIR} + "/imlui.lua"));
+    EXPECT_EQ(text(res.read("imlui:/imlui.lua")), readSource(std::string{IMLUI_RESOURCES_DIR} + "/imlui.lua"));
     for (const char* font : {"Roboto-Regular.ttf", "Roboto-Medium.ttf", "MaterialIconsRound-Regular.otf",
                              "MaterialIconsRound-Regular.codepoints"})
         EXPECT_EQ(text(res.read(std::string{"imlui:/fonts/"} + font)),
@@ -339,13 +339,13 @@ void writeFile(const std::filesystem::path& file, std::span<const std::byte> byt
 
 TEST(EmbeddedLibrary, PackagesNameTheirMountPointAndSourceFolder) {
     const std::vector<ResourcePackage> packages = embedded::imlui::packages();
-    ASSERT_EQ(packages.size(), 2U); // resources.lua: lua/ and the fonts
+    ASSERT_EQ(packages.size(), 2U); // src/resources/resources.lua: src/resources/ and the fonts
     const ResourcePackage& lua = packages[0];
     EXPECT_EQ(lua.mountPoint, "imlui:/");
     EXPECT_EQ(lua.files, embedded::imlui::packages()[0].files); // one mount per group, shared by every caller
     // The source folder is baked in only with IMLUI_DEV_PATHS=ON.
     if (!lua.sourceDir.empty())
-        EXPECT_TRUE(std::filesystem::equivalent(std::filesystem::path{lua.sourceDir}, IMLUI_LUA_DIR));
+        EXPECT_TRUE(std::filesystem::equivalent(std::filesystem::path{lua.sourceDir}, IMLUI_RESOURCES_DIR));
     const ResourcePackage& fonts = packages[1];
     EXPECT_EQ(fonts.mountPoint, "imlui:/fonts/");
     if (!fonts.sourceDir.empty())

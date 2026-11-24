@@ -25,7 +25,7 @@ Save the script while the app is running and it reloads immediately.
 
 | Page | What it covers |
 |---|---|
-| [Getting started](getting-started.md) | Prerequisites, using imlui in your app (git submodule, `add_subdirectory`, `main.cpp`, `resources.lua`), the imlui-gallery example, hot reload, `IMLUI_DEV_PATHS`, shipping, a first script, building imlui on its own |
+| [Getting started](getting-started.md) | Prerequisites, using imlui in your app (git submodule, `add_subdirectory`, `src/CMakeLists.txt`, `main.cpp`, `src/resources/`), the imlui-gallery example, hot reload, `IMLUI_DEV_PATHS`, shipping, a first script, building imlui on its own |
 | [Architecture](architecture.md) | Layers, the frame loop, property resolution, signals, inline containers, hot reload, the module map, third-party wrappers |
 | [Lua API](lua-api.md) | The script environment: `state`, `watch`, `bind`, `component`, `Repeater`/`ListView`/`If`/`Loader`, theme functions, timers, snackbar, logging, `native` |
 | [Elements](elements.md) | Every built-in element: props, defaults, signals, two-way props, common props, the Canvas painter |

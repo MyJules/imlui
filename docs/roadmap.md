@@ -128,6 +128,11 @@ example app is the separate repository imlui-gallery (the gallery plus the C++ t
 a git submodule. The library's smoke and `.pak` tests use their own fixtures (`tests/smoke_host/`,
 `tests/data/smoke_app/`).
 
+Both repositories share one layout: the top-level `CMakeLists.txt` sets the project up and adds `src/`, whose
+`CMakeLists.txt` defines the targets and embeds `src/resources/` (the manifest `resources.lua` and the files it
+lists). imlui's Lua side moved from `lua/` to `src/resources/`, its manifest from the root to
+`src/resources/resources.lua`; the gallery's `app/` became `src/resources/`.
+
 ## Next
 
 Follow-ups noticed during the cleanup, not scheduled yet:

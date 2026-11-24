@@ -1,6 +1,6 @@
 // InlineContainer: Repeater, If, Loader and Responsive when one is the root element, as a typed element.
 //
-// These containers are implemented in Lua (lua/imlui.lua): they are `__inline` and give their children
+// These containers are implemented in Lua (src/resources/imlui.lua): they are `__inline` and give their children
 // through `__children(self)` (the delegates, the branch that holds, the loaded item). A parent splices
 // their children into its own, so they are never rendered themselves, except as the root, where this
 // renders their children top to bottom.

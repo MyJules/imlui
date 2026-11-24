@@ -93,7 +93,7 @@ public:
         return addSingleton(std::move(name), ref, std::move(info), std::shared_ptr<ScriptObject>{std::move(object)});
     }
 
-    /// Installs the types and singletons into a new Lua state (before lua/imlui.lua is loaded).
+    /// Installs the types and singletons into a new Lua state (before src/resources/imlui.lua is loaded).
     void install(lua::State* state);
     /// Points the singletons back at `state`, which was installed before (after a failed reload).
     void activate(lua::State* state);

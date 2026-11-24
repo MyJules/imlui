@@ -2,7 +2,7 @@
 // onto ImGuiStyle.
 //
 // A Theme is plain data. Lua builds one (see imlui.lua.theme_table and
-// lua/imlui.lua `ui.theme{}`), can override any color role, any raw ImGui
+// src/resources/imlui.lua `ui.theme{}`), can override any color role, any raw ImGui
 // color and any ImGuiStyle field, or pick a non-material preset entirely.
 module;
 

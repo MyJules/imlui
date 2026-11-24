@@ -25,7 +25,7 @@ import imlui.embedded.imlui;
 export namespace imlui {
 
 struct EngineConfig {
-    /// Where every file comes from: `imlui:/` (lua/imlui.lua), `imlui:/fonts/` (Roboto, Material Icons and
+    /// Where every file comes from: `imlui:/` (src/resources/imlui.lua), `imlui:/fonts/` (Roboto, Material Icons and
     /// their codepoints) and `app:/` (the app's scripts and data). Must outlive the font atlas, which points
     /// into the font files; the Engine keeps it for its whole lifetime.
     Resources resources;

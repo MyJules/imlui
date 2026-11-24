@@ -12,7 +12,7 @@ bindings, two-way write-back, signal dispatch and lifetime handling for free.
 
 ```cpp
 import imlui;
-import imlui.embedded.my_app; // main.lua and friends: imlui_add_resources(my_app resources.lua NAME my_app)
+import imlui.embedded.my_app; // main.lua and friends: imlui_add_resources(my_app resources/resources.lua NAME my_app)
 
 class Gauge final : public imlui::Element {
 public:
@@ -461,10 +461,10 @@ in a singleton (or a model the singleton owns) and let elements read it through 
 ## Testing elements
 
 The tests build a headless ImGui frame harness, `imlui::test::HeadlessFrame` (test-only module
-`imlui.test.headless_frame` in `tests/support/headless_frame.cppm`). It owns an ImGui context without a window,
-backend or GPU, a `Renderer` and a `TypeRegistry`, and a Lua state set up like the engine's (the real
-`imlui.native`, the painter library, `lua/imlui.lua`). Register types, run Lua in the UI script environment, render
-frames and look at the instances:
+`imlui.test.headless_frame` in `tests/support/headless_frame.cppm`). It owns an ImGui context without a window, backend
+or GPU, a `Renderer` and a `TypeRegistry`, and a Lua state set up like the engine's (the real `imlui.native`, the
+painter library, `src/resources/imlui.lua`). Register types, run Lua in the UI script environment, render frames and
+look at the instances:
 
 ```cpp
 #include <gtest/gtest.h>
@@ -624,7 +624,7 @@ Registering a type under a built-in's name replaces the built-in: the last regis
 ## The example app
 
 The example lives in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery) repository, an app that
-vendors imlui as a submodule. Its C++ is in `src/`, and its *C++ types* page (`app/main.lua`) uses both types:
+vendors imlui as a submodule. Its C++ is in `src/`, and its *C++ types* page (`src/resources/main.lua`) uses both types:
 
 ```sh
 cmake --preset clang-debug && cmake --build build/clang-debug    # in imlui-gallery
@@ -643,10 +643,11 @@ build/clang-debug/bin/imlui_gallery                               # the last pag
   `time`, `frame` and `load`, read/write `paused`, signal `onTick`, method `tick()`. A worker thread posts
   `tick()` to the main thread twice a second with `Engine::post`. The gallery pauses it while another page is
   shown, so idle pages render no frames.
-- `CMakeLists.txt` adds imlui (`add_subdirectory(vendor/imlui)`), lists both module files in the executable's own
-  `CXX_MODULES` file set, links `imlui`, applies `imlui_set_warnings`/`imlui_set_hardening`, and embeds `app/`
-  (listed in `resources.lua`) with `imlui_add_resources(imlui_gallery resources.lua NAME gallery)`. In dev builds
-  the package carries the `app/` folder's path and `defaultConfig` mounts it over the embedded copy, so the scripts
+- `CMakeLists.txt` adds imlui (`add_subdirectory(vendor/imlui)`) and `src/`. `src/CMakeLists.txt` lists both module
+  files in the executable's own `CXX_MODULES` file set, links `imlui`, applies
+  `imlui_set_warnings`/`imlui_set_hardening`, and embeds `src/resources/` (listed in `src/resources/resources.lua`)
+  with `imlui_add_resources(imlui_gallery resources/resources.lua NAME gallery)`. In dev builds the package carries
+  the `src/resources/` folder's path and `defaultConfig` mounts it over the embedded copy, so the scripts
   hot-reload.
 
 An app of your own follows the same pattern; [Getting started](getting-started.md#using-imlui-in-your-app) has the

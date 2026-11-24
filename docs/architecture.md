@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart TD
-    S["Lua script<br/>(returns the root element)"] --> P["DSL prelude<br/>lua/imlui.lua: constructors, state, bind, Repeater, theme, timers"]
+    S["Lua script<br/>(returns the root element)"] --> P["DSL prelude<br/>src/resources/imlui.lua: constructors, state, bind, Repeater, theme, timers"]
     P --> T["Element tree<br/>plain Lua tables { __type = 'Button', ... }"]
     T --> R["Renderer<br/>imlui.ui.renderer"]
     R -->|"every element, by __type"| TY["C++ type system<br/>imlui.types.*: TypeRegistry, Element, Frame, TypeBuilder, LuaConvert"]
@@ -25,7 +25,7 @@ flowchart TD
 | Layer | Responsibility |
 |---|---|
 | **Lua script** | Builds the element tree and returns the root. It owns all state and all decisions, including theme, window title and size. |
-| **DSL prelude** (`lua/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment, the `require` searcher for components and `ui.resource`. |
+| **DSL prelude** (`src/resources/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment, the `require` searcher for components and `ui.resource`. |
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. A table's identity (its pointer) is its ImGui ID, so elements keep per-widget state such as animations and focus across frames. |
 | **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type". |
 | **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
@@ -224,7 +224,7 @@ spans stay valid. Corrupt compressed data reads as a missing file and is logged.
 `defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
 
 1. **Embedded:** the files of every `ResourcePackage` (module `imlui.resources.package`: a mount point, the files,
-   a dev source folder). The library's own come first, always: `imlui:/` (`lua/`) and `imlui:/fonts/` (Roboto,
+   a dev source folder). The library's own come first, always: `imlui:/` (`src/resources/`) and `imlui:/fonts/` (Roboto,
    Material Icons, the codepoints and the font licenses), the two groups of the library's manifest. Then the host's
    packages, the `app` argument, such as `imlui::embedded::my_app::packages()`.
 2. **Archives:** every `*.pak` next to the executable, in file name order (`mountPaks`), each at the mount point
@@ -242,8 +242,8 @@ the app: no package, archive or folder is mounted at `app:/`; the script's folde
 even when it doesn't exist, so the error names it) and the entry becomes `app:/<file name>`. A relative script path
 is resolved against the current directory, then against the executable's folder (scripts shipped next to it).
 
-So a dev build reads `lua/`, the fonts and the app from the source tree (hot reload), and a release build runs from
-its embedded data alone, while a `.pak` or loose files next to it still override single files. Hosts name no file
+So a dev build reads `src/resources/`, the fonts and the app from the source tree (hot reload), and a release build runs
+from its embedded data alone, while a `.pak` or loose files next to it still override single files. Hosts name no file
 paths.
 
 The fonts are added to the ImGui atlas without a copy
@@ -252,8 +252,8 @@ must outlive the atlas. The Engine keeps it for its whole lifetime, and the atla
 
 Lua sees resources in two ways (`imlui.lua.resources`):
 
-- Module search. `require("imlui")` and `require("a.b")` look in `imlui:/` (`a/b.lua`, then `a/b/init.lua`) through
-  a `package.searchers` entry. `lua/imlui.lua` puts its own searcher in front of it, for components next to the
+- Module search. `require("imlui")` and `require("a.b")` look in `imlui:/` (`a/b.lua`, then `a/b/init.lua`) through a
+  `package.searchers` entry. `src/resources/imlui.lua` puts its own searcher in front of it, for components next to the
   script (`ui.__dir`), loaded in `ui.env`. Chunks are named `@app:/main.lua`, so errors and tracebacks read
   `app:/main.lua:12: ...`.
 - `ui.resource.read`, `exists` and `url`. A relative name resolves against the folder of the calling script, found
@@ -262,16 +262,15 @@ Lua sees resources in two ways (`imlui.lua.resources`):
 ### Images
 
 `Image` elements draw from the `ImageCache` (module `imlui.image.image_cache`) that the Engine owns and hands to the
-`Renderer` (`Frame::images()`). The `Image` constructor in `lua/imlui.lua` stores the creating script's name as
-`__base`, and the element resolves `source` against it at every render. The cache decodes a name once with
-stb_image (PNG and JPEG) and keeps the pixels as an `ImTextureData` registered with
-`ImGui::RegisterUserTexture`: ImGui 1.92's texture list, so the OpenGL backend creates the GL texture before the
-first frame that draws it (status `WantCreate`) and no GL call is made outside the backend. A failure (missing
-file, not an image) is cached too and reported once. `refresh()` drops changed images: a texture the backend has
-uploaded is marked `WantDestroyNextFrame`, the backend destroys it after the next frame and `collect()` (after each
-frame) deletes it; one that was never uploaded is deleted at once. At shutdown the backend destroys the remaining
-textures with the window, and the cache deletes the data after the ImGui context is gone. `smooth = false` uses
-the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
+`Renderer` (`Frame::images()`). The `Image` constructor in `src/resources/imlui.lua` stores the creating script's name
+as `__base`, and the element resolves `source` against it at every render. The cache decodes a name once with stb_image
+(PNG and JPEG) and keeps the pixels as an `ImTextureData` registered with `ImGui::RegisterUserTexture`: ImGui 1.92's
+texture list, so the OpenGL backend creates the GL texture before the first frame that draws it (status `WantCreate`)
+and no GL call is made outside the backend. A failure (missing file, not an image) is cached too and reported once.
+`refresh()` drops changed images: a texture the backend has uploaded is marked `WantDestroyNextFrame`, the backend
+destroys it after the next frame and `collect()` (after each frame) deletes it; one that was never uploaded is deleted
+at once. At shutdown the backend destroys the remaining textures with the window, and the cache deletes the data after
+the ImGui context is gone. `smooth = false` uses the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
 
 ### Resource manifests
 
@@ -308,10 +307,12 @@ return {
 
 The tools evaluate manifests at build time (`imlui.tools.resource_manifest`, with `imlui.tools.glob`), through the
 `lua` wrapper module, which is its own library (`imlui_lua`) because `imlui_rc` can't link the `imlui` library it
-embeds files into. The repository has `resources.lua` at the root (the library: `lua/` at `imlui:/` and the fonts
-from `external/fonts/` at `imlui:/fonts/`) and two test manifests: `tests/data/smoke_app/resources.lua` (the smoke
-app, embedded into `imlui_smoke_host`) and `tests/data/smoke_pak.lua` (the test archive). An app has its own, next to
-its `CMakeLists.txt`.
+embeds files into. The library's manifest is `src/resources/resources.lua`: the folder it sits in (`base = "."`, the
+manifest itself excluded) at `imlui:/` and the fonts from `external/fonts/` (`base = "../../external/fonts"`) at
+`imlui:/fonts/`; it lives in `src/resources/`, a folder of resources only, so no pattern can pick up a `.cpp` or
+`.cppm`. There are two test manifests: `tests/data/smoke_app/resources.lua` (the smoke app, embedded into
+`imlui_smoke_host`) and `tests/data/smoke_pak.lua` (the test archive). An app has its own the same way, in
+`src/resources/` next to its scripts (see [Getting started](getting-started.md#using-imlui-in-your-app)).
 
 ### Embedding and archives
 
@@ -343,11 +344,12 @@ without changing it rebuilds nothing.
 **Compression** (`imlui.tools.resource_encoding`, shared by both tools): a file is stored as one zstd frame (level 19)
 when it is at least 64 bytes, its extension isn't an already-compressed format (PNG, JPEG, zstd, zip, ...), and
 compression saves at least 10 %. Otherwise it's stored as is. A manifest's `compress = { [path] = true|false }`
-overrides that rule for single files (true compresses any non-empty file). `lua/imlui.lua` shrinks to about a third,
+overrides that rule for single files (true compresses any non-empty file). `imlui.lua` shrinks to about a third,
 the fonts to about half.
 
-The library embeds its own files this way (`resources.lua`, module `imlui.embedded.imlui` with two packages), and so
-does every app (its `resources.lua`, as `app:/`) and the test host `imlui_smoke_host` (`imlui.embedded.smoke_app`).
+The library embeds its own files this way (`src/resources/resources.lua`, module `imlui.embedded.imlui` with two
+packages), and so does every app (its `src/resources/resources.lua`, as `app:/`) and the test host `imlui_smoke_host`
+(`imlui.embedded.smoke_app`).
 
 **`.pak` archives** (`imlui.resources.pak_format`) use the same encoding. The layout, with little-endian integers:
 
@@ -381,11 +383,11 @@ is the example).
 
 | Path | What |
 |---|---|
-| `CMakeLists.txt` | The `imlui_lua` and `imlui` libraries, the tools, the tests (`IMLUI_BUILD_TESTS`, default `ON` only at the top level) and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level. |
+| `CMakeLists.txt` | Project setup: the options (`IMLUI_DEV_PATHS`, `IMLUI_BUILD_TESTS`, default `ON` only at the top level), the CMake helpers, `external/`, `src/` (`add_subdirectory(src)`), the tools, the tests and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level. |
 | `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`. The functions are global once included, so a parent project calls them after `add_subdirectory`. Each file has an include guard; an app includes `ImluiSanitizers.cmake` itself before `add_subdirectory` so its own targets are instrumented too. |
-| `src/` | The library's modules (see the module map below). |
-| `lua/` | The Lua side, embedded at `imlui:/`. |
-| `resources.lua` | The library's resource manifest. |
+| `src/CMakeLists.txt` | The library targets: `imlui_lua` (`wrap/lua.cppm`) and `imlui` (every other `.cppm` under `src/`, globbed), and `imlui_add_resources(imlui resources/resources.lua NAME imlui)`. |
+| `src/imlui/`, `src/wrap/` | The library's modules (see the module map below). |
+| `src/resources/` | The library's resources: `resources.lua` (the manifest) and the Lua side (`imlui.lua`), embedded at `imlui:/`. No `.cppm` here, so the module globs never see it. |
 | `tools/` | `imlui_rc` and `imlui_pack`, the build-time resource tools. `imlui_add_resources` and `imlui_add_pak` call them by target name, so they resolve from a parent project too. |
 | `tests/` | `imlui_tests` (GoogleTest), `support/` (test-only modules), `smoke_host/` (the test app host `imlui_smoke_host`), `data/` (fixtures: `smoke_app/`, `smoke_pak.lua`, test images), `smoke_run.cmake`. |
 | `external/` | Vendored third-party code (see [Third-party code](#third-party-code)). |

@@ -1,12 +1,12 @@
 // HeadlessFrame: a test harness that renders imlui elements in real ImGui frames without a window, a GPU or
 // an ImGui backend. Test-only (built into imlui_tests).
 //
-// It owns Resources like the Engine's (`imlui:/` on lua/ and `imlui:/fonts/` on IMLUI_FONT_DIR; tests may mount
-// `app:/` and more before start()), an ImGui context (with the Roboto text fonts and the Material icon font loaded
-// through those resources, as the Material widgets measure and draw with them), a TypeRegistry, a Renderer and, once
-// started, a Lua state set up like the Engine's: the registered types installed, the real `imlui.native` (with empty
-// host hooks), painter and `imlui.resource` libraries, and imlui:/imlui.lua loaded through the resource searcher. Lua
-// code runs in the UI script environment (ui.env), so element constructors, `state`, `bind`, ids and the registered
+// It owns Resources like the Engine's (`imlui:/` on src/resources/ and `imlui:/fonts/` on IMLUI_FONT_DIR; tests may
+// mount `app:/` and more before start()), an ImGui context (with the Roboto text fonts and the Material icon font
+// loaded through those resources, as the Material widgets measure and draw with them), a TypeRegistry, a Renderer and,
+// once started, a Lua state set up like the Engine's: the registered types installed, the real `imlui.native` (with
+// empty host hooks), painter and `imlui.resource` libraries, and imlui:/imlui.lua loaded through the resource searcher.
+// Lua code runs in the UI script environment (ui.env), so element constructors, `state`, `bind`, ids and the registered
 // types are free names, as in a UI script:
 //
 //   test::HeadlessFrame h;
@@ -62,8 +62,8 @@ public:
         /// Registers the built-in element types (Column, Dialog, ModalNavigationDrawer, ...) first,
         /// like the Engine does; types registered afterwards replace built-ins of the same name.
         bool builtins = false;
-        /// Mounts the library's embedded files (imlui.embedded.imlui: imlui:/ and imlui:/fonts/) instead of lua/
-        /// and external/fonts from the source tree, like a release build running without it.
+        /// Mounts the library's embedded files (imlui.embedded.imlui: imlui:/ and imlui:/fonts/) instead of
+        /// src/resources/ and external/fonts from the source tree, like a release build running without it.
         bool embedded = false;
     };
 
@@ -153,7 +153,7 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     if (m_options.embedded) {
         embedded::imlui::mount(m_resources);
     } else {
-        m_resources.mount("imlui:/", std::make_shared<DirectoryMount>(IMLUI_LUA_DIR));
+        m_resources.mount("imlui:/", std::make_shared<DirectoryMount>(IMLUI_RESOURCES_DIR));
         m_resources.mount("imlui:/fonts/", std::make_shared<DirectoryMount>(IMLUI_FONT_DIR));
     }
     luaui::clearErrors();

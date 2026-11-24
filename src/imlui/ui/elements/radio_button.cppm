@@ -1,5 +1,5 @@
 // RadioButton: the Material 3 radio button with an optional label, as a typed element.
-// Buttons sharing a `group` value act as one group: lua/imlui.lua wraps the constructor and puts the group's
+// Buttons sharing a `group` value act as one group: src/resources/imlui.lua wraps the constructor and puts the group's
 // member set in `__radioGroup`; a click unchecks the other members through their bindings.
 module;
 
@@ -47,7 +47,7 @@ namespace imlui {
 
 namespace {
 
-// Unchecks the other members of the button's `group`. lua/imlui.lua puts the
+// Unchecks the other members of the button's `group`. src/resources/imlui.lua puts the
 // group's member set (a weak-keyed table) in `__radioGroup`.
 void uncheckRadioPeers(const luaui::Node& n) {
     lua::State* state = n.state();

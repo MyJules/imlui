@@ -13,9 +13,9 @@ target_sources(imlui_tests
 target_link_libraries(imlui_tests PRIVATE imlui imlui_pack_lib ext::lua ext::imgui ext::spdlog GTest::gtest_main)
 imlui_set_warnings(imlui_tests)
 imlui_set_hardening(imlui_tests)
-# lua_library_test and the headless harness load lua/imlui.lua from the source tree; the harness loads the
+# lua_library_test and the headless harness load src/resources/imlui.lua from the source tree; the harness loads the
 # Roboto fonts from external/fonts.
-target_compile_definitions(imlui_tests PRIVATE IMLUI_LUA_DIR="${PROJECT_SOURCE_DIR}/lua"
+target_compile_definitions(imlui_tests PRIVATE IMLUI_RESOURCES_DIR="${PROJECT_SOURCE_DIR}/src/resources"
                                                IMLUI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
                                                IMLUI_FONT_DIR="${PROJECT_SOURCE_DIR}/external/fonts")
 # An archive built through imlui_add_pak (the smoke app's scripts at app:/smoke/, manifest data/smoke_pak.lua), read

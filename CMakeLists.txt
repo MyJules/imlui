@@ -28,46 +28,15 @@ include(ImluiSanitizers)
 include(ImluiResources)
 
 # Dev builds bake each embedded block's source folder into it (imlui_add_resources, also for the parent project's
-# calls), and defaultConfig() mounts those folders over the embedded copies, so editing lua/ or an app's scripts
-# hot-reloads. OFF for a release: no source paths.
+# calls), and defaultConfig() mounts those folders over the embedded copies, so editing src/resources/ or an app's
+# scripts hot-reloads. OFF for a release: no source paths.
 option(IMLUI_DEV_PATHS "Mount the source folders of embedded files over them (hot reload while editing)" ON)
 option(IMLUI_BUILD_TESTS "Build the imlui unit and smoke tests" ${PROJECT_IS_TOP_LEVEL})
 
 add_subdirectory(external)
 
-# ------------------------------------------------------------------ Lua wrapper (module `lua`)
-# Its own library: the resource tools evaluate manifests with it, and imlui_rc can't depend on the imlui library,
-# which embeds its own files with imlui_rc.
-add_library(imlui_lua STATIC)
-target_sources(imlui_lua
-    PUBLIC
-        FILE_SET CXX_MODULES
-        BASE_DIRS src
-        FILES src/wrap/lua.cppm
-)
-target_link_libraries(imlui_lua PRIVATE ext::lua)
-target_compile_features(imlui_lua PUBLIC cxx_std_20)
-imlui_set_warnings(imlui_lua)
-imlui_set_hardening(imlui_lua)
-
-# ------------------------------------------------------------------ library
-add_library(imlui STATIC)
-file(GLOB_RECURSE IMLUI_MODULES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/*.cppm)
-list(REMOVE_ITEM IMLUI_MODULES ${PROJECT_SOURCE_DIR}/src/wrap/lua.cppm)
-target_sources(imlui
-    PUBLIC
-        FILE_SET CXX_MODULES
-        BASE_DIRS src
-        FILES ${IMLUI_MODULES}
-)
-target_link_libraries(imlui PUBLIC imlui_lua PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image ext::zstd)
-target_compile_features(imlui PUBLIC cxx_std_20)
-imlui_set_warnings(imlui)
-imlui_set_hardening(imlui)
-# The library carries its own files (imlui.embedded.imlui: lua/ at imlui:/ and the fonts at imlui:/fonts/, listed in
-# resources.lua), so an app runs without them next to it; defaultConfig() always mounts them, under the .pak archives
-# and folders that override them.
-imlui_add_resources(imlui resources.lua NAME imlui)
+# ------------------------------------------------------------------ library (imlui_lua, imlui: src/CMakeLists.txt)
+add_subdirectory(src)
 
 # ------------------------------------------------------------------ resource tools (imlui_rc, imlui_pack)
 add_subdirectory(tools)

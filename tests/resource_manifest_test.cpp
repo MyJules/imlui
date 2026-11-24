@@ -1,7 +1,7 @@
 // Tests for resource manifests (imlui.tools.resource_manifest, read by imlui_rc and imlui_pack): glob patterns,
 // groups, include/exclude, the compression override, errors (a missing prefix, a missing file, a path leaving the
 // base folder, the sandbox), the dependency file and file listing, merging groups into one .pak, and end to end: the
-// library's embedded packages hold exactly what its manifest (resources.lua) lists.
+// library's embedded packages hold exactly what its manifest (src/resources/resources.lua) lists.
 #include <algorithm>
 #include <filesystem>
 #include <map>
@@ -373,7 +373,7 @@ TEST(ResourceManifest, ArchivesNeedOnePrefixAndDistinctFiles) {
 
 TEST(ResourceManifest, EmbeddedLibraryMatchesItsManifest) {
     std::string error;
-    const auto m = tools::loadManifest(fs::path{IMLUI_LUA_DIR}.parent_path() / "resources.lua", error);
+    const auto m = tools::loadManifest(fs::path{IMLUI_RESOURCES_DIR} / "resources.lua", error);
     ASSERT_TRUE(m) << error;
     const std::vector<ResourcePackage> packages = embedded::imlui::packages();
     ASSERT_EQ(packages.size(), m->groups.size());

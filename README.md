@@ -33,11 +33,16 @@ a live theme editor, and C++ types). In short ([Getting started](docs/getting-st
 
 ```cmake
 add_subdirectory(vendor/imlui)                          # git submodule add -b material-ui <url> vendor/imlui
-add_executable(my_app src/main.cpp)
+add_subdirectory(src)                                   # the app's targets: src/CMakeLists.txt
+```
+
+```cmake
+# src/CMakeLists.txt
+add_executable(my_app main.cpp)
 target_link_libraries(my_app PRIVATE imlui)
 imlui_set_warnings(my_app)
 imlui_set_hardening(my_app)
-imlui_add_resources(my_app resources.lua NAME my_app)   # app/main.lua etc., embedded as app:/
+imlui_add_resources(my_app resources/resources.lua NAME my_app) # resources/main.lua etc., embedded as app:/
 ```
 
 ```cpp
@@ -62,15 +67,15 @@ Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.
 zstd 1.5.7) and are built as plain libraries. Project code only uses them through module wrappers.
 
 `external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0). The library embeds
-them and `lua/imlui.lua` (zstd-compressed, listed in the resource manifest `resources.lua`), and
-`imlui_add_resources` embeds an app's own files the same way, from its own `resources.lua`, so an executable runs on
+them and `src/resources/imlui.lua` (zstd-compressed, listed in the resource manifest `src/resources/resources.lua`),
+and `imlui_add_resources` embeds an app's own files the same way, from its own manifest, so an executable runs on
 its own; a `.pak` archive or loose files next to it still override.
 ImGui 1.92 rasterizes glyphs on demand, so every text style and icon size stays sharp, including
 when the theme's `fontScale` changes.
 
 Scripts **hot-reload** when you save any `.lua` file next to the script (or a file it read). In dev builds
-(`IMLUI_DEV_PATHS=ON`, the default) every embedded block also knows its source folder, so `lua/` and the app's
-scripts are read from the source tree and you don't need to rebuild. Hosts name no file paths: the app is the
+(`IMLUI_DEV_PATHS=ON`, the default) every embedded block also knows its source folder, so `src/resources/` and the
+app's scripts are read from the source tree and you don't need to rebuild. Hosts name no file paths: the app is the
 resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded::my_app::packages())`.
 
 ## Layout
@@ -88,11 +93,11 @@ resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded
 | `src/imlui/resources/` | `imlui.resources*`: resource names (`app:/main.lua`), the `Mount` interface, `DirectoryMount`, `EmbeddedMount`, `PakMount` and the `.pak` format, `Resources` (stacked mounts) |
 | `tools/` | build-time tools: `imlui_rc` (embeds the files a Lua resource manifest lists, for `imlui_add_resources`) and `imlui_pack` (builds `.pak` archives, `imlui_add_pak`) |
 | `cmake/` | the helpers an app calls after `add_subdirectory`: `imlui_add_resources`/`imlui_add_pak` (`ImluiResources.cmake`), `imlui_set_warnings`/`imlui_set_hardening` (`ImluiWarnings.cmake`), sanitizers, the `tidy` target |
-| `resources.lua` | the library's resource manifest: `lua/` at `imlui:/`, the fonts at `imlui:/fonts/` |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests and the smoke test (`ctest --preset clang-debug`); `smoke_host/` is a tiny test app host, `data/` the fixtures (`smoke_app/`, test images) |
-| `lua/imlui.lua` | the DSL: elements, `state`, `bind`, `Repeater`, `theme`, timers |
+| `src/CMakeLists.txt` | the library targets `imlui_lua` and `imlui` (module globs) and the embedding of `src/resources/` |
+| `src/resources/` | the library's resources: `resources.lua` (manifest: this folder at `imlui:/`, the fonts from `external/fonts/` at `imlui:/fonts/`) and `imlui.lua`, the DSL (elements, `state`, `bind`, `Repeater`, `theme`, timers) |
 
 ## Concepts
 

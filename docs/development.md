@@ -55,8 +55,9 @@ const std::string& Example::name() const { return m_name; }
   example `imlui.theme.scheme` for `Scheme` or `imlui.color` for `Color`.
 - Namespaces: `imlui` (core), `imlui::md` (widgets), `imlui::luaui` (Lua bridge), `imlui::log`,
   `imlui::platform`, `lua`.
-- CMake picks up `src/**/*.cppm` with a `CONFIGURE_DEPENDS` glob. New module files need no CMake edits, but you
-  do need to re-run the build (which re-checks the glob).
+- `src/CMakeLists.txt` picks up `src/**/*.cppm` with a `CONFIGURE_DEPENDS` glob. New module files need no CMake
+  edits, but you do need to re-run the build (which re-checks the glob). Keep `.cppm` files out of
+  `src/resources/`, which holds the embedded resources only.
 
 See [Architecture](architecture.md#module-map-target-layout) for the module map.
 
@@ -144,14 +145,14 @@ types.registerType<Rating>("Rating");
 - `type.nonVisual()` for elements that take no layout space (windows, timers); `setTicking(true)` for elements
   that act while they aren't rendered ([ticking elements](extending.md#ticking-elements)).
 
-**3. Lua side.** Add the name to the `BUILTIN` list in `lua/imlui.lua`. Any Capitalized name already works as a
-constructor, but a `BUILTIN` entry makes it a real `ui.*` field, so an element id or a global with the same name
-can't shadow it. The type registry is installed before the DSL loads, so `BUILTIN` constructors of typed
-elements create their C++ instances too.
+**3. Lua side.** Add the name to the `BUILTIN` list in `src/resources/imlui.lua`. Any Capitalized name already works as
+a constructor, but a `BUILTIN` entry makes it a real `ui.*` field, so an element id or a global with the same name can't
+shadow it. The type registry is installed before the DSL loads, so `BUILTIN` constructors of typed elements create their
+C++ instances too.
 
 **4. Docs and gallery.** Add the element to [Elements](elements.md) and the README element table, and a demo to the
-gallery (`app/main.lua` in the imlui-gallery repository; see [Trying changes in an app](#trying-changes-in-an-app)),
-committed there along with the submodule update.
+gallery (`src/resources/main.lua` in the imlui-gallery repository; see [Trying changes in an
+app](#trying-changes-in-an-app)), committed there along with the submodule update.
 
 **5. Tests.** A test file `tests/elements_<family>_test.cpp` renders it through the
 [headless frame harness](#the-headless-frame-harness): defaults, props reaching the instance, `nil` resets, two-way
@@ -199,7 +200,7 @@ conventions they share, and new built-ins follow them:
 
 1. Add an entry `{"name", [](lua::State* state) -> int { ...; return nResults; }}` to the function table. Use
    `lua::error(state, "...")` for bad arguments. If the function needs the app, add a hook to `NativeHooks`.
-2. Expose it from the prelude if scripts should call it directly: `ui.name = native.name` in `lua/imlui.lua`.
+2. Expose it from the prelude if scripts should call it directly: `ui.name = native.name` in `src/resources/imlui.lua`.
    Scripts can always reach it as `native.name`.
 3. Document it in [Lua API](lua-api.md#native).
 
@@ -248,14 +249,13 @@ conventions they share, and new built-ins follow them:
 The library has no runner of its own: the tests cover it headlessly, and the smoke test runs `imlui_smoke_host`.
 To see a change in a real UI, build an app against your working copy. The gallery is the usual one:
 
-- **Edit inside the app's submodule.** In `imlui-gallery/vendor/imlui`, check out a branch, work and commit there,
-  and push to (or fetch from) this repository. The gallery's build picks up every change, and with
-  `IMLUI_DEV_PATHS=ON` the library's `lua/` (`vendor/imlui/lua/`) hot-reloads like the app's own scripts.
-- **Point the submodule folder at this checkout.** In the gallery, `git submodule deinit -f vendor/imlui` (empties
-  the folder), `rmdir vendor\imlui`, then `cmd /c mklink /J vendor\imlui <path to this checkout>` (a symlink
-  elsewhere) and build. Edits here, including `lua/`, show up in the running gallery at once. Before committing in
-  the gallery, put the submodule back: `rmdir vendor\imlui` (removes only the junction), then
-  `git submodule update --init`.
+- **Edit inside the app's submodule.** In `imlui-gallery/vendor/imlui`, check out a branch, work and commit there, and
+  push to (or fetch from) this repository. The gallery's build picks up every change, and with `IMLUI_DEV_PATHS=ON` the
+  library's `src/resources/` (`vendor/imlui/src/resources/`) hot-reloads like the app's own scripts.
+- **Point the submodule folder at this checkout.** In the gallery, `git submodule deinit -f vendor/imlui` (empties the
+  folder), `rmdir vendor\imlui`, then `cmd /c mklink /J vendor\imlui <path to this checkout>` (a symlink elsewhere) and
+  build. Edits here, including `src/resources/`, show up in the running gallery at once. Before committing in the
+  gallery, put the submodule back: `rmdir vendor\imlui` (removes only the junction), then `git submodule update --init`.
 
 imlui is built inside the app's build tree (`imlui-gallery/build/<preset>/vendor/imlui`), so this repository's own
 `build/` isn't involved. Once the library change is committed, update the app: `git submodule update --remote
@@ -312,7 +312,7 @@ suppressions. Run `clang-asan` before merging larger changes.
   (role lookup, generation), `imlui.theme.theme` (`resolveColor`), and `imlui.lua.*` against a bare `lua::State`
   (prop resolution, `bind` write-back, `themeFromTable`).
 - `types_test.cpp` covers the C++ type system without a window. It installs a `TypeRegistry` into a Lua state
-  that runs `lua/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `nil` defaults,
+  that runs `src/resources/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `nil` defaults,
   `notify`/`emit`, `__gc` lifetime, singletons (also `shared_ptr` ones), `overload` and reinstalling into a new
   state.
 - `resources_test.cpp` covers the resource system: name normalization and resolving (`..` can't leave a prefix, OS
@@ -336,7 +336,7 @@ suppressions. Run `clang-asan` before merging larger changes.
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
   base folder, the sandbox, bad shapes), `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: the library's embedded packages hold exactly what
-  `resources.lua` lists.
+  `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it embeds).
 - **Smoke test** (`smoke.imlui_smoke_host`, `tests/smoke_run.cmake`) runs the test app host like a shipped release.
   `imlui_smoke_host` (`tests/smoke_host/main.cpp`, built only with the tests) embeds the smoke app
   (`tests/data/smoke_app/`: `main.lua`, a `Tile.lua` component, and a test image from a second manifest group at
@@ -377,7 +377,7 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 
 | Member | What |
 |---|---|
-| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_LUA_DIR` (`lua/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), or the library's embedded files with `.embedded = true`, and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. Frames don't apply a pending theme: call `applyPendingTheme()` between frames to apply one (it also switches the theme's fonts; see `fonts_test.cpp`), and set the default theme back at the end. |
+| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_RESOURCES_DIR` (`src/resources/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), or the library's embedded files with `.embedded = true`, and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. Frames don't apply a pending theme: call `applyPendingTheme()` between frames to apply one (it also switches the theme's fonts; see `fonts_test.cpp`), and set the default theme back at the end. |
 | `registerType<T>(name)`, `renderer()`, `types()` | Register element types before the Lua state starts; the renderer (window title) and the registry. |
 | `resources()`, `loadedResources()` | The harness's `Resources`: mount more (`app:/` on a `test::TempDir`) before the state starts. The names the Lua state read or loaded. |
 | `images()` | The harness's `ImageCache`, which `Image` elements draw from (decoding from `resources()`). Its textures stay `WantCreate`: there is no backend. Test images live in `tests/data/` (`IMLUI_TEST_DATA_DIR`): mount `app:/` on it, or copy one into a `TempDir` with `write`. |

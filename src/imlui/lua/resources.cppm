@@ -20,8 +20,8 @@ export namespace imlui::luaui {
 ///    never raise: `resolve(base, name)`, `read(name)`, `load(name [, env])` (a text chunk named `@name`) and
 ///    `find(module, folder)` return the result or nil plus a message; `exists(name)` returns a boolean.
 ///  * a package.searchers entry, second after the preload searcher, finds modules in `imlui:/`: `imlui` is
-///    `imlui:/imlui.lua`, `a.b` is `imlui:/a/b.lua` or `imlui:/a/b/init.lua`. lua/imlui.lua adds its own entry
-///    in front of it for components next to the script.
+///    `imlui:/imlui.lua`, `a.b` is `imlui:/a/b.lua` or `imlui:/a/b/init.lua`. src/resources/imlui.lua adds its
+///    own entry in front of it for components next to the script.
 /// `resources` must outlive the state. When `loaded` is given, the full name of every resource the state reads or
 /// loads is added to it (the engine watches them for hot reload); it must outlive the state too.
 void registerResources(lua::State* state, const Resources& resources, std::set<std::string>* loaded = nullptr);

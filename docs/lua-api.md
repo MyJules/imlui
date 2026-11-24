@@ -1,6 +1,7 @@
 # Lua API
 
-Everything here is defined in `lua/imlui.lua` (the DSL prelude) or in the native `imlui.native` library it wraps.
+Everything here is defined in `src/resources/imlui.lua` (the DSL prelude) or in the native `imlui.native` library it
+wraps.
 
 ## The script environment
 
@@ -284,9 +285,9 @@ Row { align = "top", spacing = 0,
 }
 ```
 
-The gallery (`app/main.lua` in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery) repository)
-shows the full pattern: a modal drawer opened from the top app bar on compact
-windows, a rail on medium ones, the standard drawer from expanded up, and grids whose `columns` follow the width.
+The gallery (`src/resources/main.lua` in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery)
+repository) shows the full pattern: a modal drawer opened from the top app bar on compact windows, a rail on medium
+ones, the standard drawer from expanded up, and grids whose `columns` follow the width.
 
 ## Theme
 

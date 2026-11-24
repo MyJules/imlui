@@ -17,7 +17,7 @@ import imlui.lua.node;
 
 export namespace imlui::luaui {
 
-/// Builds a Theme from a Lua table (see docs in lua/imlui.lua `ui.theme`).
+/// Builds a Theme from a Lua table (see docs in src/resources/imlui.lua `ui.theme`).
 Theme themeFromTable(lua::State* state, int idx);
 
 /// Reads the `fonts` field of the theme table at `idx` into `fonts` (names only; nothing is loaded), reporting

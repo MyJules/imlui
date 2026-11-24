@@ -1,6 +1,6 @@
 // Tests for the C++ type system (imlui.types.*): LuaConvert, TypeBuilder dispatch, property sync,
 // notify/emit, instance lifetime, singletons and reinstalling into a new Lua state (hot reload).
-// Runs lua/imlui.lua in a plain Lua state with a stub `imlui.native`; no window or ImGui frame.
+// Runs src/resources/imlui.lua in a plain Lua state with a stub `imlui.native`; no window or ImGui frame.
 #include <gtest/gtest.h>
 
 import lua;
@@ -161,7 +161,7 @@ lua::State* newUiState(TypeRegistry& types) {
     lua::State* state = lua::newstate();
     lua::openlibs(state);
     types.install(state);
-    const std::string boot = std::string{"package.path = '"} + IMLUI_LUA_DIR + "/?.lua;' .. package.path\n" +
+    const std::string boot = std::string{"package.path = '"} + IMLUI_RESOURCES_DIR + "/?.lua;' .. package.path\n" +
                              R"(package.preload["imlui.native"] = function()
                                     return { time = function() return 0 end, log = function() end }
                                 end
