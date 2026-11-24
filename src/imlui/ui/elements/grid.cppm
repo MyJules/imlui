@@ -66,7 +66,7 @@ void Grid::render(Frame& frame) {
     if (m_border) f |= ImGuiTableFlags_Borders;
     const float pad = frame.dp(m_spacing) * 0.5f;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {pad, pad});
-    if (ImGui::BeginTable("##grid", cols, f, {frame.resolvedWidth(frame.available().x), 0.0f})) {
+    if (ImGui::BeginTable("##grid", cols, f, {frame.resolvedWidth(), 0.0f})) {
         // Not frame.forEachChild(): that skips hidden children, and a hidden child keeps its (empty) cell here,
         // so the other cells don't move when it toggles. Non-visual children (timers, dialogs) take no cell.
         Renderer& r = frame.renderer();

@@ -19,7 +19,7 @@ export module imlui.ui.layout_box;
 import std;
 
 import imgui;
-import imlui.ui.frame_request;
+import imlui.ui.layout_cache;
 
 export namespace imlui::layout {
 
@@ -100,8 +100,7 @@ struct Entry {
     float regionRight = 0.0f;           ///< the window's content region edge at push time (see current())
     bool mirrored = false;
     // Shrink-to-fit only: the widest claim (from `left`) of this frame and of the last one, which is kept in the
-    // window's state storage under `key`.
-    ImGuiStorage* storage = nullptr;
+    // layout cache under `key`.
     ImGuiID key = 0;
     float left = 0.0f;
     float lastClaim = 0.0f;
@@ -146,11 +145,8 @@ void popTo(std::size_t depth, bool unwinding) {
             ImGui::PopTextWrapPos();
             ImGui::PopItemWidth();
         }
-        if (e.storage && std::fabs(e.claim - e.lastClaim) > 0.5f) {
-            // The widest claim changed: the fills take it on the next frame.
-            e.storage->SetFloat(e.key, e.claim);
-            requestFrame();
-        }
+        // The fills took the last frame's widest claim: when this frame's differs, the cache asks for another frame.
+        if (e.key != 0) recordSize(e.key, {e.claim, 0.0f});
         boxes.pop_back();
     }
 }
@@ -208,7 +204,7 @@ bool shrinkToFit() {
 }
 
 float claimWidth(float natural) {
-    if (Entry* e = top(); e && e->storage)
+    if (Entry* e = top(); e && e->key != 0)
         e->claim = std::max(e->claim, ImGui::GetCursorScreenPos().x + natural - e->left);
     return std::max(natural, availableWidth());
 }
@@ -223,10 +219,10 @@ void pushBox(Box box, Mirror mirror) {
     e.regionRight = regionRight();
     e.mirrored = mirror == Mirror::ItemWidthAndWrap;
     if (box.shrinkToFit) {
-        e.storage = ImGui::GetStateStorage();
         e.key = ImGui::GetID("##imlui.layout.claim");
         e.left = ImGui::GetCursorScreenPos().x;
-        e.lastClaim = e.storage->GetFloat(e.key, 0.0f);
+        e.lastClaim = lastSize(e.key).value_or(ImVec2{}).x;
+        assumeWidth(e.key, e.lastClaim);
         e.box.right = std::max(box.right, std::min(box.wrapRight.value_or(box.right), e.left + e.lastClaim));
     }
     boxes.push_back(e);

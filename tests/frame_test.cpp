@@ -38,6 +38,43 @@ private:
     float m_h = 1.0f;
 };
 
+/// A fixed-size box that reports its size before rendering (Element::intrinsicSize).
+class Sized final : public Element {
+public:
+    static void declare(TypeBuilder<Sized>&) {}
+    void render(Frame&) override { ImGui::Dummy({12.0f, 8.0f}); }
+    std::optional<ImVec2> intrinsicSize(const Frame&, float) override { return ImVec2{12.0f, 8.0f}; }
+};
+
+/// A type that fills the width by default (TypeBuilder::fillsWidth): records what its Frame makes of `width`.
+class Filler final : public Element {
+public:
+    static void declare(TypeBuilder<Filler>& type) { type.fillsWidth(); }
+    void render(Frame& frame) override {
+        size = frame.size("width");
+        resolved = frame.resolvedWidth(7.0f);
+        available = frame.available().x;
+        ImGui::Dummy({resolved, 1.0f});
+    }
+    float size = 0.0f;
+    float resolved = 0.0f;
+    float available = 0.0f;
+};
+
+/// Records what its children's handles expect of their sizes before rendering them (Frame::Child::expectedSize).
+class Expect final : public Element {
+public:
+    static void declare(TypeBuilder<Expect>&) {}
+    void render(Frame& frame) override {
+        expected.clear();
+        frame.forEachChild([&](Frame::Child& child) {
+            expected.push_back(child.expectedSize(100.0f));
+            child.render();
+        });
+    }
+    std::vector<std::optional<ImVec2>> expected;
+};
+
 /// A non-visual element that counts its renders.
 class Tick final : public Element {
 public:
@@ -142,6 +179,9 @@ protected:
         m_h.registerType<Row>("Row");
         m_h.registerType<Field>("Field");
         m_h.registerType<Area>("Area");
+        m_h.registerType<Sized>("Sized");
+        m_h.registerType<Filler>("Filler");
+        m_h.registerType<Expect>("Expect");
     }
 
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
@@ -238,7 +278,7 @@ TEST_F(FrameTest, AliasesAreSeparateNamesForOneClass) {
         a = Leaf { w = 3 }
         b = Block { w = 4 }
         names = table.concat(ui.types(), ",")
-        assert(names == "Area,Block,Field,Leaf,Row,Tick", names))");
+        assert(names == "Area,Block,Expect,Field,Filler,Leaf,Row,Sized,Tick", names))");
     Leaf* a = instance<Leaf>("a");
     Leaf* b = instance<Leaf>("b");
     ASSERT_NE(a, nullptr);
@@ -268,4 +308,39 @@ TEST_F(FrameTest, SubclassExtendsItsBaseDeclaration) {
     run("a:clear()"); // the base's method, called on the subclass
     EXPECT_EQ(a->text(), "");
     run(R"(assert(a.text == "", "notify didn't write the value back"))");
+}
+
+// A child's expected size is its intrinsic size from the first frame; without one, its size on the last frame.
+TEST_F(FrameTest, ExpectedSizesAreIntrinsicElseLastFrames) {
+    run("root = Expect { Sized {}, Leaf { w = 30, h = 4 } }");
+    renderFrame("root");
+    Expect* e = instance<Expect>("root");
+    ASSERT_NE(e, nullptr);
+    ASSERT_EQ(e->expected.size(), 2u);
+    ASSERT_TRUE(e->expected[0]);
+    EXPECT_EQ(e->expected[0]->x, 12.0f);
+    EXPECT_EQ(e->expected[0]->y, 8.0f);
+    EXPECT_FALSE(e->expected[1]); // its first frame
+    renderFrame("root");
+    ASSERT_TRUE(e->expected[1]);
+    EXPECT_EQ(e->expected[1]->x, 30.0f);
+    EXPECT_EQ(e->expected[1]->y, 4.0f);
+}
+
+// The size policy lives in the type: an unset width of a type declared fillsWidth() is a fill (-1) for
+// Frame::size() and resolvedWidth(); a width set on the element wins.
+TEST_F(FrameTest, ATypeThatFillsByDefaultSeesAnUnsetWidthAsAFill) {
+    run("root = Filler {}");
+    renderFrame("root");
+    Filler* f = instance<Filler>("root");
+    ASSERT_NE(f, nullptr);
+    EXPECT_EQ(f->size, -1.0f);
+    EXPECT_GT(f->available, 100.0f);
+    EXPECT_EQ(f->resolved, f->available);
+    run("root = Filler { width = 40 }");
+    renderFrame("root");
+    f = instance<Filler>("root");
+    ASSERT_NE(f, nullptr);
+    EXPECT_EQ(f->size, 40.0f);
+    EXPECT_EQ(f->resolved, 40.0f);
 }

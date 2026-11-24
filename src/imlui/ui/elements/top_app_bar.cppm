@@ -14,8 +14,8 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// The Material top app bar. The children are actions, right-aligned in the 64dp top row, each centered
-/// vertically by its height on the last frame.
+/// The Material top app bar. The children are actions, right-aligned in the 64dp top row by their widths, each
+/// centered vertically by its height (intrinsic sizes, else last frame's: Frame::Child::expectedWidth / Height).
 ///
 /// Props:   title = "", navigationIcon = "", variant = "small" ("center", "medium", "large"),
 ///          color = unset (the current surface)
@@ -66,11 +66,10 @@ void TopAppBar::render(Frame& frame) {
     const float barH = frame.dp(64);
     const float h = medium ? frame.dp(112) : large ? frame.dp(152) : barH;
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = frame.resolvedWidth(frame.available().x);
+    const float w = frame.resolvedWidth();
     ImDrawList* dl = frame.drawList();
     const Color bg = m_color.value_or(md::surfaceColor());
     dl->AddRectFilled(p, {p.x + w, p.y + h}, ImGui::ColorConvertFloat4ToU32(bg.vec4()));
-    ImGuiStorage* st = ImGui::GetStateStorage();
 
     float titleX = p.x + frame.dp(16);
     if (!m_navigationIcon.empty()) {
@@ -78,21 +77,28 @@ void TopAppBar::render(Frame& frame) {
         if (md::iconButton("##nav", m_navigationIcon)) emit("onNavigation");
         titleX = p.x + frame.dp(56);
     }
-    // Actions, right-aligned by their total width on the last frame, each centered in the 64dp row.
-    const ImGuiID widthKey = ImGui::GetID("##actionsW");
-    float x = p.x + w - frame.dp(4) - st->GetFloat(widthKey, 0.0f), total = 0;
+    // Actions, right-aligned by their total width, each centered in the 64dp row (intrinsic sizes, else last
+    // frame's). On an action's first frame without either, they render unseen.
+    float total = 0.0f;
+    bool unknown = false;
+    frame.forEachChild([&](Frame::Child& child) {
+        if (!child.isVisual()) return;
+        unknown = unknown || !child.expectedSize(w).has_value();
+        total += child.expectedWidth(w);
+    });
+    float x = p.x + w - frame.dp(4) - total;
     frame.forEachChild([&](Frame::Child& child) {
         if (!child.isVisual()) {
             child.render();
             return;
         }
-        ImGui::SetCursorScreenPos({x, p.y + (barH - child.lastHeight(frame.dp(48))) * 0.5f});
-        child.render();
-        const float cw = ImGui::GetItemRectSize().x;
-        x += cw;
-        total += cw;
+        ImGui::SetCursorScreenPos({x, p.y + (barH - child.expectedHeight(w, frame.dp(48))) * 0.5f});
+        if (unknown)
+            child.renderUnseen();
+        else
+            child.render();
+        x += ImGui::GetItemRectSize().x;
     });
-    st->SetFloat(widthKey, total);
 
     const ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(s.onSurface.vec4());
     if (medium || large) {

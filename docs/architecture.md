@@ -199,25 +199,58 @@ own children are laid out as direct children of the parent. That's why a `Repeat
 horizontally. `visible = false` on an inline container hides all of its children. `ListView` isn't inline. It's
 a scrolling `ScrollView` whose children come from `model`/`delegate`.
 
-Layout notes:
+Layout notes. ImGui lays items out as they are submitted, so a container must decide where a child goes, and how
+much width it gets, before the child draws. imlui's layout is built on that: **constraints go down** (layout boxes),
+**sizes come up** (intrinsic sizes, else the layout cache), and a stale size **converges** within a frame.
 
 - Each **visual** element is wrapped in an ImGui group, so it counts as exactly one layout item (a label plus a
-  field behaves as one item in a `Row`).
+  field behaves as one item in a `Row`), and its group's size is what the layout measures.
 - **Non-visual** elements (`ApplicationWindow`, `Window`, `Dialog`, `ModalNavigationDrawer`, `Snackbar`, `Timer`,
   `ImGuiDemo`, any registered with `visual = false`, and typed elements declared `nonVisual()`) take no layout
   space or spacing.
 - **Constraints go down through layout boxes** (`imlui.ui.layout_box`). A container that gives its children less
   than the ImGui window's content region pushes a box (`layout::BoxScope`, a right edge in screen coordinates): a
-  `Column` with a `width` or `padding`, each `Grid` cell. Containers that open a region (`Card`, `ScrollView`,
-  `Window`, `Dialog`, `ApplicationWindow`) push a root box for it. Everything that sizes, aligns or wraps by "the
-  available width" reads the box, never `ImGui::GetContentRegionAvail()`: `resolveSize` through
-  `Frame::resolvedWidth/resolvedHeight` and `md::itemWidth`, `md::text` (`align`, `wrap`), `md::divider`, the stack
-  `align`, and the containers that fill by default (`Grid`, `Table`, `ScrollView`, `TopAppBar`, `NavigationBar`,
-  `Canvas`). The available width is `box right - cursor x`, so `Indent`, `SameLine` and a layout's x positions shrink
-  it. A box also sets ImGui's item width and text wrap position (`PushItemWidth`, `PushTextWrapPos`), so raw ImGui
-  widgets in a custom element follow it. A box belongs to the ImGui window it was pushed in: in another window (a
-  popup, a child window without a box of its own) the queries read that window's content region, and where ImGui
-  narrows the region under a box (a table cell), the narrower edge wins. No ImGui internals are touched.
+  `Column` with a `width` or `padding`, each `Grid` cell, each `Row` child (`Frame::Child::render(right)`).
+  Containers that open a region (`Card`, `ScrollView`, `Window`, `Dialog`, `ApplicationWindow`) push a root box for
+  it. Everything that sizes, aligns or wraps by "the available width" reads the box, never
+  `ImGui::GetContentRegionAvail()`: `resolveSize` through `Frame::resolvedWidth/resolvedHeight` and `md::itemWidth`,
+  `md::text` (`align`, `wrap`), `md::divider`, the stack `align`, and the containers that fill. The available width
+  is `box right - cursor x`, so `Indent`, `SameLine` and a layout's x positions shrink it. A box also sets ImGui's
+  item width and text wrap position (`PushItemWidth`, `PushTextWrapPos`), so raw ImGui widgets in a custom element
+  follow it. A box belongs to the ImGui window it was pushed in: in another window (a popup, a child window without
+  a box of its own) the queries read that window's content region, and where ImGui narrows the region under a box
+  (a table cell), the narrower edge wins. No ImGui internals are touched.
+- **The fill policy lives in the type.** Whether an unset `width` fills is declared once, with
+  `TypeBuilder::fillsWidth()` / `fillsWidthWhen(pred)` (`Card`, `TextField`, `Slider`, `Grid`, `ScrollView`,
+  `Table`, `TabBar`, `Section`, `ListItem`, `NavigationItem`, `Plot`, `Canvas`, `TopAppBar`, `NavigationBar`,
+  `Divider`; wrapping `Text`, `Spacer { fill }`). The element's `Frame` applies it (`size("width")` reads `-1`,
+  `resolvedWidth()` fills), layouts read it before rendering (`Frame::Child::fillsWidth()`), and the `md::` widgets
+  have no fill default of their own: to them a width of 0 is their natural width.
+- **Sizes come up**, before rendering when they can: an element that can tell its size cheaply implements
+  `Element::intrinsicSize(frame, maxWidth)` (`Text` unwrapped and start-aligned, `Icon`, `Button`, `IconButton`,
+  `Spacer`; measured by the same helpers that draw them: `md::textSize`, `md::buttonSize`, `md::iconSize`,
+  `md::iconButtonSize`). Otherwise the size comes from the **layout cache** (`imlui.ui.layout_cache`): the
+  `Renderer` records every visual element's group size under its ImGui ID (`Frame::Child::id()`), and a layout
+  reads it on the next frame. `Frame::Child::expectedSize/expectedWidth/expectedHeight` give the intrinsic size,
+  else the cached one: `Row` (non-fill widths, heights for `align`), the stack `align`, `TopAppBar` actions and
+  `NavigationRail` destinations place children by them. Containers' own aggregates go through the cache too: an
+  elevated `Card`'s shadow height, and an auto-sized window's widest claim and widest aligned child.
+- **Convergence.** Placing a child by a size tells the cache so (`expectedWidth`/`lastWidth` and friends, or
+  `layout::assumeWidth/assumeHeight`); when the child then renders at another size (by more than half a pixel), the
+  cache requests another frame. Rendering is on demand, so without this a label a `Timer` or a posted change made
+  longer would stay misplaced until the next input; with it the layout settles by itself, and a settled layout asks
+  for nothing. A size that keeps changing for more than `layout::maxSettleFrames` (8) frames in a row stops asking
+  (logged once at debug level), so a layout that can't settle doesn't render forever. Entries not used for two
+  frames are dropped (elements come and go; a hidden page re-measures when shown), and a new ImGui context starts
+  empty.
+- **First appearance.** A child with neither an intrinsic size nor a cached one, which a layout must place by its
+  size (under a non-start stack `align`; in a `Row` that aligns heights, has fills or justifies; a `TopAppBar`
+  action; a non-filling `NavigationRail` child), renders **unseen** for its first frame
+  (`Frame::Child::renderUnseen()`: an empty clip rect, so it is measured but nothing is drawn or hovered) and
+  requests the next frame, which shows it in place.
+- **`Row` is a flex row.** Before rendering it asks each child whether it fills, gives the fills equal shares of
+  the width the others take (their expected widths), and renders each fill in a box of its share (fill-minus
+  resolves against it, wrapping text wraps at it). Every other child's box ends where the children after it start.
 - **Auto-sized windows** (a `Window` with `autoResize`, a `Dialog`, menus, anchored popups, the error overlay) take
   their content's width, so nothing inside may size itself by the window's width: a fill would keep the window as
   wide as it ever was (ImGui fits the window to last frame's content, which the fill made as wide as the window).
@@ -226,17 +259,15 @@ Layout notes:
   rows claim their natural width, a `Dialog` its title), never to the window's width. Content may grow past it up to
   the maximum, where text wraps (`Box::wrapRight`). The stack `align` in such a box places children in the widest
   child of the last frame. So the window's width is a function of its content: stable frame to frame, and it
-  shrinks back when the content gets shorter. When a claim or the widest child changes, a frame is requested so it
-  settles. Sizes: `Window` fills `width` (240dp when unset) and wraps at the viewport's right edge; `Dialog` 280–560dp
-  (or its `width`); menus at least 112dp, as wide as the widest row. The `Snackbar` doesn't auto-size at all: it
-  computes its width (`md::snackbarWidth`: message + actions + padding within 344–672dp, at most the viewport less
-  32dp) and sets it.
-- **`Row` is a flex row.** Before rendering it asks each child whether it fills (`Frame::Child::fillsWidth()`: a
-  fill width, a type declared `fillsWidth()` / `fillsWidthWhen()` such as `Card`, `TextField`, wrapping `Text`,
-  `Spacer { fill }`), gives the fills equal shares of the width the others left last frame, and renders each fill in
-  a box of its share (`Child::render(right)`). Every other child's box ends where the children after it start.
-- Immediate-mode layout uses *last frame's* sizes for `Row` (the widths of children that don't fill, the heights for
-  `align`, `justify`), `Column { align }` and `TopAppBar` actions. A layout settles within one frame.
+  shrinks back when the content gets shorter; a changed claim or widest child converges like any cached size.
+  Sizes: `Window` fills `width` (240dp when unset) and wraps at the viewport's right edge; `Dialog` 280–560dp (or its
+  `width`); menus at least 112dp, as wide as the widest row. The `Snackbar` doesn't auto-size at all: it computes its
+  width (`md::snackbarWidth`: message + actions + padding within 344–672dp, at most the viewport less 32dp) and sets
+  it.
+- **What still lags a frame:** the placement of children without an intrinsic size (any container, `TextField`,
+  `Chip`, a custom element that doesn't implement it) is one frame behind when their size changes, and settles on
+  the requested frame; wrapping or aligned `Text` has no intrinsic size. A fill-minus child under a non-start stack
+  `align` converges over several frames (its width depends on its own offset).
 
 ## Hot reload
 
@@ -665,8 +696,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.widgets.common` | Shared helpers: `col`, `scheme()`, `shape()`, disabled colors, `animate`, `stateLayer`, `itemWidth`, text/icon/shadow drawing |
 | `imlui.widgets.surface` | Surface stack (`pushSurface`, `popSurface`, `surfaceColor`) for cutouts on cards and dialogs |
-| `imlui.widgets.text` | `text`, `icon`, `tooltip`, `divider` |
-| `imlui.widgets.button` | `button` (+ `ButtonVariant`), `iconButton` (+ `IconButtonVariant`) |
+| `imlui.widgets.text` | `text`, `textSize`, `icon`, `iconSize`, `tooltip`, `divider` |
+| `imlui.widgets.button` | `button`, `buttonSize` (+ `ButtonVariant`), `iconButton`, `iconButtonSize` (+ `IconButtonVariant`) |
 | `imlui.widgets.selection` | `checkbox`, `radio`, `switchToggle`, `chip` (+ `ChipVariant`), `segmented` |
 | `imlui.widgets.slider` | `slider` |
 | `imlui.widgets.progress` | `progress` (linear), `circularProgress` |
@@ -696,9 +727,10 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
+| `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `cacheEntries`: last frame's sizes by ImGui ID, and another frame when a layout placed something by a stale size (convergence) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
-| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `isVisual`, `fillsWidth`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
+| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `renderUnseen`, `isVisual`, `fillsWidth`, `intrinsicSize`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
 | `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view` (also `ListView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer` |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: registers every built-in class under its Lua name and aliases |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
@@ -711,11 +743,11 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
 | `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives) |
-| `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `isVisual`, `fillsWidth`, `node`, `type`, `id`, `lastWidth`/`lastHeight`, `as<T>()`), element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size`, `available`, `resolvedWidth`/`resolvedHeight`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
-| `imlui.types.element` | `Element`: `render(Frame&)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)` |
+| `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
+| `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag, fills-width policy) |
 | `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `fillsWidth`/`fillsWidthWhen` (an unset width fills; a `Row` shares space with it), `extends<Base>` (a subclass's declaration extends its base's) |
-| `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state; the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`), so the renderer renders every element through it |
+| `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state; the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`, `fillsWidth`, `intrinsicSize`), so the renderer renders every element through it |
 
 ### Resources (`src/imlui/resources/`)
 

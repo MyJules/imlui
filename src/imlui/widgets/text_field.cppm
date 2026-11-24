@@ -18,6 +18,8 @@ export namespace imlui::md {
 struct TextFieldOptions {
     std::string_view label, placeholder, leadingIcon, trailingIcon, supporting;
     bool outlined = false, password = false, multiline = false, readOnly = false, error = false;
+    /// resolveSize values (itemWidth): a width of 0 is the natural 280dp, -1 fills (the TextField element passes -1
+    /// when its width is unset).
     float width = 0, height = 0;
 };
 
@@ -39,7 +41,7 @@ namespace imlui::md {
 TextFieldResult textField(const char* id, std::string& value, const TextFieldOptions& o) {
     const Scheme& s = scheme();
     TextFieldResult res;
-    const float w = itemWidth(o.width == 0.0f ? -1.0f : o.width, dp(280));
+    const float w = itemWidth(o.width, dp(280));
     const float h = o.multiline ? (o.height > 0 ? o.height : dp(120)) : dp(56);
     const bool hasLabel = !o.label.empty();
     const bool lead = hasIcon(o.leadingIcon);

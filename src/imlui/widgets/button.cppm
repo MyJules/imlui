@@ -22,6 +22,13 @@ enum class ButtonVariant { Filled, Tonal, Outlined, Text, Elevated, Fab };
 /// A FAB with an empty label is a regular 56dp FAB, otherwise extended.
 bool button(const char* label, ButtonVariant variant = ButtonVariant::Filled, ImVec2 size = {0, 0},
             std::string_view iconName = {});
+/// The size button() takes with the same arguments (`size.x` resolved like itemWidth(): fixed, natural, or a fill of
+/// the layout box), without drawing it.
+[[nodiscard]] ImVec2 buttonSize(const char* label, ButtonVariant variant = ButtonVariant::Filled, ImVec2 size = {0, 0},
+                                std::string_view iconName = {});
+
+/// The size of iconButton(): the 48dp touch target.
+[[nodiscard]] ImVec2 iconButtonSize();
 
 enum class IconButtonVariant { Standard, Filled, Tonal, Outlined };
 
@@ -48,21 +55,53 @@ ButtonVariant buttonVariant(std::string_view name) {
     return ButtonVariant::Filled;
 }
 
+namespace {
+
+/// A button's measurements: its size, and the width of its content (icon, gap, label), centered in it.
+struct ButtonLayout {
+    std::string_view text;
+    bool withIcon = false;
+    float iconSz = 0.0f;
+    float gap = 0.0f;
+    float content = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+};
+
+ButtonLayout buttonLayout(const char* label, ButtonVariant variant, ImVec2 size, std::string_view iconName) {
+    ButtonLayout l;
+    l.text = visibleLabel(label);
+    const bool fab = variant == ButtonVariant::Fab;
+    l.withIcon = hasIcon(iconName);
+    l.iconSz = fab ? 24.0f : 18.0f;
+    const ImVec2 ts = l.text.empty() ? ImVec2{0, 0} : measure(TextStyle::LabelLarge, l.text);
+    l.gap = l.text.empty() || !l.withIcon ? 0.0f : dp(fab ? 12 : 8);
+    float padL = dp(variant == ButtonVariant::Text ? 12 : (fab ? 16 : 24)), padR = padL;
+    if (l.withIcon && !fab && variant != ButtonVariant::Text) padL = dp(16);
+    l.content = (l.withIcon ? dp(l.iconSz) : 0.0f) + l.gap + ts.x;
+    l.h = size.y > 0 ? size.y : dp(fab ? 56 : 40);
+    float natural = l.content + padL + padR;
+    if (fab && l.text.empty()) natural = l.h;
+    l.w = itemWidth(size.x, std::max(natural, fab ? dp(56) : dp(48)));
+    return l;
+}
+
+} // namespace
+
+ImVec2 buttonSize(const char* label, ButtonVariant variant, ImVec2 size, std::string_view iconName) {
+    const ButtonLayout l = buttonLayout(label, variant, size, iconName);
+    return {l.w, l.h};
+}
+
+ImVec2 iconButtonSize() { return {dp(48), dp(48)}; }
+
 bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_view iconName) {
     const Scheme& s = scheme();
-    const std::string_view text = visibleLabel(label);
     const bool fab = variant == ButtonVariant::Fab;
-    const bool withIcon = hasIcon(iconName);
-    const float iconSz = fab ? 24.0f : 18.0f;
-    const ImVec2 ts = text.empty() ? ImVec2{0, 0} : measure(TextStyle::LabelLarge, text);
-    const float gap = text.empty() || !withIcon ? 0.0f : dp(fab ? 12 : 8);
-    float padL = dp(variant == ButtonVariant::Text ? 12 : (fab ? 16 : 24)), padR = padL;
-    if (withIcon && !fab && variant != ButtonVariant::Text) padL = dp(16);
-    const float content = (withIcon ? dp(iconSz) : 0.0f) + gap + ts.x;
-    const float h = size.y > 0 ? size.y : dp(fab ? 56 : 40);
-    float natural = content + padL + padR;
-    if (fab && text.empty()) natural = h;
-    const float w = itemWidth(size.x, std::max(natural, fab ? dp(56) : dp(48)));
+    const ButtonLayout l = buttonLayout(label, variant, size, iconName);
+    const std::string_view text = l.text;
+    const bool withIcon = l.withIcon;
+    const float iconSz = l.iconSz, gap = l.gap, content = l.content, w = l.w, h = l.h;
     const float rounding = fab ? dp(shape().large) : h * 0.5f;
 
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -118,9 +157,9 @@ IconButtonVariant iconButtonVariant(std::string_view n) {
 bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v, bool toggle, bool selected,
                 std::optional<Color> tint) {
     const Scheme& s = scheme();
-    const float target = dp(48), box = dp(40);
+    const float target = iconButtonSize().x, box = dp(40);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, {target, target});
+    bool clicked = ImGui::InvisibleButton(id, iconButtonSize());
     const bool dis = itemDisabled();
     ImGuiID iid = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();

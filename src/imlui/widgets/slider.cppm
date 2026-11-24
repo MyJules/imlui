@@ -17,7 +17,8 @@ export namespace imlui::md {
 /// Material slider. `step` <= 0 means continuous. `valueFormat` is checked with isValidFloatFormat(); an invalid
 /// one is reported once and replaced by defaultValueFormat. Returns true when the user changed the value; `*v`
 /// is written only then, so a value the user didn't touch keeps its exact double (0.1 stays 0.1). A stepped value
-/// is `vmin + k * step` without binary noise (0.1 * 3 gives 0.3, not 0.30000000000000004).
+/// is `vmin + k * step` without binary noise (0.1 * 3 gives 0.3, not 0.30000000000000004). `width` follows
+/// resolveSize (itemWidth): 0 is the natural 200dp, -1 fills (the Slider element passes -1 when unset).
 bool slider(const char* id, double* v, double vmin, double vmax, double step = 0.0, float width = 0.0f,
             const char* valueFormat = "%.2f");
 
@@ -53,7 +54,7 @@ double snapToStep(double v, double vmin, double step) {
 
 bool slider(const char* id, double* v, double vmin, double vmax, double step, float width, const char* valueFormat) {
     const Scheme& s = scheme();
-    const float w = itemWidth(width == 0.0f ? -1.0f : width, dp(200));
+    const float w = itemWidth(width, dp(200));
     const float h = dp(44);
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton(id, {w, h});

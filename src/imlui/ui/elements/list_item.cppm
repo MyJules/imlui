@@ -70,7 +70,7 @@ void ListItem::render(Frame& frame) {
     o.trailingText = m_trailingText;
     o.trailingIcon = m_trailingIcon;
     o.selected = m_selected;
-    o.width = frame.size("width", -1.0f);
+    o.width = frame.size("width");
     if (md::listItem("##li", o)) emit("onClicked");
 }
 

@@ -81,7 +81,7 @@ available width (or height) everywhere:
 | `> 0` | A fixed size in dp. |
 | `-1` | Fill the available space (any value from `-1` up to `0`). |
 | `< -1` | Fill minus `|v|` dp (`width = -16` leaves 16dp). |
-| `0` (or unset) | Automatic: the element's own default, given in its table. |
+| `0` (or unset) | Automatic: the element's own default, given in its table: its natural size, or `0 (fill)` for the elements that fill by default (`Card`, `TextField`, `Slider`, `Grid`, `ScrollView`, `TopAppBar`, ...). |
 | `fillWidth = true` | Counts as `width = -1`. |
 
 The available width is the space the parent gives: the width of a `Column` with `width` (less its `padding`), a
@@ -104,9 +104,16 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView` and `Card`; *raw* on the others. |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child (by its width on the last frame). |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it. |
 
 Non-visual children are rendered in place and don't count for the spacing.
+
+How `align` knows a child's width before drawing it: `Text` (unwrapped, start-aligned), `Icon`, `Button`,
+`IconButton` and `Spacer` know their size up front (their *intrinsic size*), so they're in place on every frame.
+Any other child is placed by its width on the last frame; when that changed, another frame follows right away, so
+the layout settles by itself even when nothing else is redrawing (a `Timer` changing a label, a script setting a
+prop). On a child's very first frame, when neither is known, it is laid out but not shown, and appears in place on
+the next frame. The same goes for `Row`, `TopAppBar` actions and `NavigationRail` destinations.
 
 ## Values that come back from C++
 
@@ -260,7 +267,7 @@ A vertical stack. `Item` is an alias.
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child. |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child, by its width ([how it knows it](#stacking-containers)). |
 | `padding` | number | `0` | Inset on every side: the children start `padding` in and, without a `width`, fill up to `padding` from the right edge. |
 | `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the children's available width. They fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. |
 
@@ -270,8 +277,11 @@ Children side by side, as a flex row. Children that **fill** share the width the
 a fill or fill-minus `width` (`fillWidth = true`, `width = -16`), an element that fills by default (`0 (fill)` in
 its table: `TextField`, `Card`, `Slider`, `Grid`, `ScrollView`, ...), wrapping text (`Text { wrap = true }`) and
 `Spacer { fill = true }`. Each fill is laid out in its share: it fills it, a fill-minus width is its share minus
-`|v|`, wrapping text wraps at it. The other children keep their own width, measured on the previous frame (a layout
-settles within one frame), and are bounded by the children after them, so a fill nested inside one stops there.
+`|v|`, wrapping text wraps at it. The other children keep their own width (their intrinsic size, else their width
+on the previous frame, settling within a frame) and are bounded by the children after them, so a fill nested inside
+one stops there. `align` centers (or bottom-aligns) each child against the tallest, by the same sizes. On a child's
+first frame, when a size the row needs isn't known yet (no intrinsic size), the row is laid out unseen for that one
+frame and shown in place on the next.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
@@ -427,7 +437,7 @@ root. `visible = false` hides all of their children.
 ### TopAppBar
 
 The Material top app bar. Its children are **actions**, right-aligned in the 64dp top row and each vertically
-centered by its height on the last frame.
+centered by its height (its intrinsic size, else last frame's; see [Stacking containers](#stacking-containers)).
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|

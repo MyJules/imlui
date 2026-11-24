@@ -54,6 +54,29 @@ protected:
 
 // ------------------------------------------------------------------ Snackbar
 
+// A width of 0 is a widget's natural width, never a fill: whether an element fills by default is its type's policy
+// (TypeBuilder::fillsWidth), and the element passes -1 then.
+TEST_F(WidgetsTest, AZeroWidthIsTheNaturalWidth) {
+    float card = 0.0f, field = 0.0f, slider = 0.0f, filled = 0.0f;
+    frame([&] {
+        md::beginCard("##card", md::CardVariant::Filled);
+        md::endCard();
+        card = ImGui::GetItemRectSize().x;
+        std::string text;
+        md::textField("##field", text, {});
+        field = ImGui::GetItemRectSize().x;
+        double v = 0.5;
+        md::slider("##slider", &v, 0.0, 1.0);
+        slider = ImGui::GetItemRectSize().x;
+        md::slider("##filled", &v, 0.0, 1.0, 0.0, -1.0f);
+        filled = ImGui::GetItemRectSize().x;
+    });
+    EXPECT_FLOAT_EQ(card, dp(320));
+    EXPECT_FLOAT_EQ(field, dp(280));
+    EXPECT_FLOAT_EQ(slider, dp(200));
+    EXPECT_GT(filled, dp(500));
+}
+
 TEST_F(WidgetsTest, ClosableSnackbarKeepsItsWidthWhateverTheThemeSpacing) {
     // A theme spacing other than the snackbar's own 8dp gap made the auto-resized window wider every frame. The
     // width is now computed from the content: message + gaps + actions + padding, at least 344dp.

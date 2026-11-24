@@ -17,6 +17,7 @@ import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.layout_box;
+import imlui.ui.layout_cache;
 import imlui.ui.frame_request;
 import imlui.ui.props;
 
@@ -38,6 +39,10 @@ public:
         /// Whether the element `node` fills the available width when its `width` is unset (its type's own default,
         /// TypeBuilder::fillsWidth / fillsWidthWhen). May sync the element's properties.
         [[nodiscard]] virtual bool fillsWidth(const luaui::Node& node) = 0;
+        /// The element's intrinsic size with `maxWidth` available (Element::intrinsicSize): nullopt when its type
+        /// can't tell before rendering. Syncs the element's properties.
+        [[nodiscard]] virtual std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
+                                                                  float maxWidth) = 0;
 
         virtual ~Types() = default;
     };
@@ -56,7 +61,9 @@ public:
     void setImages(ImageCache* images);
 
     /// Renders the element at stack index `idx`. Returns false if it was
-    /// hidden (visible = false) or of an unknown type ("unknown element type" is reported).
+    /// hidden (visible = false) or of an unknown type ("unknown element type" is reported). A visual element's size
+    /// (its group's) is recorded in the layout cache (imlui.ui.layout_cache) under `ImGui::GetID(table pointer)` in
+    /// the current ID scope, the key Frame::Child::id() gives it.
     bool render(lua::State* state, int idx);
 
     /// Calls f(stackIndex) for every child element. Children come from the
@@ -107,9 +114,16 @@ public:
     [[nodiscard]] bool isVisual(lua::State* state, int idx) const;
     /// Whether the element at `idx` fills the available width when its `width` is unset (Types::fillsWidth).
     [[nodiscard]] bool fillsWidth(lua::State* state, int idx);
+    /// The element's intrinsic size (Element::intrinsicSize) with `maxWidth` available, if its type knows it.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const luaui::Node& node, float maxWidth);
+    /// Renders the element at `idx` like render(), measured but not seen (clipped away), and asks for another
+    /// frame: for a layout that can't place it yet, on the first frame it has neither an intrinsic size nor a
+    /// size in the layout cache, so it doesn't flash in the wrong place.
+    bool renderUnseen(lua::State* state, int idx);
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
-    /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box).
+    /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box), by their
+    /// intrinsic widths or else last frame's (imlui.ui.layout_cache).
     void renderStack(const luaui::Node& node);
 
     /// Pops up `node.menu` (a Menu element) anchored to the last item when
@@ -147,6 +161,7 @@ bool Renderer::render(lua::State* state, int idx) {
         return false;
     }
     if (!n.boolean("visible", true)) return false;
+    const ImGuiID id = ImGui::GetID(n.ptr());
     ImGui::PushID(n.ptr());
     const bool disabled = n.has("enabled") && !n.boolean("enabled", true);
     if (disabled) ImGui::BeginDisabled();
@@ -155,7 +170,10 @@ bool Renderer::render(lua::State* state, int idx) {
     const bool visual = kind == Types::Kind::Visual;
     if (visual) ImGui::BeginGroup();
     m_types.renderElement(*this, n);
-    if (visual) ImGui::EndGroup();
+    if (visual) {
+        ImGui::EndGroup();
+        layout::recordSize(id, ImGui::GetItemRectSize());
+    }
     if (n.has("tooltip")) md::tooltip(n.string("tooltip"));
     if (disabled) ImGui::EndDisabled();
     ImGui::PopID();
@@ -172,11 +190,25 @@ bool Renderer::isVisual(lua::State* state, int idx) const {
 
 bool Renderer::fillsWidth(lua::State* state, int idx) { return m_types.fillsWidth(Node{state, idx}); }
 
+std::optional<ImVec2> Renderer::intrinsicSize(const Node& node, float maxWidth) {
+    return m_types.intrinsicSize(*this, node, maxWidth);
+}
+
+bool Renderer::renderUnseen(lua::State* state, int idx) {
+    // An empty clip rect: ImGui still lays the items out (and child windows inherit the clip), nothing is drawn or
+    // hovered. Unlike the style alpha, it also hides what widgets draw in their own colors.
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    ImGui::PushClipRect(at, at, true);
+    const bool rendered = render(state, idx);
+    ImGui::PopClipRect();
+    if (rendered) requestFrame(); // to show it, placed by the size it just took
+    return rendered;
+}
+
 void Renderer::renderStack(const Node& node) {
     const auto spacing = node.number("spacing");
     const float align = alignFactor(node.string("align", "start"));
     lua::State* state = node.state();
-    ImGuiStorage* st = ImGui::GetStateStorage();
     float avail = layout::availableWidth();
     const float x0 = ImGui::GetCursorScreenPos().x;
     // In an auto-sized window the stack is as wide as its widest child (a fill there is only the window's minimum
@@ -185,7 +217,11 @@ void Renderer::renderStack(const Node& node) {
     const bool fit = align > 0.0f && layout::shrinkToFit();
     const ImGuiID widestKey = fit ? ImGui::GetID("##imlui.stackWidth") : 0;
     float widest = 0.0f;
-    if (fit) avail = std::max(avail, st->GetFloat(widestKey, 0.0f));
+    if (fit) {
+        const float last = layout::lastSize(widestKey).value_or(ImVec2{}).x;
+        layout::assumeWidth(widestKey, last);
+        avail = std::max(avail, last);
+    }
     bool first = true;
     forEachChild(node, [&](int idx) {
         if (!isVisual(state, idx)) {
@@ -197,22 +233,29 @@ void Renderer::renderStack(const Node& node) {
         if (!first && spacing)
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
                                  ImGui::GetStyle().ItemSpacing.y);
-        const ImGuiID key = ImGui::GetID(c.ptr());
+        bool unseen = false;
         if (align > 0.0f) {
-            float w = st->GetFloat(key, 0.0f);
-            ImGui::SetCursorScreenPos({x0 + std::max(0.0f, (avail - w) * align), ImGui::GetCursorScreenPos().y});
+            // Placed by its intrinsic width, else by its width on the last frame; render() records the one it takes
+            // (another frame if it differs). On its first frame without either, it renders unseen.
+            const ImGuiID key = ImGui::GetID(c.ptr());
+            std::optional<float> w;
+            if (const auto intrinsic = intrinsicSize(c, avail))
+                w = intrinsic->x;
+            else if (const auto last = layout::lastSize(key))
+                w = last->x;
+            unseen = !w;
+            layout::assumeWidth(key, w.value_or(0.0f));
+            ImGui::SetCursorScreenPos(
+                {x0 + std::max(0.0f, (avail - w.value_or(0.0f)) * align), ImGui::GetCursorScreenPos().y});
         }
-        render(state, idx);
-        if (align > 0.0f) {
-            st->SetFloat(key, ImGui::GetItemRectSize().x);
-            widest = std::max(widest, ImGui::GetItemRectSize().x);
-        }
+        if (unseen)
+            renderUnseen(state, idx);
+        else
+            render(state, idx);
+        if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
         first = false;
     });
-    if (fit && std::fabs(widest - st->GetFloat(widestKey, 0.0f)) > 0.5f) {
-        st->SetFloat(widestKey, widest);
-        requestFrame();
-    }
+    if (fit) layout::recordSize(widestKey, {widest, 0.0f});
 }
 
 void Renderer::attachMenu(const Node& node, bool clicked) {

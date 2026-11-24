@@ -141,11 +141,14 @@ types.registerType<Rating>("Rating");
 ```
 
 - Declared properties arrive through the setters before each `render()`, only when they changed.
-- Use `frame.size("width")` for sizes (it handles `fillWidth` and fill-minus), `frame.dp()` and
-  `frame.drawList()`.
+- Use `frame.size("width")` for sizes (it handles `fillWidth`, fill-minus and the type's fill policy: declare
+  `type.fillsWidth()` if an unset width should fill, don't default it in the widget), `frame.dp()` and
+  `frame.drawList()`. If the element knows its size before drawing, implement `intrinsicSize()` (exactly what
+  `render()` takes), so layouts place it right on its first frame
+  ([intrinsic sizes](extending.md#intrinsic-sizes)).
 - After changing a property in C++, call `notify(name)` **before** `emit`, so the handler sees the new state.
 - Containers call `frame.renderChildren()` or `frame.renderStack()`, or `frame.forEachChild(f)` with
-  `Frame::Child` handles (`child.render()`, `child.lastWidth()`, `child.as<T>()`) for custom layout.
+  `Frame::Child` handles (`child.render()`, `child.expectedWidth()`, `child.as<T>()`) for custom layout.
   `frame.attachMenu(clicked)` supports a `menu` prop. `frame.node()` reaches raw Lua. See
   [Registering C++ types](extending.md#element-types) for the whole `Frame`.
 - `type.nonVisual()` for elements that take no layout space (windows, timers); `setTicking(true)` for elements

@@ -3,6 +3,7 @@ export module imlui.ui.elements.icon_button;
 
 import std;
 
+import imgui;
 import imlui.color;
 import imlui.widgets;
 import imlui.types.element;
@@ -23,6 +24,7 @@ public:
     static void declare(TypeBuilder<IconButton>& type);
 
     void render(Frame& frame) override;
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -79,6 +81,8 @@ void IconButton::render(Frame& frame) {
     }
     frame.attachMenu(clicked);
 }
+
+std::optional<ImVec2> IconButton::intrinsicSize(const Frame&, float) { return md::iconButtonSize(); }
 
 const std::string& IconButton::text() const { return m_text; }
 void IconButton::setText(std::string text) { m_text = std::move(text); }
