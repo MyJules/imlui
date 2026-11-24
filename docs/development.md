@@ -396,13 +396,32 @@ that can't be queried, `replaceFile`, `manifestDependencies` and the dependency 
   its `mount()` mounting the folders.
 - **Smoke test** (`smoke.imlui_smoke_host`, `tests/smoke_run.cmake`) runs the test app host like a shipped release.
   `imlui_smoke_host` (`tests/smoke_host/main.cpp`, built only with the tests) embeds the smoke app
-  (`tests/data/smoke_app/`: `main.lua`, a `Tile.lua` component, and a test image from a second manifest group at
-  `app:/images/`; always embedded, `EMBED ON`) and registers `test::RenderCounter` as `Probe`. The executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
+  (`tests/data/smoke_app/`: `main.lua`, a `Tile.lua` component, a `widgets/Label.lua` component in a nested folder,
+  `data/notes.txt` and the manifest itself listed in `files`, and a test image from a second manifest group at
+  `app:/images/`; always embedded, `EMBED ON`) and registers a layout probe as `Probe`. The executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
   empty folder under `build/<preset>/tests/smoke/` and started with `IMLUI_DEV_PATHS=0` and
   `IMLUI_EXIT_AFTER_FRAMES=5`. It must exit with 0, log that its entry script came from its embedded data, and log
   no error. In a build that doesn't embed the library (`IMLUI_EMBED_RESOURCES=OFF`), `imlui:/` comes from the
   library's source folders, which `IMLUI_DEV_PATHS=0` doesn't skip as they're its only copy. It opens a window, so it needs a desktop session. An app can reuse `tests/smoke_run.cmake` for its own
   executable (`cmake -DEXE=... -DWORK=... -DEXPECT=... -P vendor/imlui/tests/smoke_run.cmake`).
+- **Dev/shipped parity test** (`smoke.modes`, `tests/smoke_modes.cmake`) runs the same host three ways, each copied
+  alone into its own folder under `build/<preset>/tests/smoke/smoke.modes/`, and fails unless all three see the same
+  thing: `dev` with the build's defaults (in a dev build the smoke app's source folders, filtered by the manifest,
+  over the embedded copy; in `clang-ship` the same as the next), `embedded` with `IMLUI_DEV_PATHS=0`, and `pak` with
+  `IMLUI_DEV_PATHS=0`, `IMLUI_SMOKE_NO_EMBEDDED_APP=1` (a switch of the test host only: it passes no app packages)
+  and `smoke_app.pak` next to the executable (`imlui_add_pak` from the same manifest, built into
+  `build/<preset>/tests/smoke_app_pak/`, not `bin/`, where every executable would mount it). Each run must exit with 0,
+  log no error and log that `app:/main.lua` came from its mode's mount (a folder, the embedded data, the archive).
+  After the run the host prints `summary:` lines: `list()` of every folder under `app:/`, every file of
+  `listRecursive("app:/")` with its size and FNV-1a hash, and where the probe (the column's last element) was laid
+  out and how many draw commands its window had by then, which follows from the fonts, texts and image the app got.
+  The app prints a line per name it checks (size read, `exists()`) and asserts the expected answer: the manifest,
+  `data/notes.txt`, `widgets/Label.lua` and the image are served; `hidden.txt`, `data/unlisted.txt` (on disk, not
+  selected), `scratch/draft.lua` (excluded), the `scratch` folder, `data/Notes.txt` (wrong case) and the rest of the
+  image group's folder are not. The script compares each run's lines with the `dev` run's and lists the lines only
+  one of them printed (`only in dev: summary: file app:/data/notes.txt 93 ...`). In a dev build the `dev` run reads
+  the source folders while the other two use what the last build embedded or packed, so run it after building: an
+  edited smoke app file fails it until the next build.
 
 ### Environment variables
 
@@ -410,6 +429,7 @@ that can't be queried, `replaceFile`, `manifestDependencies` and the dependency 
 |---|---|
 | `IMLUI_EXIT_AFTER_FRAMES=n` | Quit after `n` rendered frames, with exit code 1 when a script error was reported (`EngineConfig::exitAfterFrames`, read by `defaultConfig`). For smoke runs. |
 | `IMLUI_DEV_PATHS=0` | Ignore the source folders compiled into a dev build's embedded packages (`ResourcePackage::sourceDir`): run from the embedded data and the files next to the executable, like a release build. Packages that aren't embedded (`IMLUI_EMBED_RESOURCES=OFF`) still mount their folder, their only copy. |
+| `IMLUI_SMOKE_NO_EMBEDDED_APP=1` | Test host only (`imlui_smoke_host`, read by `tests/smoke_host/main.cpp`, not the library): leave the embedded smoke app out, so `app:/` comes from the archives next to the executable. For the `pak` run of `smoke.modes`. |
 
 ### Resource tools
 

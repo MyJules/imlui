@@ -387,7 +387,7 @@ embeds files into. The library's manifest is `src/resources/resources.lua`: the 
 manifest itself excluded) at `imlui:/` and the fonts from `external/fonts/` (`base = "../../external/fonts"`) at
 `imlui:/fonts/`; it lives in `src/resources/`, a folder of resources only, so no pattern can pick up a `.cpp` or
 `.cppm`. There are two test manifests: `tests/data/smoke_app/resources.lua` (the smoke app, embedded into
-`imlui_smoke_host`, and into the tests twice: forced embedded and forced not embedded) and `tests/data/smoke_pak.lua` (the test archive). An app has its own the same way, in
+`imlui_smoke_host`, into the tests twice: forced embedded and forced not embedded, and packed into `smoke_app.pak` for the dev/shipped parity test `smoke.modes`) and `tests/data/smoke_pak.lua` (the test archive). An app has its own the same way, in
 `src/resources/` next to its scripts (see [Getting started](getting-started.md#using-imlui-in-your-app)).
 
 ### Embedding and archives
@@ -511,7 +511,7 @@ which uses a submodule, is the example).
 | `src/imlui/`, `src/wrap/` | The library's modules (see the module map below). |
 | `src/resources/` | The library's resources: `resources.lua` (the manifest) and the Lua side (`imlui.lua`), embedded at `imlui:/`. No `.cppm` here, so the module globs never see it. |
 | `tools/` | `imlui_rc` and `imlui_pack`, the build-time resource tools, with the aliases `imlui::imlui_rc` and `imlui::imlui_pack`. `imlui_add_resources` and `imlui_add_pak` run them by those names, which an installed package defines too (imported executables), so the helpers work the same in every mode. |
-| `tests/` | `imlui_tests` (GoogleTest), `support/` (test-only modules), `smoke_host/` (the test app host `imlui_smoke_host`), `data/` (fixtures: `smoke_app/`, `smoke_pak.lua`, test images), `smoke_run.cmake`, `package/` (the package tests: a consumer app built with each way of adding imlui, see [Development](development.md#package-tests)). |
+| `tests/` | `imlui_tests` (GoogleTest), `support/` (test-only modules), `smoke_host/` (the test app host `imlui_smoke_host`), `data/` (fixtures: `smoke_app/`, `smoke_pak.lua`, test images), `smoke_run.cmake`, `smoke_modes.cmake` (the dev/shipped parity test), `package/` (the package tests: a consumer app built with each way of adding imlui, see [Development](development.md#package-tests)). |
 | `external/` | Vendored third-party code (see [Third-party code](#third-party-code)). |
 | `docs/` | This documentation. |
 
@@ -708,7 +708,7 @@ See [Registering C++ types](extending.md).
 The host is the app's `main.cpp`, outside this repository. It has no `#include`, only `import imlui;` and
 `import imlui.embedded.<name>;` (generated from the app's manifest), and calls
 `Engine{defaultConfig(argc, argv, imlui::embedded::<name>::packages())}.run()`, after registering its C++ types.
-The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke test.
+The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke tests.
 
 ### Generated and tool modules
 

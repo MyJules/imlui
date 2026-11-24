@@ -44,16 +44,10 @@ include(GoogleTest)
 gtest_discover_tests(imlui_tests DISCOVERY_MODE PRE_TEST)
 
 # The test app host (smoke_host/main.cpp): the smoke app in data/smoke_app, embedded from its resources.lua like any
-# app's files, plus a registered C++ type (test::RenderCounter as `Probe`). Built only with the tests. Always embedded
+# app's files, plus a registered C++ type (a layout probe as `Probe`). Built only with the tests. Always embedded
 # (EMBED ON), so the smoke test below runs it alone in every configuration; when the library itself isn't embedded
 # (IMLUI_EMBED_RESOURCES=OFF), its imlui:/ files come from their source folders.
 add_executable(imlui_smoke_host smoke_host/main.cpp)
-target_sources(imlui_smoke_host
-    PRIVATE
-        FILE_SET CXX_MODULES
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/support
-        FILES support/render_counter.cppm
-)
 target_link_libraries(imlui_smoke_host PRIVATE imlui)
 imlui_set_warnings(imlui_smoke_host)
 imlui_set_hardening(imlui_smoke_host)
@@ -70,6 +64,21 @@ function(imlui_add_smoke_test name target expect)
     set_tests_properties(${name} PROPERTIES TIMEOUT 120 RUN_SERIAL ON)
 endfunction()
 imlui_add_smoke_test(smoke.imlui_smoke_host imlui_smoke_host "embedded 'smoke_app (app:/)' main.lua")
+
+# smoke.modes (smoke_modes.cmake): the smoke app run three ways, from the source folders over the embedded copy (the
+# build's defaults: dev builds only), from the embedded copy alone (IMLUI_DEV_PATHS=0) and from an archive of the same
+# manifest next to the executable (IMLUI_SMOKE_NO_EMBEDDED_APP=1, a switch of the test host), which must all see the
+# same files and render the same layout. The archive goes to its own folder: a .pak in bin/ would be mounted by
+# every executable there.
+imlui_add_pak(imlui_smoke_app_pak data/smoke_app/resources.lua
+              OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/smoke_app_pak/smoke_app.pak)
+add_dependencies(imlui_smoke_host imlui_smoke_app_pak)
+add_test(NAME smoke.modes
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:imlui_smoke_host>
+                 -DPAK=${CMAKE_CURRENT_BINARY_DIR}/smoke_app_pak/smoke_app.pak
+                 -DWORK=${CMAKE_CURRENT_BINARY_DIR}/smoke/smoke.modes -DDEV_PATHS=${IMLUI_DEV_PATHS}
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/smoke_modes.cmake)
+set_tests_properties(smoke.modes PROPERTIES TIMEOUT 300 RUN_SERIAL ON)
 
 # The package tests: a consumer app built with imlui added by add_subdirectory, FetchContent and find_package
 # (package/CMakeLists.txt, label `package`).
