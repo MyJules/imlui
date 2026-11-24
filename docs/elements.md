@@ -65,7 +65,8 @@ These are handled by the renderer (`Renderer::render`) for every element.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `id` | string | — | Makes the element reachable by name from the script: `nameField.text`. An id that collides with a `ui` member or a Lua global is reported, since the name would resolve to that instead. Every constructor registers it (`ui.registerId`), the Lua-side `Repeater`, `ListView`, `If`, `Loader` and `Responsive` included: `ListView { id = "list" }` is `list`. |
+| `id` | string | — | Makes the element reachable by name: `nameField.text` at app level, `ids.nameField` inside a [component or delegate](lua-api.md#element-ids), which has its own scope. Ids are weak (they don't keep the element alive); a duplicate in a scope is reported, and so is an app-level id that collides with a `ui` member or a Lua global, since the name would resolve to that instead. Every constructor registers it (`ui.registerId`), the Lua-side `Repeater`, `ListView`, `If`, `Loader` and `Responsive` included: `ListView { id = "list" }` is `list`. |
+| `parent` | element | — | *Read-only, Lua side.* The element that lays this one out (inline containers are skipped), `nil` for the root: `self.parent` in a binding or handler. A weak reference; assigning it raises an error. See [`self.parent`](lua-api.md#selfparent). |
 | `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) |
 | `enabled` | bool | `true` | `false` disables the element and everything inside it, with the Material disabled colors. |
 | `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. |
@@ -352,7 +353,7 @@ A `ScrollView` whose children come from `model` / `delegate` (built on the Lua s
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `model` | list, number, function or `bind` | — | Items; a number `n` means `1..n`. |
-| `delegate` | `function(item, index) -> element` | — | Builds one item's element. |
+| `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
 
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,
@@ -441,7 +442,7 @@ root. `visible = false` hides all of their children.
 
 | Element | Props (Lua side) |
 |---|---|
-| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
+| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index, ids)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
 | `If` | `condition`, array children, `otherwise` (one element). See [If](lua-api.md#if--condition-children-otherwise--element-). |
 | `Loader` | `item` (an element, or a function returning one). See [Loader](lua-api.md#loader--item-). |
 | `Responsive` | `compact`, `medium`, `expanded`, `large`, `extraLarge`: the element (or a function returning one, or `false`) for each window size class. See [Responsive](lua-api.md#responsive--compact-medium-expanded-large-extralarge-). |
