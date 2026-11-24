@@ -67,6 +67,23 @@ local function inScope(scope, fn, ...)
     return fn(...)
 end
 
+-- The scope each element was built in, for the elements built inside one (weak keys). The element's functions run
+-- in it: its bindings and on* handlers called from C++ (through native.setScopeHooks: the C++ side passes those calls
+-- through inScope), and the functions the Lua-side containers call (`model`, `condition`, a Loader's `item`, a
+-- Responsive class: see resolve). Elements built by a handler of a component's element so register in the
+-- component instance's `ids`. An element built at app level isn't here: its functions run in whatever scope is
+-- active, which is app level whenever the engine calls them.
+local scopeOf = setmetatable({}, { __mode = "k" })
+if native.setScopeHooks then native.setScopeHooks(scopeOf, inScope) end
+
+-- `fn` as a function that runs in the current scope when called later (a timer, a watcher), or `fn` itself at app
+-- level.
+local function inCurrentScope(fn)
+    local scope = scopes[#scopes]
+    if scope == nil then return fn end
+    return function(...) return inScope(scope, fn, ...) end
+end
+
 -- Calls fn(...) at app level (an empty scope stack) and returns its results: a module's top level runs there,
 -- whoever requires it first.
 local function atAppLevel(fn, ...)
@@ -139,69 +156,27 @@ end
 -- Parent links
 -------------------------------------------------------------------------------
 
--- `element.parent` is the element that lays the element out: read-only, and weak (it never keeps the parent
--- alive). It lives in a per-element proxy table that the element's metatable reads missing fields through
--- (__index is the proxy, whose own metatable falls back to the element's previous __index, e.g. a registered
--- type's methods), so reading any other missing field stays a few table lookups, no function call. __newindex
--- stores every field but `parent` as before.
-local ownMeta = setmetatable({}, { __mode = "k" })    -- the element metatables made here
-local proxyMetas = setmetatable({}, { __mode = "k" }) -- an element's previous __index -> its proxies' metatable
-local PLAIN_PROXY_META = { __mode = "v" }
-
-local function readOnlyParent()
-    error("element property 'parent' is read-only: the element's container sets it", 3)
-end
-
-local function storeField(t, k, v)
-    if k == "parent" then readOnlyParent() end
-    rawset(t, k, v)
-end
+-- `element.parent` is the element that lays the element out: read-only, and weak (it never keeps the parent or the
+-- element alive). It lives in one side table, `parents` [element] = parent (weak keys and values), not in the
+-- element: the metatable that all elements of a type share reads it (its __index answers `parent` from the table,
+-- anything else from the type's methods; see imlui.types `meta` and `parents`). Elements of a type that isn't
+-- registered (or without the C++ types) share PLAIN_META. Writes to an element go straight to the table: a script
+-- that assigns `parent` stores a raw field, which the C++ sync drops (and debug builds report).
+local parents = types ~= nil and types.parents or setmetatable({}, { __mode = "kv" })
+-- (__imlui_shared: holds no properties, so C++ property reads skip it, see luaui::Node::pushRaw.)
+local PLAIN_META = { __imlui_shared = true, __index = function(t, k) if k == "parent" then return parents[t] end end }
 
 local function isElement(v) return type(v) == "table" and type(rawget(v, "__type")) == "string" end
 
--- The parent-link proxy of element `el`, made (with the element's metatable) on first use.
-local function linkProxy(el)
-    local mt = getmetatable(el)
-    if mt ~= nil and ownMeta[mt] then return mt.__index end
-    -- A registered type's instance is attached first, so its metatable (the methods) is the one chained to.
-    if mt == nil and types ~= nil and rawget(el, "__native") == nil and isElement(el)
-        and types.isType(rawget(el, "__type")) then
-        types.attach(el)
-        mt = getmetatable(el)
-    end
-    local base = mt and mt.__index
-    local pm = PLAIN_PROXY_META
-    if base ~= nil then
-        pm = proxyMetas[base]
-        if pm == nil then
-            pm = { __mode = "v", __index = base }
-            proxyMetas[base] = pm
-        end
-    end
-    local proxy = setmetatable({}, pm)
-    local meta = {}
-    if mt then for k, v in pairs(mt) do meta[k] = v end end
-    meta.__index = proxy
-    local inner = mt and mt.__newindex
-    if inner == nil then
-        meta.__newindex = storeField
-    else
-        meta.__newindex = function(t, k, v)
-            if k == "parent" then readOnlyParent() end
-            if type(inner) == "function" then inner(t, k, v) else inner[k] = v end
-        end
-    end
-    ownMeta[meta] = true
-    setmetatable(el, meta)
-    return proxy
+-- Gives element `el` the metatable its type shares, unless it has one: a registered type's (types.meta, without
+-- creating the instance, which the first render or method call does), else PLAIN_META.
+local function shareMeta(el)
+    if getmetatable(el) ~= nil then return end
+    setmetatable(el, types ~= nil and types.meta(rawget(el, "__type")) or PLAIN_META)
 end
 
 -- The parent of `el`: nil for the root, or for an element no container took yet.
-local function parentOf(el)
-    local mt = getmetatable(el)
-    if mt ~= nil and ownMeta[mt] then return rawget(mt.__index, "parent") end
-    return nil
-end
+local function parentOf(el) return parents[el] end
 
 -- The element that lays out the children of `el`: `el` itself, or for an inline container (Repeater, If, Loader,
 -- Responsive), which its parent splices its children into, that parent (QML's visual parent). An inline container
@@ -215,56 +190,56 @@ end
 local CHILD_KEYS = { "otherwise", "menuBar", "header", "menu" }
 local SIZE_CLASS_KEYS = { "compact", "medium", "expanded", "large", "extraLarge" }
 
--- Calls f(child) for the children `el` holds now: positional, CHILD_KEYS, a Responsive's classes, the delegates a
+-- Calls f(child, arg) for the children `el` holds now: positional, CHILD_KEYS, a Responsive's classes, the delegates a
 -- Repeater or ListView built and the item a Loader or Responsive shows.
-local function forEachChild(el, f)
+local function forEachChild(el, f, arg)
     for _, c in ipairs(el) do
-        if isElement(c) then f(c) end
+        if isElement(c) then f(c, arg) end
     end
     for _, k in ipairs(CHILD_KEYS) do
         local c = rawget(el, k)
-        if isElement(c) then f(c) end
+        if isElement(c) then f(c, arg) end
     end
     if rawget(el, "__type") == "Responsive" then
         for _, k in ipairs(SIZE_CLASS_KEYS) do
             local c = rawget(el, k)
-            if isElement(c) then f(c) end
+            if isElement(c) then f(c, arg) end
         end
     end
     local list = rawget(el, "__list")
     if list then
         for _, c in ipairs(list) do
-            if isElement(c) then f(c) end
+            if isElement(c) then f(c, arg) end
         end
     end
     local box = rawget(el, "__box")
-    if box and isElement(box[1]) then f(box[1]) end
+    if box and isElement(box[1]) then f(box[1], arg) end
 end
 
 -- Makes `parent` the parent of `child` (nothing for a value that isn't an element). The children of an inline
 -- container follow it: their parent is its new holder.
 local function setParent(child, parent)
     if not isElement(child) or child == parent then return end
-    local proxy = linkProxy(child)
-    if rawget(proxy, "parent") == parent then return end
-    rawset(proxy, "parent", parent)
+    shareMeta(child)
+    if parents[child] == parent then return end
+    parents[child] = parent
     if rawget(child, "__inline") then
-        local h = holder(child)
-        forEachChild(child, function(c) setParent(c, h) end)
+        forEachChild(child, setParent, holder(child))
     end
 end
 
--- The end of every constructor, once `__type` is set: the parent link proxy (a `parent` prop is reported and
--- dropped), the children's parent links and the id.
+-- The end of every constructor, once `__type` is set: the shared metatable (a `parent` prop is reported and
+-- dropped), the children's parent links, the scope the element is built in (see scopeOf) and the id.
 local function finishElement(props)
     if rawget(props, "parent") ~= nil then
         ui.reportError(("%s: 'parent' is read-only (the element's container sets it); the value is ignored"):format(
             tostring(rawget(props, "__type"))))
         rawset(props, "parent", nil)
     end
-    linkProxy(props)
-    local h = holder(props)
-    forEachChild(props, function(c) setParent(c, h) end)
+    shareMeta(props)
+    forEachChild(props, setParent, holder(props))
+    local scope = scopes[#scopes]
+    if scope ~= nil then scopeOf[props] = scope end
     ui.registerId(props)
     return props
 end
@@ -381,9 +356,11 @@ end
 
 --- Calls fn(new, old, key) whenever state[key] changes ("*" = any key).
 --- Returns a function that removes the watcher: local stop = ui.watch(...); stop()
+--- A watcher added inside a component instance or delegate runs in its id scope.
 function ui.watch(state, key, fn)
     local w = watchers[state]
     assert(w, "ui.watch: not a ui.state table")
+    fn = inCurrentScope(fn)
     w[key] = w[key] or {}
     table.insert(w[key], fn)
     local list = w[key]
@@ -403,7 +380,9 @@ end
 --- (like a QML component's own properties), and so is `ids`: the ids declared while fn runs (nested elements
 --- included, but not those of a nested component instance, which has its own) register there instead of at app
 --- level, so two instances don't clash and the ids aren't free names. `MyComp { id = "x" }` registers the instance's
---- root element as `x` in the scope that creates the instance.
+--- root element as `x` in the scope that creates the instance. The functions of the instance's elements (bindings,
+--- handlers) and the timers and watchers it sets up run in its scope later too (see scopeOf), so the elements they
+--- build register in `ids` as well.
 function ui.component(fn)
     return function(props)
         props = props or {}
@@ -421,8 +400,14 @@ end
 
 local EMPTY = {}
 
+-- The value of a container's prop `v`: v(self) for a function (in the scope `self` was built in, see scopeOf),
+-- the bound value for a bind, else v.
 local function resolve(self, v)
-    if type(v) == "function" then return v(self) end
+    if type(v) == "function" then
+        local scope = scopeOf[self]
+        if scope ~= nil then return inScope(scope, v, self) end
+        return v(self)
+    end
     if type(v) == "table" and rawget(v, "__bind") then -- raw, like the C++ side: an __index doesn't run
         if v.t then return v.t[v.k] end
         return v.get()
@@ -497,13 +482,6 @@ function ui.If(p)
     return finishElement(p)
 end
 
--- Calls `fn(...)` in `scope` (nil: the current one) and returns its results. A Loader or Responsive calls its item
--- function in the scope it was created in, so the ids of elements built there register where the Loader's own do.
-local function callIn(scope, fn, ...)
-    if scope == nil then return fn(...) end
-    return inScope(scope, fn, ...)
-end
-
 -- Shows `item` in `box` (the one-element child list of a Loader or Responsive `self`): parents it, and marks the
 -- one it replaces as dropped.
 local function show(self, box, item)
@@ -518,10 +496,9 @@ function ui.Loader(p)
     p.__type = "Loader"
     p.__inline = true
     local box = {}
-    local scope = scopes[#scopes]
     p.__box = box
     p.__children = function(self)
-        show(self, box, callIn(scope, resolve, self, self.item))
+        show(self, box, resolve(self, self.item))
         return box
     end
     return finishElement(p)
@@ -556,11 +533,10 @@ function ui.Responsive(p)
     p.__type = "Responsive"
     p.__inline = true
     local box = {}
-    local scope = scopes[#scopes]
     p.__box = box
     p.__children = function(self)
         local v = ui.pickSizeClass(self, ui.sizeClass())
-        if type(v) == "function" then v = callIn(scope, v, self) end
+        if type(v) == "function" then v = resolve(self, v) end
         show(self, box, type(v) == "table" and v or nil)
         return box
     end
@@ -651,7 +627,9 @@ ui.color = {
 
 local timers, nextTimer = {}, 0
 
+-- A timer set inside a component instance or delegate runs in its id scope.
 local function addTimer(fn, ms, rep)
+    fn = inCurrentScope(fn)
     nextTimer = nextTimer + 1
     timers[nextTimer] = { fn = fn, interval = (ms or 0) / 1000, due = native.time() + (ms or 0) / 1000, rep = rep }
     return nextTimer
@@ -672,7 +650,9 @@ local frameCallbacks = {}
 --- Calls fn(time) at the start of every rendered frame. Frames are rendered on
 --- demand: call ui.requestFrame() from fn to keep them coming while animating.
 --- Returns a function that removes the callback.
+--- Inside a component instance or delegate, fn runs in its id scope (like the timers and watchers).
 function ui.onFrame(fn)
+    fn = inCurrentScope(fn)
     table.insert(frameCallbacks, fn)
     return function() removeFrom(frameCallbacks, fn) end
 end

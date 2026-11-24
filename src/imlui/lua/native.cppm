@@ -15,6 +15,7 @@ import imlui.theme.font_face_scope;
 import imlui.theme.font_library;
 import imlui.theme.typography;
 import imlui.theme.theme;
+import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.theme_table;
@@ -296,6 +297,14 @@ constexpr NativeFn nativeFns[] = {
                         : lv == "error" ? log::Level::Error
                                         : log::Level::Info;
          log::write(l, lua::toStringAny(state, 2), "lua");
+         return 0;
+     }},
+    // setScopeHooks(scopes, callIn) — the DSL's element scopes, for C++ calls of element functions (element_scope).
+    {"setScopeHooks",
+     [](lua::State* state) -> int {
+         if (!lua::istable(state, 1) || !lua::isfunction(state, 2))
+             lua::error(state, "setScopeHooks expects a table and a function");
+         luaui::setScopeHooks(state, 1, 2);
          return 0;
      }},
     // reportError(message) — shows a script error in the error overlay (and logs it once).

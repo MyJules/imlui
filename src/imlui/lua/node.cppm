@@ -16,10 +16,15 @@ import std;
 import lua;
 import imlui.color;
 import imlui.theme.theme;
+import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.value;
 
 export namespace imlui::luaui {
+
+/// A field of a metatable shared by all element tables of a type (the registered types' and the DSL's plain one):
+/// such a metatable only adds methods and `parent`, never a property, so property reads skip it (see pushRaw).
+inline constexpr const char* sharedMetaMarker = "__imlui_shared";
 
 class Node {
 public:
@@ -33,7 +38,8 @@ public:
     /// The element type (`__type`), e.g. "Button".
     [[nodiscard]] std::string type() const;
 
-    /// Pushes the raw (unresolved) field.
+    /// Pushes the raw (unresolved) field: the table's own, else what its metatable's __index gives, unless that
+    /// is a metatable shared by a type's elements (sharedMetaMarker), which holds no properties.
     lua::Type pushRaw(const char* key) const;
 
     /// Pushes the resolved value of property `key`; returns its Lua type.
@@ -74,8 +80,12 @@ private:
     /// Replaces the bind object at `idx` (relative) with the bound value.
     void resolveBind(int idx) const;
 
+    /// What the table's metatable is to property reads, found at the first read of a field the table lacks.
+    enum class Meta : std::uint8_t { Unknown, Skip, Index };
+
     lua::State* m_state;
     int m_index;
+    mutable Meta m_meta = Meta::Unknown;
 };
 
 } // namespace imlui::luaui
@@ -121,13 +131,28 @@ std::string Node::type() const {
     return t;
 }
 
-lua::Type Node::pushRaw(const char* key) const { return lua::getfield(m_state, m_index, key); }
+lua::Type Node::pushRaw(const char* key) const {
+    lua::pushcstring(m_state, key);
+    const lua::Type t = lua::rawget(m_state, m_index);
+    if (t != lua::Type::Nil || m_meta == Meta::Skip) return t;
+    if (m_meta == Meta::Unknown) {
+        m_meta = Meta::Skip; // no metatable, or a shared one
+        if (lua::getmetatable(m_state, m_index) != 0) {
+            lua::pushcstring(m_state, sharedMetaMarker); // nil, meta, marker
+            if (lua::rawget(m_state, -2) == lua::Type::Nil) m_meta = Meta::Index;
+            lua::pop(m_state, 2); // nil
+        }
+        if (m_meta == Meta::Skip) return t;
+    }
+    lua::pop(m_state);
+    return lua::getfield(m_state, m_index, key); // the table's own metatable (a script's): its __index runs
+}
 
 lua::Type Node::push(const char* key) const {
-    lua::getfield(m_state, m_index, key);
+    pushRaw(key);
     if (lua::isfunction(m_state, -1)) {
         lua::pushvalue(m_state, m_index);
-        if (!safeRead(m_state, 1, 1)) lua::pushnil(m_state);
+        if (!safeRead(m_state, scopedArgs(m_state, m_index, 1), 1)) lua::pushnil(m_state);
     } else if (isBind(m_state, -1)) {
         resolveBind(-1);
     }
@@ -170,8 +195,10 @@ std::string Node::string(const char* key, std::string_view def) const {
 std::optional<Color> Node::color(const char* key) const {
     std::optional<Color> r;
     lua::Type t = push(key);
-    if (t == lua::Type::String) r = resolveColor(lua::tostring(m_state, -1));
-    else if (t == lua::Type::Table) r = colorFromTable(m_state, -1);
+    if (t == lua::Type::String)
+        r = resolveColor(lua::tostring(m_state, -1));
+    else if (t == lua::Type::Table)
+        r = colorFromTable(m_state, -1);
     lua::pop(m_state);
     return r;
 }
@@ -180,8 +207,8 @@ std::string Node::text(const char* key) const {
     if (has(key)) return string(key);
     lua::rawgeti(m_state, m_index, 1);
     lua::Type t = lua::type(m_state, -1);
-    std::string r = t == lua::Type::String || t == lua::Type::Number ? std::string{lua::tostring(m_state, -1)}
-                                                                     : std::string{};
+    std::string r =
+        t == lua::Type::String || t == lua::Type::Number ? std::string{lua::tostring(m_state, -1)} : std::string{};
     lua::pop(m_state);
     return r;
 }
@@ -254,14 +281,15 @@ void Node::setTop(const char* key) const {
 }
 
 bool Node::emit(const char* signal, std::initializer_list<Value> args) const {
-    lua::getfield(m_state, m_index, signal);
+    pushRaw(signal);
     if (!lua::isfunction(m_state, -1)) {
         lua::pop(m_state);
         return false;
     }
     lua::pushvalue(m_state, m_index);
-    for (const auto& a : args) pushValue(m_state, a);
-    return safeCall(m_state, 1 + static_cast<int>(args.size()), 0);
+    for (const auto& a : args)
+        pushValue(m_state, a);
+    return safeCall(m_state, scopedArgs(m_state, m_index, 1 + static_cast<int>(args.size())), 0);
 }
 
 std::optional<Color> Node::colorFromTable(lua::State* state, int idx) {

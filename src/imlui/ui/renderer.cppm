@@ -113,7 +113,8 @@ public:
                 lua::getfield(state, -1, "__type");
                 bool element = lua::isstring(state, -1);
                 lua::pop(state);
-                lua::getfield(state, -1, "__inline");
+                lua::pushcstring(state, "__inline"); // raw: only the table's own marker counts
+                lua::rawget(state, -2);
                 bool inl = lua::toboolean(state, -1);
                 lua::pop(state);
                 if (element && inl) {

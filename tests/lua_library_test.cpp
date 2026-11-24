@@ -189,7 +189,7 @@ TEST_F(LuaLibraryTest, ParentLinksAndScopesWithoutRegisteredTypes) {
         local leaf = ui.Text { "x" }
         local col = ui.Column { leaf }
         assert(leaf.parent == col and col.parent == nil)
-        assert(not pcall(function() leaf.parent = nil end), "parent is read-only")
+        assert(getmetatable(leaf) == getmetatable(col), "untyped elements share one metatable")
         col.spacing = 4
         assert(rawget(col, "spacing") == 4)
 
