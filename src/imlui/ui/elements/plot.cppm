@@ -79,7 +79,7 @@ void Plot::render(Frame& frame) {
     o.bars = m_kind == "bars" || m_kind == "histogram";
     o.fill = m_fill;
     o.width = frame.size("width", -1.0f);
-    o.height = frame.size("height");
+    o.height = frame.resolvedHeight(0.0f);
     o.title = m_title ? *m_title : m_label;
     o.color = m_color;
     if (m_min || m_max) {

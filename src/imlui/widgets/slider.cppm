@@ -4,6 +4,7 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <unordered_set>
 
@@ -21,8 +22,10 @@ import imlui.widgets.value_format;
 export namespace imlui::md {
 
 /// Material slider. `step` <= 0 means continuous. `valueFormat` is checked with isValidFloatFormat(); an invalid
-/// one is reported once and replaced by defaultValueFormat. Returns true when the value changed.
-bool slider(const char* id, float* v, float vmin, float vmax, float step = 0.0f, float width = 0.0f,
+/// one is reported once and replaced by defaultValueFormat. Returns true when the user changed the value; `*v`
+/// is written only then, so a value the user didn't touch keeps its exact double (0.1 stays 0.1). A stepped value
+/// is `vmin + k * step` without binary noise (0.1 * 3 gives 0.3, not 0.30000000000000004).
+bool slider(const char* id, double* v, double vmin, double vmax, double step = 0.0, float width = 0.0f,
             const char* valueFormat = "%.2f");
 
 } // namespace imlui::md
@@ -44,9 +47,18 @@ const char* checkedFormat(const char* format) {
     return defaultValueFormat;
 }
 
+/// `vmin + k * step` for the step nearest to `v`, rounded to 15 significant digits: that drops the noise of the
+/// binary multiplication (0.1 * 3 = 0.30000000000000004) and keeps every value a step can mean.
+double snapToStep(double v, double vmin, double step) {
+    const double snapped = vmin + std::round((v - vmin) / step) * step;
+    char buf[32] = {};
+    if (std::snprintf(buf, sizeof buf, "%.15g", snapped) < 0) return snapped;
+    return std::strtod(buf, nullptr);
+}
+
 } // namespace
 
-bool slider(const char* id, float* v, float vmin, float vmax, float step, float width, const char* valueFormat) {
+bool slider(const char* id, double* v, double vmin, double vmax, double step, float width, const char* valueFormat) {
     const Scheme& s = scheme();
     const float w = itemWidth(width == 0.0f ? -1.0f : width, dp(200));
     const float h = dp(44);
@@ -60,13 +72,13 @@ bool slider(const char* id, float* v, float vmin, float vmax, float step, float 
     const float x0 = p.x + r, x1 = p.x + w - r;
     bool changed = false;
     if (act && vmax > vmin) {
-        float t = std::clamp((ImGui::GetMousePos().x - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
-        float nv = vmin + t * (vmax - vmin);
-        if (step > 0) nv = vmin + std::round((nv - vmin) / step) * step;
+        const float mt = std::clamp((ImGui::GetMousePos().x - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
+        double nv = vmin + static_cast<double>(mt) * (vmax - vmin);
+        if (step > 0) nv = snapToStep(nv, vmin, step);
         nv = std::clamp(nv, vmin, vmax);
         if (nv != *v) { *v = nv; changed = true; }
     }
-    float t = vmax > vmin ? std::clamp((*v - vmin) / (vmax - vmin), 0.0f, 1.0f) : 0.0f;
+    const float t = vmax > vmin ? static_cast<float>(std::clamp((*v - vmin) / (vmax - vmin), 0.0, 1.0)) : 0.0f;
     float tv = animate(iid + 2, t, 30.0f);
 
     Color active = dis ? s.onSurface.withAlpha(0.38f) : s.primary;
@@ -77,8 +89,9 @@ bool slider(const char* id, float* v, float vmin, float vmax, float step, float 
     fillRoundRect(dl, {x0, cy - th * 0.5f}, {x1, cy + th * 0.5f}, th * 0.5f, inactive);
     if (hx > x0) fillRoundRect(dl, {x0, cy - th * 0.5f}, {hx, cy + th * 0.5f}, th * 0.5f, active);
     if (step > 0 && vmax > vmin && (vmax - vmin) / step <= 40) {
-        for (float sv = vmin; sv <= vmax + step * 0.5f; sv += step) {
-            float sx = x0 + (x1 - x0) * ((sv - vmin) / (vmax - vmin));
+        const int stops = static_cast<int>(std::floor((vmax - vmin) / step + 0.5));
+        for (int i = 0; i <= stops; ++i) {
+            const float sx = x0 + (x1 - x0) * static_cast<float>(static_cast<double>(i) * step / (vmax - vmin));
             fillCircle(dl, {sx, cy}, dp(1),
                        sx <= hx ? s.onPrimary.withAlpha(0.7f) : s.onSecondaryContainer.withAlpha(0.7f));
         }
@@ -95,7 +108,7 @@ bool slider(const char* id, float* v, float vmin, float vmax, float step, float 
         // argument, so -Wformat-nonliteral is off for this call only.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
-        if (std::snprintf(buf, sizeof buf, format, static_cast<double>(*v)) < 0) buf[0] = char{};
+        if (std::snprintf(buf, sizeof buf, format, *v) < 0) buf[0] = char{};
 #pragma clang diagnostic pop
         ImVec2 ts = measure(TextStyle::LabelMedium, buf);
         ImDrawList* fg = ImGui::GetForegroundDrawList();

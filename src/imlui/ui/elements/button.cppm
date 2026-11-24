@@ -61,8 +61,8 @@ void Button::render(Frame& frame) {
     bool clicked = false;
     {
         FontFaceScope face{m_font};
-        clicked = md::button(label.c_str(), md::buttonVariant(m_variant), {frame.size("width"), frame.size("height")},
-                             m_icon);
+        clicked = md::button(label.c_str(), md::buttonVariant(m_variant),
+                             {frame.size("width"), frame.resolvedHeight(0.0f)}, m_icon);
     }
     if (clicked) emit("onClicked");
     frame.attachMenu(clicked);

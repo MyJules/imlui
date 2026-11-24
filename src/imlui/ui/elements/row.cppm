@@ -60,8 +60,7 @@ void Row::declare(TypeBuilder<Row>& type) {
 
 void Row::render(Frame& frame) {
     const float sp = m_spacing ? frame.dp(static_cast<float>(*m_spacing)) : ImGui::GetStyle().ItemSpacing.x;
-    float availW = frame.size("width");
-    if (availW <= 0) availW = ImGui::GetContentRegionAvail().x + availW;
+    const float availW = frame.resolvedWidth(ImGui::GetContentRegionAvail().x);
     const float free = std::max(0.0f, availW - m_fixed);
     const float fillW = m_fills > 0 ? free / static_cast<float>(m_fills) : 0.0f;
     float offset = 0.0f, extraGap = 0.0f;

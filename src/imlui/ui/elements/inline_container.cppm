@@ -3,7 +3,9 @@
 // These containers are implemented in Lua (src/resources/imlui.lua): they are `__inline` and give their children
 // through `__children(self)` (the delegates, the branch that holds, the loaded item). A parent splices
 // their children into its own, so they are never rendered themselves, except as the root, where this
-// renders their children top to bottom.
+// renders their children top to bottom. Their constructors register `id` like every element (ui.registerId), and
+// when one drops children (a rebuilt delegate, a replaced item) the next ui.__tick collects garbage, so a dropped
+// ticking element (Timer) that nothing else references stops right away.
 module;
 
 export module imlui.ui.elements.inline_container;

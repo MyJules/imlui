@@ -102,7 +102,9 @@ theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself wh
 2. `window.beginFrame()`, which starts a new ImGui frame. Then the zoom shortcuts are handled.
 3. `ui.__tick(now)`: runs due `setTimeout`/`setInterval` timers, then ticks the C++ ticking elements (`Timer`;
    `require("imlui.types").tick(now)`, synced first, rendered or not), then the `onFrame` callbacks, and returns
-   the seconds until the next timer.
+   the seconds until the next timer. If an inline container dropped children on the last frame (a rebuilt or
+   removed `Repeater` delegate, a replaced `Loader` / `Responsive` item) and ticking elements exist, it runs a full
+   garbage collection before ticking, so a dropped `Timer` that nothing references stops now.
 4. Renders the root element.
 5. Renders **overlays**: the children of `ui.__overlays`. Today that's the app-wide `Snackbar` element driven by
    `snackbar()`. Overlays draw above everything else.
@@ -533,6 +535,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, wake handler |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
+| `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `isVisual`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |

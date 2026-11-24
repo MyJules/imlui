@@ -173,7 +173,14 @@ conventions they share, and new built-ins follow them:
    defaults; `unset` for an empty `std::optional`; `(positional)` for the default property), `Raw:` (props read
    from the element table in `render()`: sizes, element-valued props, presence checks), `Signals:` with their
    arguments (`self` first) and `Two-way:`, each line left out when empty, then notes. [Elements](elements.md)
-   is the reference built from these; keep both in step.
+   is the reference built from these; keep both in step. `element_reference_test.cpp` checks it: every declared
+   property and signal of every registered built-in must appear in the class doc comment (with its base class's,
+   for a subclass) and in the type's section of elements.md (or its table row), each default property in the
+   "Positional strings" table, and the "Non-visual elements" list must match the non-visual flag.
+9. **Sizes** go through one rule: pass `frame.size("width")` to an `md::` widget (it resolves it with
+   `md::itemWidth`), or resolve it yourself with `frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`
+   when the element sizes itself. Both use `resolveSize` (`imlui.ui.item_size`), so `-1` is exactly the available
+   space and `< -1` exactly that minus `|v|` dp everywhere. Don't compute `avail + w` by hand.
 3. **Register it** in `registerBuiltinTypes` (`builtin.cppm`) under its family comment, aliases on the next line
    (`registerType<Column>("Column")`, then `("Item")`: Lua sees separate types).
 4. **Two-way props**: set the member, `notify("prop")`, then `emit(...)`. `notify` writes the value back and emits
@@ -325,6 +332,10 @@ suppressions. Run `clang-asan` before merging larger changes.
 - Good candidates are the pure modules: `imlui.color*` (hex parsing, OKLCH round trips), `imlui.theme.scheme`
   (role lookup, generation), `imlui.theme.theme` (`resolveColor`), and `imlui.lua.*` against a bare `lua::State`
   (prop resolution, `bind` write-back, `themeFromTable`).
+- `element_reference_test.cpp` keeps the element reference honest: it registers the built-ins and checks
+  `docs/elements.md` and the element classes' doc comments (read from the source tree through the
+  `IMLUI_DOCS_DIR` and `IMLUI_ELEMENTS_DIR` compile definitions) against the declared members (see
+  [Writing a built-in element](#writing-a-built-in-element)).
 - `types_test.cpp` covers the C++ type system without a window. It installs a `TypeRegistry` into a Lua state
   that runs `src/resources/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `nil` defaults,
   `notify`/`emit`, `__gc` lifetime, singletons (also `shared_ptr` ones), `overload` and reinstalling into a new

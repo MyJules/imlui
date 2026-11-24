@@ -161,3 +161,24 @@ TEST_F(LuaLibraryTest, ElementIdsThatCollideWithUiMembersOrGlobalsAreReported) {
         assert(ui.env.nameField == field)
     )");
 }
+
+TEST_F(LuaLibraryTest, LuaSideContainersRegisterTheirIds) {
+    run(R"(
+        local rep = ui.Repeater { id = "rep", model = 2, delegate = function() return ui.Text {} end }
+        local list = ui.ListView { id = "list", model = 1, delegate = function() return ui.Text {} end }
+        local plain = ui.ListView { id = "plainList", ui.Text {} }
+        local cond = ui.If { id = "cond", condition = true }
+        local loader = ui.Loader { id = "loader", item = ui.Text {} }
+        local resp = ui.Responsive { id = "resp", compact = ui.Text {} }
+        assert(ui.env.rep == rep and ui.env.list == list and ui.env.plainList == plain)
+        assert(ui.env.cond == cond and ui.env.loader == loader and ui.env.resp == resp)
+        assert(#reported == 0, tostring(reported[1]))
+
+        -- The same collision checks as the other elements.
+        ui.Loader { id = "io" }
+        assert(#reported == 1 and reported[1]:find("element id 'io' collides with Lua global 'io'", 1, true),
+               tostring(reported[1]))
+        ui.Repeater { id = "bind", model = 0, delegate = function() end }
+        assert(#reported == 2 and reported[2]:find("collides with ui member 'ui.bind'", 1, true), tostring(reported[2]))
+    )");
+}

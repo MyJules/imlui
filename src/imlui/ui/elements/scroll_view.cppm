@@ -114,7 +114,8 @@ void ScrollView::render(Frame& frame) {
         if (m_restoreFrames > 0) ImGui::SetNextWindowScroll(m_scroll);
     }
 
-    ImGui::BeginChild("##scroll", {frame.size("width"), frame.size("height")}, cf);
+    // Unset (0) is ImGui's default: the remaining space.
+    ImGui::BeginChild("##scroll", {frame.resolvedWidth(0.0f), frame.resolvedHeight(0.0f)}, cf);
     ImGui::PopStyleVar();
     if (m_color) ImGui::PopStyleColor();
     if (pad > 0) ImGui::PopStyleVar();

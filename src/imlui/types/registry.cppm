@@ -2,7 +2,7 @@
 //
 // install(state) runs for every new Lua state (each hot reload) before the DSL loads, and sets up:
 //
-//  * `require("imlui.types")`: { names(), isType(name), attach(element), tick(now) }. The DSL's
+//  * `require("imlui.types")`: { names(), isType(name), attach(element), tick(now), tickingCount() }. The DSL's
 //    constructors call attach() for registered types, which creates the C++ instance right away and stores
 //    it in the element table as `__native`, a full userdata whose __gc deletes the instance. The table gets a
 //    metatable whose __index is the type's methods table, so `element:reset()` works. The instance
@@ -504,6 +504,16 @@ int libTick(lua::State* state) {
     return 0;
 }
 
+/// tickingCount(): the number of ticking elements of this state. ui.__tick collects garbage after a container
+/// dropped children only when there are some (a dropped Timer then stops right away).
+int libTickingCount(lua::State* state) {
+    lua::Integer n = 0;
+    for (const Element* e : Element::tickingElements())
+        if (e->luaState() == state) ++n;
+    lua::pushinteger(state, n);
+    return 1;
+}
+
 Box* syncBox(const Node& node, const TypeInfo& info) {
     lua::State* state = node.state();
     Box* b = selfBox(state, node.index());
@@ -622,9 +632,9 @@ void TypeRegistry::install(lua::State* state) {
     lua::settop(state, top);
 
     // require("imlui.types")
-    lua::createtable(state, 0, 4);
-    const lua::CFunction lib[] = {&libNames, &libIsType, &libAttach, &libTick};
-    const char* libNamesList[] = {"names", "isType", "attach", "tick"};
+    lua::createtable(state, 0, 5);
+    const lua::CFunction lib[] = {&libNames, &libIsType, &libAttach, &libTick, &libTickingCount};
+    const char* libNamesList[] = {"names", "isType", "attach", "tick", "tickingCount"};
     for (std::size_t i = 0; i < std::size(lib); ++i) {
         lua::pushlightuserdata(state, this);
         lua::pushcclosure(state, lib[i], 1);

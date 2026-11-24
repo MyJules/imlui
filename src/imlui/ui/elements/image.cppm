@@ -93,14 +93,6 @@ namespace {
 /// The size of the placeholder drawn for a broken image without a set size, in dp.
 constexpr float placeholderSize = 48.0f;
 
-/// A size from Frame::size() against the available space: > 0 fixed, -1 fill, < -1 fill minus, 0 unset.
-float resolveSize(float v, float avail) {
-    if (v > 0.0f) return v;
-    if (v == -1.0f) return std::max(0.0f, avail);
-    if (v < -1.0f) return std::max(0.0f, avail + v);
-    return 0.0f;
-}
-
 } // namespace
 
 void Image::declare(TypeBuilder<Image>& type) {
@@ -145,9 +137,8 @@ void Image::render(Frame& frame) {
     publish(ready ? "ready" : !error.empty() ? "error" : "none", ready ? image->width() : 0, ready ? image->height() : 0);
 
     // Lay out: one item of the computed size.
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const ImVec2 size = imageSize(natural, frame.dp(1.0f), resolveSize(frame.size("width"), avail.x),
-                                  resolveSize(frame.size("height"), avail.y));
+    // Unset (0) stays 0: imageSize() then derives the size from the image.
+    const ImVec2 size = imageSize(natural, frame.dp(1.0f), frame.resolvedWidth(0.0f), frame.resolvedHeight(0.0f));
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     ImGui::Dummy(size);
     m_lastSize = size;

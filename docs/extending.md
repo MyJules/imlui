@@ -116,7 +116,8 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `forEachChild(f)` | Custom layouts: `f(Frame::Child& child)` is called for every **visible** child (inline containers spliced in). Place the cursor, then `child.render()`. See [Child handles](#child-handles). |
 | `withElementProp(key, f)`, `renderElementProp(key)` | A prop whose value is an element (`menuBar = MenuBar { ... }`, `header = ...`): `f(Frame::Child&)` is called when it's set and visible; `renderElementProp` just renders it at the cursor. |
 | `attachMenu(clicked)` | The `menu` prop (a `Menu` element) as a popup anchored to the last item: opened when `clicked`, rendered while open. Call it right after the widget that opens it. |
-| `size(key)`, `size(key, ifAuto)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values). The second form returns `ifAuto` for an unset (0) size: `size("width", -1)` fills by default. |
+| `size(key)`, `size(key, ifAuto)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values). The second form returns `ifAuto` for an unset (0) size: `size("width", -1)` fills by default. Pass it to the `md::` widgets, which resolve it. |
+| `resolvedWidth(natural)`, `resolvedHeight(natural)` | `width` / `height` resolved to pixels against the available space with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset. Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
 | `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; `"start"`/`"center"`/`"end"` as 0/0.5/1. |
 | `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
 | `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes. |
@@ -163,7 +164,8 @@ ImGui IDs such as `"##gauge"` are unique per element, and the element counts as 
 The common props keep working on typed elements without being declared, exactly as on handler-function elements:
 the renderer skips the element when `visible` is false, wraps it in `BeginDisabled` when `enabled` is false, in an
 ImGui group when it's visual, and in `PushID`, and shows `tooltip` after it. `id` registers the element for lookup
-by name, and sizes are read with `frame.size("width")` / `frame.size("height")`.
+by name, and sizes are read with `frame.size("width")` / `frame.size("height")` (or resolved to pixels with
+`frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`).
 
 ## Declaring members
 
@@ -599,8 +601,14 @@ private:
 ```
 
 An element ticks until ticking is turned off or the element is destroyed, that is until Lua collects its element
-table: an element that's merely no longer referenced keeps ticking until the next garbage collection. Give it a
-`running` property (like the built-in `Timer`) when scripts need to stop it. `timer.cppm` is the complete example.
+table. Ticking follows the table's lifetime, not whether it is in the rendered tree: an element on a hidden page, in
+an unselected `Loader` page kept in a table, or held only by a variable keeps ticking. When an inline container
+**drops** children (a `Repeater`/`ListView` delegate rebuilt or removed because its model changed, a `Loader` or
+`Responsive` item replaced by another), the next frame's `ui.__tick` runs a full garbage collection before ticking
+(only while ticking elements exist), so a dropped element that nothing else references is destroyed and stops right
+away. An element dropped some other way (a table you edit yourself) stops at the next garbage collection. A dropped
+element that still has an `id` stays referenced by `ui.ids` and keeps ticking. Give the element a `running`
+property (like the built-in `Timer`) when scripts need to stop it. `timer.cppm` is the complete example.
 
 ## The built-ins as examples
 

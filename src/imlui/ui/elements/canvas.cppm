@@ -22,7 +22,7 @@ export namespace imlui {
 /// Custom drawing from Lua: onPaint(self, p) draws with the painter (imlui.lua.painter) on every rendered frame.
 ///
 /// Props:   animated = false (render continuously, for time-dependent painting)
-/// Raw:     width (default fill), height (default 200dp)
+/// Raw:     width (size, default fill), height (size, default 200dp)
 /// Signals: onPaint(self, p), onClicked(self, x, y)
 class Canvas final : public Element {
 public:
@@ -48,9 +48,9 @@ void Canvas::declare(TypeBuilder<Canvas>& type) {
 }
 
 void Canvas::render(Frame& frame) {
-    float w = frame.size("width"), h = frame.size("height");
-    if (w <= 0) w = std::max(1.0f, ImGui::GetContentRegionAvail().x + (w < 0 ? w + 1.0f : 0.0f));
-    if (h <= 0) h = frame.dp(200);
+    // Unset: the available width, 200dp high.
+    const float w = frame.resolvedWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x));
+    const float h = frame.resolvedHeight(frame.dp(200));
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::InvisibleButton("##canvas", {w, h});
     const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();

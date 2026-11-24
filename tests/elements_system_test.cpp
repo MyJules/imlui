@@ -209,6 +209,90 @@ TEST_F(SystemTest, ATimerThatRemovesAnotherWhileTickingIsSafe) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+TEST_F(SystemTest, ATimerInARemovedRepeaterDelegateStops) {
+    run(R"(
+        n = 0
+        s = state { count = 2 }
+        root = Column { Repeater { model = function() return s.count end, delegate = function()
+            return Column { Timer { interval = 250, onTriggered = function() n = n + 1 end } } end } })");
+    m_h.renderFrames("root", 2 + 8); // the delegates are built while rendering frame 1, and start on frame 2
+    EXPECT_EQ(number("n"), 4);       // two timers, twice each
+    const auto ticking = Element::tickingElements().size();
+
+    run("s.count = 1");
+    m_h.renderFrame("root"); // the Repeater drops the second delegate
+    m_h.renderFrame("root"); // ui.__tick collects it before ticking
+    EXPECT_EQ(Element::tickingElements().size(), ticking - 1);
+    run("n = 0");
+    m_h.renderFrames("root", 8);
+    EXPECT_EQ(number("n"), 2); // only the first delegate's timer
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(SystemTest, ATimerInARebuiltRepeaterDelegateIsReplaced) {
+    run(R"(
+        hits = { a = 0, b = 0 }
+        s = state { items = { "a" } }
+        root = Column { Repeater { model = function() return s.items end, delegate = function(item)
+            return Timer { interval = 250, onTriggered = function() hits[item] = hits[item] + 1 end } end } })");
+    m_h.renderFrames("root", 2 + 4); // built while rendering frame 1, started on frame 2
+    EXPECT_EQ(number("hits.a"), 1);
+    const auto ticking = Element::tickingElements().size();
+
+    run(R"(s.items = { "b" })");
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(Element::tickingElements().size(), ticking); // the old delegate's timer is gone, the new one ticks
+    run("hits.a = 0");
+    m_h.renderFrames("root", 8);
+    EXPECT_EQ(number("hits.a"), 0);
+    EXPECT_GE(number("hits.b"), 2);
+}
+
+TEST_F(SystemTest, ALoaderItemThatIsReplacedStopsItsTimer) {
+    run(R"(
+        hits = { a = 0, b = 0 }
+        s = state { source = "a" }
+        local current, currentSource
+        local function load(source)
+            return Column { Timer { interval = 250, onTriggered = function() hits[source] = hits[source] + 1 end } }
+        end
+        root = Column { Loader { item = function()
+            if currentSource ~= s.source then currentSource = s.source; current = load(s.source) end
+            return current
+        end } })");
+    m_h.renderFrames("root", 2 + 4); // built while rendering frame 1, started on frame 2
+    EXPECT_EQ(number("hits.a"), 1);
+
+    run(R"(s.source = "b")");
+    m_h.renderFrames("root", 2);
+    run("hits.a = 0; hits.b = 0");
+    m_h.renderFrames("root", 8);
+    EXPECT_EQ(number("hits.a"), 0); // the old item was dropped and collected
+    EXPECT_EQ(number("hits.b"), 2);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(SystemTest, ATimerOnAKeptLoaderPageKeepsTickingAfterASwitch) {
+    run(R"(
+        n = 0
+        s = state { page = 2 }
+        pages = {
+            Probe { id = "p1" },
+            Column { Timer { interval = 250, onTriggered = function() n = n + 1 end } },
+        }
+        root = Column { Loader { item = function() return pages[s.page] end } })");
+    m_h.renderFrames("root", 1 + 4);
+    EXPECT_EQ(number("n"), 1);
+    const auto ticking = Element::tickingElements().size();
+
+    run("s.page = 1"); // page 2 leaves the tree, but `pages` still holds it
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(Element::tickingElements().size(), ticking);
+    run("n = 0");
+    m_h.renderFrames("root", 8);
+    EXPECT_EQ(number("n"), 2);
+}
+
 // ------------------------------------------------------------------ Snackbar
 
 // The harness can't draw a visible snackbar (md::snackbar measures text with the theme fonts, which a

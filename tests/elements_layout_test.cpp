@@ -19,6 +19,8 @@ import imlui.ui.elements.tab;
 import imlui.ui.elements.tab_bar;
 import imlui.ui.elements.tree_node;
 import imlui.test.headless_frame;
+import imlui.test.last_item_probe;
+import imlui.ui.item_size;
 
 using namespace imlui;
 
@@ -414,3 +416,65 @@ TEST_F(LayoutTest, TreeNodeTextAndInitialExpansion) {
 }
 
 } // namespace
+
+// ------------------------------------------------------------ Sizes
+
+TEST(ItemSize, ResolveSizeRules) {
+    EXPECT_FLOAT_EQ(resolveSize(40.0f, 300.0f, 7.0f), 40.0f);   // fixed
+    EXPECT_FLOAT_EQ(resolveSize(0.0f, 300.0f, 7.0f), 7.0f);     // unset: natural
+    EXPECT_FLOAT_EQ(resolveSize(-1.0f, 300.0f, 7.0f), 300.0f);  // fill
+    EXPECT_FLOAT_EQ(resolveSize(-0.5f, 300.0f, 7.0f), 300.0f);  // anything from -1 up to 0 fills
+    EXPECT_FLOAT_EQ(resolveSize(-20.0f, 300.0f, 7.0f), 280.0f); // fill minus
+    EXPECT_FLOAT_EQ(resolveSize(-400.0f, 300.0f, 7.0f), 1.0f);  // at least 1px
+}
+
+// Every element resolves fill (-1) and fill minus (< -1) widths the same way: the available width, and that
+// minus |v| dp. (Column and Canvas used to be a pixel wider on fill minus, the others a pixel narrower on fill, and
+// Spacer ignored fill values.)
+TEST_F(LayoutTest, FillAndFillMinusWidthsAreTheSameForEveryElement) {
+    m_h.registerType<test::LastItemProbe>("Last");
+    // Each element, with its width as `W`.
+    const std::string elements[] = {
+        "ProgressBar { width = W }",
+        "Column { width = W }",
+        "Canvas { width = W, height = 10 }",
+        "Row { width = W, Spacer { fill = true } }",
+        "Spacer { width = W }",
+        "TopAppBar { width = W }",
+        "NavigationBar { width = W }",
+    };
+    float fill = 0.0f;
+    for (const std::string& e : elements) {
+        for (const std::string w : {"-1", "-20"}) {
+            std::string code = e;
+            code.replace(code.find('W'), 1, w);
+            run("root = Last { " + code + " }");
+            m_h.renderFrames("root", 2); // a Row measures its children on the frame before
+            const float got = m_h.instance<test::LastItemProbe>("root")->size().x;
+            if (fill == 0.0f) fill = got; // the first: ProgressBar, through md::itemWidth
+            EXPECT_FLOAT_EQ(got, w == "-1" ? fill : fill - 20.0f) << code;
+        }
+    }
+    EXPECT_GT(fill, 100.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(LayoutTest, FillHeights) {
+    m_h.registerType<test::LastItemProbe>("Last");
+    run("root = Last { Spacer { height = 30 } }");
+    m_h.renderFrame("root");
+    EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("root")->size().y, 30.0f);
+    run("root = Last { Spacer { } }");
+    m_h.renderFrame("root");
+    EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("root")->size().y, 1.0f); // unset: 1px
+    run("root = Last { Canvas { height = -1 } }");
+    m_h.renderFrame("root");
+    const float full = m_h.instance<test::LastItemProbe>("root")->size().y;
+    EXPECT_GT(full, 200.0f); // fills the window, not the 200dp default
+    run("root = Last { Canvas { height = -50 } }");
+    m_h.renderFrame("root");
+    EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("root")->size().y, full - 50.0f);
+    run("root = Last { Spacer { height = -50 } }");
+    m_h.renderFrame("root");
+    EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("root")->size().y, full - 50.0f);
+}

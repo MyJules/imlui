@@ -18,6 +18,9 @@ imlui_set_hardening(imlui_tests)
 target_compile_definitions(imlui_tests PRIVATE IMLUI_RESOURCES_DIR="${PROJECT_SOURCE_DIR}/src/resources"
                                                IMLUI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
                                                IMLUI_FONT_DIR="${PROJECT_SOURCE_DIR}/external/fonts")
+# element_reference_test checks docs/elements.md and the element classes' doc comments against the registered types.
+target_compile_definitions(imlui_tests PRIVATE IMLUI_DOCS_DIR="${PROJECT_SOURCE_DIR}/docs"
+                                               IMLUI_ELEMENTS_DIR="${PROJECT_SOURCE_DIR}/src/imlui/ui/elements")
 # An archive built through imlui_add_pak (the smoke app's scripts at app:/smoke/, manifest data/smoke_pak.lua), read
 # back by resources_packed_test.
 imlui_add_pak(imlui_test_pak data/smoke_pak.lua OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/smoke.pak)

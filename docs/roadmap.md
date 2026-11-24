@@ -152,20 +152,6 @@ version (0.1.0, `SameMinorVersion`). The package tests (label `package`) build a
 
 Follow-ups noticed during the cleanup, not scheduled yet:
 
-- **Check the element reference automatically.** A test that walks `TypeRegistry` (declared properties, signals,
-  default property, non-visual flag) and checks that [Elements](elements.md) and each class's doc comment list
-  them, so the reference can't drift.
-- **Ticking elements outlive their use.** A `Timer` ticks until Lua collects its table, so one dropped from the
-  tree (a rebuilt `Repeater` delegate, a reloaded `Loader` item) keeps firing until the next GC. Stop ticking
-  when an element hasn't been reachable from the root or a live reference for a while, or tie ticking to
-  attachment to the tree.
-- **`id` on the Lua-side containers.** The `Repeater`, `ListView`, `If`, `Loader` and `Responsive` constructors
-  don't register `id`, so `ListView { id = "list" }` can't be referenced by name.
-- **Slider precision.** `Slider` goes through `float`, so a fractional value is written back with float noise
-  (0.1 becomes 0.10000000149...), and `onReleased` also fires after a click that didn't change the value.
-- **Size rules in one place.** `Column` and `Canvas` compute fill-minus widths as `avail + w + 1`, one pixel off
-  from the other elements, and `Spacer` clamps negative sizes to 1px (fill values do nothing). Route them through
-  one helper.
 - **Run `tidy` (and the sanitizer preset) in CI**, and extend the naming check to `tests/`.
 
 ## Kept as designed

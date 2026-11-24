@@ -19,8 +19,8 @@ export namespace imlui {
 ///
 /// Props:   value = 0, from = 0, to = 1, stepSize = 0 (continuous), format = unset
 /// Raw:     width
-/// Signals: onMoved(self, value), onReleased(self, value)
-/// Two-way: value
+/// Signals: onMoved(self, value), onReleased(self, value) (only when the value changed during the drag or click)
+/// Two-way: value (written only when the user moves the slider: an untouched value keeps its exact double)
 ///
 /// `format` defaults to "%.0f" for stepSize >= 1, else "%.2f"; an invalid format is reported once and replaced
 /// (md::slider).
@@ -48,6 +48,7 @@ private:
     double m_to = 1.0;
     double m_stepSize = 0.0;
     std::optional<std::string> m_format;
+    double m_pressValue = 0.0; ///< the value when the current drag or click started
 };
 
 } // namespace imlui
@@ -67,16 +68,16 @@ void Slider::declare(TypeBuilder<Slider>& type) {
 }
 
 void Slider::render(Frame& frame) {
-    float v = static_cast<float>(m_value);
-    const float step = static_cast<float>(m_stepSize);
-    const std::string format = m_format.value_or(step >= 1.0f ? "%.0f" : "%.2f");
-    if (md::slider("##slider", &v, static_cast<float>(m_from), static_cast<float>(m_to), step, frame.size("width"),
-                   format.c_str())) {
-        m_value = static_cast<double>(v);
+    double v = m_value;
+    const std::string format = m_format.value_or(m_stepSize >= 1.0 ? "%.0f" : "%.2f");
+    const bool changed = md::slider("##slider", &v, m_from, m_to, m_stepSize, frame.size("width"), format.c_str());
+    if (ImGui::IsItemActivated()) m_pressValue = m_value;
+    if (changed) {
+        m_value = v;
         notify("value");
         emit("onMoved", m_value);
     }
-    if (ImGui::IsItemDeactivated()) emit("onReleased", static_cast<double>(v));
+    if (ImGui::IsItemDeactivated() && m_value != m_pressValue) emit("onReleased", m_value);
 }
 
 double Slider::value() const { return m_value; }

@@ -2,7 +2,9 @@
 // It ticks from its creation, whether or not it's rendered (a Timer on a hidden page or an unselected
 // Loader page keeps firing): Element::setTicking runs tick() at the start of every frame, with the
 // properties synced first, so binding changes take effect even while it isn't rendered. It asks for a frame
-// at its next due time, so it keeps ticking while the app otherwise sleeps.
+// at its next due time, so it keeps ticking while the app otherwise sleeps. It stops when Lua collects its table;
+// a Timer that a Repeater, Loader or Responsive drops is collected on the next frame when nothing else holds it
+// (ui.__tick collects garbage after a drop).
 module;
 
 export module imlui.ui.elements.timer;
@@ -14,7 +16,8 @@ import imlui.ui.frame_request;
 
 export namespace imlui {
 
-/// A timer. It ticks (Element::setTicking) whether or not it is rendered, so it fires on a hidden page too.
+/// A timer. It ticks (Element::setTicking) whether or not it is rendered, so it fires on a hidden page too, until
+/// its element table is collected (right away when a container drops it and nothing else references it).
 /// Non-visual.
 ///
 /// Props:   interval = 1000 (ms), running = true, repeat = true, triggeredOnStart = false

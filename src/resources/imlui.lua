@@ -56,11 +56,17 @@ function ui.element(name)
         if type(props) ~= "table" then props = { props } end
         props.__type = name
         if typed then types.attach(props) end
-        if props.id ~= nil then
-            ui.checkId(props.id)
-            ui.ids[props.id] = props
-        end
+        ui.registerId(props)
         return props
+    end
+end
+
+--- Makes `props.id` (if set) reachable by name from UI scripts (ui.ids), after checking it with ui.checkId.
+--- Every element constructor calls it, the Lua-side containers (Repeater, ListView, If, Loader, Responsive) too.
+function ui.registerId(props)
+    if props.id ~= nil then
+        ui.checkId(props.id)
+        ui.ids[props.id] = props
     end
 end
 
@@ -215,6 +221,12 @@ local function resolve(self, v)
     return v
 end
 
+-- Ticking C++ elements (Timer) tick until Lua collects their table. When a container drops children (a rebuilt
+-- delegate, a Loader item that changed), the next ui.__tick runs a full garbage collection, so a dropped Timer
+-- that nothing else references stops right away instead of firing until the next GC cycle. (One still
+-- referenced, e.g. a page kept in a table or by an id, is not collected and keeps ticking.)
+local function dropped() ui.__dropped = true end
+
 --- Builds (and caches) delegate instances for a model. Delegates are only
 --- re-created when the item at an index changes, so per-delegate state survives.
 local function repeaterChildren(self)
@@ -234,11 +246,13 @@ local function repeaterChildren(self)
         local item = model[i]
         local c = cache[i]
         if not c or c.item ~= item then
+            if c then dropped() end
             c = { item = item, node = self.delegate(item, i) }
             cache[i] = c
         end
         list[i] = c.node
     end
+    if #list > n then dropped() end
     for i = n + 1, #list do list[i] = nil; cache[i] = nil end
     return list
 end
@@ -249,6 +263,7 @@ function ui.Repeater(p)
     p.__type = "Repeater"
     p.__inline = true
     p.__children = repeaterChildren
+    ui.registerId(p)
     return p
 end
 
@@ -256,6 +271,7 @@ end
 function ui.ListView(p)
     p.__type = "ListView"
     if p.delegate then p.__children = repeaterChildren end
+    ui.registerId(p)
     return p
 end
 
@@ -268,6 +284,7 @@ function ui.If(p)
         if resolve(self, self.condition) then return self end
         return others
     end
+    ui.registerId(p)
     return p
 end
 
@@ -277,9 +294,12 @@ function ui.Loader(p)
     p.__inline = true
     local box = {}
     p.__children = function(self)
-        box[1] = resolve(self, self.item)
+        local item = resolve(self, self.item)
+        if box[1] ~= nil and box[1] ~= item then dropped() end
+        box[1] = item
         return box
     end
+    ui.registerId(p)
     return p
 end
 
@@ -315,9 +335,12 @@ function ui.Responsive(p)
     p.__children = function(self)
         local v = ui.pickSizeClass(self, ui.sizeClass())
         if type(v) == "function" then v = v(self) end
-        box[1] = type(v) == "table" and v or nil
+        v = type(v) == "table" and v or nil
+        if box[1] ~= nil and box[1] ~= v then dropped() end
+        box[1] = v
         return box
     end
+    ui.registerId(p)
     return p
 end
 
@@ -418,8 +441,15 @@ function ui.__tick(now)
             t.fn()
         end
     end
-    -- C++ elements that tick every frame, rendered or not (Timer).
-    if types ~= nil and types.tick then types.tick(now) end
+    -- C++ elements that tick every frame, rendered or not (Timer). Dropped children are collected first, so a
+    -- Timer that a container dropped and nothing references stops now (see `dropped` above).
+    if types ~= nil and types.tick then
+        if ui.__dropped then
+            ui.__dropped = false
+            if types.tickingCount() > 0 then collectgarbage() end
+        end
+        types.tick(now)
+    end
     -- Iterate a copy: a callback may remove itself while running.
     for _, fn in ipairs({ table.unpack(frameCallbacks) }) do fn(now) end
     local nextDue

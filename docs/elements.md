@@ -65,22 +65,26 @@ These are handled by the renderer (`Renderer::render`) for every element.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `id` | string | — | Makes the element reachable by name from the script: `nameField.text`. An id that collides with a `ui` member or a Lua global is reported, since the name would resolve to that instead. Registered by the `ui.element` constructors, so not for `Repeater`, `ListView`, `If`, `Loader` or `Responsive`. |
+| `id` | string | — | Makes the element reachable by name from the script: `nameField.text`. An id that collides with a `ui` member or a Lua global is reported, since the name would resolve to that instead. Every constructor registers it (`ui.registerId`), the Lua-side `Repeater`, `ListView`, `If`, `Loader` and `Responsive` included: `ListView { id = "list" }` is `list`. |
 | `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) |
 | `enabled` | bool | `true` | `false` disables the element and everything inside it, with the Material disabled colors. |
 | `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. |
 
 ### Sizes
 
-Props of type `size` (mostly `width` and `height`, read *raw*) share one set of rules:
+Props of type `size` (mostly `width` and `height`, read *raw*) share one set of rules, applied by one function
+(`resolveSize`, `src/imlui/ui/item_size.cppm`) for every element and Material widget, so a fill is exactly the
+available width (or height) everywhere:
 
 | Value | Meaning |
 |---|---|
 | `> 0` | A fixed size in dp. |
-| `-1` | Fill the available space. |
+| `-1` | Fill the available space (any value from `-1` up to `0`). |
 | `< -1` | Fill minus `|v|` dp (`width = -16` leaves 16dp). |
 | `0` (or unset) | Automatic: the element's own default, given in its table. |
 | `fillWidth = true` | Counts as `width = -1`. |
+
+A fill is at least 1px. Heights fill the space left below the element in its window or scroll region.
 
 Only the elements whose table lists `width` / `height` read them. `Window`'s `width`/`height` and
 `ModalNavigationDrawer`'s `width` are plain dp numbers instead (no fill values, no `fillWidth`).
@@ -653,7 +657,7 @@ Empty space.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `width`, `height` | size | `0` | *Raw.* Fixed space; each is at least 1px. Fill values don't apply here. |
+| `width`, `height` | size | `0` (1px) | *Raw.* Fixed space, or fill / fill minus like every size. |
 | `fill` | bool | `false` | In a `Row`, takes a share of the remaining width (the `Row` reads it). |
 
 ---
@@ -810,14 +814,14 @@ A 44dp-tall Material slider. A value label appears above the handle while you dr
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number | `0` | **two-way.** With an integral `stepSize` the written-back value is an integer. |
+| `value` | number | `0` | **two-way.** Kept as a double end to end and written back only when the user moves the slider, so a bound `0.1` stays `0.1`. A stepped value is `from + k * stepSize` without binary noise (three steps of `0.1` are `0.3`); with an integral `stepSize` it is an integer. |
 | `from`, `to` | number | `0`, `1` | Range. |
 | `stepSize` | number | `0` | `0` means continuous. Tick marks are drawn when there are at most 40 steps. |
 | `format` | printf string | — | Value label. Unset: `"%.0f"` if `stepSize >= 1`, else `"%.2f"`. Exactly one `%f`, `%e` or `%g` conversion (flags, width and precision allowed), plus any `%%`. Anything else is reported once and replaced by `"%.2f"`. |
 | `width` | size | `0` (fill) | *Raw.* |
 
 **Signals:** `onMoved(self, value)` while the value changes, `onReleased(self, value)` when the handle is
-released.
+released after the drag or click changed the value (a click on the current value emits neither).
 **Two-way:** `value`.
 
 ### SpinBox
@@ -979,7 +983,7 @@ changes over time (it reads `p.time`) needs `animated = true`.
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `width` | size | `0` (fill) | *Raw.* |
-| `height` | size | `0` (200dp) | *Raw.* |
+| `height` | size | `0` (200dp) | *Raw.* `-1` fills the remaining height. |
 | `animated` | bool | `false` | Requests a frame every frame while the canvas is rendered, so time-based drawing keeps moving. |
 
 **Signals:** `onPaint(self, p)` draws with the painter `p`; `onClicked(self, x, y)`, with the position in dp
@@ -1033,7 +1037,11 @@ A timer element. It **ticks even when it isn't rendered**: a `Timer` on a page t
 `visible = false` parent or in a `Loader` that shows something else still fires. It's a ticking element
 (`Element::setTicking`): its `tick()` runs at the start of every frame, rendered or not, with its props synced
 first, so it also sees `running` turn true through a binding. It ticks from the moment the element is created
-until it's collected (or the script reloads). Use `running = false` to stop it. The engine wakes up for the next
+until it's collected (or the script reloads). Use `running = false` to stop it. A `Timer` that a container drops (a
+`Repeater` / `ListView` delegate rebuilt or removed because the model changed, a `Loader` or `Responsive` item
+replaced) stops on the next frame when nothing else references it: the next `ui.__tick` collects garbage first. One
+still referenced (a page kept in a table, an `id`) keeps ticking. See
+[ticking elements](extending.md#ticking-elements). The engine wakes up for the next
 trigger, so it keeps its rate without input.
 
 | Prop | Type | Default | Notes |

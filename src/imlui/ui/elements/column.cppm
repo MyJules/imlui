@@ -61,7 +61,7 @@ void Column::render(Frame& frame) {
     if (w != 0) {
         // A fixed-width column: reserve the width so `align` and fills work inside it.
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        const float ww = w > 0 ? w : ImGui::GetContentRegionAvail().x + w + 1.0f;
+        const float ww = frame.resolvedWidth(0.0f);
         ImGui::Dummy({ww, 0});
         ImGui::SetCursorScreenPos(p);
         ImGui::PushItemWidth(ww);

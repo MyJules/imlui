@@ -106,7 +106,7 @@ void TextField::render(Frame& frame) {
     o.readOnly = m_readOnly;
     o.error = m_error;
     o.width = frame.size("width");
-    o.height = frame.size("height");
+    o.height = frame.resolvedHeight(0.0f);
     std::string text = m_text;
     const md::TextFieldResult res = md::textField("##tf", text, o);
     if (res.changed) {

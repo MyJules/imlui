@@ -26,6 +26,7 @@ import imlui.image.image_cache;
 import imlui.lua.node;
 import imlui.types.script_object;
 import imlui.ui.frame_request;
+import imlui.ui.item_size;
 import imlui.ui.props;
 import imlui.ui.renderer;
 
@@ -147,6 +148,10 @@ public:
     [[nodiscard]] float size(const char* key) const;
     /// The same, with `ifAuto` in place of 0 (auto): `size("width", -1)` fills unless a width is set.
     [[nodiscard]] float size(const char* key, float ifAuto) const;
+    /// The `width` / `height` prop resolved to pixels against the available width / height (ImGui's content
+    /// region) by resolveSize(), the rule every element follows: fixed, fill, fill minus, or `natural` when unset.
+    [[nodiscard]] float resolvedWidth(float natural) const;
+    [[nodiscard]] float resolvedHeight(float natural) const;
     /// "Label###id": the visible text may change every frame without changing the ImGui ID.
     [[nodiscard]] static std::string labelId(std::string_view text, const char* id);
     /// "start" -> 0, "center" -> 0.5, "end" / "right" / "bottom" -> 1.
@@ -251,6 +256,12 @@ float Frame::size(const char* key) const { return sizeProp(m_node, key); }
 float Frame::size(const char* key, float ifAuto) const {
     const float v = sizeProp(m_node, key);
     return v == 0.0f ? ifAuto : v;
+}
+float Frame::resolvedWidth(float natural) const {
+    return resolveSize(sizeProp(m_node, "width"), ImGui::GetContentRegionAvail().x, natural);
+}
+float Frame::resolvedHeight(float natural) const {
+    return resolveSize(sizeProp(m_node, "height"), ImGui::GetContentRegionAvail().y, natural);
 }
 std::string Frame::labelId(std::string_view text, const char* id) { return imlui::labelId(text, id); }
 float Frame::alignFactor(std::string_view align) { return imlui::alignFactor(align); }

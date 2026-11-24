@@ -84,6 +84,38 @@ TEST_F(InputsTest, SliderClickWritesBackAndEmitsMovedThenReleased) {
     EXPECT_DOUBLE_EQ(m_h.instance<Slider>("slider")->value(), 10.0);
 }
 
+TEST_F(InputsTest, SliderKeepsExactFractionalValues) {
+    run(R"(
+        s = state { v = 0.1 }
+        root = Probe { Slider { id = "slider", value = bind(s, "v"), from = 0, to = 1, stepSize = 0.1, width = 300 } })");
+    frames(2);
+    // Rendering doesn't write the value back: the bound 0.1 stays the double 0.1 (not the float 0.10000000149).
+    run(R"(assert(s.v == 0.1, string.format("%.17g", s.v)))");
+    EXPECT_EQ(m_h.instance<Slider>("slider")->value(), 0.1);
+
+    // A stepped value is vmin + k * step without binary noise: 3 steps of 0.1 are 0.3.
+    const ImVec2 a = probe().min(), b = probe().max();
+    const float x0 = a.x + 10.0f, x1 = b.x - 10.0f; // the track runs between the handle radii (10 dp)
+    click(x0 + 0.3f * (x1 - x0), (a.y + b.y) * 0.5f);
+    run(R"(assert(s.v == 0.3, string.format("%.17g", s.v)))");
+}
+
+TEST_F(InputsTest, SliderReleasedOnlyAfterAChange) {
+    run(R"(
+        s = state { v = 2 }
+        moved, released = 0, 0
+        root = Probe { Slider { value = bind(s, "v"), from = 0, to = 10, stepSize = 1, width = 300,
+                                onMoved = function() moved = moved + 1 end,
+                                onReleased = function(_, v) released = released + 1; last = v end } })");
+    frames(2);
+    const ImVec2 a = probe().min(), b = probe().max();
+    const float x0 = a.x + 10.0f, x1 = b.x - 10.0f, y = (a.y + b.y) * 0.5f;
+    click(x0 + 0.2f * (x1 - x0), y); // on the current value: nothing changes
+    run(R"(assert(moved == 0 and released == 0, moved .. " " .. released))");
+    click(x0 + 0.7f * (x1 - x0), y);
+    run(R"(assert(moved == 1 and released == 1 and last == 7 and s.v == 7, moved .. " " .. released))");
+}
+
 // ------------------------------------------------------------------ SpinBox
 
 TEST_F(InputsTest, SpinBoxPropsAndDefaults) {

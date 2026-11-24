@@ -23,7 +23,8 @@ Text { text = function() return "Hello, " .. nameField.text end },
 ```
 
 Ids are global to the loaded UI. The lookup is lazy, so a binding can refer to an id that is declared later in the
-file.
+file. Every constructor registers its `id` (`ui.registerId(props)`), the Lua-side `Repeater`, `ListView`, `If`,
+`Loader` and `Responsive` included: `ListView { id = "list", ... }` is `list`.
 
 **Id collisions.** Because ids are looked up after `ui.*` and the globals, an id such as `"table"`, `"io"` or
 `"state"` can't be referenced by name: the name finds the global or the `ui` member instead. The element
@@ -235,6 +236,10 @@ Shows exactly one element: `item`, or the result of calling `item`. Useful for p
 ```lua
 Loader { item = function() return pages[nav.page] end }
 ```
+
+When the item changes, the old one is **dropped**: a `Timer` in it stops on the next frame unless something else
+still references it (here `pages` does, so a timer on another page keeps ticking). A `Repeater` or `ListView`
+drops the delegates it rebuilds or removes the same way. See the [`Timer` element](elements.md#timer).
 
 ## Window size and adaptive layouts
 
