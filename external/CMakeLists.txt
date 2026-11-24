@@ -55,6 +55,11 @@ set_target_properties(imlui_ext_lua PROPERTIES LINKER_LANGUAGE C SYSTEM ON EXPOR
 if(WIN32)
     target_compile_definitions(imlui_ext_lua PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
+# Lua relies on signed integer arithmetic wrapping (e.g. a hex float's exponent, `0x1p99999999999`, in
+# lua_strx2number), which -fwrapv makes defined; without it, UBSan (clang-asan, clang-fuzz) aborts on such source.
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(imlui_ext_lua PRIVATE -fwrapv)
+endif()
 add_library(ext::lua ALIAS imlui_ext_lua)
 
 # ---------------------------------------------------------------- GLFW 3.4 (`glfw`, see the top of this file)

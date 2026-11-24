@@ -311,7 +311,10 @@ Problem checkCmap4(const Reader& r, std::size_t at, std::size_t length, std::siz
     // segments - 1 for the values the spec prescribes.)
     std::size_t furthest = r.u16(at + 12) >> 1;
     const std::size_t searchRange = r.u16(at + 8) >> 1;
-    const std::size_t steps = std::min<std::size_t>(r.u16(at + 10), 16); // further steps add 0
+    // entrySelector is log2 of the segment count, at most 15. stb_truetype loops that many times on every lookup,
+    // so a bogus 65535 would make each one run 65535 steps (found by the `font` fuzz target).
+    const std::size_t steps = r.u16(at + 10);
+    if (steps > 15) return broken;
     for (std::size_t k = 1; k <= steps; ++k)
         furthest += searchRange >> k;
     if (furthest >= segments) return broken;

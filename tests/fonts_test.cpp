@@ -605,6 +605,10 @@ TEST(FontCheck, CharacterMapsMapOnlyToGlyphsTheFontHas) {
     f.entrySelector = 2; // segment 1 + 2 + 1
     EXPECT_EQ(problem(f), broken);
     f = validFormat4();
+    f.searchRange = 0;
+    f.entrySelector = 0xFFFF; // steps that add nothing, but stb_truetype takes every one on every lookup
+    EXPECT_EQ(problem(f), broken);
+    f = validFormat4();
     f.segments.clear();
     f.glyphIds.clear();
     f.rangeShift = 0;
