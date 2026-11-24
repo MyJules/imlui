@@ -76,7 +76,7 @@ void TabBar::render(Frame& frame) {
             return;
         }
         if (i++ != cur) return;
-        ImGui::PushID(c.node().ptr());
+        c.pushId();
         frame.renderStack(c.node());
         ImGui::PopID();
     });

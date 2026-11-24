@@ -1,6 +1,7 @@
 // C++ code reached from Lua that fails: exceptions from element hooks (componentComplete, tick, destroyed),
-// from the host's NativeHooks and from methods become script errors or Lua errors with a message; argument checks of the
-// native library; a Lua error during a property sync doesn't freeze the element; setInterval's checks.
+// from the host's NativeHooks and from methods become script errors or Lua errors with a message; argument checks of
+// the native library; a Lua error during a property sync doesn't freeze the element; setInterval's checks; the ticking
+// list by id, so an element destroyed mid-tick isn't replaced by one created at its address.
 #include <gtest/gtest.h>
 
 import std;
@@ -70,6 +71,53 @@ private:
     bool m_failDestroyed = false;
 };
 
+/// A ticking element allocated in a single slot while the slot is free: a Recycled created after another one died
+/// lives at the dead one's address, which forces the address reuse a general allocator does by chance.
+class Recycled final : public Element {
+public:
+    static void declare(TypeBuilder<Recycled>& type) {
+        type.property("ticking", &Recycled::ticking, &Recycled::setTickingProp).method("ticks", &Recycled::ticks);
+    }
+    static void* operator new(std::size_t size) {
+        if (!m_slotUsed && size <= sizeof(m_slot)) {
+            m_slotUsed = true;
+            return m_slot;
+        }
+        return ::operator new(size);
+    }
+    static void operator delete(void* p) {
+        if (p == static_cast<void*>(m_slot))
+            m_slotUsed = false;
+        else
+            ::operator delete(p);
+    }
+
+    Recycled() { addresses.push_back(this); }
+    void render(Frame&) override {}
+    void tick(double) override {
+        ++m_ticks;
+        emit("onTick");
+    }
+    [[nodiscard]] bool ticking() const { return isTicking(); }
+    void setTickingProp(bool on) { setTicking(on); }
+    [[nodiscard]] int ticks() const { return m_ticks; }
+
+    /// Where each Recycled was constructed, in order.
+    inline static std::vector<const void*> addresses;
+
+private:
+    alignas(std::max_align_t) inline static std::byte m_slot[512];
+    inline static bool m_slotUsed = false;
+    int m_ticks = 0;
+};
+
+/// A ticking element that never renders: start() turns ticking on.
+class TickOnly final : public Element {
+public:
+    void render(Frame&) override {}
+    void start() { setTicking(true); }
+};
+
 bool hasError(std::string_view part) {
     for (const auto& e : luaui::errors())
         if (e.find(part) != std::string::npos) return true;
@@ -81,6 +129,8 @@ protected:
     void SetUp() override {
         calls = {};
         m_h.registerType<Exploder>("Exploder");
+        m_h.registerType<Recycled>("Recycled");
+        Recycled::addresses.clear();
     }
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
 
@@ -113,6 +163,55 @@ TEST_F(LuaGuardsTest, ThrowingTickIsReportedAndTheOthersStillTick) {
     m_h.renderFrames("root", 3); // ticking starts with the first sync, in the first frame's render
     EXPECT_TRUE(hasError("Exploder.tick(): tick exploded"));
     EXPECT_EQ(calls.ticks, 4); // both, in frames 2 and 3
+}
+
+// The ticking list holds elements by id, never reused: an element destroyed and another one created at its address
+// (forced here with placement new) can't take its entry, so a stale id finds nothing.
+TEST(ElementTicking, AStaleIdDoesntFindAnElementAtTheSameAddress) {
+    alignas(TickOnly) std::byte storage[sizeof(TickOnly)];
+    auto* a = new (storage) TickOnly;
+    a->start();
+    const std::uint64_t idA = a->objectId();
+    EXPECT_EQ(Element::findTicking(idA), a);
+    EXPECT_EQ(std::ranges::count(Element::tickingElements(), idA), 1);
+    a->~TickOnly();
+    EXPECT_EQ(Element::findTicking(idA), nullptr);
+    auto* b = new (storage) TickOnly;
+    b->start();
+    ASSERT_EQ(static_cast<void*>(a), static_cast<void*>(b));
+    EXPECT_GT(b->objectId(), idA);
+    EXPECT_EQ(Element::findTicking(idA), nullptr); // the old entry can't answer for the new element
+    EXPECT_EQ(Element::findTicking(b->objectId()), b);
+    EXPECT_TRUE(b->isTicking());
+    b->~TickOnly();
+    EXPECT_EQ(Element::findTicking(b->objectId()), nullptr);
+}
+
+// A tick() whose handler destroys a ticking element that comes later in this frame's loop and creates one at its
+// address: the loop skips the dead element's entry instead of ticking the new one in its place (it ticks from the
+// next frame on, like any element that starts ticking mid-loop).
+TEST_F(LuaGuardsTest, AnElementDestroyedMidTickIsNotReplacedByOneAtItsAddress) {
+    run(R"(
+        victim = Recycled { ticking = true } -- in the slot
+        killer = Recycled { ticking = true,
+            onTick = function()
+                if done then return end
+                done = true
+                victim = nil
+                collectgarbage() collectgarbage()
+                fresh = Recycled { ticking = true } -- in the slot again: the victim's address
+                assert(fresh:ticks() == 0) -- synced: ticking from now on
+            end }
+        assert(killer:ticks() == 0) -- synced first, so it ticks first
+        assert(victim:ticks() == 0)
+        root = Column {})");
+    m_h.renderFrame("root");
+    ASSERT_EQ(Recycled::addresses.size(), 3u);                 // victim, killer, fresh
+    EXPECT_EQ(Recycled::addresses[2], Recycled::addresses[0]); // fresh lives at the victim's address
+    EXPECT_EQ(m_h.run("assert(fresh:ticks() == 0, 'ticked in the dead victim slot')"), "");
+    m_h.renderFrame("root");
+    EXPECT_EQ(m_h.run("assert(fresh:ticks() == 1)"), "");
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // destroyed() that throws in __gc is reported (a finalizer can't raise), and the instance is still deleted.

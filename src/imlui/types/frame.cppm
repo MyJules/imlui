@@ -4,10 +4,10 @@
 //
 // Children are visited as Frame::Child handles. A handle renders the child through the renderer (so the
 // per-element wrapper applies: visible, enabled, group, tooltip, ID scope), tells whether it takes layout
-// space, gives its node, type and stable ImGui ID, gives its size from the last frame (the layout cache:
-// immediate-mode layouts place children by the sizes they had on the previous frame, and get another frame when
-// that was stale), and gives the C++ instance of a typed child with its properties
-// synced (as<T>()).
+// space, gives its node, type and ImGui ID (made from its identity, which is never reused), gives its size from
+// the last frame (the layout cache: immediate-mode layouts place children by the sizes they had on the previous
+// frame, and get another frame when that was stale), and gives the C++ instance of a typed child with its
+// properties synced (as<T>()).
 export module imlui.types.frame;
 
 import std;
@@ -63,9 +63,15 @@ public:
         [[nodiscard]] const luaui::Node& node() const;
         /// The element type (`__type`), e.g. "Spacer".
         [[nodiscard]] std::string type() const;
-        /// A stable ImGui ID for the child in the parent's ID scope: the key of its size in the layout cache
+        /// The child's ImGui ID in the parent's ID scope, made from its identity (Renderer::elementId: its
+        /// instance's id, never reused, so a child that replaces a collected one at the same table address starts
+        /// fresh): the ID of the scope it renders in, the key of its size in the layout cache
         /// (imlui.ui.layout_cache), and a key for per-child state in ImGui::GetStateStorage().
         [[nodiscard]] ImGuiID id() const;
+        /// Pushes the child's ImGui ID scope, the one render() renders it in; pop with ImGui::PopID(). For a
+        /// container that renders the child's children itself (TabBar renders the current Tab's content), so
+        /// their ImGui state belongs to the child.
+        void pushId() const;
 
         /// The child's intrinsic size with `maxWidth` available (Element::intrinsicSize), when its type can tell
         /// before rendering: Text, Icon, Button, IconButton, Spacer.
@@ -229,7 +235,7 @@ namespace imlui {
 // ------------------------------------------------------------ Frame::Child
 
 Frame::Child::Child(Frame& frame, const luaui::Node& node)
-    : m_frame{frame}, m_node{node}, m_id{ImGui::GetID(node.ptr())},
+    : m_frame{frame}, m_node{node}, m_id{frame.m_renderer.elementImGuiId(node)},
       m_visual{frame.m_renderer.isVisual(node.state(), node.index())} {}
 
 bool Frame::Child::render() { return m_frame.m_renderer.render(m_node.state(), m_node.index()); }
@@ -250,6 +256,7 @@ bool Frame::Child::fillsWidth() const {
 const luaui::Node& Frame::Child::node() const { return m_node; }
 std::string Frame::Child::type() const { return m_node.type(); }
 ImGuiID Frame::Child::id() const { return m_id; }
+void Frame::Child::pushId() const { m_frame.m_renderer.pushElementId(m_node); }
 
 std::optional<ImVec2> Frame::Child::intrinsicSize(float maxWidth) const {
     if (!m_visual) return std::nullopt;

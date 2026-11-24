@@ -2,13 +2,17 @@
 //
 // A ScriptObject is linked to at most one Lua state at a time. The link is the Lua value that stands for
 // the object there: the element table for an element instance, the global userdata for a singleton.
-// It is held weakly (a weak-valued registry table keyed by the object's address), so it never keeps
+// It is held weakly (a weak-valued registry table keyed by the object's id), so it never keeps
 // the element table alive.
 //
 //  * notify("value") tells Lua that property `value` changed on the C++ side: it is written back to
 //    the element table (honouring two-way binds, like a widget edit), `onValueChanged` is emitted, and
 //    a frame is requested.
 //  * emit("onPeak", args...) calls the `onPeak` handler.
+//
+// Every object has an id (objectId()): a number no other object of the process has had or will have, so unlike its
+// address it is never reused after the object dies. It is the identity of an element (its ImGui ID scope, its key in
+// the layout cache, its place in the ticking list).
 //
 // Main thread only, like everything that touches Lua or ImGui. The exception is a Handle (handle()): a weak,
 // copyable token a worker thread holds to post work back to the object, which runs only if the object is still
@@ -51,7 +55,8 @@ public:
         std::shared_ptr<const std::atomic<bool>> m_alive;
     };
 
-    ScriptObject() = default;
+    /// Takes the next object id.
+    ScriptObject();
     virtual ~ScriptObject();
     ScriptObject(const ScriptObject&) = delete;
     ScriptObject& operator=(const ScriptObject&) = delete;
@@ -95,6 +100,10 @@ public:
     /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
     [[nodiscard]] Handle handle();
 
+    /// This object's id: unique for the process's lifetime, never 0 and never reused (a monotonic 64-bit count), so
+    /// a stale id can't name a newer object that happens to live at a dead one's address.
+    [[nodiscard]] std::uint64_t objectId() const;
+
     /// The Lua state this object is linked to, or nullptr.
     [[nodiscard]] lua::State* luaState() const;
     [[nodiscard]] bool isSingleton() const;
@@ -113,6 +122,7 @@ public:
     void detach();
 
 private:
+    std::uint64_t m_objectId;
     lua::State* m_state = nullptr;
     bool m_singleton = false;
     /// Shared with every Handle, created by the first handle(). Set to false by the destructor.
@@ -127,7 +137,8 @@ namespace imlui {
 
 namespace {
 
-/// Registry key of the weak-valued table { [lightuserdata ScriptObject*] = linked value }.
+/// Registry key of the weak-valued table { [objectId()] = linked value }. Keyed by id, not address: an entry
+/// a dead object left behind can't link a new object at its address.
 constexpr const char* linksKey = "imlui.objects";
 
 /// Pushes the links table, creating it on first use.
@@ -143,6 +154,12 @@ void pushLinks(lua::State* state) {
     lua::setfield(state, lua::registryIndex, linksKey);
 }
 
+/// The last object id handed out. Atomic: a host may construct a singleton on any thread.
+std::atomic<std::uint64_t> lastObjectId{0};
+
+/// The links table key of an object id (Lua integers are 64-bit; ids stay far below 2^63).
+lua::Integer linkKey(std::uint64_t id) { return static_cast<lua::Integer>(id); }
+
 /// "value" -> "onValueChanged"
 std::string changedSignal(std::string_view property) {
     std::string s = "on";
@@ -154,6 +171,10 @@ std::string changedSignal(std::string_view property) {
 
 } // namespace
 
+ScriptObject::ScriptObject() : m_objectId{lastObjectId.fetch_add(1, std::memory_order_relaxed) + 1} {}
+
+std::uint64_t ScriptObject::objectId() const { return m_objectId; }
+
 ScriptObject::~ScriptObject() {
     // Destructors run on the main thread, like the posted functions that check it: none can run past this point.
     if (m_alive) m_alive->store(false, std::memory_order_release);
@@ -161,7 +182,7 @@ ScriptObject::~ScriptObject() {
     // Destroyed while still linked (e.g. a singleton that dies before the engine): forget the link.
     pushLinks(m_state);
     lua::pushnil(m_state);
-    lua::rawsetp(m_state, -2, this);
+    lua::rawseti(m_state, -2, linkKey(m_objectId));
     lua::pop(m_state);
 }
 
@@ -189,7 +210,7 @@ bool ScriptObject::isSingleton() const { return m_singleton; }
 bool ScriptObject::pushSelf() const {
     if (!m_state) return false;
     pushLinks(m_state);
-    const lua::Type t = lua::rawgetp(m_state, -1, this);
+    const lua::Type t = lua::rawgeti(m_state, -1, linkKey(m_objectId));
     lua::remove(m_state, -2);
     if (t == lua::Type::Nil) {
         lua::pop(m_state);
@@ -204,7 +225,7 @@ void ScriptObject::attach(lua::State* state, int idx, bool singleton) {
     m_singleton = singleton;
     pushLinks(state);
     lua::pushvalue(state, idx);
-    lua::rawsetp(state, -2, this);
+    lua::rawseti(state, -2, linkKey(m_objectId));
     lua::pop(state);
 }
 

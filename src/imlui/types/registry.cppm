@@ -23,7 +23,12 @@
 // elements (Element::setTicking) are synced and ticked at the start of every frame by tick(now), which
 // ui.__tick calls, rendered or not. While a frame renders, an element is synced once: a layout's questions about a
 // child (fillsWidth, intrinsicSize, Frame::Child::as) and its render share the sync, unless Lua code that may have
-// changed the table ran in between (luaui::changes(): a handler, a write-back), which syncs it again.
+// changed tables ran in between (luaui::changes(): a handler, a write-back), or the element's own declared fields
+// changed since (a fingerprint of their raw values, which catches a write that bypassed the count: a raw
+// lua_setfield from C++, a binding that writes), which syncs it again. A debug build reports such a bypass.
+//
+// An element's identity is its instance's ScriptObject::objectId() (elementId()): the renderer's ImGui ID scope and
+// layout cache key, never reused, unlike the table's address.
 // Main thread only.
 export module imlui.types.registry;
 
@@ -101,6 +106,7 @@ public:
     [[nodiscard]] bool fillsWidth(const luaui::Node& node) override;
     [[nodiscard]] std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
                                                       float maxWidth) override;
+    [[nodiscard]] std::uint64_t elementId(const luaui::Node& node) override;
 
     /// The instance of the element table `node`, created now if the table has none yet. Then syncs
     /// the declared properties into it (and calls componentComplete() after the first sync). nullptr if
@@ -177,9 +183,11 @@ struct Box {
     bool owned = false;
     bool complete = false; ///< componentComplete() was called
     bool syncing = false;  ///< a sync is running (a binding that calls a method of its own element)
-    // When the last sync ended: an ImGui frame (-1 outside one) and luaui::changes() (see Sync::OncePerFrame).
+    // When the last sync ended: an ImGui frame (-1 outside one) and luaui::changes(), and what the declared fields
+    // of the element table held when it started (fingerprint()). See Sync::OncePerFrame.
     int syncedFrame = -1;
     std::uint64_t syncedChanges = 0;
+    std::uint64_t syncedFields = 0;
 };
 
 /// Whether syncInstance may skip an element synced earlier in the frame.
@@ -187,9 +195,65 @@ enum class Sync {
     Always,
     /// Layouts ask about a child (fillsWidth, intrinsicSize) and then render it, and a Row asks twice: one sync a
     /// frame is enough while nothing that could change its table ran in between (luaui::changes() stood still: a
-    /// handler, a write-back or a script between frames moves it). Only while rendering a frame.
+    /// handler, a write-back or a script between frames moves it) and its declared fields hold what they held at
+    /// the sync (fingerprint(): a write that bypassed the count is synced anyway, and reported in debug builds).
+    /// Only while rendering a frame.
     OncePerFrame,
 };
+
+#ifdef NDEBUG
+constexpr bool reportBypassedWrites = false;
+#else
+/// Debug builds report a declared field that changed while luaui::changes() stood still: the code that wrote it
+/// bypassed the count, so its writes to other tables (which bindings may read) aren't seen either.
+constexpr bool reportBypassedWrites = true;
+#endif
+
+/// Mixes `v` into the hash `h` (splitmix64's finalizer on the sum).
+std::uint64_t mix(std::uint64_t h, std::uint64_t v) {
+    std::uint64_t z = h + v + 0x9e3779b97f4a7c15ull;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    return z ^ (z >> 31);
+}
+
+/// Mixes the value on top of the stack into `h`: nil, booleans, numbers and strings by value, anything else
+/// (tables, functions, bind objects, userdata) by identity.
+std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
+    const lua::Type t = lua::type(state, -1);
+    h = mix(h, static_cast<std::uint64_t>(t));
+    switch (t) {
+    case lua::Type::Nil: return h;
+    case lua::Type::Boolean: return mix(h, lua::toboolean(state, -1) ? 1 : 0);
+    case lua::Type::Number:
+        if (lua::isinteger(state, -1)) return mix(h, static_cast<std::uint64_t>(lua::tointeger(state, -1)));
+        return mix(h, std::bit_cast<std::uint64_t>(static_cast<double>(lua::tonumber(state, -1))));
+    case lua::Type::String: return mix(h, std::hash<std::string_view>{}(lua::tostring(state, -1)));
+    default: return mix(h, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(lua::topointer(state, -1))));
+    }
+}
+
+/// A hash of what the property sync reads from the element table at `tbl` before resolving anything: the raw value
+/// of every declared, writable property (and the positional [1] the default property may take). Raw reads (no
+/// metamethods), so it never runs Lua and can't raise. What a binding or a nested table holds isn't in it: a change
+/// there is seen through luaui::changes().
+std::uint64_t fingerprint(lua::State* state, int tbl, const TypeInfo& info) {
+    lua::checkstack(state, 2);
+    std::uint64_t h = 0;
+    for (const TypeInfo::Property& p : info.properties()) {
+        if (!p.assign) continue;
+        lua::pushstring(state, p.name);
+        lua::rawget(state, tbl);
+        h = mixValue(state, h);
+        lua::pop(state);
+    }
+    if (!info.defaultProperty().empty()) {
+        lua::rawgeti(state, tbl, 1);
+        h = mixValue(state, h);
+        lua::pop(state);
+    }
+    return h;
+}
 
 /// The current ImGui frame, -1 without a context.
 int currentFrame() { return ImGui::GetCurrentContext() ? ImGui::GetFrameCount() : -1; }
@@ -314,11 +378,20 @@ int syncPropertiesFn(lua::State* state) {
 /// from componentComplete() is reported.
 void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) {
     if (b.syncing || !b.element) return;
-    const int frame = currentFrame();
-    if (mode == Sync::OncePerFrame && b.complete && frame >= 0 && b.syncedFrame == frame &&
-        b.syncedChanges == luaui::changes())
-        return;
     tbl = lua::absindex(state, tbl);
+    const int frame = currentFrame();
+    // Taken before the sync: a binding that writes a declared field of its own element during the sync makes the
+    // next query sync again.
+    const std::uint64_t fields = fingerprint(state, tbl, *b.type);
+    if (mode == Sync::OncePerFrame && b.complete && frame >= 0 && b.syncedFrame == frame &&
+        b.syncedChanges == luaui::changes()) {
+        if (fields == b.syncedFields) return;
+        if constexpr (reportBypassedWrites)
+            luaui::reportError(b.type->name() +
+                               ": a declared field of the element table changed without luaui::changes() counting "
+                               "it (a raw write from C++, or a binding that writes); synced again. Write through "
+                               "luaui::Node::set, or call luaui::noteChange() after the write");
+    }
     b.syncing = true;
     // Protected: an error in the loop is reported, not raised, and can't skip the reset below (`syncing` left set
     // would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.) It only reads
@@ -331,6 +404,7 @@ void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) 
     b.syncing = false;
     b.syncedFrame = frame;
     b.syncedChanges = luaui::changes(); // before componentComplete(), whose handlers may change the table
+    b.syncedFields = fields;
     if (!b.complete && b.element) {
         b.complete = true;
         Element* e = b.element;
@@ -538,16 +612,18 @@ int libAttach(lua::State* state) {
 /// the start of every frame.
 /// The loop of libTick. An exception from a tick() is reported, and the other elements still tick.
 void tickElements(lua::State* state, double now) {
-    for (Element* e : Element::tickingElements()) {
-        // A handler that ran in this loop may have destroyed this element (or a GC step collected it).
-        if (!Element::isTicking(e) || e->luaState() != state) continue;
+    for (const std::uint64_t id : Element::tickingElements()) {
+        // A handler that ran in this loop may have destroyed this element (or a GC step collected it), and created
+        // another one at its address: the id finds only this element, alive and still ticking.
+        Element* e = Element::findTicking(id);
+        if (!e || e->luaState() != state) continue;
         const int top = lua::gettop(state);
         if (!e->pushSelf()) continue; // the element table is being collected
         // The table is on the stack now, so the element can't be collected while it syncs and ticks.
         Box* b = selfBox(state, top + 1);
         if (b && b->element == e) {
             syncInstance(state, top + 1, *b);
-            if (b->element == e && Element::isTicking(e))
+            if (b->element == e && Element::findTicking(id) == e)
                 luaui::reportCxx([e, now] { e->tick(now); }, b->type->name(), ".tick()");
         }
         lua::settop(state, top);
@@ -564,8 +640,8 @@ int libTick(lua::State* state) {
 /// dropped children only when there are some (a dropped Timer then stops right away).
 int libTickingCount(lua::State* state) {
     lua::Integer n = 0;
-    for (const Element* e : Element::tickingElements())
-        if (e->luaState() == state) ++n;
+    for (const std::uint64_t id : Element::tickingElements())
+        if (const Element* e = Element::findTicking(id); e && e->luaState() == state) ++n;
     lua::pushinteger(state, n);
     return 1;
 }
@@ -647,6 +723,18 @@ bool TypeRegistry::fillsWidth(const Node& node) {
     if (!info) return false;
     if (!info->fillsWidthDependsOnInstance()) return info->fillsWidth(nullptr);
     return info->fillsWidth(renderSync(node));
+}
+
+std::uint64_t TypeRegistry::elementId(const Node& node) {
+    lua::State* state = node.state();
+    lua::checkstack(state, 4);
+    Box* b = selfBox(state, node.index());
+    if (!b) {
+        // A table built without the constructor ({ __type = "Gauge" }) gets its instance now, like at its first sync.
+        const TypeInfo* info = find(node.type());
+        if (info) b = attachInstance(state, node.index(), *info);
+    }
+    return b && b->element ? b->element->objectId() : 0;
 }
 
 Element* TypeRegistry::sync(const Node& node) const {

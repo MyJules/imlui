@@ -15,9 +15,10 @@
 // (not used for keepFrames frames and keepSeconds seconds: on-demand rendering renders few frames while idle, an
 // animation many per second), and above maxEntries the least recently used ones go first (elements that come and go
 // every frame, a Repeater over a changing model). Entries used on this frame or the last are never dropped. Keys are
-// ImGui IDs of element tables, which stay the same while a table lives (Repeater/ListView keep their delegates while
-// the item at an index doesn't change, TabBar pages are kept); a new table that reuses the address of a collected one
-// starts from its size and converges like any stale size. A new ImGui context starts empty.
+// the ImGui IDs of elements, made from their instances' ids (Renderer::elementImGuiId), which stay the same while an
+// element lives (Repeater/ListView keep their delegates while the item at an index doesn't change, TabBar pages are
+// kept) and are never reused: a new element never finds a dead one's size, even at a recycled table address. A new
+// ImGui context starts empty.
 export module imlui.ui.layout_cache;
 
 import std;

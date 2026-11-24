@@ -1,11 +1,15 @@
 // The layout built-ins as typed elements (Column/Item, Row, Grid, ScrollView/ListView, Card, TabBar/Tab,
 // Section/Expander, TreeNode): defaults, props reaching the layout (measured with a probe element that records
-// where it was placed), two-way write-back through bind, signals, and ScrollView keeping its scroll position
-// when it moves to another place in the tree. Renders headless ImGui frames (tests/support/headless_frame.cppm).
+// where it was placed), two-way write-back through bind, signals, ScrollView keeping its scroll position
+// when it moves to another place in the tree, element identity (a recycled table address starts fresh) and the
+// once-a-frame sync seeing a write that bypassed the change count. Renders headless ImGui frames
+// (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
+import lua;
 import imgui;
 import imlui.lua.errors;
+import imlui.lua.node;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -148,6 +152,81 @@ private:
     float m_w = 0.0f;
 };
 
+/// Renders its children; before each it records the child's ImGui ID (Frame::Child::id()) and the size the layout
+/// cache holds for it.
+class Inspect final : public Element {
+public:
+    static void declare(TypeBuilder<Inspect>&) {}
+    void render(Frame& frame) override {
+        ids.clear();
+        sizes.clear();
+        frame.forEachChild([&](Frame::Child& c) {
+            ids.push_back(c.id());
+            sizes.push_back(layout::lastSize(c.id()));
+            c.render();
+        });
+    }
+    std::vector<ImGuiID> ids;
+    std::vector<std::optional<ImVec2>> sizes;
+};
+
+/// Counts its renders in ImGui's state storage, under an ID of its own scope (like a widget keeps an open tree or a
+/// scroll position): the count goes on while the element's ImGui ID scope is the same.
+class Counter final : public Element {
+public:
+    static void declare(TypeBuilder<Counter>&) {}
+    void render(Frame&) override {
+        ImGuiStorage* storage = ImGui::GetStateStorage();
+        const ImGuiID key = ImGui::GetID("##renders");
+        m_count = storage->GetInt(key) + 1;
+        storage->SetInt(key, m_count);
+        ImGui::Dummy({30.0f, 10.0f});
+    }
+    [[nodiscard]] int count() const { return m_count; }
+
+private:
+    int m_count = 0;
+};
+
+/// Asks each child for its instance (a layout's query: the child is synced), then, when `w` is set, writes it into
+/// the child's `w` field with a raw lua_setfield, which luaui::changes() doesn't count, or through Node::set
+/// (`counted`), which it does, and renders the child.
+class RawWriter final : public Element {
+public:
+    static void declare(TypeBuilder<RawWriter>& type) {
+        type.property("w", &RawWriter::w, &RawWriter::setW)
+            .property("counted", &RawWriter::counted, &RawWriter::setCounted);
+    }
+    void render(Frame& frame) override {
+        frame.forEachChild([&](Frame::Child& c) {
+            (void)c.syncProperties();
+            if (m_w > 0.0) {
+                if (m_counted) {
+                    c.node().set("w", m_w);
+                } else {
+                    lua::pushnumber(c.node().state(), m_w);
+                    lua::setfield(c.node().state(), c.node().index(), "w");
+                }
+            }
+            c.render();
+        });
+    }
+    [[nodiscard]] double w() const { return m_w; }
+    void setW(double w) { m_w = w; }
+    [[nodiscard]] bool counted() const { return m_counted; }
+    void setCounted(bool on) { m_counted = on; }
+
+private:
+    double m_w = 0.0;
+    bool m_counted = false;
+};
+
+bool hasError(std::string_view part) {
+    for (const auto& e : luaui::errors())
+        if (e.find(part) != std::string::npos) return true;
+    return false;
+}
+
 class LayoutTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -158,6 +237,9 @@ protected:
         m_h.registerType<Measure>("Measure");
         m_h.registerType<Writer>("Writer");
         m_h.registerType<Filler>("Filler");
+        m_h.registerType<Inspect>("Inspect");
+        m_h.registerType<Counter>("Counter");
+        m_h.registerType<RawWriter>("RawWriter");
     }
     [[nodiscard]] ImVec2 lastSize(std::string_view name) {
         test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
@@ -968,6 +1050,62 @@ TEST_F(LayoutTest, AChangeMadeMidFrameIsSyncedBeforeTheChildRenders) {
     run("grow = true");
     m_h.renderFrame("root");
     EXPECT_FLOAT_EQ(probe("after").pos().x - probe("label").pos().x, 50.0f);
+}
+
+// A Lua write that bypasses luaui::changes() (a raw lua_setfield from C++, between a layout's query and the render)
+// still reaches the render on the same frame: the sync skip also compares the element's declared fields. A debug
+// build reports the bypass; a write through Node::set is counted and reported nowhere.
+TEST_F(LayoutTest, AWriteThatBypassesTheChangeCountIsSyncedBeforeTheRender) {
+    run("p = Probe { w = 10 } root = RawWriter { p }");
+    m_h.renderFrames("root", 2);
+    EXPECT_FLOAT_EQ(probe("p").w(), 10.0f);
+    run("root.w = 70");
+    m_h.renderFrame("root");
+    EXPECT_FLOAT_EQ(probe("p").w(), 70.0f); // written after the query's sync, rendered with the new value
+    const bool reported = hasError("Probe: a declared field of the element table changed without luaui::changes()");
+#ifdef NDEBUG
+    EXPECT_FALSE(reported); // handled, not reported
+#else
+    EXPECT_TRUE(reported);
+#endif
+    luaui::clearErrors();
+    run("root.w = 0 p.w = 10");
+    m_h.renderFrame("root");
+    run("root.w = 90 root.counted = true");
+    m_h.renderFrame("root");
+    EXPECT_FLOAT_EQ(probe("p").w(), 90.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ Element identity
+
+// An element's ImGui ID (its ID scope and its layout cache key) comes from its instance's id, never reused: an
+// element that takes the place of a collected one at the same table address starts fresh, with no cached size and
+// none of the old one's ImGui state. (Simulated: the table keeps its address and gets a new instance.)
+TEST_F(LayoutTest, AnElementAtARecycledAddressStartsFresh) {
+    run("a = Counter {} root = Inspect { a }");
+    m_h.renderFrames("root", 3);
+    Inspect* inspect = m_h.instance<Inspect>("root");
+    ASSERT_NE(inspect, nullptr);
+    ASSERT_EQ(inspect->sizes.size(), 1u);
+    ASSERT_TRUE(inspect->sizes[0]);
+    EXPECT_FLOAT_EQ(inspect->sizes[0]->x, 30.0f);
+    ASSERT_NE(m_h.instance<Counter>("a"), nullptr);
+    EXPECT_EQ(m_h.instance<Counter>("a")->count(), 3);
+    const ImGuiID before = inspect->ids[0];
+
+    // The same table (same address) loses its instance; the next render gives it a new one.
+    run("rawset(a, '__native', nil) collectgarbage() collectgarbage()");
+    m_h.renderFrame("root");
+    ASSERT_EQ(inspect->ids.size(), 1u);
+    EXPECT_NE(inspect->ids[0], before);
+    EXPECT_FALSE(inspect->sizes[0]);                   // no size inherited from the dead element
+    EXPECT_EQ(m_h.instance<Counter>("a")->count(), 1); // nor its ImGui state
+    const ImGuiID after = inspect->ids[0];
+    m_h.renderFrame("root");
+    EXPECT_EQ(inspect->ids[0], after);
+    EXPECT_EQ(m_h.instance<Counter>("a")->count(), 2); // stable while the element lives
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // ------------------------------------------------------------ Intrinsic sizes
