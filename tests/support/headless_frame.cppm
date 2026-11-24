@@ -27,6 +27,7 @@ import imlui.lua.errors;
 import imlui.lua.native;
 import imlui.lua.node;
 import imlui.lua.painter;
+import imlui.lua.protected_render;
 import imlui.lua.resources;
 import imlui.resources;
 import imlui.resources.directory_mount;
@@ -187,6 +188,7 @@ ImageCache& HeadlessFrame::images() { return m_images; }
 void HeadlessFrame::start() {
     if (m_state) return;
     m_state = lua::newstate();
+    lua::atpanic(m_state, &luaui::panicHandler);
     lua::openlibs(m_state);
     luaui::registerNative(m_state, &m_hooks);
     luaui::registerPainter(m_state);
@@ -257,7 +259,9 @@ void HeadlessFrame::renderFrame(std::string_view root) {
     ImGui::SetNextWindowPos({0.0f, 0.0f});
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::Begin("##headless", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
-    if (pushName(root) == lua::Type::Table) m_renderer.render(m_state, lua::gettop(m_state));
+    // Protected like the Engine's render pass: an escaped Lua error is reported (and ImGui recovered).
+    if (pushName(root) == lua::Type::Table)
+        luaui::renderProtected(m_state, 1, [this](lua::State* state) { m_renderer.render(state, 1); });
     lua::settop(m_state, top);
     ImGui::End();
     ImGui::Render();

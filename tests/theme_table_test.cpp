@@ -258,3 +258,20 @@ TEST_F(ThemeTableTest, InvalidImGuiColorIsReported) {
     EXPECT_TRUE(hasError("theme.imgui.Text: invalid color"));
     EXPECT_TRUE(t.imguiColors.empty());
 }
+
+// lua::tostring converts a number key in place, which would break the lua::next loop ("invalid key to
+// 'next'", raised unprotected): keys that aren't strings are reported and skipped.
+TEST_F(ThemeTableTest, NonStringKeysAreReportedAndSkipped) {
+    Theme t = parse(R"(
+        return { colors = { "#FF0000", primary = "#00FF00" },
+                 imgui = { "#FF0000", [2.5] = "#00FF00", Text = "#0000FF" },
+                 style = { 4, FrameRounding = 6 } })");
+    EXPECT_TRUE(hasError("theme.colors: keys must be role names"));
+    EXPECT_TRUE(hasError("theme.imgui: keys must be ImGuiCol names"));
+    EXPECT_TRUE(hasError("theme.style: keys must be ImGuiStyle field names"));
+    EXPECT_EQ(t.scheme.primary, (Color{0, 1, 0, 1}));
+    ASSERT_EQ(t.imguiColors.size(), 1u);
+    EXPECT_EQ(t.imguiColors[0].second, (Color{0, 0, 1, 1}));
+    ASSERT_EQ(t.style.size(), 1u);
+    EXPECT_EQ(t.style[0].name, "FrameRounding");
+}

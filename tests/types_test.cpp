@@ -157,6 +157,26 @@ static_assert(std::is_same_v<decltype(overload<double, double>(&Shape::grow)), d
 static_assert(std::is_same_v<decltype(constOverload<int>(&Shape::size)), double (Shape::*)(int) const>);
 static_assert(overload<double>(&Shape::setSize) == static_cast<void (Shape::*)(double)>(&Shape::setSize));
 
+/// Throws from its property hooks: a negative value from the setter, and the getter of `broken` always.
+class Thrower final : public Element {
+public:
+    static void declare(TypeBuilder<Thrower>& type) {
+        type.property("value", &Thrower::value, &Thrower::setValue).property("broken", &Thrower::broken);
+    }
+
+    void render(Frame&) override {}
+
+    [[nodiscard]] double value() const { return m_value; }
+    void setValue(double v) {
+        if (v < 0) throw std::invalid_argument("negative value");
+        m_value = v;
+    }
+    [[nodiscard]] double broken() const { throw std::runtime_error("broken getter"); }
+
+private:
+    double m_value = 0;
+};
+
 lua::State* newUiState(TypeRegistry& types) {
     lua::State* state = lua::newstate();
     lua::openlibs(state);
@@ -608,4 +628,49 @@ TEST_F(TypesTest, ClosingTheStateDetachesSingletons) {
     EXPECT_EQ(m_backend.luaState(), nullptr);
     m_backend.setLevel(0.4); // no Lua link: must not crash
     EXPECT_FALSE(m_backend.pushSelf());
+}
+
+// ------------------------------------------------------------------ C++ exceptions in property hooks
+
+// A property hook runs inside a Lua C function; an exception unwinding through Lua's C frames is undefined
+// behaviour, so setters and getters that throw are reported as script errors, like methods.
+TEST(PropertyExceptionTest, ThrowingSettersAndGettersAreReported) {
+    luaui::clearErrors();
+    TypeRegistry types;
+    types.registerType<Thrower>("Thrower");
+    Thrower single;
+    types.registerSingleton("single", single);
+    lua::State* state = newUiState(types);
+    const auto run = [&](std::string_view code) {
+        ASSERT_EQ(lua::loadbuffer(state, code, "=test"), lua::ok) << lua::tostring(state, -1);
+        ASSERT_EQ(lua::pcall(state, 0, 0, 0), lua::ok) << lua::tostring(state, -1);
+    };
+    const auto hasError = [](std::string_view part) {
+        for (const auto& e : luaui::errors())
+            if (e.find(part) != std::string::npos) return true;
+        return false;
+    };
+
+    // Singleton: obj.value = v runs the setter, obj.broken the getter.
+    run("single.value = -1; assert(single.value == 0); assert(single.broken == nil); single.value = 3");
+    EXPECT_TRUE(hasError("single.value: negative value")); // a singleton's type is named after it
+    EXPECT_TRUE(hasError("single.broken: broken getter"));
+    EXPECT_DOUBLE_EQ(single.value(), 3);
+
+    // Element: the sync reports the failed setter, and the next sync still runs (it isn't left "syncing").
+    luaui::clearErrors();
+    run("t = ui.env.Thrower { value = -2 }");
+    lua::getglobal(state, "t");
+    auto* t = dynamic_cast<Thrower*>(types.sync(Node{state, -1}));
+    ASSERT_NE(t, nullptr);
+    EXPECT_DOUBLE_EQ(t->value(), 0);
+    EXPECT_TRUE(hasError("Thrower.value: negative value"));
+    run("t.value = 5");
+    EXPECT_EQ(types.sync(Node{state, -1}), t);
+    EXPECT_DOUBLE_EQ(t->value(), 5);
+    lua::pop(state);
+
+    lua::close(state);
+    luaui::clearErrors();
+    clearFrameRequests();
 }

@@ -233,6 +233,18 @@ int singletonGc(lua::State* state) {
     return 0;
 }
 
+/// Clears a `syncing` flag when it goes out of scope.
+class SyncingGuard {
+public:
+    explicit SyncingGuard(bool& flag) : m_flag{flag} {}
+    ~SyncingGuard() { m_flag = false; }
+    SyncingGuard(const SyncingGuard&) = delete;
+    SyncingGuard& operator=(const SyncingGuard&) = delete;
+
+private:
+    bool& m_flag;
+};
+
 /// Resets property `index` of the object in `b` to its default. Unchanged when it has none.
 void resetProperty(const Box& b, std::size_t index) {
     const TypeInfo::Property& p = b.type->properties()[index];
@@ -244,6 +256,8 @@ void resetProperty(const Box& b, std::size_t index) {
 void syncInstance(lua::State* state, int tbl, Box& b) {
     if (b.syncing || !b.element) return;
     b.syncing = true;
+    // Reset on every path: a setter or componentComplete() that throws must not leave the element unsyncable.
+    const SyncingGuard syncingGuard{b.syncing};
     const Node node{state, tbl};
     const TypeInfo& info = *b.type;
     const auto& properties = info.properties();

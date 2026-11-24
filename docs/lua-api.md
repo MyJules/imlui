@@ -114,7 +114,9 @@ value it returns the value unchanged.
 
 ### `bind(t, key)` / `bind(getter, setter)`
 
-Creates a two-way binding object. `t` can be any table: a `state`, or a plain table like `sel.tags`.
+Creates a two-way binding object. `t` can be any table: a `state`, or a plain table like `sel.tags` (or any value
+that can be indexed). Reads and writes of `t[key]` run protected: an error in them, such as one raised by a
+`watch()` callback that the write triggers, is reported in the error overlay and doesn't stop the frame.
 
 ```lua
 Switch { checked = bind(s, "wifi") }
@@ -337,7 +339,8 @@ These take [color specs](theming.md#color-specs) (role, `role/alpha`, hex, `{r,g
 Frames are **rendered on demand** (see [Architecture](architecture.md#frame-loop)): after input, while an animation
 or indeterminate indicator is moving, when a timer comes due, and when a script asks for one. When nothing changes,
 the app sleeps. Timers run at the start of a frame, and the engine wakes up for the next one, so an interval keeps
-its rate even with no input. Callbacks may add or clear timers.
+its rate even with no input. Callbacks may add or clear timers. A callback that raises an error is reported
+(with a traceback) in the error overlay; the other timers and callbacks of that frame still run.
 
 | Function | Description |
 |---|---|
@@ -345,7 +348,7 @@ its rate even with no input. Callbacks may add or clear timers.
 | `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. |
 | `clearTimer(id)` | Cancels a timeout or interval. |
 | `onFrame(fn) -> stop` | Calls `fn(time)` at the start of every **rendered** frame, after the timers. Call the returned `stop()` to remove it (also from inside `fn`). |
-| `requestFrame(ms?)` | Asks for a frame now, or after `ms` milliseconds. Call it from `onFrame` (or a binding) while something you draw keeps changing on its own. |
+| `requestFrame(ms?)` | Asks for a frame now, or after `ms` milliseconds (a finite number; `math.huge` or NaN raise an error). Call it from `onFrame` (or a binding) while something you draw keeps changing on its own. |
 
 Anything that changes because of a click, a key or a timer needs nothing extra. Only state that changes by
 itself over time, such as a binding that reads `time()`, needs `requestFrame()`, a timer, or a `Canvas` with

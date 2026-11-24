@@ -85,6 +85,12 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         int ct = lua::gettop(state);
         lua::pushnil(state);
         while (lua::next(state, ct)) {
+            // lua::tostring would convert a number key in place, which breaks lua::next.
+            if (lua::type(state, -2) != lua::Type::String) {
+                reportError("theme.colors: keys must be role names");
+                lua::pop(state);
+                continue;
+            }
             std::string role{lua::tostring(state, -2)};
             Color* target = findRole(t.scheme, role);
             auto c = colorAt(lua::gettop(state), generated);
@@ -101,6 +107,12 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         int ct = lua::gettop(state);
         lua::pushnil(state);
         while (lua::next(state, ct)) {
+            // lua::tostring would convert a number key in place, which breaks lua::next.
+            if (lua::type(state, -2) != lua::Type::String) {
+                reportError("theme.imgui: keys must be ImGuiCol names");
+                lua::pop(state);
+                continue;
+            }
             std::string name{lua::tostring(state, -2)};
             int ci = imguiColorIndex(name);
             auto c = colorAt(lua::gettop(state), generated);
@@ -117,6 +129,12 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         int ct = lua::gettop(state);
         lua::pushnil(state);
         while (lua::next(state, ct)) {
+            // lua::tostring would convert a number key in place, which breaks lua::next.
+            if (lua::type(state, -2) != lua::Type::String) {
+                reportError("theme.style: keys must be ImGuiStyle field names");
+                lua::pop(state);
+                continue;
+            }
             std::string name{lua::tostring(state, -2)};
             if (!isStyleField(name)) {
                 reportError("theme.style: unknown ImGuiStyle field '" + name + "'");

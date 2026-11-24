@@ -142,7 +142,7 @@ struct LuaConvert<Color> {
     static void push(lua::State* s, const Color& v) { lua::pushstring(s, toHex(v)); }
     static bool check(lua::State* s, int idx) {
         if (lua::type(s, idx) == lua::Type::String) return resolveColor(lua::tostring(s, idx)).has_value();
-        return lua::istable(s, idx);
+        return lua::istable(s, idx) && luaui::Node::colorFromTable(s, idx).has_value();
     }
     static Color get(lua::State* s, int idx) {
         if (lua::type(s, idx) == lua::Type::String) return resolveColor(lua::tostring(s, idx)).value_or(Color{});

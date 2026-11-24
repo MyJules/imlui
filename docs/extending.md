@@ -220,7 +220,8 @@ local text = backend:describe("cpu")   -- results are converted back
 
 Arguments are checked with `LuaConvert<A>::check`. A wrong argument raises a normal Lua error,
 `bad argument #1 to 'Gauge:setRange' (number expected, got string)`. A C++ exception thrown by the method becomes
-a Lua error too. Before a method runs on an element, the element's properties are [synced](#property-sync), so it
+a Lua error too. One thrown by a property getter or setter is reported as a script error (`Gauge.value: ...`)
+instead: a setter that threw leaves the property unchanged, a getter that threw reads as `nil`. Before a method runs on an element, the element's properties are [synced](#property-sync), so it
 sees the current Lua values even if the element never rendered.
 
 **Overloads.** `&T::fn` of an overloaded member doesn't name one function. Pick one by its parameter types with

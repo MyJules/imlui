@@ -450,6 +450,13 @@ end
 --- only renders on input, animations, timers and these requests.
 function ui.requestFrame(ms) native.requestFrame((ms or 0) / 1000) end
 
+-- Runs fn(...) in protected mode and reports an error (with traceback) instead of raising it, so one failing
+-- timer or frame callback doesn't skip the others (or the ticking elements) for the rest of the frame.
+local function protectedCall(fn, ...)
+    local ok, err = xpcall(fn, debug.traceback, ...)
+    if not ok then ui.reportError(tostring(err)) end
+end
+
 --- Called by the engine at the start of every frame. Returns the seconds until
 --- the next timer is due (nil when there are no timers), so the engine wakes up for it.
 function ui.__tick(now)
@@ -462,7 +469,7 @@ function ui.__tick(now)
         local t = timers[id]
         if t then
             if t.rep then t.due = now + t.interval else timers[id] = nil end
-            t.fn()
+            protectedCall(t.fn)
         end
     end
     -- C++ elements that tick every frame, rendered or not (Timer). Dropped children are collected first, so a
@@ -472,10 +479,10 @@ function ui.__tick(now)
             ui.__dropped = false
             if types.tickingCount() > 0 then collectgarbage() end
         end
-        types.tick(now)
+        protectedCall(types.tick, now)
     end
     -- Iterate a copy: a callback may remove itself while running.
-    for _, fn in ipairs({ table.unpack(frameCallbacks) }) do fn(now) end
+    for _, fn in ipairs({ table.unpack(frameCallbacks) }) do protectedCall(fn, now) end
     local nextDue
     for _, t in pairs(timers) do
         if not nextDue or t.due < nextDue then nextDue = t.due end

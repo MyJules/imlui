@@ -18,6 +18,10 @@ void clearErrors();
 /// Message handler for lua::pcall: appends a traceback to the error.
 int tracebackHandler(lua::State* state);
 
+/// Panic function for lua::atpanic: logs the error that escaped every protected call. Lua aborts the process
+/// when it returns; installing it only makes that abort say why.
+int panicHandler(lua::State* state);
+
 /// Calls the function below `nargs` arguments at the top of the stack in
 /// protected mode. On success leaves `nresults` values; on failure reports
 /// the error (with traceback) and leaves nothing.
@@ -48,6 +52,16 @@ int tracebackHandler(lua::State* state) {
     std::string msg = lua::isstring(state, 1) ? std::string{lua::tostring(state, 1)} : lua::toStringAny(state, 1);
     lua::traceback(state, state, msg.c_str(), 1);
     return 1;
+}
+
+int panicHandler(lua::State* state) {
+    try {
+        const std::string msg =
+            lua::isstring(state, -1) ? std::string{lua::tostring(state, -1)} : std::string{lua::typeName(state, -1)};
+        log::write(log::Level::Critical, "unprotected Lua error, aborting: " + msg, "lua");
+    } catch (...) { // nothing may unwind into Lua's C frames; the process aborts next anyway
+    }
+    return 0;
 }
 
 bool safeCall(lua::State* state, int nargs, int nresults) {

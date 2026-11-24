@@ -67,7 +67,7 @@ public:
     /// Calls handler `signal` (e.g. "onClicked") as handler(self, args...).
     bool emit(const char* signal, std::initializer_list<Value> args = {}) const;
 
-    /// Reads {r, g, b[, a]} at `idx`.
+    /// Reads {r, g, b[, a]} at `idx`; nullopt unless r, g and b are numbers.
     static std::optional<Color> colorFromTable(lua::State* state, int idx);
 
 private:
@@ -83,6 +83,22 @@ private:
 module :private;
 
 namespace imlui::luaui {
+
+namespace {
+
+// bindGet(t, k) -> t[k] and bindSet(t, k, v): a two-way bind's source access, called through safeCall because
+// the source's metamethods (a ui.state proxy's __newindex runs watchers) can raise.
+int bindGet(lua::State* state) {
+    lua::gettable(state, 1);
+    return 1;
+}
+
+int bindSet(lua::State* state) {
+    lua::settable(state, 1);
+    return 0;
+}
+
+} // namespace
 
 Node::Node(lua::State* state, int idx) : m_state{state}, m_index{lua::absindex(state, idx)} {}
 
@@ -200,10 +216,13 @@ void Node::setTop(const char* key) const {
     pushRaw(key);
     if (isBind(m_state, -1)) {
         lua::getfield(m_state, -1, "t");
-        if (lua::istable(m_state, -1)) {
-            lua::getfield(m_state, -2, "k");
+        if (lua::toboolean(m_state, -1)) {
+            // t[k] = v may run a metamethod (a ui.state proxy's __newindex runs its watchers), so it runs protected.
+            lua::pushcfunction(m_state, &bindSet);
+            lua::insert(m_state, -2);
+            lua::getfield(m_state, -3, "k");
             lua::pushvalue(m_state, value);
-            lua::settable(m_state, -3);
+            safeCall(m_state, 3, 0);
         } else {
             lua::pop(m_state);
             lua::getfield(m_state, -1, "set");
@@ -240,8 +259,10 @@ std::optional<Color> Node::colorFromTable(lua::State* state, int idx) {
     float c[4] = {0, 0, 0, 1};
     for (int i = 0; i < 4; ++i) {
         lua::rawgeti(state, idx, i + 1);
-        if (lua::isnumber(state, -1)) c[i] = static_cast<float>(lua::tonumber(state, -1));
+        const bool number = lua::isnumber(state, -1);
+        if (number) c[i] = static_cast<float>(lua::tonumber(state, -1));
         lua::pop(state);
+        if (!number && i < 3) return std::nullopt; // r, g and b are required; alpha defaults to 1
     }
     return Color{c[0], c[1], c[2], c[3]};
 }
@@ -249,10 +270,12 @@ std::optional<Color> Node::colorFromTable(lua::State* state, int idx) {
 void Node::resolveBind(int idx) const {
     int b = lua::absindex(m_state, idx);
     lua::getfield(m_state, b, "t");
-    if (lua::istable(m_state, -1)) {
+    if (lua::toboolean(m_state, -1)) {
+        // t[k] may run an __index metamethod, so it runs protected (like Lua's resolve, any truthy t is a source).
+        lua::pushcfunction(m_state, &bindGet);
+        lua::insert(m_state, -2);
         lua::getfield(m_state, b, "k");
-        lua::gettable(m_state, -2);
-        lua::remove(m_state, -2);
+        if (!safeCall(m_state, 2, 1)) lua::pushnil(m_state);
     } else {
         lua::pop(m_state);
         lua::getfield(m_state, b, "get");

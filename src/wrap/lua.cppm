@@ -40,6 +40,8 @@ void close(State* state);
 void openlibs(State* state);
 /// Opens only the base library (print, pairs, tostring, ...) into the globals; for sandboxes.
 void openbase(State* state);
+/// Sets the panic function (called on an error outside any protected call, before Lua aborts); returns the old one.
+CFunction atpanic(State* state, CFunction panicf);
 
 // ---------------------------------------------------------------- stack
 int gettop(State* state);
@@ -162,6 +164,7 @@ Type toType(int t) { return static_cast<Type>(t); }
 State* newstate() { return luaL_newstate(); }
 void close(State* state) { lua_close(state); }
 void openlibs(State* state) { luaL_openlibs(state); }
+CFunction atpanic(State* state, CFunction panicf) { return lua_atpanic(state, panicf); }
 void openbase(State* state) {
     luaL_requiref(state, LUA_GNAME, luaopen_base, 1);
     lua_pop(state, 1);
