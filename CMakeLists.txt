@@ -64,6 +64,9 @@ if(IMLUI_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
+# ------------------------------------------------------------------ clang-tidy (`--target tidy`)
+include(ImluiTidy)
+
 # ------------------------------------------------------------------ tests
 option(IMLUI_BUILD_TESTS "Build unit tests" ON)
 if(IMLUI_BUILD_TESTS)
