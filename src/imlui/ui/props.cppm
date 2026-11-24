@@ -19,6 +19,14 @@ export namespace imlui {
 /// "start" -> 0, "center" -> 0.5, "end" / "right" / "bottom" -> 1.
 [[nodiscard]] float alignFactor(std::string_view align);
 
+/// A 1-based index prop as an int that is safe to do arithmetic on: values below 1, NaN and -infinity become 0
+/// (none), values past the int range (and +infinity) become the largest int.
+[[nodiscard]] int indexValue(double index);
+[[nodiscard]] int indexValue(int index);
+
+/// A progress fraction for the widgets: clamped to [0, 1], 0 when not finite (`done / total` with total == 0).
+[[nodiscard]] float progressFraction(double value);
+
 } // namespace imlui
 
 module :private;
@@ -42,6 +50,19 @@ float alignFactor(std::string_view align) {
     if (align == "center") return 0.5f;
     if (align == "end" || align == "right" || align == "bottom") return 1.0f;
     return 0.0f;
+}
+
+int indexValue(double index) {
+    if (!(index >= 1.0)) return 0; // also NaN
+    if (index >= static_cast<double>(std::numeric_limits<int>::max())) return std::numeric_limits<int>::max();
+    return static_cast<int>(index);
+}
+
+int indexValue(int index) { return std::max(index, 0); }
+
+float progressFraction(double value) {
+    if (!std::isfinite(value)) return 0.0f;
+    return static_cast<float>(std::clamp(value, 0.0, 1.0));
 }
 
 } // namespace imlui

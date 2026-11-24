@@ -7,12 +7,13 @@ import imlui.widgets.progress;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.props;
 
 export namespace imlui {
 
 /// A Material 3 circular progress indicator.
 ///
-/// Props:   value = 0 (0..1), indeterminate = false, thickness = 4 (dp)
+/// Props:   value = 0 (0..1; clamped, NaN shows 0), indeterminate = false, thickness = 4 (dp)
 /// Raw:     size (the diameter, default 48dp)
 class CircularProgress final : public Element {
 public:
@@ -46,8 +47,9 @@ void CircularProgress::declare(TypeBuilder<CircularProgress>& type) {
 }
 
 void CircularProgress::render(Frame& frame) {
+    // A NaN or out-of-range value is clamped here: the widget reads any negative fraction as indeterminate.
     // `size` goes through the common size path (sizeProp); 0 lets the widget pick its default diameter.
-    md::circularProgress(m_indeterminate ? -1.0f : static_cast<float>(m_value), frame.size("size"),
+    md::circularProgress(m_indeterminate ? -1.0f : progressFraction(m_value), frame.size("size"),
                          static_cast<float>(m_thickness));
 }
 

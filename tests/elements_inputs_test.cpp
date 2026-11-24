@@ -154,6 +154,15 @@ TEST_F(InputsTest, SpinBoxPropsAndDefaults) {
     EXPECT_EQ(set->variant(), "outlined");
 }
 
+// decimals is clamped to 0..15: the widget formats with "%.<decimals>f".
+TEST_F(InputsTest, SpinBoxDecimalsAreClamped) {
+    run("root = Probe { SpinBox { value = 1, decimals = 1e9 } }");
+    frames(2);
+    run("root = Probe { SpinBox { value = 1, decimals = -5 } }");
+    frames(2);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(InputsTest, SpinBoxIncrementWritesBackAndEmitsValueModified) {
     run(R"(
         s = state { v = 4 }
@@ -301,6 +310,12 @@ TEST_F(InputsTest, ComboBoxPropsAndDefaults) {
     EXPECT_EQ(set->supportingText(), "S");
     EXPECT_EQ(set->variant(), "outlined");
     EXPECT_TRUE(set->error());
+}
+
+TEST_F(InputsTest, ComboBoxTakesTheSmallestIndex) {
+    run("root = Probe { ComboBox { model = { 'a', 'b' }, currentIndex = math.mininteger } }"); // no overflow
+    frames(2);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 TEST_F(InputsTest, ComboBoxPickingAnItemWritesBackAndEmitsActivated) {

@@ -7,6 +7,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -50,7 +51,7 @@ void SegmentedButton::declare(TypeBuilder<SegmentedButton>& type) {
 }
 
 void SegmentedButton::render(Frame& frame) {
-    int cur = static_cast<int>(m_currentIndex) - 1;
+    int cur = indexValue(m_currentIndex) - 1; // NaN, infinities and huge values are safe
     if (md::segmented("##seg", m_model, &cur, frame.size("width"), m_icons)) {
         m_currentIndex = static_cast<double>(cur + 1);
         // Copied before notify(): its handler (onCurrentIndexChanged, a bound setter) may replace the model, and a

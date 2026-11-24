@@ -154,6 +154,80 @@ TEST_F(SystemTest, TimerTriggeredOnStartAndOneShotWriteBack) {
     run("assert(s.running == false)");
 }
 
+// restart() starts the period over, also while running; running = false then true before the next frame is no
+// change (props sync once per frame).
+TEST_F(SystemTest, TimerRestartStartsThePeriodOver) {
+    run(R"(
+        n = 0
+        t = Timer { interval = 250, onTriggered = function() n = n + 1 end }
+        root = Column { })");
+    m_h.renderFrames("root", 3); // 125 ms after the start
+    run("t:restart()");
+    m_h.renderFrames("root", 4); // the restart frame + 3
+    EXPECT_EQ(number("n"), 0);
+    m_h.renderFrame("root");
+    EXPECT_EQ(number("n"), 1);
+
+    // A stopped timer: restart() turns it on and writes running = true back.
+    run("t.running = false");
+    m_h.renderFrames("root", 2);
+    run("t:restart()");
+    run("assert(t.running == true)");
+    m_h.renderFrames("root", 5);
+    EXPECT_EQ(number("n"), 2);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// An interval that isn't a positive number is reported once, and the timer doesn't fire (nor render every frame)
+// until it gets a valid one.
+TEST_F(SystemTest, TimerRejectsAnIntervalThatIsntPositive) {
+    for (const char* interval : {"0", "-5", "0/0", "math.huge"}) {
+        luaui::clearErrors();
+        run(std::string{R"(
+            n = 0
+            t = Timer { interval = )"} + interval + R"(, onTriggered = function() n = n + 1 end }
+            root = Column { })");
+        m_h.renderFrames("root", 6);
+        EXPECT_EQ(number("n"), 0) << interval;
+        EXPECT_EQ(luaui::errors().size(), 1u) << interval;
+        EXPECT_EQ(secondsUntilFrame(), std::numeric_limits<double>::infinity()) << interval;
+        run("t.running = false; t = nil; collectgarbage(); collectgarbage()");
+    }
+    luaui::clearErrors();
+    run(R"(
+        n = 0
+        t = Timer { interval = 0, onTriggered = function() n = n + 1 end }
+        root = Column { })");
+    m_h.renderFrames("root", 2);
+    run("t.interval = 250");
+    m_h.renderFrames("root", 5);
+    EXPECT_EQ(number("n"), 1);
+}
+
+// A one-shot can't write false into a function binding: it stays stopped until the function returns false, then
+// true again.
+TEST_F(SystemTest, TimerOneShotUnderAFunctionBindingStaysStopped) {
+    run(R"(
+        n = 0
+        changed = nil
+        s = state { run = true }
+        t = Timer { interval = 250, ["repeat"] = false, running = function() return s.run end,
+                    onTriggered = function() n = n + 1 end, onRunningChanged = function(_, v) changed = v end }
+        root = Column { })");
+    m_h.renderFrames("root", 5);
+    EXPECT_EQ(number("n"), 1);
+    run("assert(changed == false)");
+    m_h.renderFrames("root", 12);
+    EXPECT_EQ(number("n"), 1); // not restarted by the binding's true
+
+    run("s.run = false");
+    m_h.renderFrame("root");
+    run("s.run = true");
+    m_h.renderFrames("root", 5);
+    EXPECT_EQ(number("n"), 2);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(SystemTest, TimerDefaultsAndNil) {
     run(R"(t = Timer { interval = 50, running = false, ["repeat"] = false, triggeredOnStart = true })");
     Timer* t = m_h.instance<Timer>("t");

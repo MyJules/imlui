@@ -191,7 +191,9 @@ when the title changes.
 
 A Material basic dialog: modal, centered over a scrim, `extraLarge` corners, a `headlineSmall` title. Escape
 closes it. It stacks its children. Non-visual. A dialog may open another one from its content: the nested dialog
-shows above it, and Escape closes the top-most dialog (or a menu opened from it) first.
+shows above it, and Escape closes the top-most dialog (or a menu opened from it) first. Sibling dialogs (not
+nested in one another) show one at a time: one whose `open` turns true while another is shown waits, still
+`open`, and shows the frame after the other closes.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
@@ -255,7 +257,7 @@ A vertical stack. `Item` is an alias.
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child. |
 | `padding` | number | `0` | Inset at the top, bottom and start. |
-| `width` | size | `0` (auto) | *Raw.* A fixed or fill width that the children can fill (`fillWidth`) and `align` within. |
+| `width` | size | `0` (auto) | *Raw.* A fixed or fill width. It is the children's available width: they fill it (`fillWidth`, fill-minus widths), `align` within it and wrap text at it, also inside a `Row`. |
 
 ### Row
 
@@ -338,7 +340,9 @@ A Material card that stacks its children.
 
 Material tabs. A `TabBar` collects its visible children as tab headers and renders only the selected one's
 content, stacked with that child's `spacing` / `align`. Its children are normally `Tab`s; another element used
-as a tab gives its header through *raw* `title` (default `"Tab"`) and `icon` props.
+as a tab gives its header through *raw* `title` (default `"Tab"`) and `icon` props. Non-visual children (`Timer`,
+`Dialog`, `Window`, `ModalNavigationDrawer`, ...) are not tabs and don't count for `currentIndex`: they render
+whichever tab is selected, so a `Dialog` declared in a `TabBar` opens from any tab.
 
 | `TabBar` prop | Type | Default | Notes |
 |---|---|---|---|
@@ -835,7 +839,7 @@ A numeric field (56dp) with decrement and increment icon buttons.
 | `value` | number | `0` | **two-way.** Clamped to the range. |
 | `from`, `to` | number | `-1e9`, `1e9` | Range. With `from > to` the range is empty and the buttons don't clamp. |
 | `stepSize` | number | `1` | Button step. |
-| `decimals` | integer | `0` | Shown decimals. |
+| `decimals` | integer | `0` | Shown decimals, clamped to 0..15. |
 | `label` | string | `""` | Floating label. |
 | `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
 | `width` | size | `0` (200dp) | *Raw.* |
@@ -916,7 +920,7 @@ A Material 3 (2024) linear indicator, with a gap and a stop indicator.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number | `0` | 0..1. |
+| `value` | number | `0` | 0..1. Clamped; NaN (`done / total` with `total == 0`) shows 0. |
 | `indeterminate` | bool | `false` | Animated. |
 | `width` | size | `0` (240dp) | *Raw.* |
 
@@ -924,7 +928,7 @@ A Material 3 (2024) linear indicator, with a gap and a stop indicator.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number | `0` | 0..1. |
+| `value` | number | `0` | 0..1. Clamped; NaN shows 0. |
 | `indeterminate` | bool | `false` | Spinning. |
 | `size` | size | `0` (48dp) | *Raw.* Diameter. |
 | `thickness` | number | `4` | Stroke width (dp). |
@@ -966,9 +970,9 @@ A Material data table: a 56dp header and selectable rows, inside an outlined car
 | `currentRow` | integer | `0` | **two-way.** The selected row; `0` means none. |
 | `rowHeight` | number | `52` | Row height (dp). |
 | `outlined` | bool | `true` | Wraps the table in an outlined card. |
-| `width` | size | `0` (fill) | *Raw.* |
+| `width` | size | `0` (fill) | *Raw.* With or without the card. |
 
-**Signals:** `onRowClicked(self, row)`.
+**Signals:** `onRowClicked(self, row)`, after the rows are drawn: the handler may change `rows`.
 **Two-way:** `currentRow`.
 
 ```lua
@@ -1048,11 +1052,13 @@ trigger, so it keeps its rate without input.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `interval` | number | `1000` | Period in ms. |
-| `running` | bool | `true` | **two-way.** Starting it (again) restarts the period. A one-shot writes `false` back when it fires. |
+| `interval` | number | `1000` | Period in ms, > 0. Another value (0, negative, NaN, infinite) is reported as a script error, and the timer doesn't fire until it gets a valid one. |
+| `running` | bool | `true` | **two-way.** Starting it (again) restarts the period. A one-shot writes `false` back when it fires. Props sync once per frame, so `running = false` then `true` before the next frame is no change: use `restart()`. Under a function binding (`running = function() ... end`), which the timer can't write, a one-shot stays stopped until the function has returned `false` and then `true` again. |
 | `repeat` | bool | `true` | `false` fires once. |
 | `triggeredOnStart` | bool | `false` | Also fires when it starts running. |
 
+**Methods:** `timer:restart()` starts the period over now (and fires `triggeredOnStart`), running or not; a
+stopped timer gets `running = true`.
 **Signals:** `onTriggered(self)`; `onRunningChanged(self, false)` when a one-shot stops itself.
 **Two-way:** `running`.
 

@@ -86,7 +86,9 @@ void Table::render(Frame& frame) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {frame.dp(8), 0});
     const ImGuiTableFlags flags =
         ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX;
-    if (ImGui::BeginTable("##table", columnCount, flags)) {
+    // An outlined table fills its card, which takes the width; a plain one takes it itself (0 = fill).
+    const ImVec2 outerSize{m_outlined ? 0.0f : frame.resolvedWidth(0.0f), 0.0f};
+    if (ImGui::BeginTable("##table", columnCount, flags, outerSize)) {
         for (int c = 0; c < columnCount; ++c)
             ImGui::TableSetupColumn(m_columns[static_cast<std::size_t>(c)].c_str());
         ImGui::TableNextRow(0, headH);
@@ -106,6 +108,9 @@ void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
     const luaui::Node& n = frame.node();
     lua::State* state = n.state();
     const Scheme& s = frame.scheme();
+    // A click is handled after the loop: its handlers may change `rows` (remove the clicked row, ...), while the
+    // loop walks this frame's rows table and count.
+    int clicked = 0;
     if (n.push("rows") == lua::Type::Table) {
         const int rows = lua::gettop(state);
         const lua::Integer count = lua::rawlen(state, rows);
@@ -129,11 +134,8 @@ void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
                     const ImVec2 p = ImGui::GetCursorScreenPos();
                     if (ImGui::Selectable("##row", selected == i,
                                           ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
-                                          {0, rowH})) {
-                        m_currentRow = static_cast<int>(i);
-                        notify("currentRow");
-                        emit("onRowClicked", m_currentRow);
-                    }
+                                          {0, rowH}))
+                        clicked = static_cast<int>(i);
                     ImGui::SetCursorScreenPos(p);
                     ImGui::PopID();
                 }
@@ -143,6 +145,11 @@ void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
         }
     }
     lua::pop(state);
+    if (clicked > 0) {
+        m_currentRow = clicked;
+        notify("currentRow");
+        emit("onRowClicked", m_currentRow);
+    }
 }
 
 const std::vector<std::string>& Table::columns() const { return m_columns; }

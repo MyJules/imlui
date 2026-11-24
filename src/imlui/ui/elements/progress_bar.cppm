@@ -7,12 +7,13 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.props;
 
 export namespace imlui {
 
 /// A Material 3 linear progress indicator.
 ///
-/// Props:   value = 0 (0..1), indeterminate = false
+/// Props:   value = 0 (0..1; clamped, NaN shows 0), indeterminate = false
 /// Raw:     width
 class ProgressBar final : public Element {
 public:
@@ -42,8 +43,9 @@ void ProgressBar::declare(TypeBuilder<ProgressBar>& type) {
 }
 
 void ProgressBar::render(Frame& frame) {
+    // A NaN or out-of-range value is clamped here: the widget reads any negative fraction as indeterminate.
     // `width` goes through the common size path (sizeProp), so `fillWidth` and fill-minus sizes work.
-    md::progress(m_indeterminate ? -1.0f : static_cast<float>(m_value), frame.size("width"));
+    md::progress(m_indeterminate ? -1.0f : progressFraction(m_value), frame.size("width"));
 }
 
 double ProgressBar::value() const { return m_value; }

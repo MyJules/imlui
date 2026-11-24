@@ -14,6 +14,7 @@ import imlui.ui.elements.busy_indicator;
 import imlui.ui.elements.plot;
 import imlui.ui.elements.table;
 import imlui.ui.elements.canvas;
+import imlui.ui.frame_request;
 import imlui.test.headless_frame;
 import imlui.test.last_item_probe;
 
@@ -58,6 +59,21 @@ TEST_F(DataTest, CircularProgressPropsDefaultsAndSize) {
     EXPECT_TRUE(progress->indeterminate());
     EXPECT_DOUBLE_EQ(progress->thickness(), 6.0);
     EXPECT_DOUBLE_EQ(progress->value(), 0.0);
+}
+
+// A value of NaN (done / total with total == 0) or below 0 is not "indeterminate": the widgets read any negative
+// fraction as indeterminate and animate (and request frames) forever.
+TEST_F(DataTest, ProgressValuesAreClampedNotIndeterminate) {
+    for (const char* value : {"0/0", "-0.5", "-math.huge", "math.huge", "2"}) {
+        run(std::string{"root = Probe { ProgressBar { value = "} + value + " }, CircularProgress { value = " + value +
+            " } }");
+        frames(3);
+        EXPECT_EQ(secondsUntilFrame(), std::numeric_limits<double>::infinity()) << value;
+    }
+    run("root = Probe { ProgressBar { indeterminate = true } }");
+    frames(2);
+    EXPECT_EQ(secondsUntilFrame(), 0.0); // indeterminate still animates
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 TEST_F(DataTest, BusyIndicatorKeepsItsSpaceWhenStopped) {
@@ -163,6 +179,32 @@ TEST_F(DataTest, TableColumnsAreCappedAtImGuisLimit) {
     frames(2);
     ASSERT_EQ(luaui::errors().size(), 1u);
     EXPECT_NE(luaui::errors()[0].find("at most 511"), std::string::npos) << luaui::errors()[0];
+}
+
+// `width` applies with or without the card.
+TEST_F(DataTest, TableWidthAppliesWithoutTheCard) {
+    run(R"(root = Probe { Table { columns = { "A", "B" }, rows = { { 1, 2 } }, outlined = false, width = 300 } })");
+    frames(2);
+    EXPECT_FLOAT_EQ(probeSize().x, 300.0f);
+    run(R"(root = Probe { Table { columns = { "A", "B" }, rows = { { 1, 2 } }, outlined = false } })");
+    frames(2);
+    EXPECT_GT(probeSize().x, 700.0f); // unset: fills
+}
+
+// onRowClicked runs after the rows are drawn: a handler that removes rows doesn't make the rest of the frame
+// read rows that are gone (reported as "rows[i] is not a list of cells").
+TEST_F(DataTest, TableRowClickedHandlerMayRemoveRows) {
+    run(R"(
+        rows = { { "x" }, { "y" }, { "z" } }
+        got = nil
+        root = Probe { Table { columns = { "Name" }, rows = rows, outlined = false, width = 400,
+                               onRowClicked = function(_, row) got = row; for i = #rows, 1, -1 do rows[i] = nil end end } })");
+    frames(2);
+    const ImVec2 a = probe().min();
+    click(a.x + 40.0f, a.y + 56.0f + 26.0f); // the first row
+    run(R"(assert(got == 1, tostring(got)))");
+    frames(2);
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
 TEST_F(DataTest, PlotOfLargeOrConstantValuesDraws) {

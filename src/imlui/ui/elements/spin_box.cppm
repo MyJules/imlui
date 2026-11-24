@@ -12,7 +12,7 @@ export namespace imlui {
 
 /// A numeric field with decrement and increment buttons.
 ///
-/// Props:   value = 0, from = -1e9, to = 1e9, stepSize = 1, decimals = 0, label = "",
+/// Props:   value = 0, from = -1e9, to = 1e9, stepSize = 1, decimals = 0 (0..15), label = "",
 ///          variant = "filled" ("outlined")
 /// Raw:     width
 /// Signals: onValueModified(self, value)
@@ -54,6 +54,12 @@ module :private;
 
 namespace imlui {
 
+namespace {
+
+constexpr int maxDecimals = 15;
+
+} // namespace
+
 void SpinBox::declare(TypeBuilder<SpinBox>& type) {
     type.property("value", &SpinBox::value, &SpinBox::setValue)
         .property("from", &SpinBox::from, &SpinBox::setFrom)
@@ -67,7 +73,10 @@ void SpinBox::declare(TypeBuilder<SpinBox>& type) {
 
 void SpinBox::render(Frame& frame) {
     double v = m_value;
-    if (md::spinBox("##spin", &v, m_from, m_to, m_stepSize, m_decimals, m_label, frame.size("width"),
+    // Clamped here: the widget builds a "%.<decimals>f" format, and a double has no more than 15 significant
+    // decimal digits anyway.
+    const int decimals = std::clamp(m_decimals, 0, maxDecimals);
+    if (md::spinBox("##spin", &v, m_from, m_to, m_stepSize, decimals, m_label, frame.size("width"),
                     m_variant == "outlined")) {
         m_value = v;
         notify("value");

@@ -274,6 +274,17 @@ TEST_F(ControlsTest, SegmentedButtonWritesTheOneBasedIndexBackAndEmitsOnActivate
     expectNoErrors();
 }
 
+// currentIndex is a Lua number: NaN, infinities and values past the int range select nothing (or the last) and
+// don't overflow.
+TEST_F(ControlsTest, IndexControlsTakeAnyNumberAsCurrentIndex) {
+    for (const char* index : {"0/0", "math.huge", "-math.huge", "1e300", "-1e300", "math.mininteger", "0"}) {
+        run(std::string{"root = Column { SegmentedButton { model = { 'a', 'b' }, currentIndex = "} + index +
+            " }, RadioGroup { model = { 'a', 'b' }, currentIndex = " + index + " } }");
+        m_h.renderFrames("root", 2);
+    }
+    expectNoErrors();
+}
+
 TEST_F(ControlsTest, ListItemPropsAndClick) {
     run(R"(
         s = state { clicks = 0 }

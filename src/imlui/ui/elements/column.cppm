@@ -13,7 +13,7 @@ export namespace imlui {
 /// A vertical stack (also registered as Item).
 ///
 /// Props:   padding = 0, spacing = unset (ImGui item spacing), align = "start" ("center", "end")
-/// Raw:     width
+/// Raw:     width (a fixed width is the children's available width: `align`, fills and wrapping use it)
 class Column final : public Element {
 public:
     static void declare(TypeBuilder<Column>& type);
@@ -41,6 +41,37 @@ module :private;
 
 namespace imlui {
 
+namespace {
+
+/// Moves the right edge of the current window's content region (its WorkRect, and its ContentRegionRect, which
+/// GetContentRegionAvail() reads outside tables) to `right` for its lifetime. ImGui has no public API for it;
+/// tables narrow the same rects for their cells. The window recomputes both at its next Begin(), so a Lua error
+/// that unwinds past the guard can't leak the narrowing into the next frame.
+class ContentRegionGuard {
+public:
+    explicit ContentRegionGuard(float right)
+        : m_window{ImGui::GetCurrentWindow()}, m_work{m_window->WorkRect.Max.x},
+          m_content{m_window->ContentRegionRect.Max.x} {
+        m_window->WorkRect.Max.x = right;
+        m_window->ContentRegionRect.Max.x = right;
+    }
+    ~ContentRegionGuard() {
+        m_window->WorkRect.Max.x = m_work;
+        m_window->ContentRegionRect.Max.x = m_content;
+    }
+    ContentRegionGuard(const ContentRegionGuard&) = delete;
+    ContentRegionGuard& operator=(const ContentRegionGuard&) = delete;
+    ContentRegionGuard(ContentRegionGuard&&) = delete;
+    ContentRegionGuard& operator=(ContentRegionGuard&&) = delete;
+
+private:
+    ImGuiWindow* m_window;
+    float m_work;
+    float m_content;
+};
+
+} // namespace
+
 void Column::declare(TypeBuilder<Column>& type) {
     type.property("padding", &Column::padding, &Column::setPadding)
         .property("spacing", &Column::spacing, &Column::setSpacing)
@@ -55,11 +86,14 @@ void Column::render(Frame& frame) {
     }
     const float w = frame.size("width");
     if (w != 0) {
-        // A fixed-width column: reserve the width so `align` and fills work inside it.
+        // A fixed-width column: reserve the width, and narrow the window's content region to it while the
+        // children render, so everything that measures the available width (GetContentRegionAvail: `align`,
+        // fills, md::itemWidth, text wrapping) measures the column instead of the window.
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float ww = frame.resolvedWidth(0.0f);
         ImGui::Dummy({ww, 0});
         ImGui::SetCursorScreenPos(p);
+        const ContentRegionGuard region{p.x + ww};
         ImGui::PushItemWidth(ww);
         frame.renderStack();
         ImGui::PopItemWidth();

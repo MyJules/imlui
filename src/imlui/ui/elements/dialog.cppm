@@ -3,7 +3,9 @@ export module imlui.ui.elements.dialog;
 
 import std;
 
+import imgui;
 import imlui.widgets;
+import imlui.ui.frame_request;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -18,6 +20,10 @@ export namespace imlui {
 /// Two-way: open
 ///
 /// Escape (or anything else that closes the popup) writes open = false, then emits onClosed.
+///
+/// ImGui shows one popup per level, so of sibling dialogs (at the same popup level) open at the same time, one is
+/// shown: a dialog whose `open` turns true while another is up waits, and opens the frame after that one closes.
+/// A dialog opened from inside another (one of its children) is a level up and shows over it.
 class Dialog final : public Element {
 public:
     static void declare(TypeBuilder<Dialog>& type);
@@ -36,6 +42,8 @@ private:
     bool m_open = false;
     std::string m_title;
     std::string m_icon;
+    /// Open but waiting for a sibling dialog to close (see above).
+    bool m_waiting = false;
 };
 
 } // namespace imlui
@@ -52,9 +60,39 @@ void Dialog::declare(TypeBuilder<Dialog>& type) {
         .nonVisual();
 }
 
+namespace {
+
+/// Whether a modal popup other than `id` (another Dialog) is shown at the popup level a popup begun now would
+/// open at. ImGui keeps one popup per level: OpenPopup() there would close it, and its next OpenPopup() ours.
+/// A popup that wasn't shown last frame nor this one (its Dialog left the tree while open) doesn't count.
+bool otherModalAtThisLevel(ImGuiID id) {
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    const int level = g.BeginPopupStack.Size;
+    if (level >= g.OpenPopupStack.Size) return false;
+    const ImGuiPopupData& open = g.OpenPopupStack[level];
+    const ImGuiWindow* w = open.Window;
+    return open.PopupId != id && w && (w->Flags & ImGuiWindowFlags_Modal) != 0 && (w->Active || w->WasActive);
+}
+
+} // namespace
+
 void Dialog::render(Frame& frame) {
     bool open = m_open;
     const std::string title = md::scopedWindowName(m_title, "dlg");
+    if (!open) {
+        m_waiting = false;
+    } else if (!ImGui::IsPopupOpen(title.c_str())) {
+        if (otherModalAtThisLevel(ImGui::GetID(title.c_str()))) {
+            m_waiting = true;
+            return;
+        }
+        if (m_waiting) {
+            // The other dialog closed this frame, maybe on an Escape press this one would see too: open on the next.
+            m_waiting = false;
+            requestFrame();
+            return;
+        }
+    }
     if (md::beginDialog(title.c_str(), &open, frame.size("width"), m_icon)) {
         frame.renderStack();
         md::endDialog();
