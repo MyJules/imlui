@@ -116,18 +116,25 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
         return n == 1 ? (x0 + x1) * 0.5f : x0 + (x1 - x0) * static_cast<float>(i) / static_cast<float>(n - 1);
     };
     auto py = [&](float v) { return bottom - (bottom - top) * std::clamp((v - mn) / (mx - mn), 0.0f, 1.0f); };
+    // Non-finite values (NaN, inf) are gaps, as for the axis range: no bar, no point, no hover readout, and the
+    // line breaks around them.
+    auto finite = [&](int i) { return std::isfinite(values[static_cast<std::size_t>(i)]); };
 
     int hoverIdx = -1;
     if (hov) {
         float mxp = ImGui::GetMousePos().x;
         float best = hugeExtent;
         for (int i = 0; i < n; ++i)
-            if (std::fabs(px(i) - mxp) < best) { best = std::fabs(px(i) - mxp); hoverIdx = i; }
+            if (finite(i) && std::fabs(px(i) - mxp) < best) {
+                best = std::fabs(px(i) - mxp);
+                hoverIdx = i;
+            }
     }
 
     if (o.bars) {
         float bw = std::max(dp(2), (x1 - x0) / static_cast<float>(n) * 0.6f);
         for (int i = 0; i < n; ++i) {
+            if (!finite(i)) continue;
             float x = px(i);
             float y = py(values[static_cast<std::size_t>(i)]), y0 = py(std::max(mn, 0.0f));
             Color bc = i == hoverIdx ? mix(c, s.onSurface, 0.15f) : c;
@@ -136,12 +143,14 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
         }
     } else {
         std::vector<ImVec2> pts(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i) pts[static_cast<std::size_t>(i)] = {px(i), py(values[static_cast<std::size_t>(i)])};
+        for (int i = 0; i < n; ++i)
+            if (finite(i)) pts[static_cast<std::size_t>(i)] = {px(i), py(values[static_cast<std::size_t>(i)])};
         if (o.fill && n >= 2) {
-            // Vertical gradient under the line.
+            // Vertical gradient under the line, between neighbouring finite points.
             const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
             const ImU32 cTop = col(c.withAlpha(0.28f)), cBot = col(c.withAlpha(0.0f));
             for (int i = 0; i + 1 < n; ++i) {
+                if (!finite(i) || !finite(i + 1)) continue;
                 ImVec2 a = pts[static_cast<std::size_t>(i)], b = pts[static_cast<std::size_t>(i + 1)];
                 dl->PrimReserve(6, 4);
                 auto base = static_cast<unsigned>(dl->_VtxCurrentIdx);
@@ -157,7 +166,21 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
                 dl->PrimWriteIdx(static_cast<unsigned short>(base + 3));
             }
         }
-        dl->AddPolyline(pts.data(), n, col(c), dp(2));
+        // One polyline per run of finite points; a lone point between gaps is a dot.
+        for (int i = 0; i < n;) {
+            if (!finite(i)) {
+                ++i;
+                continue;
+            }
+            int end = i;
+            while (end + 1 < n && finite(end + 1))
+                ++end;
+            if (end > i)
+                dl->AddPolyline(&pts[static_cast<std::size_t>(i)], end - i + 1, col(c), dp(2));
+            else
+                fillCircle(dl, pts[static_cast<std::size_t>(i)], dp(1.5f), c);
+            i = end + 1;
+        }
     }
     if (hoverIdx >= 0) {
         float x = px(hoverIdx), y = py(values[static_cast<std::size_t>(hoverIdx)]);

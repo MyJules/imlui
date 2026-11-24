@@ -37,8 +37,10 @@ bool spinBox(const char* id, double* v, double vmin, double vmax, double step, i
     f.inputX = f.p.x + dp(16);
     f.inputW = w - dp(16) - dp(96);
     bool changed = false;
-    field::drawFieldBackground(f, false, ImGui::IsMouseHoveringRect(f.p, {f.p.x + w, f.p.y + h}),
-                               field::scopeDisabled());
+    // The input's focus from the last frame: the container is drawn before the input, to stay under its text.
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID focusKey = ImGui::GetID("##focused");
+    field::drawFieldBackground(f, st->GetBool(focusKey, false), field::containerHovered(f), field::scopeDisabled());
 
     pushFont(TextStyle::BodyLarge);
     const float lineH = ImGui::GetFontSize();
@@ -55,6 +57,7 @@ bool spinBox(const char* id, double* v, double vmin, double vmax, double step, i
     const bool active = ImGui::IsItemActive();
     const bool hov = ImGui::IsItemHovered();
     const bool dis = itemDisabled();
+    st->SetBool(focusKey, active);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(3);
     ImGui::PopFont();

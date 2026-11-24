@@ -39,7 +39,9 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     bool changed = false;
-    float indX0 = 0, indX1 = 0;
+    // The indicator's ends relative to the bar's left edge, so it doesn't lag behind when the bar moves (scrolling,
+    // resizing); none while no tab is selected.
+    std::optional<std::pair<float, float>> indicator;
     for (int i = 0; i < static_cast<int>(items.size()); ++i) {
         const ImVec2 a{p.x + tw * static_cast<float>(i), p.y};
         ImGui::SetCursorScreenPos(a);
@@ -70,18 +72,22 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
         }
         if (sel) {
             contentW = std::max(contentW, dp(24));
-            if (secondary) { indX0 = a.x; indX1 = a.x + tw; }
-            else { indX0 = a.x + (tw - contentW) * 0.5f; indX1 = indX0 + contentW; }
+            const float left = tw * static_cast<float>(i);
+            if (secondary)
+                indicator = std::pair{left, left + tw};
+            else
+                indicator = std::pair{left + (tw - contentW) * 0.5f, left + (tw + contentW) * 0.5f};
         }
     }
     hLine(dl, p.x, p.x + w, p.y + h - dp(1), s.surfaceVariant, dp(1));
     // Sliding indicator.
     const ImGuiID k = ImGui::GetID("##ind");
-    float x0 = animate(k, indX0, 16.0f), x1 = animate(k + 1, indX1, 16.0f);
-    if (x1 > x0) {
+    if (indicator) {
+        const float x0 = p.x + animate(k, indicator->first, 16.0f), x1 = p.x + animate(k + 1, indicator->second, 16.0f);
         float ih = secondary ? dp(2) : dp(3);
-        fillRoundRect(dl, {x0, p.y + h - ih}, {x1, p.y + h}, secondary ? 0.0f : dp(3), s.primary,
-                      ImDrawFlags_RoundCornersTop);
+        if (x1 > x0)
+            fillRoundRect(dl, {x0, p.y + h - ih}, {x1, p.y + h}, secondary ? 0.0f : dp(3), s.primary,
+                          ImDrawFlags_RoundCornersTop);
     }
     ImGui::PopID();
     ImGui::SetCursorScreenPos(p);

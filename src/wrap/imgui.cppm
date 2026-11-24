@@ -289,6 +289,8 @@ export using ::ImGuiHoveredFlags_;
 export using ::ImGuiHoveredFlags_None;
 export using ::ImGuiHoveredFlags_AllowWhenDisabled;
 export using ::ImGuiHoveredFlags_ForTooltip;
+export using ::ImGuiHoveredFlags_ChildWindows;
+export using ::ImGuiHoveredFlags_NoPopupHierarchy;
 
 export using ::ImGuiConfigFlags_;
 export using ::ImGuiConfigFlags_NavEnableKeyboard;
