@@ -43,7 +43,7 @@ export namespace imlui {
 template <class T>
 struct LuaConvert;
 
-/// The LuaConvert type used for a value of type T passed by reference (Object::emit arguments):
+/// The LuaConvert type used for a value of type T passed by reference (ScriptObject::emit arguments):
 /// decayed, with string literals and char arrays as `const char*`.
 template <class T>
 using LuaArgType = std::conditional_t<std::is_same_v<std::decay_t<T>, char*>, const char*, std::decay_t<T>>;
@@ -125,7 +125,7 @@ struct LuaConvert<std::string_view> {
     static void push(lua::State* s, std::string_view v) { lua::pushstring(s, v); }
 };
 
-/// Push only (string literals passed to Object::emit decay to this).
+/// Push only (string literals passed to ScriptObject::emit decay to this).
 template <>
 struct LuaConvert<const char*> {
     static constexpr std::string_view name = "string";

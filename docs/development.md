@@ -92,8 +92,9 @@ using `imlui.widgets.common`:
 Return what happened (`bool` changed/clicked, or a result struct).
 
 **2a. Typed element (recommended).** One class per module, `src/imlui/ui/elements/<name>.cppm`
-(`export module imlui.ui.elements.<name>;`), added to the `imlui.ui.elements` umbrella and registered in
-`registerBuiltinTypes(TypeRegistry&)` (`imlui.ui.elements.builtin`):
+(`export module imlui.ui.elements.<name>;`), added to the `imlui.ui.elements` umbrella and registered in its
+group's `register<Group>Types(TypeRegistry&)` (e.g. `registerControlTypes` in `imlui.ui.elements.controls`), which
+`registerBuiltinTypes` (`imlui.ui.elements.builtin`) calls:
 
 ```cpp
 // Example: a hypothetical "Rating" element backed by a new md::rating() widget.
@@ -118,7 +119,7 @@ void Rating::render(Frame&) {
     }
 }
 
-void registerBuiltinTypes(TypeRegistry& types) {
+void registerControlTypes(TypeRegistry& types) {
     // ...
     types.registerType<Rating>("Rating");
 }
@@ -129,7 +130,9 @@ void registerBuiltinTypes(TypeRegistry& types) {
   `frame.drawList()`.
 - After changing a property in C++, call `notify(name)` **before** `emit`, so the handler sees the new state.
 - Containers call `frame.renderChildren()` or `frame.renderStack()`, or `frame.forEachChild(f)` with
-  `frame.render(child)` for custom layout. `frame.node()` and `frame.renderer()` reach everything else (menus).
+  `Frame::Child` handles (`child.render()`, `child.lastWidth()`, `child.as<T>()`) for custom layout.
+  `frame.attachMenu(clicked)` supports a `menu` prop. `frame.node()` reaches raw Lua. See
+  [Registering C++ types](extending.md#element-types) for the whole `Frame`.
 - `type.nonVisual()` for elements that take no layout space (timers).
 
 **2b. Handler function.** Register it in the matching `imlui.ui.elements.<group>` module, inside its
@@ -165,6 +168,55 @@ elements create their C++ instances too.
 Apps add elements without touching imlui: `engine.registerType<MyThing>("MyThing")` (recommended), or
 `engine.renderer().registerElement("MyThing", fn, visual)`, before `engine.run()`. See
 [Registering C++ types](extending.md).
+
+## Porting a built-in to the typed API
+
+The built-in elements are moving from handler functions to typed elements, one group at a time. The shared
+pieces are in place, so porting a group touches only that group's files:
+
+1. **One module per element**, `src/imlui/ui/elements/<snake_name>.cppm`, `export module
+   imlui.ui.elements.<snake_name>;`, one class (`progress_bar.cppm` and `timer.cppm` are the models). The group
+   module imports it to register it. Add an `export import` for it to the `imlui.ui.elements` umbrella
+   (`elements.cppm`) so apps can use the class. That line is the only edit outside the group; when several groups
+   are ported in parallel, leave the umbrella lines to the merge.
+2. **Register it in the group module**, in `register<Group>Types(TypeRegistry&)` (`registerWindowTypes`,
+   `registerLayoutTypes`, `registerNavigationTypes`, `registerContentTypes`, `registerControlTypes`,
+   `registerInputTypes`, `registerDataTypes`, `registerSystemTypes`), and **remove the handler** from
+   `register<Group>Elements`. `registerBuiltinTypes` already calls every group, after the handlers.
+3. **Keep the Lua contract**: the same prop names, defaults, signals and argument order. Write-back that the
+   handler did with `n.set(k, v)` becomes the setter's member plus `notify("k")`, before `emit(...)`. `notify` also
+   emits `on<K>Changed`, which handler elements didn't.
+4. **Compare the gallery** with screenshots taken before the port (every page, plus a phone-sized window): it must
+   look the same. Animated content (progress, canvas, chart) and timer texts differ by nature.
+
+During the transition:
+
+- **Same name, both registered:** a type replaces a handler of the same name (the last registration renders, and
+  types register after handlers). Forgetting to delete the handler is harmless, but delete it.
+- **Aliases:** register one class under each name (`registerType<Column>("Column")`, then `("Item")`). Lua sees
+  separate types.
+- **Subclasses:** `TextArea::declare(TypeBuilder<TextArea>& type)` calls `type.extends<TextField>()`, then adds
+  its own members. A subclass without its own `declare` doesn't compile.
+- **Props that are not declared** are still readable through `frame.node()` (`n.has("checked")` for "is it
+  checkable", a `__children` function, the `rows` table, a painter callback). Declared `std::optional<T>`
+  properties distinguish "unset" from a value, too. Props that only the renderer reads (`visible`, `enabled`,
+  `tooltip`, `id`) need nothing.
+- **What the handlers used, and the Frame replacement:**
+
+  | Handler code | Typed element |
+  |---|---|
+  | `r.renderChildren(n)`, `r.renderStack(n)` | `frame.renderChildren()`, `frame.renderStack()` |
+  | `r.renderStack(t)` for a child `t` (TabBar) | `frame.renderStack(child.node())` |
+  | `r.forEachChild(n, ...)` + `isVisual` + `visible` check + `r.render(...)` | `frame.forEachChild([&](Frame::Child& c) { ... c.render(); })` (hidden children are already skipped) |
+  | `st->GetFloat(ImGui::GetID(c.ptr()), d)` / `SetFloat(... GetItemRectSize())` | `c.lastWidth(d)`, `c.lastHeight(d)`; `c.render()` stores both |
+  | `c.type() == "Spacer"`, `Node{state, idx}.string("title")` | `c.type()`, `c.node().string("title")`, or `c.as<Tab>()->title()` |
+  | `n.push("menuBar")` / `n.push("header")` + `r.render(...)` | `frame.renderElementProp("menuBar")`, `frame.withElementProp("header", f)` |
+  | `r.attachMenu(n, clicked)` | `frame.attachMenu(clicked)` |
+  | `r.setWindowTitle(...)` | `frame.setWindowTitle(...)` |
+  | `sizeProp(n, k)`, `sizeProp(n, k) == 0 ? -1 : sizeProp(n, k)` | `frame.size(k)`, `frame.size(k, -1.0f)` |
+  | `labelId(t, id)`, `alignFactor(a)` | `Frame::labelId(t, id)`, `Frame::alignFactor(a)` |
+  | `NavigationScope scope{{...}}` (navigation) | the same: `imlui.ui.navigation_scope` exports `NavigationScope` with `Style`, `Context` and `current()` |
+  | `md::pushSurface` / `popSurface`, `theme()`, `requestFrame()` | unchanged (`imlui.widgets`), or `frame.scheme()`, `frame.requestFrame()` |
 
 ## Adding a native function
 

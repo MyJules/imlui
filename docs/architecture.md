@@ -9,7 +9,7 @@ flowchart TD
     T --> R["Renderer + element handlers<br/>imlui.ui.renderer, imlui.ui.elements.*"]
     R --> N["Lua bridge<br/>imlui.lua.node / value / errors / painter / native"]
     R --> W["Material widgets<br/>imlui.widgets.* (namespace imlui::md)"]
-    R --> TY["C++ type system<br/>imlui.types.*: Element, Object, TypeBuilder, LuaConvert, TypeRegistry"]
+    R --> TY["C++ type system<br/>imlui.types.*: Element, ScriptObject, TypeBuilder, LuaConvert, TypeRegistry"]
     TY --> N
     TY --> W
     C["App C++ types and singletons<br/>registerType / registerSingleton"] --> TY
@@ -69,7 +69,7 @@ Who requests frames:
 | Indeterminate `ProgressBar`, `CircularProgress`, `BusyIndicator` | every frame |
 | `Canvas { animated = true }` | every frame |
 | `Timer` elements | a frame when the interval is due |
-| `Object::notify` / `Object::emit` (C++ types), `Engine::post` | a frame (waking the loop if it sleeps) |
+| `ScriptObject::notify` / `ScriptObject::emit` (C++ types), `Engine::post` | a frame (waking the loop if it sleeps) |
 | Lua timers: `ui.__tick` returns the seconds until the next `setTimeout`/`setInterval` | a frame then |
 | `Snackbar` | every frame while it slides in or fades out, and a frame when the fade starts |
 | Tooltips | a frame every 100 ms while an item is hovered but the tooltip delay hasn't passed |
@@ -269,11 +269,12 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, wake handler |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
+| `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `registerElement`, `render`, `forEachChild`, `renderChildren`, `renderStack`, `attachMenu`, window title |
 | `imlui.ui.elements.windows` | `ApplicationWindow`, `Window`, `Dialog` |
 | `imlui.ui.elements.layout` | `Column`, `Item`, `Row`, `Grid`, `ScrollView`, `ListView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `Repeater`, `If`, `Loader`, `Responsive` |
-| `imlui.ui.elements.navigation` | `TopAppBar`, `NavigationItem`, `NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem`; the scoped navigation context that styles `NavigationItem` |
+| `imlui.ui.elements.navigation` | `TopAppBar`, `NavigationItem`, `NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem` (styled through `imlui.ui.navigation_scope`) |
 | `imlui.ui.elements.content` | `Text`, `Label`, `Icon`, `Link`, `Separator`, `Divider`, `Spacer` |
 | `imlui.ui.elements.controls` | `Button`, `IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem` |
 | `imlui.ui.elements.inputs` | `Slider`, `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker` |
@@ -281,7 +282,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.elements.system` | `Snackbar`, `ImGuiDemo` |
 | `imlui.ui.elements.progress_bar` | `ProgressBar`, a typed element (`Element` + `TypeBuilder`) |
 | `imlui.ui.elements.timer` | `Timer`, a typed non-visual element |
-| `imlui.ui.elements.builtin` | `registerBuiltinElements(Renderer&)` (handler functions) and `registerBuiltinTypes(TypeRegistry&)` (typed elements) |
+| `imlui.ui.elements.builtin` | `registerBuiltinElements(Renderer&)` (handler functions) and `registerBuiltinTypes(TypeRegistry&)` (typed elements). Each group module has both a `register<Group>Elements(Renderer&)` and a `register<Group>Types(TypeRegistry&)` (`ProgressBar` in `registerDataTypes`, `Timer` in `registerSystemTypes`); builtin calls them all, types after handlers, so a type replaces a handler of the same name |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
 
 ### C++ type system (`src/imlui/types/`)
@@ -291,11 +292,11 @@ See [Registering C++ types](extending.md).
 | Module | Purpose |
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
-| `imlui.types.object` | `Object`: base of everything exposed to Lua; weak Lua link, `notify(property)`, `emit(signal, args...)` |
-| `imlui.types.frame` | `Frame`: render-time context (`renderChildren`, `forEachChild`, `dp`, `drawList`, `requestFrame`, theme, `node()`) |
+| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; weak Lua link, `notify(property)`, `emit(signal, args...)` |
+| `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `isVisual`, `node`, `type`, `id`, `lastWidth`/`lastHeight`, `as<T>()`), element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `setWindowTitle`, `node()` |
 | `imlui.types.element` | `Element`: `render(Frame&)`, `componentComplete()`, `destroyed()` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag) |
-| `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty` |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `extends<Base>` (a subclass's declaration extends its base's) |
 | `imlui.types.registry` | `TypeRegistry`: registered types and singletons; `install` into each Lua state; the per-frame property sync |
 
 ### App (`src/imlui/app/`)

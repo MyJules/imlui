@@ -29,7 +29,7 @@ export module imlui.types.type_builder;
 
 import lua;
 import imlui.types.lua_convert;
-import imlui.types.object;
+import imlui.types.script_object;
 import imlui.types.type_info;
 
 namespace imlui::detail {
@@ -91,13 +91,13 @@ int invokeMethod(const Fn& fn, T& self, lua::State* s, int first, const std::str
 
 export namespace imlui {
 
-/// T derives from Object. (Checked in the constructor: T is still incomplete where `declare` names
+/// T derives from ScriptObject. (Checked in the constructor: T is still incomplete where `declare` names
 /// TypeBuilder<T> inside its own class.)
 template <class T>
 class TypeBuilder {
 public:
     explicit TypeBuilder(TypeInfo& info) : m_info{info} {
-        static_assert(std::derived_from<T, Object>, "TypeBuilder<T>: T must derive from imlui::Object");
+        static_assert(std::derived_from<T, ScriptObject>, "TypeBuilder<T>: T must derive from imlui::ScriptObject");
     }
 
     /// A read/write property. The setter is called (by the per-frame sync, or `obj.name = v` on a
@@ -109,7 +109,7 @@ public:
         static_assert(std::is_invocable_v<const Setter&, T&, V&&>, "the setter must accept the getter's type");
         TypeInfo::Property p = readOnly<Getter>(std::move(name), getter);
         p.nullable = detail::isOptional<V>;
-        p.assign = [getter, setter](lua::State* s, int idx, Object& o) -> TypeInfo::Assign {
+        p.assign = [getter, setter](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
             if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
             V v = LuaConvert<V>::get(s, idx);
             T& self = static_cast<T&>(o);
@@ -130,7 +130,7 @@ public:
         return *this;
     }
 
-    /// Declares a signal (an `on*` handler name), emitted with Object::emit(name, args...).
+    /// Declares a signal (an `on*` handler name), emitted with ScriptObject::emit(name, args...).
     TypeBuilder& signal(std::string name) {
         m_info.addSignal(std::move(name));
         return *this;
@@ -142,7 +142,7 @@ public:
     TypeBuilder& method(std::string name, Fn fn) {
         using Args = typename detail::MethodTraits<Fn>::Args;
         std::string where = m_info.name() + ":" + name;
-        m_info.addMethod({std::move(name), [fn, where](lua::State* s, Object& o, int first) -> int {
+        m_info.addMethod({std::move(name), [fn, where](lua::State* s, ScriptObject& o, int first) -> int {
                               try {
                                   return detail::invokeMethod(
                                       fn, static_cast<T&>(o), s, first, where, static_cast<Args*>(nullptr),
@@ -152,6 +152,17 @@ public:
                                   return -1;
                               }
                           }});
+        return *this;
+    }
+
+    /// Declares the members of base class `Base` (its `declare(TypeBuilder<Base>&)`) on this type, for a
+    /// subclass that extends its base: `TextArea::declare` calls `type.extends<TextField>()`, then adds its
+    /// own members.
+    template <class Base>
+        requires(std::derived_from<T, Base> && !std::same_as<T, Base>)
+    TypeBuilder& extends() {
+        TypeBuilder<Base> base{m_info};
+        Base::declare(base);
         return *this;
     }
 
@@ -180,7 +191,7 @@ private:
         TypeInfo::Property p;
         p.name = std::move(name);
         p.typeName = LuaConvert<V>::name;
-        p.push = [getter](lua::State* s, const Object& o) {
+        p.push = [getter](lua::State* s, const ScriptObject& o) {
             LuaConvert<V>::push(s, std::invoke(getter, static_cast<const T&>(o)));
         };
         return p;

@@ -47,7 +47,7 @@ import imlui.lua.painter;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.ui.elements;
-import imlui.types.object;
+import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.type_info;
 import imlui.types.registry;
@@ -70,10 +70,10 @@ public:
         return m_types.registerType<T>(std::move(name));
     }
 
-    /// Exposes `object` (derived from imlui::Object) to Lua as the global `name`. Not owned: it must
+    /// Exposes `object` (derived from imlui::ScriptObject) to Lua as the global `name`. Not owned: it must
     /// outlive run(). Call before run().
     template <class T>
-        requires std::derived_from<T, Object>
+        requires std::derived_from<T, ScriptObject>
     TypeInfo& registerSingleton(std::string name, T& object) {
         return m_types.registerSingleton<T>(std::move(name), object);
     }

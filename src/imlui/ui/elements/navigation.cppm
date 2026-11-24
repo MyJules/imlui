@@ -1,12 +1,8 @@
 // App bars, navigation and menus: TopAppBar, NavigationItem, NavigationBar, NavigationRail,
 // ModalNavigationDrawer, MenuBar, Menu, MenuItem.
 //
-// NavigationItem is the one destination element for every navigation container. The container sets a
-// navigation context (style and destination width) while it renders its children, and NavigationItem draws
-// itself in that style: a drawer pill by default, a bar or rail destination inside a NavigationBar or
-// NavigationRail. The context is scoped (NavigationScope), so it applies to everything the container renders,
-// including Repeater delegates, and the outer context comes back afterwards. The rail header and the
-// modal drawer's sheet reset it to the drawer style.
+// NavigationItem is the one destination element for every navigation container: it draws itself in the style of
+// the current NavigationScope (imlui.ui.navigation_scope), which the containers open around their children.
 module;
 
 #include <algorithm>
@@ -24,12 +20,18 @@ import imlui.theme.typography;
 import imlui.theme.theme;
 import imlui.widgets;
 import imlui.lua.node;
+import imlui.ui.navigation_scope;
 import imlui.ui.props;
 import imlui.ui.renderer;
+import imlui.types.registry;
 
 export namespace imlui {
 
 void registerNavigationElements(Renderer& renderer);
+
+/// Registers this group's typed elements (one class per module, see docs/development.md, "Porting a built-in
+/// to the typed API").
+void registerNavigationTypes(TypeRegistry& types);
 
 } // namespace imlui
 
@@ -40,28 +42,6 @@ namespace imlui {
 using luaui::Node;
 
 namespace {
-
-enum class NavigationStyle { Drawer, Bar, Rail };
-
-/// How NavigationItems render right now; set by the navigation container whose children are being rendered.
-struct NavigationContext {
-    NavigationStyle style = NavigationStyle::Drawer;
-    float itemWidth = 0.0f; ///< pixels; bar and rail destinations take the width their container gives them
-};
-
-NavigationContext navigationContext;
-
-/// Sets the navigation context for its lifetime and restores the outer one afterwards.
-class NavigationScope {
-public:
-    explicit NavigationScope(NavigationContext context) : m_saved{navigationContext} { navigationContext = context; }
-    ~NavigationScope() { navigationContext = m_saved; }
-    NavigationScope(const NavigationScope&) = delete;
-    NavigationScope& operator=(const NavigationScope&) = delete;
-
-private:
-    NavigationContext m_saved;
-};
 
 /// Number of visible visual children (inline containers spliced in).
 int visibleItemCount(Renderer& r, const Node& n) {
@@ -138,14 +118,15 @@ void navigationItem(Renderer&, const Node& n) {
     const std::string icon = n.string("icon", ""), label = n.text(), badge = n.string("badge", "");
     const bool selected = n.boolean("selected", false);
     bool clicked = false;
-    switch (navigationContext.style) {
-    case NavigationStyle::Bar:
-        clicked = md::navigationBarItem("##nav", icon, label, selected, badge, navigationContext.itemWidth);
+    const NavigationScope::Context& context = NavigationScope::current();
+    switch (context.style) {
+    case NavigationScope::Style::Bar:
+        clicked = md::navigationBarItem("##nav", icon, label, selected, badge, context.itemWidth);
         break;
-    case NavigationStyle::Rail:
-        clicked = md::navigationRailItem("##nav", icon, label, selected, badge, navigationContext.itemWidth);
+    case NavigationScope::Style::Rail:
+        clicked = md::navigationRailItem("##nav", icon, label, selected, badge, context.itemWidth);
         break;
-    case NavigationStyle::Drawer:
+    case NavigationScope::Style::Drawer:
         clicked = md::navigationItem("##nav", icon, label, selected, badge,
                                      sizeProp(n, "width") == 0 ? -1.0f : sizeProp(n, "width"));
         break;
@@ -167,7 +148,7 @@ void navigationBar(Renderer& r, const Node& n) {
     const int count = visibleItemCount(r, n);
     const float cell = count > 0 ? w / static_cast<float>(count) : w;
     {
-        NavigationScope scope{{NavigationStyle::Bar, cell}};
+        NavigationScope scope{{NavigationScope::Style::Bar, cell}};
         int i = 0;
         r.forEachChild(n, [&](int idx) {
             if (!r.isVisual(state, idx)) {
@@ -224,7 +205,7 @@ void navigationRail(Renderer& r, const Node& n) {
     y += std::max(0.0f, std::floor((p.y + h - dp(12) - y - lastTotal) * align));
     const float top = y;
     {
-        NavigationScope scope{{NavigationStyle::Rail, w}};
+        NavigationScope scope{{NavigationScope::Style::Rail, w}};
         bool first = true;
         r.forEachChild(n, [&](int idx) {
             if (!r.isVisual(state, idx)) {
@@ -304,5 +285,7 @@ void registerNavigationElements(Renderer& renderer) {
     renderer.registerElement("Menu", menu);
     renderer.registerElement("MenuItem", menuItem);
 }
+
+void registerNavigationTypes(TypeRegistry&) {}
 
 } // namespace imlui

@@ -14,10 +14,15 @@ import imlui.widgets;
 import imlui.lua.node;
 import imlui.ui.props;
 import imlui.ui.renderer;
+import imlui.types.registry;
 
 export namespace imlui {
 
 void registerContentElements(Renderer& renderer);
+
+/// Registers this group's typed elements (one class per module, see docs/development.md, "Porting a built-in
+/// to the typed API").
+void registerContentTypes(TypeRegistry& types);
 
 } // namespace imlui
 
@@ -74,5 +79,7 @@ void registerContentElements(Renderer& renderer) {
     renderer.registerElement("Divider", divider);
     renderer.registerElement("Spacer", spacer);
 }
+
+void registerContentTypes(TypeRegistry&) {}
 
 } // namespace imlui

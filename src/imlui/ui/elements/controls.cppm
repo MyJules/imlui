@@ -14,10 +14,15 @@ import imlui.widgets;
 import imlui.lua.node;
 import imlui.ui.props;
 import imlui.ui.renderer;
+import imlui.types.registry;
 
 export namespace imlui {
 
 void registerControlElements(Renderer& renderer);
+
+/// Registers this group's typed elements (one class per module, see docs/development.md, "Porting a built-in
+/// to the typed API").
+void registerControlTypes(TypeRegistry& types);
 
 } // namespace imlui
 
@@ -163,5 +168,7 @@ void registerControlElements(Renderer& renderer) {
     renderer.registerElement("SegmentedButton", segmentedButton);
     renderer.registerElement("ListItem", listItem);
 }
+
+void registerControlTypes(TypeRegistry&) {}
 
 } // namespace imlui

@@ -1,6 +1,6 @@
-// Object: the base class of every C++ object exposed to Lua (registered element types and singletons).
+// ScriptObject: the base class of every C++ object exposed to Lua (registered element types and singletons).
 //
-// An Object is linked to at most one Lua state at a time. The link is the Lua value that stands for
+// A ScriptObject is linked to at most one Lua state at a time. The link is the Lua value that stands for
 // the object there: the element table for an element instance, the global userdata for a singleton.
 // It is held weakly (a weak-valued registry table keyed by the object's address), so it never keeps
 // the element table alive.
@@ -16,7 +16,7 @@ module;
 #include <string>
 #include <string_view>
 
-export module imlui.types.object;
+export module imlui.types.script_object;
 
 import lua;
 import imlui.lua.errors;
@@ -26,14 +26,14 @@ import imlui.ui.frame_request;
 
 export namespace imlui {
 
-class Object {
+class ScriptObject {
 public:
-    Object() = default;
-    virtual ~Object();
-    Object(const Object&) = delete;
-    Object& operator=(const Object&) = delete;
-    Object(Object&&) = delete;
-    Object& operator=(Object&&) = delete;
+    ScriptObject() = default;
+    virtual ~ScriptObject();
+    ScriptObject(const ScriptObject&) = delete;
+    ScriptObject& operator=(const ScriptObject&) = delete;
+    ScriptObject(ScriptObject&&) = delete;
+    ScriptObject& operator=(ScriptObject&&) = delete;
 
     /// Property `property` changed in C++: writes it back to Lua (through Node::set, so a two-way bind
     /// writes its source and a function binding is left alone), emits `on<Property>Changed` with the new
@@ -99,7 +99,7 @@ namespace imlui {
 
 namespace {
 
-/// Registry key of the weak-valued table { [lightuserdata Object*] = linked value }.
+/// Registry key of the weak-valued table { [lightuserdata ScriptObject*] = linked value }.
 constexpr const char* linksKey = "imlui.objects";
 
 /// Pushes the links table, creating it on first use.
@@ -126,7 +126,7 @@ std::string changedSignal(std::string_view property) {
 
 } // namespace
 
-Object::~Object() {
+ScriptObject::~ScriptObject() {
     if (!m_state) return;
     // Destroyed while still linked (e.g. a singleton that dies before the engine): forget the link.
     pushLinks(m_state);
@@ -135,10 +135,10 @@ Object::~Object() {
     lua::pop(m_state);
 }
 
-lua::State* Object::luaState() const { return m_state; }
-bool Object::isSingleton() const { return m_singleton; }
+lua::State* ScriptObject::luaState() const { return m_state; }
+bool ScriptObject::isSingleton() const { return m_singleton; }
 
-bool Object::pushSelf() const {
+bool ScriptObject::pushSelf() const {
     if (!m_state) return false;
     pushLinks(m_state);
     const lua::Type t = lua::rawgetp(m_state, -1, this);
@@ -150,7 +150,7 @@ bool Object::pushSelf() const {
     return true;
 }
 
-void Object::attach(lua::State* state, int idx, bool singleton) {
+void ScriptObject::attach(lua::State* state, int idx, bool singleton) {
     idx = lua::absindex(state, idx);
     m_state = state;
     m_singleton = singleton;
@@ -160,11 +160,11 @@ void Object::attach(lua::State* state, int idx, bool singleton) {
     lua::pop(state);
 }
 
-void Object::relink(lua::State* state) { m_state = state; }
+void ScriptObject::relink(lua::State* state) { m_state = state; }
 
-void Object::detach() { m_state = nullptr; }
+void ScriptObject::detach() { m_state = nullptr; }
 
-void Object::notify(std::string_view property) {
+void ScriptObject::notify(std::string_view property) {
     requestFrame();
     if (!m_state) return;
     lua::State* state = m_state;

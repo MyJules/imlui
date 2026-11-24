@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     imlui::Engine engine{imlui::defaultConfig(argc, argv)};
     engine.registerType<Gauge>("Gauge");
 
-    Backend backend;                              // derives imlui::Object, has a declare()
+    Backend backend;                              // derives imlui::ScriptObject, has a declare()
     engine.registerSingleton("backend", backend); // the Lua global `backend`
     return engine.run();
 }
@@ -69,7 +69,7 @@ A complete, runnable version is the [`imlui_custom_types` example](#the-example-
 
 - [Element types](#element-types): `Element`, `render(Frame&)`, the lifecycle hooks
 - [Declaring members](#declaring-members): `TypeBuilder<T>`: properties, signals, methods, `nonVisual`,
-  `defaultProperty`
+  `defaultProperty`, aliases, subclasses (`extends`)
 - [Property sync](#property-sync): how Lua values reach the setters every frame
 - [Telling Lua about changes](#telling-lua-about-changes): `notify` and `emit`
 - [Singletons](#singletons)
@@ -87,7 +87,7 @@ registers with `Engine::registerType<T>(name)` before `engine.run()`. The name m
 like every element constructor.
 
 ```cpp
-class Element : public Object {
+class Element : public ScriptObject {
 public:
     virtual void render(Frame& frame) = 0; // every rendered frame the element is visible
     virtual void componentComplete();      // once: after the first property sync, before the first render
@@ -95,27 +95,64 @@ public:
 };
 ```
 
-`render()` draws the element at the ImGui cursor. Everything the built-in elements can do is available:
+`render()` draws the element at the ImGui cursor. Everything the built-in elements can do is available through the
+`Frame` (module `imlui.types.frame`):
 
 | `Frame` member | What |
 |---|---|
 | `renderChildren()` | Renders the children top to bottom. Inline containers (`Repeater`, `If`, ...) are spliced in. |
 | `renderStack()` | Renders the children with the `spacing`/`align` props, like `Column`. |
-| `forEachChild(f)`, `render(child)` | Custom layouts: `f(const luaui::Node& child)` is called per child; place the cursor and call `frame.render(child)`. |
+| `renderChildren(node)`, `renderStack(node)` | The same for another element's children, e.g. the current tab's content: `frame.renderStack(child.node())`. |
+| `forEachChild(f)` | Custom layouts: `f(Frame::Child& child)` is called for every **visible** child (inline containers spliced in). Place the cursor, then `child.render()`. See [Child handles](#child-handles). |
+| `withElementProp(key, f)`, `renderElementProp(key)` | A prop whose value is an element (`menuBar = MenuBar { ... }`, `header = ...`): `f(Frame::Child&)` is called when it's set and visible; `renderElementProp` just renders it at the cursor. |
+| `attachMenu(clicked)` | The `menu` prop (a `Menu` element) as a popup anchored to the last item: opened when `clicked`, rendered while open. Call it right after the widget that opens it. |
+| `size(key)`, `size(key, ifAuto)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values). The second form returns `ifAuto` for an unset (0) size: `size("width", -1)` fills by default. |
+| `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; `"start"`/`"center"`/`"end"` as 0/0.5/1. |
 | `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
-| `size(key)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values). |
 | `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes. |
 | `requestFrame()`, `requestFrameAfter(s)` | Frames are [rendered on demand](architecture.md#on-demand-rendering): anything that changes on its own asks for the next one. |
-| `theme()`, `scheme()` | The current theme and Material color scheme. |
-| `node()` | The element table as a `luaui::Node`: an escape hatch to raw props (`node().string("x")`), `node().emit(...)`, menus. |
-| `renderer()` | The `Renderer`, for `attachMenu` and friends. |
+| `theme()`, `scheme()` | The current theme and Material color scheme. The md surface stack (`md::pushSurface`/`popSurface`/`surfaceColor`, `imlui.widgets`) works as in the widgets. |
+| `setWindowTitle(title)` | The native window title (what `ApplicationWindow`'s `title` sets). |
+| `node()` | The element table as a `luaui::Node`: an escape hatch to raw Lua (`node().pushRaw("__children")`, a painter callback, a table of rows). |
+| `renderer()` | The `Renderer`. The members above cover what the built-in elements need; prefer them. |
+
+### Child handles
+
+`Frame::Child` is a lightweight handle, valid inside the callback that gives it:
+
+| `Frame::Child` member | What |
+|---|---|
+| `render()` | Renders the child at the cursor through the renderer, with the same per-element wrapper as everywhere (see below). False if it's hidden or unknown. Afterwards a visual child is the last ImGui item (`ImGui::GetItemRectSize()`), and its size is stored for the next frame. |
+| `isVisual()` | False for non-visual types (`Timer`, `Dialog`, ...). Layouts render those where they are and don't place, count or space them. |
+| `node()`, `type()` | The child's element table and its type name (`"Spacer"`). |
+| `id()` | A stable ImGui ID for the child in the parent's ID scope, for your own per-child state in `ImGui::GetStateStorage()`. |
+| `lastWidth(fallback)`, `lastHeight(fallback)` | The child's size when it was last rendered through `render()`, or `fallback` on its first frame. Immediate-mode layouts (centering, right alignment, rows) measure on the previous frame and settle within one frame. |
+| `as<T>()` | The C++ instance of a typed child as a `T*`, with its declared properties **synced first**, so the parent reads this frame's values (`child.as<Tab>()->title()`). `nullptr` when the child isn't a typed element or not a `T`. `syncProperties()` does the sync and returns the `ScriptObject*`. |
+
+```cpp
+void Row::render(imlui::Frame& frame) {
+    const ImVec2 start = ImGui::GetCursorScreenPos();
+    float x = start.x;
+    frame.forEachChild([&](imlui::Frame::Child& child) {
+        if (!child.isVisual()) { child.render(); return; }   // a Timer, a Dialog, ...
+        const float h = child.lastHeight();                  // measured last frame
+        ImGui::SetCursorScreenPos({x, start.y + std::max(0.0f, (m_height - h) * 0.5f)});
+        child.render();
+        x += ImGui::GetItemRectSize().x + frame.dp(8);
+    });
+}
+```
+
+For a child that is still a handler-function element, read its props through `child.node()`
+(`child.node().string("title")`).
 
 Each visual element is wrapped in an ImGui group and an ImGui ID scope (the element table's address), so plain
 ImGui IDs such as `"##gauge"` are unique per element, and the element counts as one item in a `Row`.
 
-The common props keep working on typed elements without being declared: `visible`, `enabled` and `tooltip` are
-applied by the renderer around `render()`, `id` registers the element for lookup by name, and sizes are read with
-`frame.size("width")` / `frame.size("height")`.
+The common props keep working on typed elements without being declared, exactly as on handler-function elements:
+the renderer skips the element when `visible` is false, wraps it in `BeginDisabled` when `enabled` is false, in an
+ImGui group when it's visual, and in `PushID`, and shows `tooltip` after it. `id` registers the element for lookup
+by name, and sizes are read with `frame.size("width")` / `frame.size("height")`.
 
 ## Declaring members
 
@@ -172,6 +209,44 @@ a Lua error too.
 - `type.defaultProperty("value")` lets a positional first value set the property, `Gauge { 0.5 }`, like `text`
   for `Button { "OK" }`. A table in that position is a child, not a value.
 
+### Aliases
+
+One class can be registered under several names. Each name is its own type to Lua (`ui.types()` lists both); an
+instance belongs to the name it was created for.
+
+```cpp
+types.registerType<Column>("Column");
+types.registerType<Column>("Item");
+```
+
+### Subclasses: `extends<Base>()`
+
+A subclass declares its own members and pulls in its base's with `extends<Base>()`, which runs
+`Base::declare` on the subclass's type:
+
+```cpp
+class TextField : public imlui::Element {
+public:
+    static void declare(imlui::TypeBuilder<TextField>& type); // text, label, ... onTextChanged
+    void render(imlui::Frame& frame) override;                // reads m_multiline
+protected:
+    bool m_multiline = false;
+};
+
+class TextArea final : public TextField {
+public:
+    static void declare(imlui::TypeBuilder<TextArea>& type) {
+        type.extends<TextField>();     // every TextField property, signal and method
+        // .property("rows", ...)      // plus TextArea's own
+    }
+    TextArea() { m_multiline = true; }
+};
+```
+
+A subclass must have its own `declare(TypeBuilder<Sub>&)`: one inherited unchanged from the base takes
+`TypeBuilder<Base>&`, and `registerType<Sub>` rejects it at compile time instead of silently registering a type
+without members.
+
 ## Property sync
 
 Before every `render()`, the renderer **syncs** the declared writable properties from the element table into the
@@ -194,7 +269,8 @@ Because the sync compares with the getter, the element table is the source of tr
 
 ## Telling Lua about changes
 
-Both functions live on `imlui::Object` (module `imlui.types.object`), the base of elements and singletons.
+Both functions live on `imlui::ScriptObject` (module `imlui.types.script_object`), the base of elements and
+singletons: anything a Lua script can see, with properties, methods and signals.
 
 ### `notify(name)`
 
@@ -231,7 +307,7 @@ emit("onRowMoved", from, to, std::string{"drag"});
 
 ## Singletons
 
-A singleton is any object deriving `imlui::Object` with a `declare()`. Register it by reference:
+A singleton is any object deriving `imlui::ScriptObject` with a `declare()`. Register it by reference:
 
 ```cpp
 SystemInfo backend;
@@ -373,6 +449,11 @@ C++ state (keep state in the element table or in ImGui storage), no methods and 
 elements are written this way. It's the right tool for stateless drawing. For anything with state, methods or a
 C++ model behind it, use `registerType<T>()`.
 
+A type and a handler with the same name don't coexist: registering either one **replaces** the other in the
+renderer, and the last registration renders. The engine registers the built-in handlers first and the built-in and
+app types after them, so a type always wins over a built-in handler of the same name. (The DSL constructor creates
+the C++ instance whenever the name is a registered type.)
+
 | | `registerType<T>` | `renderer().registerElement` |
 |---|---|---|
 | Per-element C++ state | an instance per element table | none |
@@ -410,11 +491,11 @@ build/clang-debug/bin/imlui_custom_types
 | Module | Contents |
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations; the `LuaPushable` / `LuaReadable` concepts |
-| `imlui.types.object` | `Object`: `notify`, `emit`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
-| `imlui.types.frame` | `Frame`: the render-time context |
+| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
+| `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
 | `imlui.types.element` | `Element`: `render`, `componentComplete`, `destroyed` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in |
-| `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty` |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `extends` |
 | `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>`, `install`, `activate`, `sync`, `typeNames` |
 
 `Engine` forwards `registerType<T>(name)` and `registerSingleton(name, obj)` to its registry, which `types()`

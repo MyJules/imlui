@@ -10,7 +10,7 @@ import imlui.lua.node;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.types.lua_convert;
-import imlui.types.object;
+import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_info;
@@ -88,7 +88,7 @@ private:
     std::vector<std::string> m_items;
 };
 
-class Backend final : public Object {
+class Backend final : public ScriptObject {
 public:
     static void declare(TypeBuilder<Backend>& type) {
         type.property("level", &Backend::level, &Backend::setLevel)

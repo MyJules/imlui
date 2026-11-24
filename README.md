@@ -56,8 +56,8 @@ tree, so you don't need to rebuild.
 | `src/imlui/lua/` | `imlui.lua.*`: Lua bridge (`Node` bindings and signals, values, errors, theme tables, Canvas painter, `imlui.native`) |
 | `src/imlui/widgets/` | `imlui.widgets.*`: Material widgets drawn with ImGui (buttons, selection, slider, fields, menus, ...) |
 | `src/imlui/ui/` | `imlui.ui.renderer` (walks the Lua element tree every frame) and `imlui.ui.props` |
-| `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in element handlers, by family, the typed `ProgressBar` and `Timer`, and `registerBuiltinElements` / `registerBuiltinTypes` |
-| `src/imlui/types/` | `imlui.types.*`: the C++ type system: `Object`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
+| `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in element handlers, by family, the typed `ProgressBar` and `Timer`, a `register<Group>Elements` / `register<Group>Types` pair per family, and `registerBuiltinElements` / `registerBuiltinTypes` |
+| `src/imlui/types/` | `imlui.types.*`: the C++ type system: `ScriptObject`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |

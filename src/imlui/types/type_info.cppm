@@ -13,7 +13,7 @@ module;
 export module imlui.types.type_info;
 
 import lua;
-import imlui.types.object;
+import imlui.types.script_object;
 import imlui.types.element;
 
 export namespace imlui {
@@ -27,10 +27,10 @@ public:
         std::string name;
         std::string_view typeName; ///< LuaConvert<V>::name, for error messages
         /// Pushes the getter's value.
-        std::function<void(lua::State*, const Object&)> push;
+        std::function<void(lua::State*, const ScriptObject&)> push;
         /// Converts the value at `idx` and calls the setter if it differs from the getter's value.
         /// Empty for read-only properties.
-        std::function<Assign(lua::State*, int, Object&)> assign;
+        std::function<Assign(lua::State*, int, ScriptObject&)> assign;
         /// True when nil is a value of the property (std::optional): nil is then synced, not skipped.
         bool nullable = false;
     };
@@ -39,7 +39,7 @@ public:
         std::string name;
         /// Calls the method with the Lua arguments starting at `firstArg`. Returns the number of results
         /// pushed, or -1 with an error message pushed instead.
-        std::function<int(lua::State*, Object&, int firstArg)> call;
+        std::function<int(lua::State*, ScriptObject&, int firstArg)> call;
     };
 
     using Factory = std::function<std::unique_ptr<Element>()>;

@@ -12,10 +12,16 @@ import imlui.widgets;
 import imlui.lua.node;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
+import imlui.types.registry;
+import imlui.ui.elements.timer;
 
 export namespace imlui {
 
 void registerSystemElements(Renderer& renderer);
+
+/// Registers this group's typed elements (one class per module, see docs/development.md, "Porting a built-in
+/// to the typed API").
+void registerSystemTypes(TypeRegistry& types);
 
 } // namespace imlui
 
@@ -73,5 +79,7 @@ void registerSystemElements(Renderer& renderer) {
     renderer.registerElement("Snackbar", snackbar, false);
     renderer.registerElement("ImGuiDemo", imguiDemo, false);
 }
+
+void registerSystemTypes(TypeRegistry& types) { types.registerType<Timer>("Timer"); }
 
 } // namespace imlui

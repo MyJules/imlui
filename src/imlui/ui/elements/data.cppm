@@ -21,10 +21,16 @@ import imlui.lua.painter;
 import imlui.ui.frame_request;
 import imlui.ui.props;
 import imlui.ui.renderer;
+import imlui.types.registry;
+import imlui.ui.elements.progress_bar;
 
 export namespace imlui {
 
 void registerDataElements(Renderer& renderer);
+
+/// Registers this group's typed elements (one class per module, see docs/development.md, "Porting a built-in
+/// to the typed API").
+void registerDataTypes(TypeRegistry& types);
 
 } // namespace imlui
 
@@ -183,5 +189,7 @@ void registerDataElements(Renderer& renderer) {
     renderer.registerElement("Table", table);
     renderer.registerElement("Canvas", canvas);
 }
+
+void registerDataTypes(TypeRegistry& types) { types.registerType<ProgressBar>("ProgressBar"); }
 
 } // namespace imlui

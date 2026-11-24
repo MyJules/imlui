@@ -11,6 +11,10 @@
 //    whose __newindex writes properties (setters) and stores `on*` signal handlers.
 //  * a sentinel whose __gc detaches the singletons when the state closes.
 //
+// One C++ type may be registered under several names (aliases: registerType<Column>("Column") and
+// registerType<Column>("Item")). Each name is its own type to Lua; an instance belongs to the name it was
+// created for.
+//
 // Every registered element type is also a Renderer element whose handler syncs the declared
 // properties from the element table into the instance (setters run only on a changed value), calls
 // componentComplete() once, and then Element::render(). Main thread only.
@@ -34,7 +38,7 @@ import lua;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.renderer;
-import imlui.types.object;
+import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_info;
@@ -57,23 +61,17 @@ public:
     TypeInfo& registerType(std::string name) {
         auto info = std::make_unique<TypeInfo>(std::move(name));
         info->setFactory([] { return std::unique_ptr<Element>{std::make_unique<T>()}; });
-        if constexpr (requires(TypeBuilder<T>& b) { T::declare(b); }) {
-            TypeBuilder<T> builder{*info};
-            T::declare(builder);
-        }
+        declareType<T>(*info);
         return addType(std::move(info));
     }
 
     /// Exposes `object` to Lua as the global `name`. The object isn't owned and must outlive every Lua
     /// state the registry installs into (in practice: the Engine's run()).
     template <class T>
-        requires std::derived_from<T, Object>
+        requires std::derived_from<T, ScriptObject>
     TypeInfo& registerSingleton(std::string name, T& object) {
         auto info = std::make_unique<TypeInfo>(name);
-        if constexpr (requires(TypeBuilder<T>& b) { T::declare(b); }) {
-            TypeBuilder<T> builder{*info};
-            T::declare(builder);
-        }
+        declareType<T>(*info);
         return addSingleton(std::move(name), object, std::move(info));
     }
 
@@ -93,16 +91,34 @@ public:
     Element* sync(const luaui::Node& node) const;
 
 private:
+    /// Runs T::declare. A T whose only declare() is inherited from a base (it takes TypeBuilder<Base>&) would
+    /// silently lose its members, so that is an error: give T its own declare() that calls
+    /// `type.extends<Base>()`.
+    template <class T>
+    static void declareType(TypeInfo& info) {
+        if constexpr (requires(TypeBuilder<T>& b) { T::declare(b); }) {
+            TypeBuilder<T> builder{info};
+            T::declare(builder);
+        } else {
+            static_assert(
+                !requires { &T::declare; },
+                "T::declare must take TypeBuilder<T>&; a subclass declares its own and calls "
+                "type.extends<Base>() in it");
+        }
+    }
+
     struct Singleton {
         std::string name;
-        Object* object;
+        ScriptObject* object;
         const TypeInfo* type;
     };
 
     TypeInfo& addType(std::unique_ptr<TypeInfo> info);
-    TypeInfo& addSingleton(std::string name, Object& object, std::unique_ptr<TypeInfo> info);
+    TypeInfo& addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info);
 
     Renderer& m_renderer;
+    /// What Frames use to resolve typed children (Frame::Child::as): sync(node).
+    Frame::InstanceLookup m_instances;
     /// Never shrinks: Lua states hold raw pointers to these until they close.
     std::vector<std::unique_ptr<TypeInfo>> m_infos;
     std::vector<const TypeInfo*> m_types; ///< current element types (a re-registration replaces)
@@ -129,7 +145,7 @@ constexpr const char* markerKey = "__imlui";
 
 /// The userdata behind `__native` and behind a singleton global.
 struct Box {
-    Object* object = nullptr;
+    ScriptObject* object = nullptr;
     Element* element = nullptr; ///< set for owned element instances
     const TypeInfo* type = nullptr;
     bool owned = false;
@@ -200,7 +216,7 @@ bool pushProperty(lua::State* state, const Box& b, std::string_view key) {
     return false;
 }
 
-/// __get(box, name): the getter's value. Object::notify reads the current value through it.
+/// __get(box, name): the getter's value. ScriptObject::notify reads the current value through it.
 int boxGet(lua::State* state) {
     Box* b = boxAt(state, 1);
     if (!b || !b->object) lua::error(state, "__get: not a live imlui object");
@@ -404,7 +420,7 @@ Box* syncBox(const Node& node, const TypeInfo& info) {
     return b;
 }
 
-void renderTyped(const TypeInfo& info, Renderer& renderer, const Node& node) {
+void renderTyped(const TypeInfo& info, Renderer& renderer, const Node& node, const Frame::InstanceLookup& instances) {
     Box* b = syncBox(node, info);
     if (!b) return;
     Element* e = b->element;
@@ -412,25 +428,28 @@ void renderTyped(const TypeInfo& info, Renderer& renderer, const Node& node) {
         b->complete = true;
         e->componentComplete();
     }
-    Frame frame{renderer, node};
+    Frame frame{renderer, node, &instances};
     e->render(frame);
 }
 
 } // namespace
 
-TypeRegistry::TypeRegistry(Renderer& renderer) : m_renderer{renderer} {}
+TypeRegistry::TypeRegistry(Renderer& renderer)
+    : m_renderer{renderer}, m_instances{[this](const Node& node) -> ScriptObject* { return sync(node); }} {}
 
 TypeInfo& TypeRegistry::addType(std::unique_ptr<TypeInfo> info) {
     TypeInfo& ref = *info;
     m_infos.push_back(std::move(info));
     std::erase_if(m_types, [&](const TypeInfo* t) { return t->name() == ref.name(); });
     m_types.push_back(&ref);
+    // Replaces a handler of the same name (a built-in lambda during the port, or an earlier type): the last
+    // registration renders. The Engine registers the built-in handlers before any type, so types win.
     m_renderer.registerElement(
-        ref.name(), [&ref](Renderer& r, const Node& n) { renderTyped(ref, r, n); }, ref.visual());
+        ref.name(), [this, &ref](Renderer& r, const Node& n) { renderTyped(ref, r, n, m_instances); }, ref.visual());
     return ref;
 }
 
-TypeInfo& TypeRegistry::addSingleton(std::string name, Object& object, std::unique_ptr<TypeInfo> info) {
+TypeInfo& TypeRegistry::addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info) {
     TypeInfo& ref = *info;
     m_infos.push_back(std::move(info));
     std::erase_if(m_singletons, [&](const Singleton& s) { return s.name == name; });

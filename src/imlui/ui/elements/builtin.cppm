@@ -1,5 +1,5 @@
 // registerBuiltinElements() / registerBuiltinTypes(): register every built-in element with a
-// Renderer (handler functions) or a TypeRegistry (typed elements).
+// Renderer (handler functions) or a TypeRegistry (typed elements). Each group module registers its own.
 export module imlui.ui.elements.builtin;
 
 import imlui.ui.renderer;
@@ -11,16 +11,15 @@ import imlui.ui.elements.controls;
 import imlui.ui.elements.inputs;
 import imlui.ui.elements.data;
 import imlui.ui.elements.system;
-import imlui.ui.elements.progress_bar;
-import imlui.ui.elements.timer;
 import imlui.types.registry;
 
 export namespace imlui {
 
-/// Registers every built-in element type with `renderer`.
+/// Registers the built-in element handlers with `renderer`.
 void registerBuiltinElements(Renderer& renderer);
 
-/// Registers the built-in typed elements (ProgressBar, Timer) with `types`.
+/// Registers the built-in typed elements with `types`. Call it after registerBuiltinElements(): a type
+/// replaces a handler of the same name.
 void registerBuiltinTypes(TypeRegistry& types);
 
 } // namespace imlui
@@ -41,8 +40,14 @@ void registerBuiltinElements(Renderer& renderer) {
 }
 
 void registerBuiltinTypes(TypeRegistry& types) {
-    types.registerType<ProgressBar>("ProgressBar");
-    types.registerType<Timer>("Timer");
+    registerWindowTypes(types);
+    registerLayoutTypes(types);
+    registerNavigationTypes(types);
+    registerContentTypes(types);
+    registerControlTypes(types);
+    registerInputTypes(types);
+    registerDataTypes(types);
+    registerSystemTypes(types);
 }
 
 } // namespace imlui

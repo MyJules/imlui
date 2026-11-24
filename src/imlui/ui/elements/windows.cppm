@@ -14,10 +14,15 @@ import imlui.widgets;
 import imlui.lua.node;
 import imlui.ui.props;
 import imlui.ui.renderer;
+import imlui.types.registry;
 
 export namespace imlui {
 
 void registerWindowElements(Renderer& renderer);
+
+/// Registers this group's typed elements (one class per module, see docs/development.md, "Porting a built-in
+/// to the typed API").
+void registerWindowTypes(TypeRegistry& types);
 
 } // namespace imlui
 
@@ -118,5 +123,7 @@ void registerWindowElements(Renderer& renderer) {
     renderer.registerElement("Window", window, false);
     renderer.registerElement("Dialog", dialog, false);
 }
+
+void registerWindowTypes(TypeRegistry&) {}
 
 } // namespace imlui

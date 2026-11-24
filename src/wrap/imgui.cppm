@@ -274,6 +274,9 @@ export using ::ImGuiHoveredFlags_ForTooltip;
 export using ::ImGuiConfigFlags_;
 export using ::ImGuiConfigFlags_NavEnableKeyboard;
 
+export using ::ImGuiBackendFlags_;
+export using ::ImGuiBackendFlags_RendererHasTextures; // headless frames in tests: no prebuilt font atlas needed
+
 export using ::ImGuiMouseButton_;
 export using ::ImGuiMouseButton_Left;
 

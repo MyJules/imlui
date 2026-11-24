@@ -19,10 +19,15 @@ import imlui.widgets;
 import imlui.lua.node;
 import imlui.ui.props;
 import imlui.ui.renderer;
+import imlui.types.registry;
 
 export namespace imlui {
 
 void registerLayoutElements(Renderer& renderer);
+
+/// Registers this group's typed elements (one class per module, see docs/development.md, "Porting a built-in
+/// to the typed API").
+void registerLayoutTypes(TypeRegistry& types);
 
 } // namespace imlui
 
@@ -266,5 +271,7 @@ void registerLayoutElements(Renderer& renderer) {
     for (const char* name : {"Repeater", "If", "Loader", "Responsive"})
         renderer.registerElement(name, [](Renderer& r, const Node& n) { r.renderChildren(n); });
 }
+
+void registerLayoutTypes(TypeRegistry&) {}
 
 } // namespace imlui

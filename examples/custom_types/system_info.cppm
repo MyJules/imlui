@@ -22,7 +22,7 @@ import imlui;
 
 export namespace example {
 
-class SystemInfo final : public imlui::Object {
+class SystemInfo final : public imlui::ScriptObject {
 public:
     static void declare(imlui::TypeBuilder<SystemInfo>& type);
 

@@ -6,11 +6,11 @@
 export module imlui.types.element;
 
 import imlui.types.frame;
-import imlui.types.object;
+import imlui.types.script_object;
 
 export namespace imlui {
 
-class Element : public Object {
+class Element : public ScriptObject {
 public:
     /// Draws the element (Material widgets, the draw list) and its children (frame.renderChildren()).
     /// Called on every rendered frame the element is visible, after the property sync.
