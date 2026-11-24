@@ -9,14 +9,15 @@ A UI script runs in `ui.env`, not in `_G`. It must **return the root element**, 
 The engine reports an error if the script returns anything other than a table. (Precisely: each script loaded as a
 resource, the entry script and every component, gets its own thin environment over `ui.env`, whose `ui`, `Image`,
 `theme`, `themeState` and `resource` know the script's name, so [relative names](#resources) resolve against its
-folder. Globals, ids and fields set on `ui` are shared by all scripts, as if they ran in `ui.env` itself.)
+folder. Globals, app-level ids and fields set on `ui` are shared by all scripts, as if they ran in `ui.env` itself.)
 
 A free name `x` in a script is looked up in this order:
 
 1. **`ui.x`**: everything on this page, plus the built-in element constructors. `ui` itself is also available.
 2. **Lua globals** (`_G`): `math`, `string`, `table`, `os`, `io`, `require`, ..., and the
    [C++ singletons](extending.md#singletons) the app registered (for example `backend`).
-3. **Element ids**: `TextField { id = "nameField" }` makes `nameField` refer to that element table, QML style.
+3. **App-level element ids**: `TextField { id = "nameField" }` makes `nameField` refer to that element table, QML
+   style (see [Element ids](#element-ids)).
 4. **Any other Capitalized name** becomes an element constructor (`ui.element(name)`), so elements registered
    from C++ work without any Lua changes. For a [registered C++ type](extending.md) it's a typed constructor.
 
@@ -25,16 +26,82 @@ TextField { id = "nameField", label = "Name", text = "" },
 Text { text = function() return "Hello, " .. nameField.text end },
 ```
 
-Ids are global to the loaded UI. The lookup is lazy, so a binding can refer to an id that is declared later in the
-file. Every constructor registers its `id` (`ui.registerId(props)`), the Lua-side `Repeater`, `ListView`, `If`,
-`Loader` and `Responsive` included: `ListView { id = "list", ... }` is `list`.
+### Element ids
 
-**Id collisions.** Because ids are looked up after `ui.*` and the globals, an id such as `"table"`, `"io"` or
-`"state"` can't be referenced by name: the name finds the global or the `ui` member instead. The element
-constructor reports such an id in the error overlay when the element is created, for example
+Every constructor registers its `id` (`ui.registerId(props)`), the Lua-side `Repeater`, `ListView`, `If`,
+`Loader` and `Responsive` included: `ListView { id = "list", ... }` is `list`. Where it goes depends on the
+**scope** the element is built in:
+
+| Built ... | Registers in | Free name? |
+|---|---|---|
+| outside every component instance and delegate: the entry script, the top level of a `require`d module (whoever requires it first) | the **app** scope, `ui.ids` | yes |
+| while a [component](#componentfn---constructor) function runs (nested elements included) | that **instance's** `ids` table, the second argument of `fn(props, ids)` | no |
+| while a [`Repeater` / `ListView` delegate](#repeater--model-delegate-) runs | that **delegate instance's** `ids`, the third argument of `delegate(item, index, ids)` | no |
+| by a `Loader`'s `item` function or a `Responsive` class function (also at render time) | the scope the `Loader` / `Responsive` was created in | as that scope |
+| anywhere else at run time: a handler, a binding, a timer | the app scope | yes |
+
+So two instances of a component can both declare `id = "field"`: each reaches its own as `ids.field`, and neither
+is a free name. A nested component instance has its own `ids`, which the outer one doesn't see. The app-level ids
+stay free names everywhere, inside components too. Lookup of a free name is lazy, so a binding can refer to an id
+that is declared later in the file.
+
+```lua
+local LabeledField = component(function(props, ids)
+    return Column {
+        TextField { id = "field", label = props.label, text = "" },
+        Text { text = function() return #ids.field.text .. " characters" end },
+    }
+end)
+```
+
+**Ids are weak.** `ui.ids` and every `ids` table don't keep their elements alive: the tree does (or a variable, a
+table, a closure). When an element leaves the tree (a `Loader` showing another item, a delegate the model dropped)
+and nothing else references it, it is collected and its id reads `nil`; a binding that still uses it reports the
+usual error (`attempt to index a nil value (global 'field')`) in the error overlay. An element registered under an
+id is kept until the next frame starts, so a script can build it in one statement and put it in the tree later:
+
+```lua
+Text { id = "title", text = "Hello" }  -- nothing but the id refers to it yet
+return ApplicationWindow { title }     -- fine: the tree holds it from here on
+```
+
+**Duplicates.** An id that a scope already has for another element is reported in the error overlay, for example
+`duplicate element id 'name' in the app scope; the first element keeps it`, or `... in component (app:/Form.lua:3)`
+/ `... in Repeater delegate (app:/main.lua:12)`, naming where the component or delegate function is defined. The
+first element keeps the id. Registering the same element again is not a duplicate, and a load (a hot reload too)
+starts without ids.
+
+**Id collisions.** Because free names are looked up in `ui.*` and the globals first, an app-level id such as
+`"table"`, `"io"` or `"state"` can't be referenced by name: the name finds the global or the `ui` member instead.
+The element constructor reports such an id in the error overlay when the element is created, for example
 `element id 'io' collides with Lua global 'io'; it can't be referenced by name — rename it` (or
 `... collides with ui member 'ui.state' ...`). The element is still created, and `ui.ids.io` still holds it; only
 the free name doesn't. Rename the id. (`ui.checkId(id)` runs the same check and returns `false` for such an id.)
+Ids in a component or delegate scope aren't free names, so they aren't checked.
+
+### `self.parent`
+
+Every element has a read-only `parent`: the element that lays it out, or `nil` for the root (and for an element no
+container took yet). Bindings and handlers reach it through `self`:
+
+```lua
+Card { title = "Totals",
+    Text { text = function(self) return self.parent.title end } }
+```
+
+- The constructor of a container sets it for its children: positional children, and the element props it renders
+  (`menu`, `menuBar`, `header`, `otherwise`, a `Responsive`'s classes). Children are built first, so `parent` is
+  set once the container's constructor runs, not while the child's own does.
+- **Inline containers are skipped**, as in QML: a child of a `Repeater`, `If`, `Loader` or `Responsive` gets the
+  element that lays the container out (the `Column` around the `Repeater`), at any nesting depth. An inline
+  container that is the root is its children's parent. `Repeater` delegates and a `Loader`'s or `Responsive`'s
+  item get theirs when they're built or shown (at render time). A `ListView` (not inline) is its delegates' parent.
+- An element that is a child in several places has the parent that took it last.
+- It's a **weak** reference: it never keeps the parent alive.
+- Assigning it (`self.parent = x`) raises an error; `parent = ...` in a constructor is reported and ignored.
+
+`parent` lives behind the element's metatable (a per-element proxy), not in the table itself: `rawget(el, "parent")`
+is `nil`, and it isn't a property the C++ side syncs.
 
 Indices (`currentIndex`, `currentRow`, delegate `index`) are **1-based**.
 
@@ -43,8 +110,9 @@ Indices (`currentIndex`, `currentRow`, delegate `index`) are **1-based**.
 ### `element(name) -> constructor`
 
 Returns a constructor for element type `name`. Calling it with a table **turns that table into the element**
-(it is not copied): the prelude sets `__type` and registers `id`. The table's identity matters because it is the
-element's ImGui ID and holds its per-element state.
+(it is not copied): the prelude sets `__type`, gives the table its metatable (for [`parent`](#selfparent)), sets
+its children's `parent` and registers `id`. The table's identity matters because it is the element's ImGui ID and
+holds its per-element state.
 
 ```lua
 Button { text = "OK", onClicked = function(self) print("clicked", self.text) end }
@@ -52,8 +120,8 @@ Button "OK"      -- a non-table argument becomes the first positional value: { "
 ```
 
 For a type registered from C++ with `Engine::registerType<T>()`, the constructor also creates the C++ instance
-(stored in the table as `__native`) and gives the table a metatable through which the type's methods are
-callable: `gauge:reset()`. See [Registering C++ types](extending.md).
+(stored in the table as `__native`), and the table's metatable makes the type's methods callable:
+`gauge:reset()`. See [Registering C++ types](extending.md).
 
 ### `types() -> { name, ... }`
 
@@ -129,8 +197,12 @@ Slider { value = bind(function() return s.v * 100 end,  -- getter
 
 ### `component(fn) -> constructor`
 
-Wraps `fn(props)` so that `MyComp { ... }` calls it with the props table, or `{}` if there are none. Locals created
-inside `fn` are per instance.
+Wraps `fn(props, ids)` so that `MyComp { ... }` calls it with the props table (or `{}` if there are none) and a
+new `ids` table for that instance. Locals created inside `fn` are per instance, and so are ids: the elements
+built while `fn` runs register their ids in `ids`, not as free names (see [Element ids](#element-ids)), so every
+instance has its own `ids.field`. `MyComp { id = "x" }` registers the instance's root element as `x` in the scope
+that creates the instance (`ui.ids` at app level). A component that raises leaves the scopes as they were: the
+next element registers where it would have anyway.
 
 ### `require "Name"`
 
@@ -144,10 +216,11 @@ Errors and tracebacks name the file as a resource: `app:/StatCard.lua:3: ...`.
 
 ```lua
 -- StatCard.lua
-return component(function(props)
+return component(function(props, ids)
     return Card { variant = props.variant or "filled", padding = 20,
-        Text { text = props.title, style = "titleSmall", color = "onSurfaceVariant" },
-        Text { text = props.value, style = "headlineMedium", color = props.color or "primary" },
+        Text { id = "title", text = props.title, style = "titleSmall", color = "onSurfaceVariant" },
+        Text { text = props.value, style = "headlineMedium",
+               color = function() return ids.title.text == "" and "outline" or props.color or "primary" end },
     }
 end)
 
@@ -205,10 +278,21 @@ one of them hides all of its children.
 | Prop | Type | Meaning |
 |---|---|---|
 | `model` | list, number, function or `bind` | Items. A number `n` means items `1..n`. |
-| `delegate` | `function(item, index) -> element` | Builds the element for one item. |
+| `delegate` | `function(item, index, ids) -> element` | Builds the element for one item. `ids` is the delegate instance's own [id scope](#element-ids). |
 
 Delegate instances are **cached per index**. They are rebuilt only when the item at that index changes
 (`~=` comparison), so per-delegate state survives frames. Extra cached entries are dropped when the model shrinks.
+Each instance's ids go to its own `ids` (a new table per instance), so every row can declare `id = "name"`. The
+delegates' [`parent`](#selfparent) is the element the `Repeater` is in.
+
+```lua
+Repeater { model = people, delegate = function(person, i, ids)
+    return Row {
+        TextField { id = "name", text = person.name },
+        Button { text = "Save", onClicked = function() person.name = ids.name.text end },
+    }
+end }
+```
 
 ```lua
 Row { spacing = 8,
@@ -221,7 +305,8 @@ Row { spacing = 8,
 ### `ListView`
 
 A scrolling `Repeater`: a `ScrollView` whose children come from `model`/`delegate`. It isn't inline. Without
-`delegate`, its array children are used. It takes all `ScrollView` props (`height`, `width`, `padding`, `color`,
+`delegate`, its array children are used. Its delegates get `ids` like a `Repeater`'s, and the `ListView` is
+their `parent`. It takes all `ScrollView` props (`height`, `width`, `padding`, `color`,
 `rounding`, `border`, `spacing`, `align`).
 
 ```lua
@@ -242,7 +327,9 @@ If { condition = function() return s.loggedIn end,
 
 ### `Loader { item }`
 
-Shows exactly one element: `item`, or the result of calling `item`. Useful for page switching.
+Shows exactly one element: `item`, or the result of calling `item`. Useful for page switching. An `item` function
+runs in the [id scope](#element-ids) the `Loader` was created in, so elements it builds lazily inside a component
+register their ids in that instance's `ids`.
 
 ```lua
 Loader { item = function() return pages[nav.page] end }
@@ -288,7 +375,8 @@ TopAppBar { navigationIcon = function() return compact() and "menu" or "" end, .
 An inline container (like `Loader`) that shows the element given for the current size class. A class that isn't
 given falls back to the nearest smaller class that is, or else to the smallest one given. `false` shows nothing.
 Build each element once, as below: switching classes then keeps their state, scroll positions included (a
-`ScrollView` restores its offset when it's rendered in another place).
+`ScrollView` restores its offset when it's rendered in another place). A class may also be a function `fn(self)` returning the element,
+called whenever the `Responsive` renders, in the [id scope](#element-ids) the `Responsive` was created in.
 
 ```lua
 Row { align = "top", spacing = 0,

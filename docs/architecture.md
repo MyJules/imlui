@@ -335,6 +335,33 @@ something outlives a frame:
 
 A hot reload builds new elements, so they start fresh too: no cached sizes and no ImGui state from the old tree.
 
+### Element ids and parent links
+
+Both live in the DSL (`src/resources/imlui.lua`); the C++ side never sees them.
+
+- **Id scopes.** A stack of scopes, each `{ ids, what }`. `ui.component(fn)` pushes a new scope around
+  `fn(props, ids)`, `repeaterChildren` one around each `delegate(item, index, ids)` it builds, and a `Loader` or
+  `Responsive` pushes the scope it was created in around its `item` / class function (they run at render time,
+  when the stack is otherwise empty). The resource searcher runs a module's top level with an empty stack.
+  `ui.registerId` registers into the innermost scope, or into `ui.ids` (app level, checked with `ui.checkId`) when
+  the stack is empty; only `ui.ids` is behind the free names (`ui.env`). Pushes pop through a to-be-closed
+  variable (`local _ <close> = POP_SCOPE`), so a component or delegate that raises leaves the stack as it found it.
+- **Weak ids.** `ui.ids` and every scope's `ids` are weak-valued. An element registered under an id is also kept in
+  a strong `pinned` list until the next `ui.__tick`, which covers the window in which a script has built an
+  element but not yet put it in the tree. After that only the tree (or the script's own references) keeps it.
+- **Duplicates.** The first element registered under an id in a scope keeps it; another one is reported with the
+  scope's description (`the app scope`, `component (file:line)`, `Repeater delegate (file:line)`). `ui.__load`
+  starts with an empty `ui.ids`, and a hot reload has a new state anyway.
+- **Parent links.** Every constructor (`finishElement`) gives the element a metatable of its own: `__index` is a
+  per-element weak-valued proxy table holding `parent`, whose own metatable falls back to the element's previous
+  `__index` (a registered type's methods table; shared per methods table), and `__newindex` stores every field
+  raw except `parent`, which raises. Reads of other missing fields, the C++ prop reads included, stay table
+  lookups (element, proxy, methods), no function call. The constructor then links its children (positional,
+  `menu` / `menuBar` / `header` / `otherwise`, a `Responsive`'s classes) to its *holder*: itself, or for an inline
+  container its own parent, so inline containers are skipped. When an inline container gets a parent, its
+  children are re-linked to the new holder. Delegates and `Loader` / `Responsive` items are linked when built or
+  shown.
+
 ## Hot reload
 
 `Engine::reloadNow()`:
@@ -494,7 +521,7 @@ Lua sees resources in two ways (`imlui.lua.resources`):
   `theme`, `themeState` and `resource`, are the script's own versions, bound to its full name when it is loaded. So
   relative names (`ui.resource.*`, `Image { source }`, theme fonts) resolve against the folder of the script whose
   code makes the call, wherever that code runs, also in tail calls (`return ui.resource.read("x")`), where Lua drops
-  the caller's frame. Everything else reads and writes the shared `ui.env` and `ui` (globals, ids, `ui.x = ...`), as
+  the caller's frame. Everything else reads and writes the shared `ui.env` and `ui` (globals, app-level ids, `ui.x = ...`), as
   before. Code that uses the plain `ui` table (`require("imlui")`, or code loaded from a string in `ui.env`) finds the
   calling script from the caller's chunk name on the stack instead, falls back to the main script, and raises a clear
   error for a relative `ui.resource` name in a tail call, the one case it can't resolve.

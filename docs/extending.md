@@ -592,11 +592,13 @@ so the sync can skip unchanged values.
 
 - The DSL constructor (`Gauge { ... }`) creates the C++ instance **immediately**, through the default
   constructor, and stores it in the element table as `__native`, a full userdata with a `__gc` metamethod. The
-  element table gets a metatable whose `__index` is the type's methods table, which is how `cpu:reset()` works.
+  element table gets a metatable that falls back to the type's methods table, which is how `cpu:reset()` works
+  (every constructed element has a metatable: it also serves the read-only [`parent`](lua-api.md#selfparent)).
   Element tables otherwise stay what they always were: plain tables with `__type` and array children.
 - Nothing else holds the instance: its link back to the table is weak. When Lua collects the element table, the
   userdata goes with it, `destroyed()` runs and the instance is deleted. Elements that the UI keeps (the tree
-  returned by the script, ids, captured locals) live as long as the Lua state.
+  returned by the script, captured locals, tables) live as long as the Lua state. Ids don't count: they are
+  [weak](lua-api.md#element-ids).
 - Properties are synced at the first render, the first method call or a parent's `as<T>()`, whichever comes
   first, not in the constructor, so the constructor sees no Lua values. Defaults for `nil` are captured right
   after the constructor. `componentComplete()` runs once after the first sync.
@@ -828,8 +830,8 @@ an unselected `Loader` page kept in a table, or held only by a variable keeps ti
 **drops** children (a `Repeater`/`ListView` delegate rebuilt or removed because its model changed, a `Loader` or
 `Responsive` item replaced by another), the next frame's `ui.__tick` runs a full garbage collection before ticking
 (only while ticking elements exist), so a dropped element that nothing else references is destroyed and stops right
-away. An element dropped some other way (a table you edit yourself) stops at the next garbage collection. A dropped
-element that still has an `id` stays referenced by `ui.ids` and keeps ticking. Give the element a `running`
+away. An element dropped some other way (a table you edit yourself) stops at the next garbage collection. An `id`
+doesn't keep a dropped element alive ([ids are weak](lua-api.md#element-ids)). Give the element a `running`
 property (like the built-in `Timer`) when scripts need to stop it. `timer.cppm` is the complete example.
 
 ## The built-ins as examples

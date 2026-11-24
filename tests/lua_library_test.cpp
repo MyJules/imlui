@@ -182,3 +182,20 @@ TEST_F(LuaLibraryTest, LuaSideContainersRegisterTheirIds) {
         assert(#reported == 2 and reported[2]:find("collides with ui member 'ui.bind'", 1, true), tostring(reported[2]))
     )");
 }
+
+// Without the C++ types (plain element tables, no metatable before), parent links and scopes work the same.
+TEST_F(LuaLibraryTest, ParentLinksAndScopesWithoutRegisteredTypes) {
+    run(R"(
+        local leaf = ui.Text { "x" }
+        local col = ui.Column { leaf }
+        assert(leaf.parent == col and col.parent == nil)
+        assert(not pcall(function() leaf.parent = nil end), "parent is read-only")
+        col.spacing = 4
+        assert(rawget(col, "spacing") == 4)
+
+        local C = ui.component(function(props, ids) return ui.Column { ui.Text { id = "t" }, ids = ids } end)
+        local a, b = C {}, C {}
+        assert(a.ids.t == a[1] and b.ids.t == b[1] and ui.ids.t == nil)
+        assert(#reported == 0, tostring(reported[1]))
+    )");
+}

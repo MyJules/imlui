@@ -122,6 +122,8 @@ resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded
 - **Signals** are `on*` handlers called as `handler(self, ...)`, e.g. `onClicked`, `onToggled`,
   `onMoved`, `onTextChanged`, `onAccepted`, `onActivated`, `onTriggered`.
 - **`id`** makes an element reachable by name, QML style: `TextField { id = "name" }`, then `name.text`.
+  Components (`component(function(props, ids) ... end)`) and delegates have their own scope: `ids.name`.
+  `self.parent` is the element that lays an element out.
 - **`state{}`** is an observable table. `watch(state, key | "*", fn)` reacts to changes and returns a
   function that removes the watcher (so does `onFrame(fn)`).
 - **Dynamic children**:
