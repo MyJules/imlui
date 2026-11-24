@@ -24,6 +24,7 @@ class Window {
 public:
     struct Config {
         std::string title = "imlui";
+        /// Initial size in unscaled units (dp at 100 %); scaled to the monitor's content scale.
         int width = 1280;
         int height = 800;
         bool vsync = true;
@@ -47,8 +48,22 @@ public:
     /// events are being processed, e.g. during a live resize.
     void setRefreshCallback(std::function<void()> fn);
 
+    /// Called when the monitor content scale of the window changes (moved to
+    /// another monitor, or the OS scale setting changed). Gets the new scale.
+    void setContentScaleCallback(std::function<void(float)> fn);
+
     /// Processes OS events. May render frames through the refresh callback.
     void pollEvents();
+
+    /// Waits up to `seconds` for OS events and processes them (0 = don't wait,
+    /// infinity = wait until an event arrives). May render frames through the
+    /// refresh callback. Returns true if input or window events arrived.
+    bool waitEvents(double seconds);
+
+    /// Wakes a waitEvents() call from anywhere (thread-safe).
+    static void postEmptyEvent();
+
+    [[nodiscard]] bool minimized() const;
 
     /// Starts a new ImGui frame.
     void beginFrame();
@@ -57,20 +72,29 @@ public:
     void endFrame(float r, float g, float b);
 
     void setTitle(const std::string& title);
+    /// Sets the size in screen coordinates.
     void setSize(int w, int h);
+    /// Sets the size in unscaled units (dp at 100 %): multiplied by the content
+    /// scale and converted to screen coordinates (pixels on Windows, points on macOS).
+    void setScaledSize(int w, int h);
     void show();
     /// Centers the window on the primary monitor.
     void center();
 
-    /// Monitor content scale (DPI factor) at creation time.
+    /// Current monitor content scale (DPI factor) of the window.
     [[nodiscard]] float contentScale() const;
 
 private:
     void refreshDuringEvents();
+    void installEventCallbacks();
+    static void markEvent();
+    void onContentScale(float scale);
 
     static Window* m_self;
     std::function<void()> m_refresh;
+    std::function<void(float)> m_onContentScale;
     bool m_inPoll = false, m_inRefresh = false;
+    bool m_hadEvents = false;
     GLFWwindow* m_window = nullptr;
     bool m_glfwInitialized = false;
     bool m_backendsReady = false;
@@ -111,6 +135,11 @@ bool Window::create(const Config& cfg) {
     glfwGetWindowContentScale(m_window, &sx, &sy);
     m_scale = sx > 0.0f ? sx : 1.0f;
 
+    // Before the ImGui backend installs its callbacks: it chains to these, so
+    // every input event also marks the frame loop as woken by input.
+    m_self = this;
+    installEventCallbacks();
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -124,12 +153,13 @@ bool Window::create(const Config& cfg) {
     // While the user drags a window edge, Windows runs a modal loop inside
     // glfwPollEvents() and the app loop is stalled. GLFW still calls these
     // callbacks, so frames are rendered from them to keep the UI live.
-    m_self = this;
     glfwSetWindowRefreshCallback(m_window, [](GLFWwindow*) {
         if (m_self) m_self->refreshDuringEvents();
     });
     glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow*, int, int) {
-        if (m_self) m_self->refreshDuringEvents();
+        if (!m_self) return;
+        m_self->m_hadEvents = true;
+        m_self->refreshDuringEvents();
     });
     log::info("window created ({}x{}, content scale {:.2f})", cfg.width, cfg.height, m_scale);
     return true;
@@ -158,6 +188,37 @@ void Window::requestClose() { glfwSetWindowShouldClose(m_window, GLFW_TRUE); }
 
 void Window::setRefreshCallback(std::function<void()> fn) { m_refresh = std::move(fn); }
 
+void Window::setContentScaleCallback(std::function<void(float)> fn) { m_onContentScale = std::move(fn); }
+
+void Window::installEventCallbacks() {
+    glfwSetCursorPosCallback(m_window, [](GLFWwindow*, double, double) { markEvent(); });
+    glfwSetMouseButtonCallback(m_window, [](GLFWwindow*, int, int, int) { markEvent(); });
+    glfwSetScrollCallback(m_window, [](GLFWwindow*, double, double) { markEvent(); });
+    glfwSetKeyCallback(m_window, [](GLFWwindow*, int, int, int, int) { markEvent(); });
+    glfwSetCharCallback(m_window, [](GLFWwindow*, unsigned int) { markEvent(); });
+    glfwSetCursorEnterCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
+    glfwSetWindowFocusCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
+    glfwSetWindowSizeCallback(m_window, [](GLFWwindow*, int, int) { markEvent(); });
+    glfwSetWindowIconifyCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
+    glfwSetWindowMaximizeCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
+    glfwSetDropCallback(m_window, [](GLFWwindow*, int, const char**) { markEvent(); });
+    glfwSetWindowContentScaleCallback(m_window, [](GLFWwindow*, float sx, float) {
+        if (m_self) m_self->onContentScale(sx);
+    });
+}
+
+void Window::markEvent() {
+    if (m_self) m_self->m_hadEvents = true;
+}
+
+void Window::onContentScale(float scale) {
+    m_hadEvents = true;
+    if (scale <= 0.0f || scale == m_scale) return;
+    log::info("content scale changed: {:.2f} -> {:.2f}", m_scale, scale);
+    m_scale = scale;
+    if (m_onContentScale) m_onContentScale(scale);
+}
+
 void Window::pollEvents() {
     m_inPoll = true;
     glfwPollEvents();
@@ -167,6 +228,24 @@ void Window::pollEvents() {
     }
     m_inPoll = false;
 }
+
+bool Window::waitEvents(double seconds) {
+    m_inPoll = true;
+    if (seconds <= 0.0)
+        glfwPollEvents();
+    else if (seconds >= 1e9)
+        glfwWaitEvents();
+    else
+        glfwWaitEventsTimeout(seconds);
+    m_inPoll = false;
+    const bool had = m_hadEvents;
+    m_hadEvents = false;
+    return had;
+}
+
+void Window::postEmptyEvent() { glfwPostEmptyEvent(); }
+
+bool Window::minimized() const { return glfwGetWindowAttrib(m_window, GLFW_ICONIFIED) != 0; }
 
 void Window::beginFrame() {
     ImGui_ImplOpenGL3_NewFrame();
@@ -193,6 +272,17 @@ void Window::setTitle(const std::string& title) {
 }
 
 void Window::setSize(int w, int h) { glfwSetWindowSize(m_window, w, h); }
+
+void Window::setScaledSize(int w, int h) {
+    // Pixels per screen coordinate: 1 on Windows and X11, 2 on a Retina display.
+    int ww = 0, wh = 0, fw = 0, fh = 0;
+    glfwGetWindowSize(m_window, &ww, &wh);
+    glfwGetFramebufferSize(m_window, &fw, &fh);
+    const float pixelsPerUnit = ww > 0 && fw > 0 ? static_cast<float>(fw) / static_cast<float>(ww) : 1.0f;
+    const float k = m_scale / pixelsPerUnit;
+    glfwSetWindowSize(m_window, static_cast<int>(static_cast<float>(w) * k + 0.5f),
+                      static_cast<int>(static_cast<float>(h) * k + 0.5f));
+}
 void Window::show() { glfwShowWindow(m_window); }
 
 void Window::center() {

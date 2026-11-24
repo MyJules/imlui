@@ -357,11 +357,12 @@ local navigationPage = Column {
 local todo = state { items = { "Write the Lua DSL", "Theme everything", "Ship it" }, newItem = "", selected = 0 }
 local samples, bars = {}, { 4, 7, 5, 9, 6, 11, 8 }
 for i = 1, 90 do samples[i] = 0 end
-setInterval(function()
+local function sample()
     table.remove(samples, 1)
     local t = time()
     samples[#samples + 1] = math.sin(t * 1.7) * 0.6 + math.sin(t * 4.3) * 0.25 + (math.random() - 0.5) * 0.12
-end, 50)
+end
+local sampler -- the 50 ms interval runs only while the Data page is shown (see the shell below)
 
 local function addTodo()
     if todo.newItem ~= "" then
@@ -432,6 +433,7 @@ local canvasPage = Column {
     Card { padding = 0, variant = "filled",
         Canvas {
             height = 360,
+            animated = true, -- onPaint uses p.time: render continuously
             onClicked = function(_, x, y) table.insert(paint.dots, { x, y }) end,
             onPaint = function(_, p)
                 local pts = {}
@@ -460,6 +462,9 @@ local canvasPage = Column {
 local roles = { "primary", "onPrimary", "primaryContainer", "onPrimaryContainer", "secondary", "secondaryContainer",
                 "tertiary", "tertiaryContainer", "error", "errorContainer", "surface", "surfaceContainerLow",
                 "surfaceContainer", "surfaceContainerHighest", "outline", "outlineVariant" }
+
+local zoomDrag = {} -- .value: the zoom slider's value while it is being dragged
+local function zoomValue() return zoomDrag.value or zoom() end
 
 local themePage = Column {
     spacing = 20,
@@ -490,6 +495,13 @@ local themePage = Column {
             Slider { value = bind(look, "spacing"), from = 4, to = 14, stepSize = 1, fillWidth = true },
             Text { text = function() return ("Font scale ×%.2f"):format(look.fontScale) end, style = "labelLarge", color = "onSurfaceVariant" },
             Slider { value = bind(look, "fontScale"), from = 0.8, to = 1.4, fillWidth = true },
+            Text { text = function() return ("UI zoom %d %%  (Ctrl + / - / 0, Ctrl + wheel)"):format(math.floor(zoomValue() * 100 + 0.5)) end,
+                   style = "labelLarge", color = "onSurfaceVariant" },
+            -- Zooming moves the slider under the mouse, so the drag only previews the value
+            -- and setZoom() applies it on release.
+            Slider { value = bind(zoomValue, function(v) zoomDrag.value = v end), from = 0.5, to = 2, stepSize = 0.1,
+                     fillWidth = true, format = "%.1fx",
+                     onReleased = function(_, v) zoomDrag.value = nil; setZoom(v) end },
         }),
         section("Scheme", "Generated color roles.", {
             Grid { columns = 2, spacing = 8,
@@ -522,6 +534,16 @@ local pages = {
 }
 -- GALLERY_PAGE=n opens page n at startup (handy for screenshots / testing).
 local nav = state { page = tonumber(os.getenv("GALLERY_PAGE") or "") or 1, demo = false }
+
+-- Frames are rendered on demand, and a timer wakes the app at its rate. Run the
+-- live chart's sampler only while its page is visible, so other pages stay idle.
+local function syncSampler()
+    local onData = pages[nav.page] and pages[nav.page][3] == dataPage
+    if onData and not sampler then sampler = setInterval(sample, 50)
+    elseif not onData and sampler then clearTimer(sampler); sampler = nil end
+end
+watch(nav, "page", syncSampler)
+syncSampler()
 
 return ApplicationWindow {
     title = function() return "imlui gallery — " .. pages[nav.page][1] end,

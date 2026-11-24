@@ -57,6 +57,10 @@ void setTheme(Theme t);
 /// Applies a pending theme; call between frames. Returns true if it changed.
 bool applyPendingTheme();
 
+/// Re-applies the current theme to ImGuiStyle at the current dpiScale() (after a
+/// monitor DPI or zoom change). Call between frames.
+void reapplyTheme();
+
 /// Whether a style field name is known (for validating Lua input).
 [[nodiscard]] bool isStyleField(std::string_view name);
 
@@ -254,6 +258,8 @@ bool applyPendingTheme() {
     applyNow(currentTheme);
     return true;
 }
+
+void reapplyTheme() { applyNow(currentTheme); }
 
 bool isStyleField(std::string_view name) {
     for (const auto& f : styleFields)

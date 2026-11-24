@@ -9,6 +9,7 @@ import lua;
 import imgui;
 import imlui.widgets;
 import imlui.lua.node;
+import imlui.ui.frame_request;
 import imlui.ui.renderer;
 
 export namespace imlui {
@@ -41,6 +42,11 @@ void snackbar(Renderer&, const Node& n) {
         lua::setfield(state, n.index(), "shownAt");
         return;
     }
+    // Animate the slide-in and the fade-out; in between, wake up when the fade starts.
+    if (age < 0.18 || age > dur)
+        requestFrame();
+    else
+        requestFrameAfter(dur - age);
     bool closed = false;
     if (md::snackbar(n.string("text", ""), n.string("actionText", ""), t, n.boolean("closable", false), &closed)) {
         n.emit("onAction");
@@ -65,18 +71,26 @@ void timer(Renderer&, const Node& n) {
     const bool started = lua::isnumber(state, -1);
     double last = started ? lua::tonumber(state, -1) : now;
     lua::pop(state);
+    const double interval = n.number("interval", 1000) / 1000.0;
     if (!started) {
         lua::pushnumber(state, now);
         lua::setfield(state, n.index(), "__last");
+        requestFrameAfter(interval);
         if (n.boolean("triggeredOnStart", false)) n.emit("onTriggered");
         return;
     }
-    if (now - last >= n.number("interval", 1000) / 1000.0) {
+    if (now - last >= interval) {
         lua::pushnumber(state, now);
         lua::setfield(state, n.index(), "__last");
-        if (!n.boolean("repeat", true)) n.set("running", false);
+        const bool repeat = n.boolean("repeat", true);
+        if (!repeat)
+            n.set("running", false);
+        else
+            requestFrameAfter(interval);
         n.emit("onTriggered");
+        return;
     }
+    requestFrameAfter(interval - (now - last));
 }
 
 void imguiDemo(Renderer&, const Node& n) {

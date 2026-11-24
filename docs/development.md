@@ -74,6 +74,8 @@ using `imlui.widgets.common`:
 - `stateLayer(id, hovered, active)` for the hover and press overlay.
 - `itemDisabled()` with `disabledContent()`/`disabledContainer()` for the disabled state.
 - `dp()` for every size.
+- `animate(id, target)` for transitions. It requests frames while the value moves. Anything else that changes on
+  its own over time must call `requestFrame()` from `imlui.ui.frame_request` (frames are rendered on demand).
 - `itemWidth(requested, natural)` so `width`/`fillWidth` behave like the other widgets.
 
 Return what happened (`bool` changed/clicked, or a result struct).
@@ -186,4 +188,8 @@ end, 800)
 ```
 
 ImGui processes a press and its release in different frames, so leave at least a frame between them, as above.
+`injectMouse` starts the same 0.3 s settle period as real input, so the UI renders and reacts without real input.
+While the window is focused and the real cursor is outside it, the ImGui GLFW backend replaces injected positions
+with the real cursor position on every frame. Injected clicks are reliable while the real cursor rests over the
+window, or while the window isn't focused.
 Script errors and `log.error` output appear on stderr, which a CI job can scan.

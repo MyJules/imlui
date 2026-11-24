@@ -22,7 +22,7 @@ flowchart TD
 | **Lua script** | Builds the element tree and returns the root. It owns all state and all decisions, including theme, window title and size. |
 | **DSL prelude** (`lua/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment and the `require` searcher for components. |
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. A table's identity (its pointer) is its ImGui ID, so elements keep per-widget state such as animations and focus across frames. |
-| **Renderer** | Walks the tree every frame (immediate mode). It looks up a handler for each `__type` and applies the common props (`visible`, `enabled`, `tooltip`). |
+| **Renderer** | Walks the tree on every rendered frame (immediate mode). It looks up a handler for each `__type` and applies the common props (`visible`, `enabled`, `tooltip`). |
 | **Element handlers** | One per element type, grouped by family in `imlui.ui.elements.*`. They read props through `luaui::Node`, call Material widgets, write two-way props back, and emit signals. |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
 | **ImGui / platform** | Dear ImGui with the GLFW and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. |
@@ -31,22 +31,68 @@ flowchart TD
 
 `Engine::run()` does the following:
 
-1. Creates the window **hidden**, sets the DPI scale from the monitor content scale, loads Roboto and Material
-   Icons, applies the default theme, and loads the script.
-2. Applies the root element's `title` and `width`/`height` to the native window, centers it and shows it.
+1. Creates the window **hidden**, sets the content scale from the monitor, loads Roboto and Material Icons,
+   applies the default theme, and loads the script.
+2. Applies the root element's `title` and `width`/`height` (dp, multiplied by the content scale) to the native
+   window, centers it and shows it.
 3. Each loop iteration:
    - Every 400 ms, compares `.lua` modification times (hot reload). A change, or a `reload()` call, triggers
      `reloadNow()`.
-   - `window.pollEvents()`. If the window is minimized, it waits up to 100 ms for events.
-   - `renderFrame()`.
+   - Computes how long it may sleep: until the next **requested frame** (see below) or the next file check,
+     whichever comes first. With nothing pending, that's the 400 ms hot-reload interval (or forever without hot
+     reload). While minimized it sleeps at least 100 ms.
+   - `window.waitEvents(timeout)` (`glfwWaitEventsTimeout`). Input or window events start a **settle period** of
+     0.3 s, during which every iteration renders, so transitions and hover layers finish.
+   - `renderFrame()`, but only if a frame is due. Otherwise the loop goes back to sleep without rendering.
+
+### On-demand rendering
+
+`imlui.ui.frame_request` keeps the pending frame requests: `requestFrame()` (as soon as possible),
+`requestFrameAfter(seconds)` and `requestFramesFor(seconds)` (continuously, the settle period).
+`secondsUntilFrame()` tells the loop when the next frame is due. At the start of a frame,
+`beginFrameRequests()` drops the requests that frame serves, so anything that still needs frames asks again while
+it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`.
+
+Who requests frames:
+
+| Source | Request |
+|---|---|
+| Input and window events (mouse, keys, focus, resize, DPI change) | the 0.3 s settle period |
+| `md::animate` / `md::stateLayer` (every Material transition) | a frame while the value is still moving |
+| Indeterminate `ProgressBar`, `CircularProgress`, `BusyIndicator` | every frame |
+| `Canvas { animated = true }` | every frame |
+| `Timer` elements | a frame when the interval is due |
+| Lua timers: `ui.__tick` returns the seconds until the next `setTimeout`/`setInterval` | a frame then |
+| `Snackbar` | every frame while it slides in or fades out, and a frame when the fade starts |
+| Tooltips | a frame every 100 ms while an item is hovered but the tooltip delay hasn't passed |
+| An active text field | a frame every 100 ms for the caret blink |
+| A held mouse button | frames at 30 Hz (repeat buttons, drags that pause) |
+| `ui.requestFrame(ms?)`, `ui.setZoom`, `native.injectMouse` | a frame (or the settle period) |
+| A reload | the settle period |
+
+`md::animate` caps the frame time it advances by at 1/30 s, so a transition that starts on the first frame after
+a long sleep doesn't jump to its end.
+
+### Scaling
+
+`imlui.theme.dpi` holds the monitor **content scale** and the user **zoom**. `dpiScale()` is their product, and
+`dp(v)` converts with it. The window reports content scale changes (`glfwSetWindowContentScaleCallback`), and
+`ui.setZoom` and the zoom shortcuts schedule a zoom change. At the start of the next frame, `syncScale()` applies
+the zoom and, if the effective scale changed, calls `reapplyTheme()`: the style is rebuilt from an unscaled
+`ImGuiStyle`, then `ScaleAllSizes(dpiScale())` and `FontScaleDpi = dpiScale()` are applied, as for any new
+theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself when it moves to another monitor.
+
+### Rendering a frame
 
 `renderFrame()` renders one complete frame:
 
-1. **`applyPendingTheme()`**. `theme{}` and `setTheme` only *schedule* a theme. It's applied here, between frames,
-   so a click handler can change the theme in the middle of a frame without breaking that frame's ImGui style
-   stack.
-2. `window.beginFrame()`, which starts a new ImGui frame.
-3. `ui.__tick(now)`: runs due `setTimeout`/`setInterval` timers, then the `onFrame` callbacks.
+1. `beginFrameRequests()`, then **`syncScale()`**, which applies a pending zoom and the pending theme. `theme{}`
+   and `setTheme` only *schedule* a theme. It's applied here, between frames, so a click handler can change the
+   theme in the middle of a frame without breaking that frame's ImGui style stack. If only the scale changed, the
+   current theme is re-applied.
+2. `window.beginFrame()`, which starts a new ImGui frame. Then the zoom shortcuts are handled.
+3. `ui.__tick(now)`: runs due `setTimeout`/`setInterval` timers, then the `onFrame` callbacks, and returns the
+   seconds until the next timer.
 4. Renders the root element.
 5. Renders **overlays**: the children of `ui.__overlays`. Today that's the app-wide `Snackbar` element driven by
    `snackbar()`. Overlays draw above everything else.
@@ -57,7 +103,7 @@ flowchart TD
    title is only updated when it changes.
 
 **Live resize.** On Windows, the OS runs a modal loop while the user drags the window border, so
-`glfwPollEvents()` doesn't return. The engine registers `renderFrame` as the window's **refresh callback**, and
+`glfwWaitEventsTimeout()` doesn't return. The engine registers `renderFrame` as the window's **refresh callback**, and
 GLFW calls it from its refresh and framebuffer-size callbacks. The UI then lays itself out again during the drag.
 
 **Error overlay.** All calls into Lua go through `luaui::safeCall`, which runs `pcall` with a traceback handler.
@@ -65,9 +111,6 @@ Errors are logged with the source tag `lua`, deduplicated, and capped at the las
 panel with the `errorContainer` color sits at the bottom center of the window, with **Dismiss** (clears the list)
 and **Reload** buttons. An error in a binding or handler only affects that value or call, and the rest of the UI
 keeps rendering.
-
-The app currently renders continuously with vsync on. On-demand rendering is planned
-(see [changelog](changelog.md)).
 
 ## Property resolution
 
@@ -82,7 +125,9 @@ The app currently renders continuously with vsync on. On-demand rendering is pla
 | `bind(getter, setter)` | `getter()` | `setter(v)` |
 
 Because bindings are evaluated every frame, a UI that reads a `state{}` (or any table) inside a function always
-shows current data. No dependency tracking is needed. `watch()` is only for side effects.
+shows current data. No dependency tracking is needed. `watch()` is only for side effects. "Every frame" means
+every *rendered* frame: state changed by input handlers or timers is shown because those render a frame anyway.
+Only a binding whose value changes by itself (for example from `time()`) needs `requestFrame()`.
 
 Type coercion: numbers read where strings are expected are converted. Colors accept a role name, `role/alpha`,
 hex, or `{r, g, b, a}` (see [Theming](theming.md#color-specs)). `Node::text()` returns the `text` prop, or the
@@ -146,7 +191,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on scope exit |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions); macros become `constexpr` functions |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink`, `setLevel` |
-| `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh callback |
+| `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize` |
 
 ### Color (`src/imlui/color/`)
 
@@ -160,11 +205,11 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.theme.dpi` | `dpiScale`, `setDpiScale`, `dp(v)` |
+| `imlui.theme.dpi` | `contentScale`/`setContentScale`, `zoom`/`setZoom`, `zoomStep`, `dpiScale` (their product), `dp(v)` |
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
 | `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts`, `font`, `fontSize`, `fontPixels`, `pushFont` |
 | `imlui.theme.icons` | `loadIcons`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
-| `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`), `theme()`, `setTheme`, `applyPendingTheme`, `resolveColor`, `imguiColorIndex`, `isStyleField` |
+| `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`), `theme()`, `setTheme`, `applyPendingTheme`, `reapplyTheme`, `resolveColor`, `imguiColorIndex`, `isStyleField` |
 | `imlui.theme.font_scope` | `FontScope`: RAII push/pop of a text style's font |
 
 ### Lua bridge (`src/imlui/lua/`, namespace `imlui::luaui`)
@@ -209,6 +254,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
+| `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, wake handler |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.renderer` | `Renderer`: `registerElement`, `render`, `forEachChild`, `renderChildren`, `renderStack`, `attachMenu`, window title |
 | `imlui.ui.elements.windows` | `ApplicationWindow`, `Window`, `Dialog` |

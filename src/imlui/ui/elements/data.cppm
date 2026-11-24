@@ -18,6 +18,7 @@ import imlui.widgets;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.painter;
+import imlui.ui.frame_request;
 import imlui.ui.props;
 import imlui.ui.renderer;
 
@@ -142,6 +143,9 @@ void canvas(Renderer&, const Node& n) {
     ImVec2 m = ImGui::GetMousePos();
     const float s = dpiScale();
     if (clicked) n.emit("onClicked", {(m.x - p.x) / s, (m.y - p.y) / s});
+
+    // `animated = true`: onPaint draws something time-dependent, so render continuously.
+    if (n.boolean("animated", false)) requestFrame();
 
     n.pushRaw("onPaint");
     if (!lua::isfunction(state, -1)) {

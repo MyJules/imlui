@@ -6,6 +6,7 @@ The `material-ui` branch, newest first:
 
 | Commit | Change |
 |---|---|
+| (phase D) | **DPI scaling, user zoom and on-demand rendering.** The effective scale is the monitor content scale times a user zoom (`ui.zoom`/`ui.setZoom`, `ui.dpiScale`, Ctrl + `=`/`-`/`0` and Ctrl + wheel, `ui.setZoomShortcuts`). Moving the window to a monitor with another DPI re-applies the theme at the new scale. The root window's `width`/`height` are dp, and negative "fill minus" sizes are scaled too. The engine sleeps in `glfwWaitEventsTimeout` and renders only after input (a 0.3 s settle period), while animations, indeterminate indicators, `Canvas { animated = true }`, snackbars, tooltips, text carets and timers request frames, or on `ui.requestFrame()`. Idle CPU on a static gallery page dropped from a full core to almost nothing. New module `imlui.ui.frame_request`. The gallery gets a UI zoom slider. |
 | `fixes-1` | **Docs-review fixes.** `ui.setTitle()` sticks unless the `ApplicationWindow` has a `title` prop (default `"imlui"`). Theme tables accept role names and `"role/alpha"` in `seed`, `colors.*` and `imgui.*`; `colors`/`imgui` roles refer to the scheme generated from the same table, and an invalid `imgui.*` color is reported. `RadioButton { group = ... }` unchecks the other buttons of its group. `watch()` and `onFrame()` return a function that removes the callback. New `ui.isDark`, `ui.deltaTime`, `ui.imguiVersion`. `registerBuiltinElements` moved to `imlui.ui.elements.builtin`. No more gtest `-Wcharacter-conversion` warning. README layout and element tables updated; the temporary refactor spec is removed. Tests for theme-table colors and `lua/imlui.lua`. |
 | `afd358a` | **Module refactor phase B** merged: `imlui.widgets.*` modules and viewport-aware anchored popups. |
 | `6d1a447` | **Module refactor phase C** merged: `imlui.ui.renderer`, `imlui.ui.props`, `imlui.ui.elements.*`, `imlui.lua.painter`, `imlui.lua.native`, `imlui.app.*`. |
@@ -36,7 +37,4 @@ The module refactor (phases A–C) and the unit tests have landed; see the table
 
 ## Planned
 
-- **Phase D: DPI scaling and user zoom.** Correct scaling when the window moves between monitors with different
-  DPI, plus a user-controlled zoom factor.
-- **On-demand rendering.** Render only when something changed (input, animation, timers, bindings that may have
-  changed) instead of rendering every frame.
+Nothing scheduled yet.

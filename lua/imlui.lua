@@ -306,13 +306,20 @@ function ui.setInterval(fn, ms) return addTimer(fn, ms, true) end
 function ui.clearTimer(id) timers[id] = nil end
 
 local frameCallbacks = {}
---- Calls fn(time) at the start of every frame. Returns a function that removes it.
+--- Calls fn(time) at the start of every rendered frame. Frames are rendered on
+--- demand: call ui.requestFrame() from fn to keep them coming while animating.
+--- Returns a function that removes the callback.
 function ui.onFrame(fn)
     table.insert(frameCallbacks, fn)
     return function() removeFrom(frameCallbacks, fn) end
 end
 
---- Called by the engine at the start of every frame.
+--- Asks for a frame to be rendered (after `ms` milliseconds if given). The engine
+--- only renders on input, animations, timers and these requests.
+function ui.requestFrame(ms) native.requestFrame((ms or 0) / 1000) end
+
+--- Called by the engine at the start of every frame. Returns the seconds until
+--- the next timer is due (nil when there are no timers), so the engine wakes up for it.
 function ui.__tick(now)
     -- Collect first: callbacks may add or clear timers.
     local due = {}
@@ -328,6 +335,11 @@ function ui.__tick(now)
     end
     -- Iterate a copy: a callback may remove itself while running.
     for _, fn in ipairs({ table.unpack(frameCallbacks) }) do fn(now) end
+    local nextDue
+    for _, t in pairs(timers) do
+        if not nextDue or t.due < nextDue then nextDue = t.due end
+    end
+    return nextDue and math.max(0, nextDue - now) or nil
 end
 
 -- Snackbar: one app-wide instance, rendered by the engine above everything.
@@ -372,6 +384,13 @@ ui.quit = native.quit
 ui.reload = native.reload
 ui.setTitle = native.setTitle
 ui.textSize = native.textSize
+
+-- Scaling: sizes are in dp; dp -> pixels = monitor content scale * user zoom.
+ui.zoom = native.zoom                       -- zoom() -> current (or pending) zoom factor
+ui.setZoom = native.setZoom                 -- setZoom(z), clamped to 0.5..3, applied next frame
+ui.dpiScale = native.dpiScale               -- dpiScale() -> effective dp -> pixel factor
+ui.contentScale = native.contentScale       -- contentScale() -> monitor content scale
+ui.setZoomShortcuts = native.setZoomShortcuts -- setZoomShortcuts(false) turns off Ctrl +/-/0/wheel
 
 -------------------------------------------------------------------------------
 -- Script environment & loading
