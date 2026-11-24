@@ -47,12 +47,14 @@ int mountPaks(Resources& resources, const std::filesystem::path& folder, std::st
 /// from a resource manifest, one package per group of the manifest. The library's own (`imlui:/`, `imlui:/fonts/`)
 /// always come first. Mounts, from the bottom of the stack (overridden) to the top (wins):
 ///
-///  1. the embedded files of every package;
+///  1. the embedded files of every package (none for a package built with IMLUI_EMBED_RESOURCES=OFF);
 ///  2. every `*.pak` next to the executable (mountPaks());
 ///  3. override folders next to the executable, named after a prefix, where they exist: `<exe folder>/app/` at
 ///     `app:/`, `<exe folder>/imlui/` at `imlui:/`, and likewise for the prefix of every package;
 ///  4. dev builds (IMLUI_DEV_PATHS=ON): each package's source folder at its mount point, where it exists, so editing
-///     the sources hot-reloads. The environment variable IMLUI_DEV_PATHS=0 skips them.
+///     the sources hot-reloads. The environment variable IMLUI_DEV_PATHS=0 skips them, except for packages without
+///     embedded files, whose folder is their only copy; when such a folder doesn't exist (the executable runs on
+///     another machine), an error names it.
 ///
 /// The entry is `app:/main.lua`. A script given as argv[1] replaces the app: nothing above is mounted at `app:/`,
 /// the script's folder is mounted there instead, and the entry is `app:/<file name>`. A relative argv[1] is resolved
@@ -147,20 +149,28 @@ EngineConfig defaultConfig(int argc, char** argv, std::vector<ResourcePackage> a
 
     EngineConfig cfg;
     Resources& res = cfg.resources;
-    // Bottom of the stack: what the executable carries.
+    // Bottom of the stack: what the executable carries (nothing for a package that isn't embedded).
     for (const ResourcePackage& p : packages)
-        res.mount(p.mountPoint, p.files);
+        if (p.files) res.mount(p.mountPoint, p.files);
     // Archives next to the executable override embedded files.
     mountPaks(res, exeDir, replaced);
     // Loose files next to the executable override both: <exe folder>/<prefix>/ at <prefix>:/.
     for (const std::string& prefix : prefixes)
         if (prefix != replaced && isDirectory(exeDir / prefix))
             res.mount(prefix + ":/", std::make_shared<DirectoryMount>(exeDir / prefix));
-    // Dev builds: the folders the files were embedded from, on top, so editing them hot-reloads.
-    if (environment("IMLUI_DEV_PATHS") != "0")
-        for (const ResourcePackage& p : packages)
-            if (!p.sourceDir.empty() && isDirectory(pathFromUtf8(p.sourceDir)))
-                res.mount(p.mountPoint, std::make_shared<DirectoryMount>(pathFromUtf8(p.sourceDir)));
+    // Dev builds: the folders the files were embedded from, on top, so editing them hot-reloads. A package that
+    // isn't embedded (IMLUI_EMBED_RESOURCES=OFF) has only its folder, which is then always mounted.
+    const bool devPaths = environment("IMLUI_DEV_PATHS") != "0";
+    for (const ResourcePackage& p : packages) {
+        if (p.files && (!devPaths || p.sourceDir.empty())) continue;
+        const fs::path dir = pathFromUtf8(p.sourceDir);
+        if (isDirectory(dir))
+            res.mount(p.mountPoint, std::make_shared<DirectoryMount>(dir));
+        else if (!p.files)
+            log::error("the files of {} aren't embedded in this build (IMLUI_EMBED_RESOURCES=OFF) and their source "
+                       "folder '{}' doesn't exist",
+                       p.mountPoint, p.sourceDir);
+    }
     // A script named on the command line is always mounted, so a missing one is reported where it was looked for.
     if (scriptArg) {
         const fs::path script = resolveScript(fs::path{argv[1]}, exeDir);

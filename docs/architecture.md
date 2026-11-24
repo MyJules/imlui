@@ -224,7 +224,7 @@ spans stay valid. Corrupt compressed data reads as a missing file and is logged.
 `defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
 
 1. **Embedded:** the files of every `ResourcePackage` (module `imlui.resources.package`: a mount point, the files,
-   a dev source folder). The library's own come first, always: `imlui:/` (`src/resources/`) and `imlui:/fonts/` (Roboto,
+   a dev source folder). A package built without embedding (`IMLUI_EMBED_RESOURCES=OFF`) has no files here. The library's own come first, always: `imlui:/` (`src/resources/`) and `imlui:/fonts/` (Roboto,
    Material Icons, the codepoints and the font licenses), the two groups of the library's manifest. Then the host's
    packages, the `app` argument, such as `imlui::embedded::my_app::packages()`.
 2. **Archives:** every `*.pak` next to the executable, in file name order (`mountPaks`), each at the mount point
@@ -235,14 +235,16 @@ spans stay valid. Corrupt compressed data reads as a missing file and is logged.
 4. **Dev source folders:** each package's `sourceDir` at its mount point, where the folder exists. Only dev builds
    have them (`IMLUI_DEV_PATHS=ON` makes `imlui_add_resources` bake each manifest group's absolute `base` folder
    into the generated module);
-   the environment variable `IMLUI_DEV_PATHS=0` skips them at runtime.
+   the environment variable `IMLUI_DEV_PATHS=0` skips them at runtime. A package without embedded files
+   (`IMLUI_EMBED_RESOURCES=OFF`, the default in dev builds) has only this folder: it's mounted even with
+   `IMLUI_DEV_PATHS=0`, and when it doesn't exist (the executable was moved to another machine) an error names it.
 
 The entry is `app:/main.lua` (`EngineConfig::entry`, which a host can change). A script on the command line replaces
 the app: no package, archive or folder is mounted at `app:/`; the script's folder is mounted there instead (on top,
 even when it doesn't exist, so the error names it) and the entry becomes `app:/<file name>`. A relative script path
 is resolved against the current directory, then against the executable's folder (scripts shipped next to it).
 
-So a dev build reads `src/resources/`, the fonts and the app from the source tree (hot reload), and a release build runs
+So a dev build reads `src/resources/`, the fonts and the app from the source tree (hot reload, nothing embedded), and a release build runs
 from its embedded data alone, while a `.pak` or loose files next to it still override single files. Hosts name no file
 paths.
 
@@ -311,13 +313,13 @@ embeds files into. The library's manifest is `src/resources/resources.lua`: the 
 manifest itself excluded) at `imlui:/` and the fonts from `external/fonts/` (`base = "../../external/fonts"`) at
 `imlui:/fonts/`; it lives in `src/resources/`, a folder of resources only, so no pattern can pick up a `.cpp` or
 `.cppm`. There are two test manifests: `tests/data/smoke_app/resources.lua` (the smoke app, embedded into
-`imlui_smoke_host`) and `tests/data/smoke_pak.lua` (the test archive). An app has its own the same way, in
+`imlui_smoke_host`, and into the tests twice: forced embedded and forced not embedded) and `tests/data/smoke_pak.lua` (the test archive). An app has its own the same way, in
 `src/resources/` next to its scripts (see [Getting started](getting-started.md#using-imlui-in-your-app)).
 
 ### Embedding and archives
 
-`imlui_add_resources(<target> <manifest> [NAME <name>])` (`cmake/ImluiResources.cmake`) embeds the files of a
-manifest into a target. `NAME` defaults to the manifest's folder name (lowercased, other characters as `_`). At build
+`imlui_add_resources(<target> <manifest> [NAME <name>] [EMBED ON|OFF])` (`cmake/ImluiResources.cmake`) embeds the
+files of a manifest into a target, when the build embeds (see [Embedding or not](#embedding-or-not) below). `NAME` defaults to the manifest's folder name (lowercased, other characters as `_`). At build
 time the `imlui_rc` tool (`tools/`) encodes each file and writes `<name>.bin` (the stored bytes of every group, back
 to back) and the module `imlui.embedded.<name>` into the build tree. The module pulls the blob in with `#embed`, a
 clang extension in C++ whose `-Wc23-extensions` warning is turned off only around that line of the generated file.
@@ -340,6 +342,23 @@ custom target `imlui_resources_<name>_list` therefore runs `imlui_rc --list` on 
 manifest and rewrites the file list (`<name>.files`, an input of the embedding) only when the set of files changed.
 That's cheap (no file is read), and the tool rewrites its other outputs only when they change too, so touching a file
 without changing it rebuilds nothing.
+
+#### Embedding or not
+
+The CMake option `IMLUI_EMBED_RESOURCES` decides whether `imlui_add_resources` embeds; its default is the opposite of
+`IMLUI_DEV_PATHS`: dev builds don't embed, release builds (`-DIMLUI_DEV_PATHS=OFF`) do. A dev build reads every file
+from the source folders anyway (they're mounted on top), so embedding them would only make each edit of a Lua file,
+an image or a font re-embed, recompile the generated module and relink. Without embedding, `imlui_rc --source-dirs`
+generates the same module `imlui.embedded.<name>` with the same `packages()` and `mount()`, but no blob: each package
+has its mount point and its group's `base` folder, `files` is null, and `mount()` mounts the folders. The module
+depends on the manifest only (no dependency file, no file list target), so editing, adding or removing a resource
+file needs no build at all (`ninja: no work to do`), and hot reload picks it up. Changing the manifest regenerates
+the module: the manifest is still evaluated at build time for its groups' mount points and folders.
+
+`EMBED ON|OFF` overrides the option for one call (the library's `imlui_smoke_host` embeds always, so its smoke test
+runs it alone in every configuration). Not embedding needs `IMLUI_DEV_PATHS=ON`, as the source folders are then the
+only copy of the files: `IMLUI_EMBED_RESOURCES=OFF` with `IMLUI_DEV_PATHS=OFF` stops the configure with an error, and
+so does `EMBED OFF` in a build with `IMLUI_DEV_PATHS=OFF`. `imlui_add_pak` always packs.
 
 **Compression** (`imlui.tools.resource_encoding`, shared by both tools): a file is stored as one zstd frame (level 19)
 when it is at least 64 bytes, its extension isn't an already-compressed format (PNG, JPEG, zstd, zip, ...), and
@@ -383,7 +402,7 @@ is the example).
 
 | Path | What |
 |---|---|
-| `CMakeLists.txt` | Project setup: the options (`IMLUI_DEV_PATHS`, `IMLUI_BUILD_TESTS`, default `ON` only at the top level), the CMake helpers, `external/`, `src/` (`add_subdirectory(src)`), the tools, the tests and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level. |
+| `CMakeLists.txt` | Project setup: the options (`IMLUI_DEV_PATHS`, `IMLUI_EMBED_RESOURCES` (default: the opposite of `IMLUI_DEV_PATHS`; both `OFF` is a configure error), `IMLUI_BUILD_TESTS`, default `ON` only at the top level), the CMake helpers, `external/`, `src/` (`add_subdirectory(src)`), the tools, the tests and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level. |
 | `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`. The functions are global once included, so a parent project calls them after `add_subdirectory`. Each file has an include guard; an app includes `ImluiSanitizers.cmake` itself before `add_subdirectory` so its own targets are instrumented too. |
 | `src/CMakeLists.txt` | The library targets: `imlui_lua` (`wrap/lua.cppm`) and `imlui` (every other `.cppm` under `src/`, globbed), and `imlui_add_resources(imlui resources/resources.lua NAME imlui)`. |
 | `src/imlui/`, `src/wrap/` | The library's modules (see the module map below). |

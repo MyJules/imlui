@@ -509,7 +509,8 @@ The engine loads every file through `EngineConfig::resources` (see [Architecture
 and stacks, from the bottom: the embedded
 files (the library's `imlui:/` and `imlui:/fonts/`, then the host's packages), every `*.pak` next to the executable,
 the override folders next to it named after a prefix (`app/` at `app:/`, `imlui/` at `imlui:/`), and in dev builds
-each package's source folder (hot reload; `IMLUI_DEV_PATHS`). The entry is `app:/main.lua`; a script argument
+each package's source folder (hot reload; `IMLUI_DEV_PATHS`; dev builds don't embed by default,
+`IMLUI_EMBED_RESOURCES`, so there the folders are the only copy). The entry is `app:/main.lua`; a script argument
 replaces everything at `app:/` with its own folder. The host names no file paths. A host can mount more, before
 `run()`, on the config or through `Engine::resources()`, and change `entry`. A later mount overrides files of an
 earlier one at the same names:

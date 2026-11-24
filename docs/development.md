@@ -285,6 +285,17 @@ cmake --build --preset clang-asan
 ctest --preset clang-asan           # includes the smoke test: the test host runs under the sanitizers
 ```
 
+The presets are dev builds (`IMLUI_DEV_PATHS=ON`), so nothing is embedded (`IMLUI_EMBED_RESOURCES` defaults to `OFF`):
+the library's `imlui.embedded.imlui` only names `src/resources/` and `external/fonts/`, and editing those needs no
+build. The tests check whichever shape the build has, plus both shapes of the smoke app's manifest in every
+configuration (`imlui.embedded.smoke_embedded`, `EMBED ON`; `imlui.embedded.smoke_sources`, `EMBED OFF`, dev builds
+only). Before merging resource changes, also build and test the embedded configurations, in their own build folders:
+
+```sh
+cmake --preset clang-debug -B build/embed-on -DIMLUI_EMBED_RESOURCES=ON   # dev paths over embedded copies
+cmake --preset clang-release -B build/ship -DIMLUI_DEV_PATHS=OFF          # as shipped: embedded, no source paths
+```
+
 Our targets build with a strict warning set and `-Werror`, so any warning fails the build. See
 [Warnings and compiler checks](../CODE_STYLE.md#warnings-and-compiler-checks) for the flags and the rules for
 suppressions. Run `clang-asan` before merging larger changes.
@@ -329,21 +340,26 @@ suppressions. Run `clang-asan` before merging larger changes.
   embedded files and their packages against the sources, `defaultConfig` (release-style from embedded data alone;
   `.pak` archives in name order under the `app/` and `imlui/` override folders next to the executable; a package's
   dev source folder on top, skipped with `IMLUI_DEV_PATHS=0` or when missing; a script argument replacing every
-  `app:/` mount, relative paths falling back to the executable's folder), and the harness on embedded data only
-  (`Options::embedded`). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
+  `app:/` mount, relative paths falling back to the executable's folder; a package without files mounting its source
+  folder even with `IMLUI_DEV_PATHS=0`, and nothing but a logged error when that folder is missing), and the harness
+  on the library's packages (`Options::embedded`: embedded data, or the source folders in a build that doesn't embed). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
 - `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns, one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
   base folder, the sandbox, bad shapes), `manifestDependencies` and the dependency file format, merging groups into
-  one `.pak` (`tools::mergeGroups`), and end to end: the library's embedded packages hold exactly what
-  `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it embeds).
+  one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
+  hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
+  embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is
+  checked the embedded way and `imlui.embedded.smoke_sources` (forced `EMBED OFF`, dev builds) the other way, with
+  its `mount()` mounting the folders.
 - **Smoke test** (`smoke.imlui_smoke_host`, `tests/smoke_run.cmake`) runs the test app host like a shipped release.
   `imlui_smoke_host` (`tests/smoke_host/main.cpp`, built only with the tests) embeds the smoke app
   (`tests/data/smoke_app/`: `main.lua`, a `Tile.lua` component, and a test image from a second manifest group at
-  `app:/images/`) and registers `test::RenderCounter` as `Probe`. The executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
+  `app:/images/`; always embedded, `EMBED ON`) and registers `test::RenderCounter` as `Probe`. The executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
   empty folder under `build/<preset>/tests/smoke/` and started with `IMLUI_DEV_PATHS=0` and
   `IMLUI_EXIT_AFTER_FRAMES=5`. It must exit with 0, log that its entry script came from its embedded data, and log
-  no error. It opens a window, so it needs a desktop session. An app can reuse `tests/smoke_run.cmake` for its own
+  no error. In a build that doesn't embed the library (`IMLUI_EMBED_RESOURCES=OFF`), `imlui:/` comes from the
+  library's source folders, which `IMLUI_DEV_PATHS=0` doesn't skip as they're its only copy. It opens a window, so it needs a desktop session. An app can reuse `tests/smoke_run.cmake` for its own
   executable (`cmake -DEXE=... -DWORK=... -DEXPECT=... -P vendor/imlui/tests/smoke_run.cmake`).
 
 ### Environment variables
@@ -351,7 +367,7 @@ suppressions. Run `clang-asan` before merging larger changes.
 | Variable | Effect |
 |---|---|
 | `IMLUI_EXIT_AFTER_FRAMES=n` | Quit after `n` rendered frames, with exit code 1 when a script error was reported (`EngineConfig::exitAfterFrames`, read by `defaultConfig`). For smoke runs. |
-| `IMLUI_DEV_PATHS=0` | Ignore the source folders compiled into a dev build's embedded packages (`ResourcePackage::sourceDir`): run from the embedded data and the files next to the executable, like a release build. |
+| `IMLUI_DEV_PATHS=0` | Ignore the source folders compiled into a dev build's embedded packages (`ResourcePackage::sourceDir`): run from the embedded data and the files next to the executable, like a release build. Packages that aren't embedded (`IMLUI_EMBED_RESOURCES=OFF`) still mount their folder, their only copy. |
 | `GALLERY_PAGE=n` | Open the gallery (imlui-gallery) on page `n`. Read by its `main.lua`, not by imlui. |
 
 ### Resource tools
@@ -359,8 +375,9 @@ suppressions. Run `clang-asan` before merging larger changes.
 `tools/` builds two host tools with the same toolchain (see [Architecture](architecture.md#resource-manifests)).
 Both read a Lua resource manifest (`resources.lua`). `imlui_rc`, which `imlui_add_resources(<target> <manifest>)`
 runs, writes the blob, the `imlui.embedded.<name>` module and the dependency file `<name>.d` into
-`build/<preset>/<dir>/imlui_resources/`; `imlui_rc --list` (target `imlui_resources_<name>_list`, run on every
-build) rewrites `<name>.files` when the manifest's set of files changed, so a file added to a globbed folder
+`build/<preset>/<dir>/imlui_resources/` (without embedding, `imlui_rc --source-dirs` writes only the module, which
+names the groups' folders and depends on the manifest alone); `imlui_rc --list` (target `imlui_resources_<name>_list`, run on every
+build, only when embedding) rewrites `<name>.files` when the manifest's set of files changed, so a file added to a globbed folder
 re-embeds even where Ninja misses the folder's new time. `imlui_pack` builds `.pak` archives
 (`imlui_add_pak(<name> <manifest>)`, or by hand: `imlui_pack out.pak app:/ <folder> [files...]`). Their shared code
 is the `imlui_resource_tools` library (`tools/lib/`, links the zstd compressor and `imlui_lua`, the Lua wrapper; it

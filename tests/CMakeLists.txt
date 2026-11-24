@@ -24,12 +24,25 @@ imlui_add_pak(imlui_test_pak data/smoke_pak.lua OUTPUT ${CMAKE_CURRENT_BINARY_DI
 add_dependencies(imlui_tests imlui_test_pak)
 target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${CMAKE_CURRENT_BINARY_DIR}/smoke.pak"
                                                IMLUI_SMOKE_APP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/smoke_app")
+# Both shapes of a generated module, whatever IMLUI_EMBED_RESOURCES says: the smoke app's manifest embedded
+# (imlui.embedded.smoke_embedded) and, in dev builds, not embedded (imlui.embedded.smoke_sources: source folders only).
+# The library's own imlui.embedded.imlui follows the option, which IMLUI_TEST_EMBED_RESOURCES tells the tests.
+imlui_add_resources(imlui_tests data/smoke_app/resources.lua NAME smoke_embedded EMBED ON)
+if(IMLUI_DEV_PATHS)
+    imlui_add_resources(imlui_tests data/smoke_app/resources.lua NAME smoke_sources EMBED OFF)
+    target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_DEV_PATHS=1)
+endif()
+if(IMLUI_EMBED_RESOURCES)
+    target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_EMBED_RESOURCES=1)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(imlui_tests DISCOVERY_MODE PRE_TEST)
 
 # The test app host (smoke_host/main.cpp): the smoke app in data/smoke_app, embedded from its resources.lua like any
-# app's files, plus a registered C++ type (test::RenderCounter as `Probe`). Built only with the tests.
+# app's files, plus a registered C++ type (test::RenderCounter as `Probe`). Built only with the tests. Always embedded
+# (EMBED ON), so the smoke test below runs it alone in every configuration; when the library itself isn't embedded
+# (IMLUI_EMBED_RESOURCES=OFF), its imlui:/ files come from their source folders.
 add_executable(imlui_smoke_host smoke_host/main.cpp)
 target_sources(imlui_smoke_host
     PRIVATE
@@ -40,11 +53,12 @@ target_sources(imlui_smoke_host
 target_link_libraries(imlui_smoke_host PRIVATE imlui)
 imlui_set_warnings(imlui_smoke_host)
 imlui_set_hardening(imlui_smoke_host)
-imlui_add_resources(imlui_smoke_host data/smoke_app/resources.lua)
+imlui_add_resources(imlui_smoke_host data/smoke_app/resources.lua EMBED ON)
 
 # Release-style smoke runs: the executable is copied alone (with the DLLs next to it, e.g. the ASan runtime) into an
 # empty folder and started with IMLUI_DEV_PATHS=0 (no source tree) and IMLUI_EXIT_AFTER_FRAMES (quit after a few
-# frames, exit 1 on a script error), so it must run from its embedded Lua, fonts and app script alone.
+# frames, exit 1 on a script error), so it must run from its embedded Lua, fonts and app script alone (the library's
+# imlui:/ files from its source folders when the build doesn't embed them, IMLUI_EMBED_RESOURCES=OFF).
 function(imlui_add_smoke_test name target expect)
     add_test(NAME ${name}
              COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:${target}> -DWORK=${CMAKE_CURRENT_BINARY_DIR}/smoke/${name}

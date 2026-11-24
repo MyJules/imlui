@@ -4,7 +4,7 @@
 # so an app that adds imlui as a subproject calls these functions after add_subdirectory(vendor/imlui), on its own
 # targets and manifests (relative paths are relative to the calling CMakeLists.txt).
 #
-#   imlui_add_resources(<target> <manifest> [NAME <name>])
+#   imlui_add_resources(<target> <manifest> [NAME <name>] [EMBED ON|OFF])
 #
 #     Embeds the files of <manifest> (a Lua file, by convention resources.lua; a relative path is relative to the
 #     current source dir) into <target>. Generates the module `imlui.embedded.<name>` (into the build tree) and adds
@@ -12,12 +12,17 @@
 #     pass to defaultConfig(): one per group of the manifest, with its files, its mount point and, when
 #     IMLUI_DEV_PATHS is ON, the group's absolute base folder, which defaultConfig() mounts over the embedded copy
 #     (hot reload; "" with IMLUI_DEV_PATHS=OFF). Also `mount(imlui::Resources&)`, which mounts them all.
-#       NAME  the module and namespace name: lowercase letters, digits, `_` (default: the manifest's folder name,
-#             made so)
-#     imlui_rc writes a dependency file listing the manifest, every embedded file and every folder it scanned for
-#     the manifest's patterns, and the target imlui_resources_<name>_list compares the manifest's file list on every
-#     build, so editing the manifest or a file, or adding or removing a file in a scanned folder, re-embeds; nothing
-#     is globbed at configure time. Each file is stored zstd-compressed when that saves at least
+#       NAME   the module and namespace name: lowercase letters, digits, `_` (default: the manifest's folder name,
+#              made so)
+#       EMBED  whether to embed the files (default: the option IMLUI_EMBED_RESOURCES, which is OFF in dev builds).
+#              OFF generates the same module without the files: each package has only its mount point and its
+#              source folder (`files` is null), defaultConfig() mounts the source folder, and `mount()` mounts the
+#              source folders. The module then depends on the manifest only, so editing, adding or removing a
+#              resource file needs no build. OFF needs IMLUI_DEV_PATHS=ON.
+#     When embedding, imlui_rc writes a dependency file listing the manifest, every embedded file and every folder it
+#     scanned for the manifest's patterns, and the target imlui_resources_<name>_list compares the manifest's file
+#     list on every build, so editing the manifest or a file, or adding or removing a file in a scanned folder,
+#     re-embeds; nothing is globbed at configure time. Each file is stored zstd-compressed when that saves at least
 #     10 % (text, fonts), as is otherwise (PNG, JPEG, small files), unless the manifest's `compress` says otherwise,
 #     and decompressed on first read.
 #
@@ -57,7 +62,7 @@ function(_imlui_manifest_listing out manifest file target)
 endfunction()
 
 function(imlui_add_resources target manifest)
-    cmake_parse_arguments(PARSE_ARGV 2 opt "" "NAME" "")
+    cmake_parse_arguments(PARSE_ARGV 2 opt "" "NAME;EMBED" "")
     if(opt_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "imlui_add_resources(${target}): unknown arguments ${opt_UNPARSED_ARGUMENTS}")
     endif()
@@ -72,23 +77,42 @@ function(imlui_add_resources target manifest)
     if(NOT name MATCHES "^[a-z][a-z0-9_]*$")
         message(FATAL_ERROR "imlui_add_resources(${target}): NAME '${name}' must be lowercase letters, digits and _")
     endif()
-
-    # Dev builds bake each group's base folder into the generated module (ResourcePackage::sourceDir):
-    # defaultConfig() mounts it over the embedded copy, so editing a file hot-reloads.
-    set(flags)
-    if(IMLUI_DEV_PATHS)
-        set(flags --dev-paths)
+    set(embed ${IMLUI_EMBED_RESOURCES})
+    if(DEFINED opt_EMBED)
+        set(embed ${opt_EMBED})
     endif()
+    if(NOT embed AND NOT IMLUI_DEV_PATHS)
+        message(FATAL_ERROR "imlui_add_resources(${target}): EMBED OFF needs IMLUI_DEV_PATHS=ON (the source folders "
+                            "would be the only copy of the files)")
+    endif()
+
     set(dir ${CMAKE_CURRENT_BINARY_DIR}/imlui_resources)
-    _imlui_manifest_listing(listing ${manifest} ${dir}/${name}.files imlui_resources_${name}_list)
-    add_custom_command(
-        OUTPUT ${dir}/${name}.cppm ${dir}/${name}.bin
-        COMMAND imlui_rc ${flags} ${manifest} ${name} ${dir}
-        DEPENDS imlui_rc ${manifest} ${listing}
-        DEPFILE ${dir}/${name}.d
-        COMMENT "Embedding ${manifest} (imlui.embedded.${name})"
-        VERBATIM
-    )
+    if(embed)
+        # Dev builds bake each group's base folder into the generated module (ResourcePackage::sourceDir):
+        # defaultConfig() mounts it over the embedded copy, so editing a file hot-reloads.
+        set(flags)
+        if(IMLUI_DEV_PATHS)
+            set(flags --dev-paths)
+        endif()
+        _imlui_manifest_listing(listing ${manifest} ${dir}/${name}.files imlui_resources_${name}_list)
+        add_custom_command(
+            OUTPUT ${dir}/${name}.cppm ${dir}/${name}.bin
+            COMMAND imlui_rc ${flags} ${manifest} ${name} ${dir}
+            DEPENDS imlui_rc ${manifest} ${listing}
+            DEPFILE ${dir}/${name}.d
+            COMMENT "Embedding ${manifest} (imlui.embedded.${name})"
+            VERBATIM
+        )
+    else()
+        # Only the mount points and source folders: regenerated when the manifest changes, never for its files.
+        add_custom_command(
+            OUTPUT ${dir}/${name}.cppm
+            COMMAND imlui_rc --source-dirs ${manifest} ${name} ${dir}
+            DEPENDS imlui_rc ${manifest}
+            COMMENT "Listing the source folders of ${manifest} (imlui.embedded.${name}, not embedded)"
+            VERBATIM
+        )
+    endif()
     # A library's embedded module is part of its interface (the tests import imlui.embedded.imlui); an
     # executable's file sets must be private.
     get_target_property(type ${target} TYPE)

@@ -86,11 +86,12 @@ imlui_add_resources(my_app resources/resources.lua NAME my_app)  # generates mod
 | What | Notes |
 |---|---|
 | target `imlui` | The library, with its C++20 modules (`import imlui;`, also `imgui` and the other wrappers) and its own embedded files (`src/resources/imlui.lua`, the fonts). Linking it is enough, also for modules that `import imgui;`. |
-| `imlui_add_resources(<target> <manifest> [NAME <name>])` | Embeds the files a manifest lists into `<target>` as module `imlui.embedded.<name>` ([Shipping an app](#shipping-an-app)). |
+| `imlui_add_resources(<target> <manifest> [NAME <name>] [EMBED ON\|OFF])` | Embeds the files a manifest lists into `<target>` as module `imlui.embedded.<name>` ([Shipping an app](#shipping-an-app)); in dev builds it only records their folders ([Dev and ship builds](#dev-and-ship-builds)). `EMBED` overrides `IMLUI_EMBED_RESOURCES` for this call. |
 | `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` | A target that builds a `.pak` archive (default: `<name>.pak` in `CMAKE_RUNTIME_OUTPUT_DIRECTORY`). |
 | `imlui_set_warnings(<target>)`, `imlui_set_hardening(<target>)` | imlui's warning policy and Debug hardening ([CODE_STYLE.md](../CODE_STYLE.md#warnings-and-compiler-checks)). |
 | targets `imlui_rc`, `imlui_pack` | The build-time resource tools the functions above run; built on demand. |
-| option `IMLUI_DEV_PATHS` (default `ON`) | Dev builds bake each embedded group's source folder in, for hot reload; `OFF` for a build you ship ([Dev paths](#dev-paths-imlui_dev_paths)). Applies to the app's `imlui_add_resources` too. |
+| option `IMLUI_DEV_PATHS` (default `ON`) | Dev builds bake each embedded group's source folder in, for hot reload; `OFF` for a build you ship ([Dev and ship builds](#dev-and-ship-builds)). Applies to the app's `imlui_add_resources` too. |
+| option `IMLUI_EMBED_RESOURCES` (default: the opposite of `IMLUI_DEV_PATHS`) | Whether `imlui_add_resources` embeds the files: `OFF` in dev builds, so editing a resource needs no build; `ON` for a build you ship. `OFF` needs `IMLUI_DEV_PATHS=ON`. |
 | option `IMLUI_BUILD_TESTS` | Default `OFF` as a subproject (`ON` when imlui is built on its own). |
 | cache variable `IMLUI_SANITIZERS` | e.g. `address,undefined` (see `cmake/ImluiSanitizers.cmake`). |
 
@@ -191,15 +192,32 @@ When a file changes, it builds a **fresh Lua state** and runs the script again:
 
 You can also reload from Lua with `reload()`, as the gallery's *More → Reload script* menu does.
 
-## Dev paths (`IMLUI_DEV_PATHS`)
+## Dev and ship builds
+
+Two options decide where a build reads its files from; the second follows the first unless you set it:
 
 ```sh
-cmake --preset clang-debug -DIMLUI_DEV_PATHS=OFF
+cmake --preset clang-debug                                     # dev: source folders, nothing embedded
+cmake --preset clang-release -B build/ship -DIMLUI_DEV_PATHS=OFF # ship: everything embedded, no source paths
 ```
+
+| | `IMLUI_DEV_PATHS` | `IMLUI_EMBED_RESOURCES` | Files come from |
+|---|---|---|---|
+| Dev build (default, also the `clang-release` preset) | `ON` | `OFF` | the source folders: editing a Lua file, an image or a font hot-reloads and needs no build (`ninja: no work to do`) |
+| Build you ship | `OFF` | `ON` | the executable alone, plus whatever `.pak` or folder you put next to it |
+| Dev build that embeds (`-DIMLUI_EMBED_RESOURCES=ON`) | `ON` | `ON` | the source folders over the embedded copies; editing a file re-embeds on the next build. Run it with the environment variable `IMLUI_DEV_PATHS=0` to try it as it would ship |
+| (error at configure) | `OFF` | `OFF` | nothing: the configure stops |
+
+The presets don't set either option, so `clang-release` is an optimized dev build. Configure a build you ship in a
+fresh build folder with `-DIMLUI_DEV_PATHS=OFF` (`IMLUI_EMBED_RESOURCES` then defaults to `ON`); in a folder that was
+configured as a dev build, also pass `-DIMLUI_EMBED_RESOURCES=ON`, as the cached `OFF` stays. A dev build's
+executable needs the source tree: moved elsewhere, it logs an error naming each missing source folder.
+`imlui_add_resources(... EMBED ON)` embeds one manifest whatever the option says (a test that runs an executable
+alone, say).
 
 | `IMLUI_DEV_PATHS` | Effect |
 |---|---|
-| `ON` (default) | Every embedded package remembers the folder it was embedded from (the `base` of its group in the resource manifest: the app's `src/resources/`, imlui's `src/resources/` and `external/fonts/`, ...), and `defaultConfig` mounts those folders over the embedded copies, so editing them hot-reloads without rebuilding. In an app that's the app's own `src/resources/`, and `vendor/imlui/src/resources/` and `vendor/imlui/external/fonts/` for the library. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime. |
+| `ON` (default) | Every package remembers the folder its files come from (the `base` of its group in the resource manifest: the app's `src/resources/`, imlui's `src/resources/` and `external/fonts/`, ...), and `defaultConfig` mounts those folders (over the embedded copies, if any), so editing them hot-reloads without rebuilding. In an app that's the app's own `src/resources/`, and `vendor/imlui/src/resources/` and `vendor/imlui/external/fonts/` for the library. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime where the files are embedded. |
 | `OFF` | No source paths are compiled in: the app runs from its embedded files. Use this for a build you move or ship. |
 
 Either way, files next to the executable override the embedded ones: any `*.pak` archive, which mounts itself where
@@ -212,7 +230,8 @@ given on the command line).
 
 The app lists its scripts and data in its resource manifest and embeds them with `imlui_add_resources`, as above.
 Text and fonts are stored zstd-compressed and decompressed on first read. Configure the build you ship with
-`-DIMLUI_DEV_PATHS=OFF`, so it holds no source paths; the executable then needs nothing next to it.
+`-DIMLUI_DEV_PATHS=OFF`, so it holds no source paths and embeds every file (`IMLUI_EMBED_RESOURCES` defaults to `ON`
+then); the executable then needs nothing next to it.
 
 An `app/` folder next to the executable overrides single embedded `app:/` files. To update files without
 rebuilding, ship a `.pak` next to the executable: `imlui_add_pak(patch patch/resources.lua)` in CMake (a manifest

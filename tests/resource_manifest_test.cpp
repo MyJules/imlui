@@ -1,7 +1,8 @@
 // Tests for resource manifests (imlui.tools.resource_manifest, read by imlui_rc and imlui_pack): glob patterns,
 // groups, include/exclude, the compression override, errors (a missing prefix, a missing file, a path leaving the
 // base folder, the sandbox), the dependency file and file listing, merging groups into one .pak, and end to end: the
-// library's embedded packages hold exactly what its manifest (src/resources/resources.lua) lists.
+// modules imlui_add_resources generates match their manifest, embedded (the library's in release builds, a forced
+// EMBED ON copy of the smoke app's) and not embedded (the library's in dev builds, a forced EMBED OFF copy).
 #include <algorithm>
 #include <filesystem>
 #include <map>
@@ -12,11 +13,16 @@
 
 #include <gtest/gtest.h>
 
+import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.packed_mount;
 import imlui.resources.package;
 import imlui.resources.pak_mount;
 import imlui.embedded.imlui;
+import imlui.embedded.smoke_embedded;
+#ifdef IMLUI_TEST_DEV_PATHS
+import imlui.embedded.smoke_sources;
+#endif
 import imlui.tools.depfile;
 import imlui.tools.glob;
 import imlui.tools.pack;
@@ -369,28 +375,76 @@ TEST(ResourceManifest, ArchivesNeedOnePrefixAndDistinctFiles) {
     EXPECT_NE(error.find("app:/x.txt"), std::string::npos) << error;
 }
 
-// ------------------------------------------------------------------ end to end: the library's own manifest
+// ------------------------------------------------------------------ end to end: generated modules match their manifest
 
-TEST(ResourceManifest, EmbeddedLibraryMatchesItsManifest) {
+namespace {
+
+/// Checks generated `packages` against manifest `file`: one package per group, at its mount point. Embedded, each
+/// holds exactly the group's files (and, with IMLUI_DEV_PATHS=ON, names the group's base folder); not embedded, it
+/// has no files and names the base folder, its only copy.
+void expectMatchesManifest(const std::vector<ResourcePackage>& packages, const fs::path& file, bool embedded) {
     std::string error;
-    const auto m = tools::loadManifest(fs::path{IMLUI_RESOURCES_DIR} / "resources.lua", error);
+    const auto m = tools::loadManifest(file, error);
     ASSERT_TRUE(m) << error;
-    const std::vector<ResourcePackage> packages = embedded::imlui::packages();
     ASSERT_EQ(packages.size(), m->groups.size());
     for (std::size_t i = 0; i < packages.size(); ++i) {
         const auto& group = m->groups[i];
         EXPECT_EQ(packages[i].mountPoint, group.mountPoint);
+        if (!embedded) {
+            EXPECT_EQ(packages[i].files, nullptr) << group.mountPoint;
+            ASSERT_FALSE(packages[i].sourceDir.empty()) << group.mountPoint;
+            EXPECT_TRUE(fs::equivalent(fs::path{packages[i].sourceDir}, group.base)) << group.mountPoint;
+            continue;
+        }
         const auto* files = dynamic_cast<const PackedMount*>(packages[i].files.get());
-        ASSERT_NE(files, nullptr);
-        std::vector<std::string> embedded;
+        ASSERT_NE(files, nullptr) << group.mountPoint;
+        std::vector<std::string> stored;
         for (const auto& e : files->entries())
-            embedded.push_back(e.path);
-        std::ranges::sort(embedded);
-        EXPECT_EQ(embedded, paths(group)) << group.mountPoint;
+            stored.push_back(e.path);
+        std::ranges::sort(stored);
+        EXPECT_EQ(stored, paths(group)) << group.mountPoint;
         if (!packages[i].sourceDir.empty()) // IMLUI_DEV_PATHS=ON: the group's base folder
             EXPECT_TRUE(fs::equivalent(fs::path{packages[i].sourceDir}, group.base));
     }
+}
+
+#ifdef IMLUI_TEST_EMBED_RESOURCES
+constexpr bool libraryEmbedded = true;
+#else
+constexpr bool libraryEmbedded = false;
+#endif
+
+} // namespace
+
+// imlui.embedded.imlui follows IMLUI_EMBED_RESOURCES: the embedded shape in release builds, the source folders in dev
+// builds (the forced copies below cover the other shape in every configuration).
+TEST(ResourceManifest, EmbeddedLibraryMatchesItsManifest) {
+    expectMatchesManifest(embedded::imlui::packages(), fs::path{IMLUI_RESOURCES_DIR} / "resources.lua",
+                          libraryEmbedded);
+    std::string error;
+    const auto m = tools::loadManifest(fs::path{IMLUI_RESOURCES_DIR} / "resources.lua", error);
+    ASSERT_TRUE(m) << error;
     EXPECT_FALSE(std::ranges::any_of(m->groups, [](const tools::ResourceGroup& g) {
         return std::ranges::any_of(g.files, [](const tools::SourceFile& f) { return f.path == "resources.lua"; });
     }));
 }
+
+// imlui_add_resources(... EMBED ON) embeds whatever IMLUI_EMBED_RESOURCES says.
+TEST(ResourceManifest, ForcedEmbeddingMatchesItsManifest) {
+    expectMatchesManifest(embedded::smoke_embedded::packages(), fs::path{IMLUI_SMOKE_APP_DIR} / "resources.lua", true);
+}
+
+#ifdef IMLUI_TEST_DEV_PATHS
+// imlui_add_resources(... EMBED OFF): the same module, packages with a mount point and a source folder only, and
+// mount() mounts those folders.
+TEST(ResourceManifest, NotEmbeddedNamesTheSourceFolders) {
+    const auto packages = embedded::smoke_sources::packages();
+    expectMatchesManifest(packages, fs::path{IMLUI_SMOKE_APP_DIR} / "resources.lua", false);
+    Resources res;
+    embedded::smoke_sources::mount(res);
+    EXPECT_TRUE(res.exists("app:/main.lua"));
+    EXPECT_TRUE(res.exists("app:/images/rgba_4x2.png"));
+    EXPECT_TRUE(res.modified("app:/main.lua")); // directories: hot reload sees changes
+    EXPECT_TRUE(res.origin("app:/main.lua").starts_with("directory '"));
+}
+#endif

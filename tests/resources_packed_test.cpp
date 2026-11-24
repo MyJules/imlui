@@ -2,7 +2,8 @@
 // concurrent reads), .pak archives (written by the imlui_pack code, read by PakMount; corrupt and truncated archives
 // rejected), the override order embedded < .pak < directory, the library's own embedded files and packages, and
 // defaultConfig: release-style (embedded data only), archives and prefix folders next to the executable, dev source
-// folders on top, a script argument replacing the app; and the headless harness without src/resources/.
+// folders on top, packages without files (IMLUI_EMBED_RESOURCES=OFF) mounting their source folder, a script argument
+// replacing the app; and the headless harness without src/resources/.
 #include <filesystem>
 #include <fstream>
 
@@ -37,6 +38,18 @@ std::string text(std::optional<std::span<const std::byte>> bytes) {
 }
 
 std::span<const std::byte> bytesOf(std::string_view s) { return std::as_bytes(std::span{s.data(), s.size()}); }
+
+/// Whether the library's own files are embedded (IMLUI_EMBED_RESOURCES=ON); dev builds mount their source folders.
+#ifdef IMLUI_TEST_EMBED_RESOURCES
+constexpr bool libraryEmbedded = true;
+#else
+constexpr bool libraryEmbedded = false;
+#endif
+
+/// How the origin of a library file starts: `embedded 'imlui (imlui:/fonts/)'` or `directory '`.
+std::string libraryOrigin(std::string_view mountPoint) {
+    return libraryEmbedded ? "embedded 'imlui (" + std::string{mountPoint} + ")'" : std::string{"directory '"};
+}
 
 /// Text that zstd compresses well (well over the 64-byte minimum).
 std::string repetitive(std::string_view seed, int times) {
@@ -306,10 +319,14 @@ TEST(EmbeddedLibrary, CarriesTheLuaSideAndTheFonts) {
         EXPECT_EQ(text(res.read(std::string{"imlui:/fonts/"} + font)),
                   readSource(std::string{IMLUI_FONT_DIR} + "/" + font))
             << font;
-    EXPECT_EQ(res.origin("imlui:/imlui.lua"), "embedded 'imlui (imlui:/)' imlui.lua");
-    // Text and fonts are worth compressing.
+    EXPECT_TRUE(res.origin("imlui:/imlui.lua").starts_with(libraryOrigin("imlui:/")));
     const auto packages = embedded::imlui::packages();
     ASSERT_EQ(packages.size(), 2U);
+    if (!libraryEmbedded) { // the source folders, mounted by mount()
+        EXPECT_EQ(packages[1].files, nullptr);
+        return;
+    }
+    // Text and fonts are worth compressing.
     const auto* fonts = dynamic_cast<const PackedMount*>(packages[1].files.get());
     ASSERT_NE(fonts, nullptr);
     for (const auto& e : fonts->entries())
@@ -361,9 +378,9 @@ TEST(DefaultConfig, ReleaseRunsFromEmbeddedDataAlone) {
     const EngineConfig cfg = defaultConfig(1, argv, {testApp()});
     EXPECT_EQ(cfg.entry, "app:/main.lua");
     EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'embedded app' }");
-    EXPECT_TRUE(cfg.resources.origin("imlui:/imlui.lua").starts_with("embedded 'imlui (imlui:/)'"));
-    EXPECT_TRUE(
-        cfg.resources.origin("imlui:/fonts/Roboto-Regular.ttf").starts_with("embedded 'imlui (imlui:/fonts/)'"));
+    // Not embedded (dev builds), the library's source folders are its only copy, mounted despite IMLUI_DEV_PATHS=0.
+    EXPECT_TRUE(cfg.resources.origin("imlui:/imlui.lua").starts_with(libraryOrigin("imlui:/")));
+    EXPECT_TRUE(cfg.resources.origin("imlui:/fonts/Roboto-Regular.ttf").starts_with(libraryOrigin("imlui:/fonts/")));
     EXPECT_EQ(cfg.resources.describe().size(), 3U); // imlui:/, imlui:/fonts/, the app: no folders, no archives
 
     // No app package: the library alone, and the entry is still app:/main.lua (reported missing by the Engine).
@@ -397,7 +414,8 @@ TEST(DefaultConfig, ArchivesThenPrefixFoldersOverrideEmbeddedFiles) {
     char* argv[] = {exe.data()};
 
     // Archives in file name order: b.pak wins over a.pak.
-    writeFile(dir.path() / "a.pak", makePak(dir, "imlui:/", {{"imlui.lua", "-- a.pak"}, {"extra.lua", "-- a.pak"}}));
+    // (pak.lua, not imlui.lua: in dev builds the library's source folder is on top of everything.)
+    writeFile(dir.path() / "a.pak", makePak(dir, "imlui:/", {{"pak.lua", "-- a.pak"}, {"extra.lua", "-- a.pak"}}));
     std::filesystem::remove_all(dir.path() / "pak_src");
     writeFile(dir.path() / "b.pak", makePak(dir, "app:/", {{"data.txt", "b.pak"}, {"pak.txt", "b.pak"}}));
     std::filesystem::remove_all(dir.path() / "pak_src");
@@ -408,7 +426,7 @@ TEST(DefaultConfig, ArchivesThenPrefixFoldersOverrideEmbeddedFiles) {
 
     const EngineConfig cfg = defaultConfig(1, argv, {testApp()});
     const Resources& res = cfg.resources;
-    EXPECT_EQ(text(res.read("imlui:/imlui.lua")), "-- a.pak");
+    EXPECT_EQ(text(res.read("imlui:/pak.lua")), "-- a.pak");
     EXPECT_EQ(text(res.read("imlui:/extra.lua")), "-- loose");
     EXPECT_EQ(text(res.read("imlui:/fonts/extra.txt")), "loose font folder");
     EXPECT_EQ(text(res.read("imlui:/fonts/Roboto-Regular.ttf")).size(),
@@ -434,9 +452,9 @@ TEST(DefaultConfig, DevSourceFoldersGoOnTop) {
         const EngineConfig cfg = defaultConfig(1, argv, {testApp(source)});
         EXPECT_EQ(cfg.entry, "app:/main.lua");
         EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'source' }");
-        EXPECT_TRUE(cfg.resources.exists("app:/StatCard.lua")); // components next to the script
+        EXPECT_TRUE(cfg.resources.exists("app:/StatCard.lua"));                // components next to the script
         EXPECT_EQ(text(cfg.resources.read("app:/data.txt")), "embedded data"); // falls back to the embedded copy
-        EXPECT_TRUE(cfg.resources.modified("app:/main.lua")); // a directory: hot reload sees changes
+        EXPECT_TRUE(cfg.resources.modified("app:/main.lua"));                  // a directory: hot reload sees changes
     }
     {
         // IMLUI_DEV_PATHS=0 runs like a release: the loose folder next to the executable wins.
@@ -451,6 +469,26 @@ TEST(DefaultConfig, DevSourceFoldersGoOnTop) {
         const EngineConfig cfg = defaultConfig(1, argv, {testApp((dir.path() / "gone").string())});
         EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'loose' }");
     }
+}
+
+TEST(DefaultConfig, PackagesWithoutFilesMountTheirSourceFolder) {
+    // IMLUI_DEV_PATHS=0 skips the source folders of embedded packages, not the only copy of the files.
+    const test::ScopedEnv noDev{"IMLUI_DEV_PATHS", "0"};
+    test::TempDir dir;
+    std::string exe = (dir.path() / "bin" / "app.exe").string();
+    char* argv[] = {exe.data()};
+    dir.write("src/main.lua", "return Text { text = 'source' }");
+    const ResourcePackage sources{"app:/", nullptr, (dir.path() / "src").string()};
+
+    const EngineConfig cfg = defaultConfig(1, argv, {sources});
+    EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'source' }");
+    EXPECT_TRUE(cfg.resources.modified("app:/main.lua"));
+
+    // A missing folder (the executable moved) is logged as an error, and nothing is mounted for it.
+    const ResourcePackage gone{"app:/", nullptr, (dir.path() / "gone").string()};
+    const EngineConfig moved = defaultConfig(1, argv, {gone});
+    EXPECT_FALSE(moved.resources.exists("app:/main.lua"));
+    EXPECT_EQ(moved.resources.describe().size(), cfg.resources.describe().size() - 1);
 }
 
 TEST(DefaultConfig, ScriptArgumentReplacesTheApp) {
@@ -493,7 +531,7 @@ TEST(ReleaseConfig, HeadlessUiRunsOnEmbeddedLuaAndFonts) {
     options.embedded = true;
     options.builtins = true;
     test::HeadlessFrame h{options};
-    EXPECT_TRUE(h.resources().origin("imlui:/imlui.lua").starts_with("embedded"));
+    EXPECT_TRUE(h.resources().origin("imlui:/imlui.lua").starts_with(libraryOrigin("imlui:/")));
     ASSERT_EQ(h.run(R"(
         local info = debug.getinfo(ui.element, "S")
         assert(info.source == "@imlui:/imlui.lua", info.source)

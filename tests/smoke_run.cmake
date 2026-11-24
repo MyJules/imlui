@@ -1,7 +1,8 @@
 # Runs an executable alone, like a shipped release: copied into an empty folder with only the DLLs that sit next to
-# it in the build (the ASan runtime in sanitizer builds), no source tree (IMLUI_DEV_PATHS=0), quitting after a few
-# frames (IMLUI_EXIT_AFTER_FRAMES; the exit code is 1 when a script error was reported). Fails unless it exits
-# with 0, logged EXPECT (where the entry script came from), and logged no error.
+# it in the build (the ASan runtime in sanitizer builds), no source tree (IMLUI_DEV_PATHS=0; only packages that aren't
+# embedded still read their source folders), quitting after a few frames (IMLUI_EXIT_AFTER_FRAMES; the exit code is 1
+# when a script error was reported). Fails unless it exits with 0, logged EXPECT (where the entry script came from),
+# and logged no error.
 #
 #   cmake -DEXE=<executable> -DWORK=<scratch folder> -DEXPECT=<text> -P smoke_run.cmake
 file(REMOVE_RECURSE ${WORK})

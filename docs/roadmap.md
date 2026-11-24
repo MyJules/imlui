@@ -90,7 +90,9 @@ Ship an app as one executable with its Lua scripts, fonts, images and data. Deci
 - **Release default:** with `IMLUI_DEV_PATHS=OFF`, everything is embedded, so the exe is self-contained. A
   directory or `.pak` next to the exe can still override files. Dev builds mount each embedded block's source folder
   (baked into its `ResourcePackage` by `imlui_add_resources`) over the embedded data, so names resolve the same way
-  and hot reload keeps working. Hosts name no file paths: the app is `app:/main.lua`.
+  and hot reload keeps working. Hosts name no file paths: the app is `app:/main.lua`. Dev builds don't embed by
+  default (`IMLUI_EMBED_RESOURCES`, see step 9): the source folders are the only copy, and editing a file needs no
+  build.
 - **Lua:**
   - A `package.searchers` entry finds modules through `Resources`.
   - `ui.__load` and component loading go through it, with chunk names like `app:/main.lua`.
@@ -119,6 +121,10 @@ Order, one commit per step:
    modules export `packages()`, one `ResourcePackage` per group. Dependencies through a Ninja dependency file plus a
    file list compared on every build; no configure-time globbing. A `.pak` of several groups needs one prefix and is
    mounted at their common folder.
+9. *(done)* Embedding as a setting: the option `IMLUI_EMBED_RESOURCES` (default `OFF` in dev builds, `ON` with
+   `IMLUI_DEV_PATHS=OFF`; both `OFF` is a configure error) and `imlui_add_resources(... EMBED ON|OFF)` per call.
+   Without embedding the generated module keeps its API, with packages that only name their source folder, and
+   depends on the manifest alone, so editing a Lua file no longer re-embeds, recompiles and relinks.
 
 ## 6. Library repository *(done)*
 

@@ -14,8 +14,10 @@ export namespace imlui {
 /// group of the resource manifest) returns them: the files, their mount point and, in dev builds, the folder they
 /// were embedded from.
 struct ResourcePackage {
-    std::string mountPoint;       ///< `app:/`, `imlui:/fonts/`
-    std::shared_ptr<Mount> files; ///< the embedded files
+    std::string mountPoint; ///< `app:/`, `imlui:/fonts/`
+    /// The embedded files; null when the build doesn't embed them (IMLUI_EMBED_RESOURCES=OFF, the default in dev
+    /// builds, or `imlui_add_resources(... EMBED OFF)`): `sourceDir` is then their only copy.
+    std::shared_ptr<Mount> files;
     /// The absolute folder the files come from (the group's `base`) when the build has IMLUI_DEV_PATHS=ON,
     /// otherwise "". defaultConfig() mounts it over the embedded files, so editing them hot-reloads.
     std::string sourceDir;

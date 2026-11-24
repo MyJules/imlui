@@ -31,6 +31,22 @@ include(ImluiResources)
 # calls), and defaultConfig() mounts those folders over the embedded copies, so editing src/resources/ or an app's
 # scripts hot-reloads. OFF for a release: no source paths.
 option(IMLUI_DEV_PATHS "Mount the source folders of embedded files over them (hot reload while editing)" ON)
+# Whether imlui_add_resources embeds the files (also for the parent project's calls, unless a call says EMBED ON|OFF).
+# Dev builds don't by default: they load the files from the source folders anyway, so editing a Lua file, an image
+# or a font needs no build at all. Without embedding the source folders are the only copy, so OFF needs
+# IMLUI_DEV_PATHS=ON.
+if(IMLUI_DEV_PATHS)
+    set(IMLUI_EMBED_DEFAULT OFF)
+else()
+    set(IMLUI_EMBED_DEFAULT ON)
+endif()
+option(IMLUI_EMBED_RESOURCES "Embed the files of resource manifests (default: OFF with IMLUI_DEV_PATHS, else ON)"
+       ${IMLUI_EMBED_DEFAULT})
+if(NOT IMLUI_EMBED_RESOURCES AND NOT IMLUI_DEV_PATHS)
+    message(FATAL_ERROR "IMLUI_EMBED_RESOURCES=OFF needs IMLUI_DEV_PATHS=ON: without the embedded files and without "
+                        "the source folders an executable would have no resources. For a build you ship, set "
+                        "-DIMLUI_DEV_PATHS=OFF -DIMLUI_EMBED_RESOURCES=ON (a fresh build folder gets ON by default).")
+endif()
 option(IMLUI_BUILD_TESTS "Build the imlui unit and smoke tests" ${PROJECT_IS_TOP_LEVEL})
 
 add_subdirectory(external)
