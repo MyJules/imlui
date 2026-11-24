@@ -163,7 +163,7 @@ can't shadow it. The type registry is installed before the DSL loads, so `BUILTI
 elements create their C++ instances too.
 
 **4. Docs and gallery.** Add the element to [Elements](elements.md), the README element table, and a demo in
-`examples/gallery.lua`.
+`examples/gallery/main.lua`.
 
 Apps add elements without touching imlui: `engine.registerType<MyThing>("MyThing")` (recommended), or
 `engine.renderer().registerElement("MyThing", fn, visual)`, before `engine.run()`. See

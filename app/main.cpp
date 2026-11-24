@@ -2,7 +2,7 @@
 //
 // Module-only translation unit (no #include). All UI — including the window
 // title and size — is described by the Lua script (ApplicationWindow).
-// Defaults to examples/gallery.lua.
+// Defaults to examples/gallery/main.lua.
 import imlui;
 
 #ifndef IMLUI_SOURCE_DIR

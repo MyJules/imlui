@@ -135,7 +135,7 @@ return component(function(props)
     }
 end)
 
--- gallery.lua
+-- main.lua (next to StatCard.lua)
 local StatCard = require "StatCard"
 StatCard { title = "Frame rate", value = function() return ("%.0f fps"):format(fps()) end }
 ```
@@ -243,7 +243,7 @@ Row { align = "top", spacing = 0,
 }
 ```
 
-The gallery (`examples/gallery.lua`) shows the full pattern: a modal drawer opened from the top app bar on compact
+The gallery (`examples/gallery/main.lua`) shows the full pattern: a modal drawer opened from the top app bar on compact
 windows, a rail on medium ones, the standard drawer from expanded up, and grids whose `columns` follow the width.
 
 ## Theme

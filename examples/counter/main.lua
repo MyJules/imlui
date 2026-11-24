@@ -1,4 +1,4 @@
--- Smallest useful imlui app. Run: imlui_app examples/counter.lua
+-- Smallest useful imlui app. Run: imlui_app examples/counter/main.lua
 local s = state { count = 0 }
 
 theme { seed = "#006A6A", dark = false }

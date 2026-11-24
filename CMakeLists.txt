@@ -42,34 +42,27 @@ if(IMLUI_DEV_PATHS)
     target_compile_definitions(imlui_app PRIVATE IMLUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
 
-# Ship the Lua side (DSL + examples) and the default font next to the binary.
+# Ship the Lua side (DSL), the default font and every Lua-only example folder (one without a CMakeLists.txt,
+# e.g. examples/gallery, examples/counter) next to the binary. Examples with C++ copy their own files.
 add_custom_command(TARGET imlui_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lua $<TARGET_FILE_DIR:imlui_app>/lua
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/examples $<TARGET_FILE_DIR:imlui_app>/examples
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${IMLUI_FONTS_DIR} $<TARGET_FILE_DIR:imlui_app>/fonts
 )
+file(GLOB IMLUI_EXAMPLE_DIRS LIST_DIRECTORIES true CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/examples/*)
+foreach(dir IN LISTS IMLUI_EXAMPLE_DIRS)
+    if(IS_DIRECTORY ${dir} AND NOT EXISTS ${dir}/CMakeLists.txt)
+        cmake_path(GET dir FILENAME name)
+        add_custom_command(TARGET imlui_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory ${dir} $<TARGET_FILE_DIR:imlui_app>/examples/${name}
+        )
+    endif()
+endforeach()
 
-# ------------------------------------------------------------------ example: C++ types
-# Registers C++ element types and a singleton (examples/custom_types/*.cppm) and runs
-# examples/custom_types.lua. See docs/extending.md.
-add_executable(imlui_custom_types examples/custom_types/main.cpp)
-target_sources(imlui_custom_types
-    PRIVATE
-        FILE_SET CXX_MODULES
-        BASE_DIRS examples/custom_types
-        FILES examples/custom_types/gauge.cppm examples/custom_types/system_info.cppm
-)
-target_link_libraries(imlui_custom_types PRIVATE imlui ext::lua ext::imgui ext::spdlog)
-imlui_set_warnings(imlui_custom_types)
-imlui_set_hardening(imlui_custom_types)
-if(IMLUI_DEV_PATHS)
-    target_compile_definitions(imlui_custom_types PRIVATE IMLUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# ------------------------------------------------------------------ examples with C++ (examples/<name>/CMakeLists.txt)
+option(IMLUI_BUILD_EXAMPLES "Build the example executables that register C++ types" ON)
+if(IMLUI_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()
-add_custom_command(TARGET imlui_custom_types POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lua $<TARGET_FILE_DIR:imlui_custom_types>/lua
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/examples $<TARGET_FILE_DIR:imlui_custom_types>/examples
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${IMLUI_FONTS_DIR} $<TARGET_FILE_DIR:imlui_custom_types>/fonts
-)
 
 # ------------------------------------------------------------------ tests
 option(IMLUI_BUILD_TESTS "Build unit tests" ON)
