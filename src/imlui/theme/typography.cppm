@@ -41,6 +41,7 @@ std::optional<TextStyle> textStyleFromName(std::string_view name);
 /// atlas; call before loadIcons() and before the first frame.
 void loadFonts(const std::filesystem::path& dir);
 
+/// The font of style `s`; ImGui's current font before loadFonts() (e.g. in headless tests).
 [[nodiscard]] ImFont* font(TextStyle s);
 /// Size to pass to ImGui::PushFont (dp, before global scale factors).
 [[nodiscard]] float fontSize(TextStyle s);
@@ -98,7 +99,10 @@ void loadFonts(const std::filesystem::path& dir) {
     ImGui::GetIO().FontDefault = regularFont;
 }
 
-ImFont* font(TextStyle s) { return textStyleInfo(s).weight == Weight::Medium ? mediumFont : regularFont; }
+ImFont* font(TextStyle s) {
+    ImFont* f = textStyleInfo(s).weight == Weight::Medium ? mediumFont : regularFont;
+    return f ? f : ImGui::GetFont();
+}
 float fontSize(TextStyle s) { return textStyleInfo(s).size; }
 float fontPixels(float sizeDp) {
     const ImGuiStyle& st = ImGui::GetStyle();

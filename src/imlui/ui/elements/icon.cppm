@@ -1,0 +1,77 @@
+// Icon: a Material Symbols glyph, as a typed element.
+module;
+
+#include <optional>
+#include <string>
+
+export module imlui.ui.elements.icon;
+
+import imlui.color;
+import imlui.widgets;
+import imlui.types.element;
+import imlui.types.frame;
+import imlui.types.type_builder;
+
+export namespace imlui {
+
+/// Icon { name | icon | text | positional string, size = 24 (dp), color }. The first of `name`, `icon` and
+/// `text` (or the positional string) that is set names the glyph.
+class Icon final : public Element {
+public:
+    static void declare(TypeBuilder<Icon>& type);
+
+    void render(Frame& frame) override;
+
+    [[nodiscard]] const std::optional<std::string>& name() const;
+    void setName(std::optional<std::string> name);
+    [[nodiscard]] const std::optional<std::string>& icon() const;
+    void setIcon(std::optional<std::string> icon);
+    [[nodiscard]] const std::string& text() const;
+    void setText(std::string text);
+    [[nodiscard]] float size() const; ///< dp
+    void setSize(float size);
+    [[nodiscard]] const std::optional<Color>& color() const;
+    void setColor(std::optional<Color> color);
+
+    /// The glyph drawn: `name`, else `icon`, else `text`.
+    [[nodiscard]] const std::string& glyph() const;
+
+private:
+    std::optional<std::string> m_name;
+    std::optional<std::string> m_icon;
+    std::string m_text;
+    float m_size = 24.0f;
+    std::optional<Color> m_color;
+};
+
+} // namespace imlui
+
+module :private;
+
+namespace imlui {
+
+void Icon::declare(TypeBuilder<Icon>& type) {
+    type.property("name", &Icon::name, &Icon::setName)
+        .property("icon", &Icon::icon, &Icon::setIcon)
+        .property("text", &Icon::text, &Icon::setText)
+        .property("size", &Icon::size, &Icon::setSize)
+        .property("color", &Icon::color, &Icon::setColor)
+        .defaultProperty("text");
+}
+
+void Icon::render(Frame&) { md::icon(glyph(), m_size, m_color); }
+
+const std::optional<std::string>& Icon::name() const { return m_name; }
+void Icon::setName(std::optional<std::string> name) { m_name = std::move(name); }
+const std::optional<std::string>& Icon::icon() const { return m_icon; }
+void Icon::setIcon(std::optional<std::string> icon) { m_icon = std::move(icon); }
+const std::string& Icon::text() const { return m_text; }
+void Icon::setText(std::string text) { m_text = std::move(text); }
+float Icon::size() const { return m_size; }
+void Icon::setSize(float size) { m_size = size; }
+const std::optional<Color>& Icon::color() const { return m_color; }
+void Icon::setColor(std::optional<Color> color) { m_color = color; }
+
+const std::string& Icon::glyph() const { return m_name ? *m_name : m_icon ? *m_icon : m_text; }
+
+} // namespace imlui

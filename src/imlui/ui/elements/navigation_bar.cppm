@@ -1,0 +1,72 @@
+// NavigationBar: the Material 3 bottom navigation bar, as a typed element.
+module;
+
+#include <cmath>
+#include <optional>
+
+export module imlui.ui.elements.navigation_bar;
+
+import imgui;
+import imlui.color;
+import imlui.widgets;
+import imlui.ui.navigation_scope;
+import imlui.types.element;
+import imlui.types.frame;
+import imlui.types.type_builder;
+
+export namespace imlui {
+
+/// NavigationBar { color = "surfaceContainer", width, <NavigationItems> }: 80dp tall; the visible destinations
+/// share the width equally and draw as bar destinations.
+class NavigationBar final : public Element {
+public:
+    static void declare(TypeBuilder<NavigationBar>& type);
+
+    void render(Frame& frame) override;
+
+    /// The container color; unset: surfaceContainer.
+    [[nodiscard]] const std::optional<Color>& color() const;
+    void setColor(std::optional<Color> color);
+
+private:
+    std::optional<Color> m_color;
+};
+
+} // namespace imlui
+
+module :private;
+
+namespace imlui {
+
+void NavigationBar::declare(TypeBuilder<NavigationBar>& type) {
+    type.property("color", &NavigationBar::color, &NavigationBar::setColor);
+}
+
+void NavigationBar::render(Frame& frame) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    float w = frame.size("width");
+    if (w <= 0) w = ImGui::GetContentRegionAvail().x + w;
+    const float h = frame.dp(80);
+    const Color bg = m_color.value_or(frame.scheme().surfaceContainer);
+    md::fillRoundRect(frame.drawList(), p, {p.x + w, p.y + h}, 0.0f, bg);
+    md::pushSurface(bg);
+    int count = 0;
+    frame.forEachChild([&](Frame::Child& child) { count += child.isVisual() ? 1 : 0; });
+    const float cell = count > 0 ? w / static_cast<float>(count) : w;
+    {
+        const NavigationScope scope{{NavigationScope::Style::Bar, cell}};
+        int i = 0;
+        frame.forEachChild([&](Frame::Child& child) {
+            if (child.isVisual()) ImGui::SetCursorScreenPos({p.x + std::floor(cell * static_cast<float>(i++)), p.y});
+            child.render();
+        });
+    }
+    md::popSurface();
+    ImGui::SetCursorScreenPos(p);
+    ImGui::Dummy({w, h});
+}
+
+const std::optional<Color>& NavigationBar::color() const { return m_color; }
+void NavigationBar::setColor(std::optional<Color> color) { m_color = color; }
+
+} // namespace imlui
