@@ -35,6 +35,7 @@ void registerSystemTypes(TypeRegistry& types) {
     types.registerType<InlineContainer>("Repeater");
     types.registerType<InlineContainer>("If");
     types.registerType<InlineContainer>("Loader");
+    types.registerType<InlineContainer>("Responsive");
 }
 
 } // namespace imlui

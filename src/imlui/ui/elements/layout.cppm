@@ -34,11 +34,9 @@ module :private;
 
 namespace imlui {
 
-void registerLayoutElements(Renderer& renderer) {
-    // Inline containers are normally spliced into their parent by forEachChild; these handlers only run when
-    // one is used as the root. Their children come from Lua (`__children`).
-    for (const char* name : {"Repeater", "If", "Loader", "Responsive"})
-        renderer.registerElement(name, [](Renderer& r, const luaui::Node& n) { r.renderChildren(n); });
+void registerLayoutElements(Renderer& /*renderer*/) {
+    // Everything in this group is a typed element now (see registerLayoutTypes). Inline containers
+    // (Repeater, If, Loader, Responsive) are registered as InlineContainer in the system group.
 }
 
 void registerLayoutTypes(TypeRegistry& types) {
