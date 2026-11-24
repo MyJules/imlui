@@ -146,9 +146,11 @@ copied anywhere.
 The `imlui-gallery` repository (a separate repository, usually checked out next to this one as `../imlui-gallery`)
 is the example app, laid out as above:
 
-- `src/resources/main.lua`: every built-in element, adaptive navigation (drawer, rail, modal drawer by window size
-  class) and a live theme editor, with the `StatCard.lua` component and `landscape.png`, listed in
-  `src/resources/resources.lua`.
+- `src/resources/main.lua`: the app shell: the theme, adaptive navigation (drawer, rail, modal drawer by window
+  size class) and the page list.
+- `src/resources/pages/*.lua`: one file per page, together showing every built-in element and a live theme editor;
+  `layout.lua` and `theme_state.lua` are shared by the pages, `StatCard.lua` is a component and `landscape.png` an
+  image, all listed in `src/resources/resources.lua`.
 - `src/CMakeLists.txt`: the `imlui_gallery` target and its embedded resources (module `imlui.embedded.gallery`).
 - `src/gauge.cppm` and `src/system_info.cppm`: a C++ element type (`Gauge`) and a singleton (`backend`), shown on
   the gallery's *C++ types* page. See [Registering C++ types](extending.md#the-example-app).

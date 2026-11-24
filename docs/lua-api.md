@@ -285,7 +285,7 @@ Row { align = "top", spacing = 0,
 }
 ```
 
-The gallery (`src/resources/main.lua` in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery)
+The gallery shell (`src/resources/main.lua` in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery)
 repository) shows the full pattern: a modal drawer opened from the top app bar on compact windows, a rail on medium
 ones, the standard drawer from expanded up, and grids whose `columns` follow the width.
 

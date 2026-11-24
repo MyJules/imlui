@@ -150,8 +150,8 @@ a constructor, but a `BUILTIN` entry makes it a real `ui.*` field, so an element
 shadow it. The type registry is installed before the DSL loads, so `BUILTIN` constructors of typed elements create their
 C++ instances too.
 
-**4. Docs and gallery.** Add the element to [Elements](elements.md) and the README element table, and a demo to the
-gallery (`src/resources/main.lua` in the imlui-gallery repository; see [Trying changes in an
+**4. Docs and gallery.** Add the element to [Elements](elements.md) and the README element table, and a demo to a
+page of the gallery (`src/resources/pages/<page>.lua` in the imlui-gallery repository; see [Trying changes in an
 app](#trying-changes-in-an-app)), committed there along with the submodule update.
 
 **5. Tests.** A test file `tests/elements_<family>_test.cpp` renders it through the

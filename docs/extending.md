@@ -624,7 +624,7 @@ Registering a type under a built-in's name replaces the built-in: the last regis
 ## The example app
 
 The example lives in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery) repository, an app that
-vendors imlui as a submodule. Its C++ is in `src/`, and its *C++ types* page (`src/resources/main.lua`) uses both types:
+vendors imlui as a submodule. Its C++ is in `src/`, and its *C++ types* page (`src/resources/pages/cpp_types.lua`) uses both types:
 
 ```sh
 cmake --preset clang-debug && cmake --build build/clang-debug    # in imlui-gallery
