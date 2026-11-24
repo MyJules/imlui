@@ -7,7 +7,7 @@
 #
 #   cmake -DMODE=<subdirectory|fetchcontent|find_package|fetchcontent_find> -DSOURCE=<imlui source> -DWORK=<folder>
 #         -DGENERATOR=<...> -DMAKE_PROGRAM=<...> -DC_COMPILER=<...> -DCXX_COMPILER=<...> -DBUILD_TYPE=<...>
-#         [-DPREFIX=<installed imlui>] [-DMSVC_RUNTIME=<...>] -P run.cmake
+#         [-DPREFIX=<installed imlui>] [-DMSVC_RUNTIME=<...>] [-DOWN_DEPS=ON] [-DSANITIZERS=<list>] -P run.cmake
 set(consumer ${CMAKE_CURRENT_LIST_DIR}/consumer)
 set(build ${WORK}/build)
 
@@ -16,6 +16,12 @@ set(args -G ${GENERATOR} -DCMAKE_MAKE_PROGRAM=${MAKE_PROGRAM} -DCMAKE_C_COMPILER
          -DIMLUI_CONSUMER_MODE=${MODE} -DIMLUI_SOURCE_DIR=${SOURCE})
 if(MSVC_RUNTIME)
     list(APPEND args -DCMAKE_MSVC_RUNTIME_LIBRARY=${MSVC_RUNTIME})
+endif()
+if(OWN_DEPS)
+    list(APPEND args -DIMLUI_CONSUMER_OWN_DEPS=ON)
+endif()
+if(SANITIZERS)
+    list(APPEND args -DIMLUI_SANITIZERS=${SANITIZERS})
 endif()
 if(PREFIX)
     # An installed imlui embeds its own files; the app's are embedded too, so the executable runs on its own.

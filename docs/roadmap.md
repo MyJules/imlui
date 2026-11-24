@@ -147,6 +147,9 @@ the options `IMLUI_DEV_PATHS` / `IMLUI_EMBED_RESOURCES`: `add_subdirectory`, `Fe
 The install carries the module interface units, the vendored libraries as `imlui::ext_*` with their headers under
 `include/imlui/ext/`, and the library's files always embedded; the app's CMake rebuilds the BMIs. `project()` has the
 version (0.1.0, `SameMinorVersion`). The package tests (label `package`) build a consumer app in each mode.
+Follow-ups (build fixes): the install's embedded copy of the library's files is its own target, so dev builds embed
+nothing again; vendored targets are `imlui_ext_*` (an app's own GLFW, spdlog or GoogleTest is reused); the sanitizer
+flags are usage requirements of `imlui::imlui`; a `clang-ship` preset.
 
 ## Next
 

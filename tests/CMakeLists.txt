@@ -10,7 +10,7 @@ target_sources(imlui_tests
         FILES ${IMLUI_TEST_MODULES}
 )
 # imlui_pack_lib: the .pak writer and the resource encoding, for the round-trip tests (resources_packed_test).
-target_link_libraries(imlui_tests PRIVATE imlui imlui_pack_lib ext::lua ext::imgui ext::spdlog GTest::gtest_main)
+target_link_libraries(imlui_tests PRIVATE imlui imlui_pack_lib ext::lua ext::imgui ext::spdlog ext::gtest_main)
 imlui_set_warnings(imlui_tests)
 imlui_set_hardening(imlui_tests)
 # lua_library_test and the headless harness load src/resources/imlui.lua from the source tree; the harness loads the
@@ -26,14 +26,14 @@ target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${CMAKE_CURRENT_B
                                                IMLUI_SMOKE_APP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/smoke_app")
 # Both shapes of a generated module, whatever IMLUI_EMBED_RESOURCES says: the smoke app's manifest embedded
 # (imlui.embedded.smoke_embedded) and, in dev builds, not embedded (imlui.embedded.smoke_sources: source folders only).
-# The library's own imlui.embedded.imlui follows the option, or is always embedded with IMLUI_INSTALL=ON
-# (IMLUI_LIBRARY_EMBEDS, src/CMakeLists.txt), which IMLUI_TEST_EMBED_RESOURCES tells the tests.
+# The library's own imlui.embedded.imlui (target imlui, src/CMakeLists.txt) follows the option, which
+# IMLUI_TEST_EMBED_RESOURCES tells the tests (the embedded copy an install carries isn't linked here).
 imlui_add_resources(imlui_tests data/smoke_app/resources.lua NAME smoke_embedded EMBED ON)
 if(IMLUI_DEV_PATHS)
     imlui_add_resources(imlui_tests data/smoke_app/resources.lua NAME smoke_sources EMBED OFF)
     target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_DEV_PATHS=1)
 endif()
-if(IMLUI_LIBRARY_EMBEDS)
+if(IMLUI_EMBED_RESOURCES)
     target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_EMBED_RESOURCES=1)
 endif()
 

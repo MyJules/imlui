@@ -37,9 +37,10 @@ include(ImluiResources)
 
 option(IMLUI_BUILD_TESTS "Build the imlui unit and smoke tests" ${PROJECT_IS_TOP_LEVEL})
 # Install rules and the CMake package (find_package(imlui CONFIG), cmake/ImluiInstall.cmake). An installed library
-# can't read its source folders, so with IMLUI_INSTALL=ON the library always embeds its own files
-# (src/CMakeLists.txt), whatever IMLUI_EMBED_RESOURCES says; the app's imlui_add_resources calls still follow it.
-option(IMLUI_INSTALL "Add imlui's install rules and CMake package (forces the library to embed its own files)"
+# can't read its source folders, so with IMLUI_INSTALL=ON an embedded copy of the library's own files is built for the
+# install (imlui_files_install, src/CMakeLists.txt), whatever IMLUI_EMBED_RESOURCES says; the build itself (the tests,
+# the tools) still follows IMLUI_EMBED_RESOURCES, so a dev build doesn't rebuild the library when they change.
+option(IMLUI_INSTALL "Add imlui's install rules and CMake package (an embedded copy of its files for the install)"
        ${PROJECT_IS_TOP_LEVEL})
 # Where an install puts the vendored headers the modules include (their global module fragments), relative to the
 # prefix: their targets' INSTALL_INTERFACE include folders (external/CMakeLists.txt) and the install rules agree on it.
@@ -50,7 +51,7 @@ set(IMLUI_INSTALL_MODULEDIR ${CMAKE_INSTALL_INCLUDEDIR}/imlui/modules)
 
 add_subdirectory(external)
 
-# ------------------------------------------------------------------ library (imlui_lua, imlui: src/CMakeLists.txt)
+# ------------------------------------------------------------------ library (imlui, imlui_core, ...: src/)
 add_subdirectory(src)
 
 # ------------------------------------------------------------------ resource tools (imlui_rc, imlui_pack)

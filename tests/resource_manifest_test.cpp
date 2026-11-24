@@ -416,9 +416,9 @@ constexpr bool libraryEmbedded = false;
 
 } // namespace
 
-// imlui.embedded.imlui follows IMLUI_EMBED_RESOURCES, or is always embedded with IMLUI_INSTALL=ON: the embedded shape
-// in release builds and installable builds, the source folders in other dev builds (the forced copies below cover the
-// other shape in every configuration).
+// imlui.embedded.imlui (target imlui) follows IMLUI_EMBED_RESOURCES: the embedded shape in ship builds, the source
+// folders in dev builds (the forced copies below cover the other shape in every configuration; an install's embedded
+// copy, imlui_files_install, is checked by the package tests).
 TEST(ResourceManifest, EmbeddedLibraryMatchesItsManifest) {
     expectMatchesManifest(embedded::imlui::packages(), fs::path{IMLUI_RESOURCES_DIR} / "resources.lua",
                           libraryEmbedded);

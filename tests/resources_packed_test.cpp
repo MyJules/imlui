@@ -39,8 +39,8 @@ std::string text(std::optional<std::span<const std::byte>> bytes) {
 
 std::span<const std::byte> bytesOf(std::string_view s) { return std::as_bytes(std::span{s.data(), s.size()}); }
 
-/// Whether the library's own files are embedded (IMLUI_EMBED_RESOURCES=ON or IMLUI_INSTALL=ON); otherwise dev builds
-/// mount their source folders.
+/// Whether the library's own files are embedded (IMLUI_EMBED_RESOURCES=ON); otherwise dev builds mount their source
+/// folders.
 #ifdef IMLUI_TEST_EMBED_RESOURCES
 constexpr bool libraryEmbedded = true;
 #else
@@ -368,6 +368,23 @@ TEST(EmbeddedLibrary, PackagesNameTheirMountPointAndSourceFolder) {
     EXPECT_EQ(fonts.mountPoint, "imlui:/fonts/");
     if (!fonts.sourceDir.empty())
         EXPECT_TRUE(std::filesystem::equivalent(std::filesystem::path{fonts.sourceDir}, IMLUI_FONT_DIR));
+}
+
+// defaultConfig() is defaultConfigWith() and the library's packages; another set replaces them entirely.
+TEST(DefaultConfig, WithOtherLibraryPackages) {
+    const test::ScopedEnv noDev{"IMLUI_DEV_PATHS", "0"};
+    test::TempDir dir;
+    std::string exe = (dir.path() / "app.exe").string();
+    char* argv[] = {exe.data()};
+    const std::vector<ResourcePackage> library{
+        {"imlui:/",
+         std::make_shared<test::MemoryMount>(
+             std::initializer_list<std::pair<const std::string, std::string>>{{"imlui.lua", "return {}"}}, "other"),
+         ""}};
+    const EngineConfig cfg = defaultConfigWith(1, argv, library, {testApp()});
+    EXPECT_EQ(text(cfg.resources.read("imlui:/imlui.lua")), "return {}");
+    EXPECT_FALSE(cfg.resources.exists("imlui:/fonts/Roboto-Regular.ttf"));
+    EXPECT_EQ(cfg.resources.describe().size(), 2U); // the replacement and the app
 }
 
 TEST(DefaultConfig, ReleaseRunsFromEmbeddedDataAlone) {
