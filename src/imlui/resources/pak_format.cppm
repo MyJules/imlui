@@ -45,11 +45,16 @@ inline constexpr std::uint32_t pakVersion = 1;
 /// Files larger than this (decompressed) are rejected as corrupt.
 inline constexpr std::uint64_t pakMaxFileSize = std::uint64_t{1} << 31;
 
-/// The bytes of an archive holding `files`, mounted at `mountPoint`.
-[[nodiscard]] std::vector<std::byte> writePak(std::string_view mountPoint, std::span<const PakFile> files);
+/// The bytes of an archive holding `files`, mounted at `mountPoint`. nullopt (with a reason in `error`, when given)
+/// when the archive couldn't be read back: a string or the file count doesn't fit its u32 field, a file is larger
+/// than pakMaxFileSize or a stored one's size isn't its stored size, or two files have the same path. Paths and the
+/// mount point aren't checked here (parsePak() does).
+[[nodiscard]] std::optional<std::vector<std::byte>>
+writePak(std::string_view mountPoint, std::span<const PakFile> files, std::string* error = nullptr);
 
 /// Parses and checks the header and index of `archive`: the magic and version, a valid mount point, normalized
-/// paths, and every file inside the archive. nullopt (with a reason in `error`, when given) for anything else.
+/// paths without duplicates, and every file inside the archive. nullopt (with a reason in `error`, when given) for
+/// anything else.
 [[nodiscard]] std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string* error = nullptr);
 
 } // namespace imlui
@@ -114,14 +119,31 @@ private:
     bool m_ok = true;
 };
 
-std::optional<PakIndex> failed(std::string* error, std::string reason) {
+/// Sets `error` (when given); returns nullopt, for an optional of any type.
+std::nullopt_t failed(std::string* error, std::string reason) {
     if (error) *error = std::move(reason);
     return std::nullopt;
 }
 
+constexpr std::uint64_t u32Max = std::numeric_limits<std::uint32_t>::max();
+
 } // namespace
 
-std::vector<std::byte> writePak(std::string_view mountPoint, std::span<const PakFile> files) {
+std::optional<std::vector<std::byte>> writePak(std::string_view mountPoint, std::span<const PakFile> files,
+                                               std::string* error) {
+    // Everything the reader would reject or the fields would truncate fails here, not in the shipped archive.
+    if (mountPoint.size() > u32Max) return failed(error, "the mount point is too long");
+    if (files.size() > u32Max) return failed(error, "too many files (" + std::to_string(files.size()) + ")");
+    std::set<std::string_view> paths;
+    for (const auto& f : files) {
+        if (f.path.size() > u32Max) return failed(error, "a path is too long");
+        if (f.size > pakMaxFileSize)
+            return failed(error, "'" + f.path + "' is too large (" + std::to_string(f.size) + " bytes, at most " +
+                                     std::to_string(pakMaxFileSize) + ")");
+        if (!f.compressed && f.size != f.stored.size()) return failed(error, "'" + f.path + "' has an invalid size");
+        if (!paths.insert(f.path).second) return failed(error, "'" + f.path + "' is listed twice");
+    }
+
     std::vector<std::byte> out;
     for (const char c : pakMagic)
         out.push_back(static_cast<std::byte>(c));
@@ -157,6 +179,7 @@ std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string
     index.mountPoint = in.string(static_cast<std::size_t>(in.number(4)));
     if (!in.ok()) return failed(error, "truncated header");
     if (!normalizeName(index.mountPoint)) return failed(error, "invalid mount point '" + index.mountPoint + "'");
+    std::set<std::string, std::less<>> seen;
 
     for (std::uint64_t i = 0; i < count; ++i) {
         PakIndexEntry e;
@@ -174,6 +197,7 @@ std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string
             return failed(error, "'" + e.path + "' lies outside the archive (truncated?)");
         if (e.size > pakMaxFileSize || (!e.compressed && e.size != e.storedSize))
             return failed(error, "'" + e.path + "' has an invalid size");
+        if (!seen.insert(e.path).second) return failed(error, "'" + e.path + "' is in the index twice");
         index.entries.push_back(std::move(e));
     }
     return index;
