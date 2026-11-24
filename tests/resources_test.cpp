@@ -3,6 +3,8 @@
 // harness with an `app:/` mount on a temporary folder.
 #include <gtest/gtest.h>
 
+import std;
+
 import imlui.resources;
 import imlui.resources.name;
 import imlui.resources.mount;
@@ -190,6 +192,51 @@ TEST(DirectoryMount, HidesTheFilesItIsToldTo) {
     EXPECT_EQ(mount.list(""), (std::vector<std::string>{"main.lua", "sub/"}));
     EXPECT_EQ(text(mount.read("sub/resources.lua")), "-- not hidden: another path");
     EXPECT_EQ(mount.list("sub"), (std::vector<std::string>{"resources.lua"}));
+}
+
+// Names are case-sensitive, as in the embedded and .pak mounts, also where the file system isn't (Windows): a wrong
+// case in any segment isn't found, so it fails in development too, and can't get around a hidden file.
+TEST(DirectoryMount, NamesAreCaseSensitive) {
+    test::TempDir dir;
+    dir.write("Main.lua", "main");
+    dir.write("Sub/Data.txt", "data");
+    dir.write("resources.lua", "return {}");
+    DirectoryMount mount{dir.path(), {"resources.lua"}};
+    EXPECT_EQ(text(mount.read("Main.lua")), "main");
+    EXPECT_EQ(text(mount.read("Sub/Data.txt")), "data");
+    EXPECT_TRUE(mount.modified("Sub/Data.txt"));
+    EXPECT_EQ(mount.list("Sub"), (std::vector<std::string>{"Data.txt"}));
+
+    for (const char* wrong : {"main.lua", "MAIN.LUA", "sub/Data.txt", "Sub/data.txt", "RESOURCES.LUA"}) {
+        EXPECT_FALSE(mount.read(wrong)) << wrong;
+        EXPECT_FALSE(mount.exists(wrong)) << wrong;
+        EXPECT_FALSE(mount.modified(wrong)) << wrong;
+    }
+    EXPECT_FALSE(mount.exists("sub"));
+    EXPECT_TRUE(mount.list("sub").empty());
+
+    // Renaming the file to another case: the old spelling goes, the new one works (the folder listing is redone).
+    std::filesystem::rename(dir.path() / "Main.lua", dir.path() / "main.lua");
+    EXPECT_FALSE(mount.read("Main.lua"));
+    EXPECT_FALSE(mount.modified("Main.lua"));
+    EXPECT_EQ(text(mount.read("main.lua")), "main");
+
+    // A file added later is found by its exact name.
+    dir.write("Sub/New.txt", "new");
+    EXPECT_EQ(text(mount.read("Sub/New.txt")), "new");
+    EXPECT_FALSE(mount.read("Sub/new.txt"));
+}
+
+// One entry that can't be queried (a link to nothing) doesn't end the listing of a folder.
+TEST(DirectoryMount, ListsPastAnEntryThatCantBeQueried) {
+    test::TempDir dir;
+    dir.write("b.txt", "b");
+    dir.write("c/d.txt", "d");
+    std::error_code ec;
+    std::filesystem::create_symlink(dir.path() / "missing.txt", dir.path() / "a_dangling", ec);
+    if (ec) GTEST_SKIP() << "can't create a symbolic link here: " << ec.message();
+    DirectoryMount mount{dir.path()};
+    EXPECT_EQ(mount.list(""), strings({"b.txt", "c/"}));
 }
 
 // ------------------------------------------------------------------ Resources
@@ -416,5 +463,35 @@ TEST_F(LuaResourcesTest, ModulesInImluiPrefixLoadInTheGlobalEnvironment) {
         local m = require("extra.mod")
         assert(m.env, "imlui:/ modules run in the global environment")
         assert(m.name == "extra.mod")
+    )");
+}
+
+namespace {
+
+/// A mount whose every call throws, as one that runs out of memory would.
+class ThrowingMount final : public Mount {
+public:
+    [[nodiscard]] std::optional<ResourceData> read(std::string_view) const override { throw std::bad_alloc{}; }
+    [[nodiscard]] bool exists(std::string_view) const override { throw std::bad_alloc{}; }
+    [[nodiscard]] std::vector<std::string> list(std::string_view) const override { throw std::bad_alloc{}; }
+    [[nodiscard]] std::optional<ResourceTime> modified(std::string_view) const override { throw std::bad_alloc{}; }
+    [[nodiscard]] std::string origin() const override { return "throwing"; }
+};
+
+} // namespace
+
+// A C++ exception never crosses Lua's C frames: the library functions return nil and a message (exists, false).
+TEST_F(LuaResourcesTest, ExceptionsBecomeFailuresNotCrashes) {
+    m_frame.resources().mount("app:/boom/", std::make_shared<ThrowingMount>());
+    run(R"(
+        local r = require("imlui.resource")
+        local text, err = r.read("app:/boom/x.txt")
+        assert(text == nil and err == "out of memory", tostring(err))
+        local fn, loadErr = r.load("app:/boom/x.lua")
+        assert(fn == nil and loadErr == "out of memory", tostring(loadErr))
+        local name, findErr = r.find("x", "app:/boom/")
+        assert(name == nil and findErr == "out of memory", tostring(findErr))
+        assert(r.exists("app:/boom/x.txt") == false)
+        assert(r.read("app:/data.json") == '{"n": 1}', "other names still work")
     )");
 }

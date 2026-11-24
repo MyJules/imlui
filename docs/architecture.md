@@ -225,14 +225,16 @@ read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. An optional set of hidden paths (a package's manifest) is left out of `read`, `exists`, `list` and `modified`. |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. An optional set of hidden paths (a package's manifest) is left out of `read`, `exists`, `list` and `modified`. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged). |
 | `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
 | `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
 `EmbeddedMount` and `PakMount` share `PackedMount`: a sorted table of files, each stored as is or as one zstd frame.
 A stored file is served straight from the embedded data or the archive buffer (zero-copy). A compressed one is
-decompressed on its first read, under the mount's mutex, and the buffer is kept until the mount is destroyed, so
-the bytes stay valid as long as the mount. Corrupt compressed data reads as a missing file and is logged.
+decompressed on its first read, under that file's own lock (files decompress in parallel, each once), and the
+buffer is kept until the mount is destroyed, so the bytes stay valid as long as the mount. Corrupt compressed data
+reads as a missing file and is logged once (the failure is remembered); a file too large to allocate reads as missing
+and is logged, without an exception (reads come from Lua's C frames).
 
 `defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
 
@@ -429,13 +431,16 @@ gets the libraries in a working order.
 | Index | per file: u32 length + path, u64 offset (from the start of the archive), u64 stored size, u64 size, u32 flags (bit 0: zstd) |
 | Blobs | each file's stored bytes |
 
-`parsePak` checks the magic and the version, the mount point, that every path is normalized and every blob lies
-inside the archive, and caps the sizes, so a truncated or corrupt archive is rejected with a reason instead of being
+`parsePak` checks the magic and the version, the mount point, that every path is normalized and appears once and
+every blob lies inside the archive, and caps the sizes, so a truncated or corrupt archive is rejected with a reason instead of being
 read out of bounds.
 
 `imlui_pack [--depfile <file>] <out.pak> <manifest>` builds an archive from a manifest, and
 `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` does it from CMake (by default `bin/<name>.pak`, next to the
-executables; tracked like `imlui_add_resources`: a dependency file and the list target `<name>_list`).
+executables, `bin/<config>/<name>.pak` with a multi-config generator; tracked like `imlui_add_resources`: a
+dependency file and the list target `<name>_list`). `writePak` refuses what the reader would reject or a field would
+truncate (a file over the size cap, a duplicate path, a string longer than its u32 length), and `imlui_pack` writes
+`<out.pak>.tmp` and renames it over the output, so a failed run never leaves a partial archive.
 `imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand. An archive keeps its single
 mount point (format version 1 is unchanged), so **the groups of a manifest packed into one archive must share their
 prefix**: the archive is mounted at the deepest folder that holds every group's mount point, and each group's files

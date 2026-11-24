@@ -41,8 +41,9 @@
 #     same way and tracked the same way (dependency file, file list target <name>_list). The groups of the manifest
 #     must share a prefix: the archive is mounted at the deepest folder holding all their mount points. OUTPUT
 #     defaults to <name>.pak in the runtime output folder (CMAKE_RUNTIME_OUTPUT_DIRECTORY, else the current binary
-#     dir), where defaultConfig() mounts every *.pak it finds next to the executable, at the mount point stored in the
-#     archive.
+#     dir; with a multi-config generator its <config> subfolder, where the executables go), where defaultConfig()
+#     mounts every *.pak it finds next to the executable, at the mount point stored in the archive. OUTPUT may use
+#     generator expressions ($<CONFIG>).
 include_guard(GLOBAL)
 
 # Dev builds bake each embedded block's source folder into it (imlui_add_resources), and defaultConfig() mounts those
@@ -167,15 +168,26 @@ function(imlui_add_pak name manifest)
         message(FATAL_ERROR "imlui_add_pak(${name}): the name must be a plain file name")
     endif()
     _imlui_manifest_path(manifest "imlui_add_pak(${name})" "${manifest}")
+    get_property(multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     set(output ${opt_OUTPUT})
-    if(NOT output AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
-        set(output ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${name}.pak)
-    elseif(NOT output)
-        set(output ${CMAKE_CURRENT_BINARY_DIR}/${name}.pak)
+    if(NOT output)
+        # Next to the executables. A multi-config generator puts them in a folder per configuration under the runtime
+        # output folder, unless that already names the configuration with a generator expression.
+        set(folder ${CMAKE_CURRENT_BINARY_DIR})
+        if(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+            set(folder ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        endif()
+        if(multi_config AND NOT folder MATCHES [[\$<]])
+            string(APPEND folder "/$<CONFIG>")
+        endif()
+        set(output ${folder}/${name}.pak)
     endif()
     cmake_path(ABSOLUTE_PATH output BASE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR} NORMALIZE)
     cmake_path(GET output FILENAME file)
     set(depfile ${CMAKE_CURRENT_BINARY_DIR}/${name}.pak.d)
+    if(multi_config)
+        set(depfile ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${name}.pak.d) # one per configuration, like the output
+    endif()
     _imlui_manifest_listing(listing ${manifest} ${CMAKE_CURRENT_BINARY_DIR}/${name}.pak.files ${name}_list)
     add_custom_command(
         OUTPUT ${output}

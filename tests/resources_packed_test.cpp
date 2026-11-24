@@ -234,6 +234,46 @@ TEST(PakMount, RoundTripsThroughTheWriter) {
     EXPECT_EQ(text(res.read("app:/main.lua")), script);
 }
 
+// The writer fails, with a reason, on what it can't write or the reader would reject, instead of truncating it.
+TEST(PakMount, WriterRejectsWhatTheReaderCouldntRead) {
+    const std::string payload = "xyz";
+    std::string error;
+    const PakFile tooLarge[] = {{"big.bin", bytesOf(payload), pakMaxFileSize + 1, true}};
+    EXPECT_FALSE(writePak("app:/", tooLarge, &error));
+    EXPECT_NE(error.find("'big.bin' is too large"), std::string::npos) << error;
+    const PakFile twice[] = {{"a.txt", bytesOf(payload), 3, false}, {"a.txt", bytesOf(payload), 3, false}};
+    EXPECT_FALSE(writePak("app:/", twice, &error));
+    EXPECT_NE(error.find("'a.txt' is listed twice"), std::string::npos) << error;
+    const PakFile wrongSize[] = {{"a.txt", bytesOf(payload), 4, false}};
+    EXPECT_FALSE(writePak("app:/", wrongSize, &error));
+    EXPECT_NE(error.find("invalid size"), std::string::npos) << error;
+}
+
+// imlui_pack writes a temporary file and renames it over the output: no partial archive, no file left behind.
+TEST(PakMount, PackToolReplacesTheOutputWhole) {
+    test::TempDir dir;
+    dir.write("src/a.txt", "aaa");
+    dir.write("out.pak", "previous");
+    const std::string output = tools::utf8(dir.path() / "out.pak");
+    const std::string base = tools::utf8(dir.path() / "src");
+    std::string program = "imlui_pack";
+    std::string point = "app:/";
+    std::vector<char*> args{program.data(), const_cast<char*>(output.c_str()), point.data(),
+                            const_cast<char*>(base.c_str())};
+    ASSERT_EQ(tools::runPack(static_cast<int>(args.size()), args.data()), 0);
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "out.pak.tmp"));
+    std::string error;
+    const auto pak = PakMount::open(dir.path() / "out.pak", &error);
+    ASSERT_TRUE(pak) << error;
+    EXPECT_EQ(text(pak->read("a.txt")), "aaa");
+
+    // A failed run (no such base folder) leaves the archive as it was.
+    const std::string missing = tools::utf8(dir.path() / "nowhere");
+    args[3] = const_cast<char*>(missing.c_str());
+    EXPECT_NE(tools::runPack(static_cast<int>(args.size()), args.data()), 0);
+    EXPECT_TRUE(PakMount::open(dir.path() / "out.pak", &error)) << error;
+}
+
 TEST(PakMount, RejectsCorruptAndTruncatedArchives) {
     test::TempDir dir;
     const auto good = makePak(dir, "imlui:/fonts/", {{"a.txt", repetitive("aaa", 60)}, {"b.txt", "bbb"}});
@@ -262,18 +302,30 @@ TEST(PakMount, RejectsCorruptAndTruncatedArchives) {
     // A path that would leave the mount, and an entry pointing past the end.
     const std::string payload = "xyz";
     const PakFile escaping[] = {{"../x.txt", bytesOf(payload), 3, false}};
-    EXPECT_FALSE(PakMount::fromBytes(writePak("app:/", escaping), "escape", &error));
+    EXPECT_FALSE(PakMount::fromBytes(*writePak("app:/", escaping), "escape", &error));
     EXPECT_NE(error.find("invalid path"), std::string::npos) << error;
     const PakFile badPoint[] = {{"x.txt", bytesOf(payload), 3, false}};
-    EXPECT_FALSE(PakMount::fromBytes(writePak("C:/x/", badPoint), "point", &error));
+    EXPECT_FALSE(PakMount::fromBytes(*writePak("C:/x/", badPoint), "point", &error));
 
-    // Compressed data that doesn't decompress: the archive opens, the file reads as missing.
+    // The same path twice in the index (the writer refuses to write it, so patch a second path into the first).
+    const PakFile twice[] = {{"a.txt", bytesOf(payload), 3, false}, {"b.txt", bytesOf(payload), 3, false}};
+    auto duplicated = *writePak("app:/", twice);
+    const auto second = std::ranges::search(duplicated, bytesOf("b.txt"));
+    ASSERT_FALSE(second.empty());
+    second.front() = std::byte{'a'};
+    EXPECT_FALSE(PakMount::fromBytes(duplicated, "twice", &error));
+    EXPECT_NE(error.find("'a.txt' is in the index twice"), std::string::npos) << error;
+
+    // Compressed data that doesn't decompress: the archive opens, the file reads as missing, also when read again
+    // (the failure is remembered: reported once, not decompressed again).
     const std::string notZstd = repetitive("not zstd", 20);
     const PakFile corrupt[] = {{"c.txt", bytesOf(notZstd), 500, true}};
-    const auto pak = PakMount::fromBytes(writePak("app:/", corrupt), "corrupt", &error);
+    const auto pak = PakMount::fromBytes(*writePak("app:/", corrupt), "corrupt", &error);
     ASSERT_TRUE(pak) << error;
     EXPECT_TRUE(pak->exists("c.txt"));
     EXPECT_FALSE(pak->read("c.txt"));
+    EXPECT_FALSE(pak->read("c.txt"));
+    EXPECT_EQ(pak->decompressedCount(), 0U);
 
     // defaultConfig's helper skips a bad archive and mounts the rest.
     dir.write("bad.pak", "not an archive");

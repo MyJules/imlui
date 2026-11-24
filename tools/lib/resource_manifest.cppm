@@ -311,7 +311,7 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
             return std::nullopt;
         }
         // A link may still lead out of the base folder.
-        if (utf8(file.lexically_relative(group.base)).starts_with("..")) {
+        if (leavesBase(file.lexically_relative(group.base))) {
             error = where + "'" + path + "' is outside the base folder";
             return std::nullopt;
         }
@@ -337,8 +337,16 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
             }
             if (!it->is_regular_file(ec) || it->path() == self) continue;
             const std::string path = utf8(it->path().lexically_relative(group.base));
-            if (matchesAny(fields.include, path) && !matchesAny(fields.exclude, path) && !selected.contains(path))
-                selected[path] = {path, it->path(), std::nullopt};
+            if (!matchesAny(fields.include, path) || matchesAny(fields.exclude, path) || selected.contains(path))
+                continue;
+            // A matched link may lead out of the base folder, like a `files` entry.
+            std::error_code linkEc;
+            const fs::path target = fs::weakly_canonical(it->path(), linkEc);
+            if (linkEc || leavesBase(target.lexically_relative(group.base))) {
+                error = where + "'" + path + "' is outside the base folder";
+                return std::nullopt;
+            }
+            selected[path] = {path, it->path(), std::nullopt};
         }
         if (ec) {
             error = where + "can't list " + utf8(folder) + ": " + ec.message();

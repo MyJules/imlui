@@ -233,6 +233,39 @@ TEST(ResourceManifest, PathsCantLeaveTheBaseFolder) {
               std::string::npos);
 }
 
+// Only a first path element `..` leaves the folder: names that merely start with two dots are ordinary files.
+TEST(ResourceManifest, NamesStartingWithTwoDotsStayInside) {
+    test::TempDir dir;
+    dir.write("app/..foo.png", "png");
+    dir.write("app/..config/x.lua", "-- x");
+    std::string error;
+    const auto m = manifest(
+        dir, R"(return { prefix = "app", base = "app", files = { "..foo.png" }, include = "**/*.lua" })", error);
+    ASSERT_TRUE(m) << error;
+    EXPECT_EQ(paths(m->groups[0]), (std::vector<std::string>{"..config/x.lua", "..foo.png"}));
+
+    const auto collected = tools::collectFiles(dir.path() / "app", {}, error);
+    ASSERT_TRUE(collected) << error;
+    ASSERT_EQ(collected->size(), 2U);
+    EXPECT_EQ((*collected)[0].path, "..config/x.lua");
+    EXPECT_EQ((*collected)[1].path, "..foo.png");
+    EXPECT_FALSE(tools::collectFiles(dir.path() / "app", {dir.path() / "resources.lua"}, error));
+}
+
+// A file an `include` pattern matches is checked like a `files` entry: a link to a file outside the base folder is
+// rejected.
+TEST(ResourceManifest, IncludedLinksCantLeaveTheBaseFolder) {
+    test::TempDir dir;
+    dir.write("secret.txt", "secret");
+    dir.write("app/main.lua", "");
+    std::error_code ec;
+    fs::create_symlink(dir.path() / "secret.txt", dir.path() / "app" / "secret.txt", ec);
+    if (ec) GTEST_SKIP() << "can't create a symbolic link here: " << ec.message();
+    const std::string error = failure(dir, R"(return { prefix = "app", base = "app", include = "*" })");
+    EXPECT_NE(error.find("'secret.txt' is outside the base folder"), std::string::npos) << error;
+    EXPECT_EQ(failure(dir, R"(return { prefix = "app", base = "app", include = "*.lua" })"), "");
+}
+
 TEST(ResourceManifest, RunsInASandbox) {
     test::TempDir dir;
     dir.write("main.lua", "");

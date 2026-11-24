@@ -27,6 +27,10 @@ collectFiles(const std::filesystem::path& base, const std::vector<std::filesyste
 [[nodiscard]] std::filesystem::path pathFromUtf8(std::string_view s);
 [[nodiscard]] std::string utf8(const std::filesystem::path& p);
 
+/// Whether `relative`, a path made relative to a base folder (lexically_relative), lies outside that folder: it is
+/// empty, absolute, or its first element is `..`. (`..foo.png` is a file name, not a way out.)
+[[nodiscard]] bool leavesBase(const std::filesystem::path& relative);
+
 } // namespace imlui::tools
 
 module :private;
@@ -40,6 +44,10 @@ fs::path pathFromUtf8(std::string_view s) { return fs::path{std::u8string{s.begi
 std::string utf8(const fs::path& p) {
     const std::u8string s = p.generic_u8string();
     return std::string{s.begin(), s.end()};
+}
+
+bool leavesBase(const fs::path& relative) {
+    return relative.empty() || relative.is_absolute() || *relative.begin() == "..";
 }
 
 std::optional<std::vector<std::byte>> readFile(const fs::path& file) {
@@ -75,12 +83,11 @@ std::optional<std::vector<SourceFile>> collectFiles(const fs::path& base, const 
             return std::nullopt;
         }
         const fs::path relative = file.lexically_relative(root);
-        const std::string path = utf8(relative);
-        if (relative.empty() || path.starts_with("..") || relative.is_absolute()) {
+        if (leavesBase(relative)) {
             error = "'" + utf8(input) + "' isn't under the base folder '" + utf8(root) + "'";
             return std::nullopt;
         }
-        out.push_back({path, file, std::nullopt});
+        out.push_back({utf8(relative), file, std::nullopt});
     }
     std::ranges::sort(out, {}, &SourceFile::path);
     for (std::size_t i = 1; i < out.size(); ++i)

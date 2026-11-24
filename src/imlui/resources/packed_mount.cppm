@@ -14,7 +14,8 @@ export namespace imlui {
 /// Files packed into one block of memory (data compiled into the executable, a .pak archive read into memory).
 /// A stored file is served straight from that memory (zero-copy). A compressed one is decompressed on its first
 /// read and the result is cached until the mount is destroyed, so all bytes stay valid as long as the mount (the
-/// ResourceData handles have no owner).
+/// ResourceData handles have no owner). A file that fails to decompress (corrupt data) is reported once and then
+/// reads as missing; one too large to allocate reads as missing (the error is logged, nothing is thrown).
 /// The files never change: modified() is always nullopt.
 class PackedMount : public Mount {
 public:
@@ -44,9 +45,17 @@ private:
     /// The index of file `path` in m_entries.
     [[nodiscard]] std::optional<std::size_t> find(std::string_view path) const;
 
-    std::vector<Entry> m_entries; ///< sorted by path, unique
-    mutable std::mutex m_mutex;
-    mutable std::vector<std::unique_ptr<std::vector<std::byte>>> m_decompressed; ///< by entry index, on first read
+    /// The decompressed bytes of one compressed entry. `state` is written under `mutex` and read without it, so
+    /// files are decompressed in parallel, each once.
+    struct Decompressed {
+        enum class State : std::uint8_t { Pending, Ready, Failed };
+        std::mutex mutex;
+        std::atomic<State> state = State::Pending;
+        std::vector<std::byte> bytes; ///< set once, before `state` becomes Ready
+    };
+
+    std::vector<Entry> m_entries;                   ///< sorted by path, unique
+    std::unique_ptr<Decompressed[]> m_decompressed; ///< by entry index
 };
 
 } // namespace imlui
@@ -65,7 +74,7 @@ PackedMount::PackedMount(std::vector<Entry> entries) {
     for (std::size_t i = 0; i < entries.size(); ++i)
         if (i + 1 == entries.size() || entries[i].path != entries[i + 1].path)
             m_entries.push_back(std::move(entries[i]));
-    m_decompressed.resize(m_entries.size());
+    m_decompressed = std::make_unique<Decompressed[]>(m_entries.size());
 }
 
 std::optional<std::size_t> PackedMount::find(std::string_view path) const {
@@ -81,22 +90,36 @@ std::optional<ResourceData> PackedMount::read(std::string_view path) const {
     const Entry& entry = m_entries[*index];
     if (!entry.compressed) return ResourceData{entry.data};
 
-    std::scoped_lock lock{m_mutex};
-    auto& cached = m_decompressed[*index];
-    if (!cached) {
-        // Check the size the frame declares before allocating it.
-        if (zstd::contentSize(entry.data) != entry.size) {
-            log::error("resource '{}' ({}): corrupt compressed data", path, origin());
-            return std::nullopt;
+    using State = Decompressed::State;
+    Decompressed& slot = m_decompressed[*index];
+    if (slot.state.load(std::memory_order_acquire) == State::Pending) {
+        std::scoped_lock lock{slot.mutex};
+        if (slot.state.load(std::memory_order_relaxed) == State::Pending) {
+            // Check the size the frame declares before allocating it.
+            if (zstd::contentSize(entry.data) != entry.size) {
+                log::error("resource '{}' ({}): corrupt compressed data", path, origin());
+                slot.state.store(State::Failed, std::memory_order_release);
+                return std::nullopt;
+            }
+            std::vector<std::byte> bytes;
+            try {
+                bytes.resize(static_cast<std::size_t>(entry.size));
+            } catch (const std::bad_alloc&) {
+                // Not thrown (read() is called from Lua's C frames), not remembered (it may fit later).
+                log::error("resource '{}' ({}): out of memory decompressing {} bytes", path, origin(), entry.size);
+                return std::nullopt;
+            }
+            if (!zstd::decompress(entry.data, bytes)) {
+                log::error("resource '{}' ({}): corrupt compressed data", path, origin());
+                slot.state.store(State::Failed, std::memory_order_release);
+                return std::nullopt;
+            }
+            slot.bytes = std::move(bytes);
+            slot.state.store(State::Ready, std::memory_order_release);
         }
-        auto bytes = std::make_unique<std::vector<std::byte>>(static_cast<std::size_t>(entry.size));
-        if (!zstd::decompress(entry.data, *bytes)) {
-            log::error("resource '{}' ({}): corrupt compressed data", path, origin());
-            return std::nullopt;
-        }
-        cached = std::move(bytes);
     }
-    return ResourceData{*cached}; // owned by the mount until it is destroyed
+    if (slot.state.load(std::memory_order_acquire) != State::Ready) return std::nullopt;
+    return ResourceData{slot.bytes}; // owned by the mount until it is destroyed
 }
 
 bool PackedMount::exists(std::string_view path) const {
@@ -130,8 +153,10 @@ std::optional<ResourceTime> PackedMount::modified(std::string_view) const { retu
 const std::vector<PackedMount::Entry>& PackedMount::entries() const { return m_entries; }
 
 std::size_t PackedMount::decompressedCount() const {
-    std::scoped_lock lock{m_mutex};
-    return static_cast<std::size_t>(std::ranges::count_if(m_decompressed, [](const auto& p) { return p != nullptr; }));
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < m_entries.size(); ++i)
+        if (m_decompressed[i].state.load(std::memory_order_acquire) == Decompressed::State::Ready) ++count;
+    return count;
 }
 
 } // namespace imlui

@@ -27,7 +27,7 @@ export namespace imlui::tools {
 [[nodiscard]] int runPack(int argc, char** argv);
 
 /// The bytes of a .pak archive holding `files`, mounted at `mountPoint`; nullopt (with the reason in `error`) when
-/// the mount point is invalid or a file can't be read.
+/// the mount point is invalid, a file can't be read or the archive can't hold it (writePak()).
 [[nodiscard]] std::optional<std::vector<std::byte>> packFiles(std::string_view mountPoint,
                                                               const std::vector<SourceFile>& files, std::string& error);
 
@@ -129,7 +129,9 @@ std::optional<std::vector<std::byte>> packFiles(std::string_view mountPoint, con
     }
     std::string folder = *point;
     if (!folder.ends_with('/')) folder += '/';
-    return writePak(folder, entries);
+    auto pak = writePak(folder, entries, &error);
+    if (!pak) error = "can't write the archive: " + error;
+    return pak;
 }
 
 int runPack(int argc, char** argv) {
@@ -167,10 +169,29 @@ int runPack(int argc, char** argv) {
     }
     const auto pak = packFiles(mountPoint, files, error);
     if (!pak) return fail(error);
-    std::ofstream out{output, std::ios::binary | std::ios::trunc};
-    out.write(reinterpret_cast<const char*>(pak->data()), static_cast<std::streamsize>(pak->size()));
-    if (!out) return fail("can't write '" + utf8(output) + "'");
+    // Written next to the output and renamed over it, so a failed run leaves the previous archive, never a partial
+    // one.
+    fs::path temporary = output;
+    temporary += ".tmp";
     std::error_code ec;
+    // The output's folder (a multi-config generator's per-configuration folder) may not exist yet.
+    for (const fs::path& file : {output, depfile})
+        if (file.has_parent_path()) fs::create_directories(file.parent_path(), ec);
+    {
+        std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
+        out.write(reinterpret_cast<const char*>(pak->data()), static_cast<std::streamsize>(pak->size()));
+        out.close();
+        if (!out) {
+            fs::remove(temporary, ec);
+            return fail("can't write '" + utf8(temporary) + "'");
+        }
+    }
+    fs::rename(temporary, output, ec);
+    if (ec) {
+        const std::string reason = ec.message();
+        fs::remove(temporary, ec);
+        return fail("can't replace '" + utf8(output) + "': " + reason);
+    }
     if (!depfile.empty() && !writeDepfile(depfile, fs::absolute(output, ec), dependencies))
         return fail("can't write '" + utf8(depfile) + "'");
     return 0;
