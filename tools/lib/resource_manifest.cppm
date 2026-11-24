@@ -7,7 +7,7 @@
 //         mount = "ui",                       -- optional folder under the prefix: app:/ui/
 //         base = ".",                         -- the folder paths are relative to, relative to the manifest
 //         files = { "main.lua" },             -- explicit files
-//         include = { "**/*.lua", "*.png" },  -- glob patterns (imlui.tools.glob), relative to base
+//         include = { "**/*.lua", "*.png" },  -- glob patterns (imlui.resources.glob), relative to base
 //         exclude = { "tests/**" },           -- patterns removed from what `include` matched
 //         compress = { ["big.bin"] = false }, -- per file: override the size-based compression rule
 //     }
@@ -20,7 +20,7 @@ export module imlui.tools.resource_manifest;
 import std;
 
 import lua;
-import imlui.tools.glob;
+import imlui.resources.glob;
 import imlui.tools.source_files;
 
 export namespace imlui::tools {
@@ -30,6 +30,11 @@ struct ResourceGroup {
     std::string mountPoint;        ///< `app:/`, `imlui:/fonts/`
     std::filesystem::path base;    ///< absolute: the folder the paths are relative to (the dev source folder)
     std::vector<SourceFile> files; ///< sorted by path
+    // The selection as the manifest wrote it (`files`, `include`, `exclude`), for a dev build's source folder mount
+    // to serve the same files (ResourceSelection).
+    std::vector<std::string> listed;
+    std::vector<std::string> include;
+    std::vector<std::string> exclude;
 };
 
 /// A parsed manifest.
@@ -255,6 +260,42 @@ bool matchesAny(const std::vector<std::string>& patterns, std::string_view path)
     return std::ranges::any_of(patterns, [&](const std::string& pattern) { return globMatch(pattern, path); });
 }
 
+bool equalIgnoringAsciiCase(std::string_view a, std::string_view b) {
+    const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+    return std::ranges::equal(a, b, {}, lower, lower);
+}
+
+/// How existing file `path` (relative to `base`) is spelled on disk when that differs from `path`, else "". On a file
+/// system that ignores case (Windows, macOS) `Main.lua` finds `main.lua`, but the resource would be named `Main.lua`,
+/// which no mount finds (resource names are case-sensitive).
+std::string spellingOnDisk(const fs::path& base, std::string_view path) {
+    fs::path folder = base;
+    std::string onDisk;
+    bool differs = false;
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t slash = path.find('/', start);
+        const std::string segment{path.substr(start, slash - start)};
+        std::string found;
+        std::error_code ec;
+        for (auto it = fs::directory_iterator(folder, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            const std::string name = utf8(it->path().filename());
+            if (name == segment) {
+                found = name;
+                break;
+            }
+            if (found.empty() && equalIgnoringAsciiCase(name, segment)) found = name;
+        }
+        if (found.empty()) found = segment; // can't tell (unlisted, or a difference beyond ASCII case)
+        differs = differs || found != segment;
+        onDisk += (onDisk.empty() ? "" : "/") + found;
+        if (slash == std::string_view::npos) break;
+        folder /= pathFromUtf8(found);
+        start = slash + 1;
+    }
+    return differs ? onDisk : std::string{};
+}
+
 /// Resolves one group's fields against the file system.
 std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::path& manifest, const std::string& where,
                                           std::vector<fs::path>& scanned, std::string& error) {
@@ -315,6 +356,11 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
             error = where + "'" + path + "' is outside the base folder";
             return std::nullopt;
         }
+        if (const std::string spelled = spellingOnDisk(group.base, path); !spelled.empty()) {
+            error = where + "file '" + path + "' is spelled '" + spelled +
+                    "' on disk (resource names are case-sensitive: use the same spelling)";
+            return std::nullopt;
+        }
         selected[path] = {path, file, std::nullopt};
     }
 
@@ -369,6 +415,9 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
         }
         group.files.push_back(std::move(file));
     }
+    group.listed = fields.files;
+    group.include = fields.include;
+    group.exclude = fields.exclude;
     return group;
 }
 

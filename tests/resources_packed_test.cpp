@@ -18,6 +18,7 @@ import imlui.resources.package;
 import imlui.app.config;
 import imlui.embedded.imlui;
 import imlui.lua.errors;
+import imlui.platform.process;
 import imlui.tools.resource_encoding;
 import imlui.tools.source_files;
 import imlui.tools.pack;
@@ -338,6 +339,59 @@ TEST(PakMount, RejectsCorruptAndTruncatedArchives) {
     EXPECT_EQ(text(res.read("imlui:/fonts/b.txt")), "bbb");
 }
 
+// The mount point an archive names is a full folder name, canonical, with its trailing slash: a file name would be
+// mounted as a folder of that name.
+TEST(PakMount, MountPointIsAFolderName) {
+    test::TempDir dir;
+    const std::string payload = "xyz";
+    const PakFile files[] = {{"x.txt", bytesOf(payload), 3, false}};
+    std::string error;
+    for (const char* folder : {"app:/", "imlui:/fonts/", "my-lib:/a/b/"})
+        EXPECT_TRUE(PakMount::fromBytes(*writePak(folder, files), "ok", &error)) << folder << ": " << error;
+    for (const char* bad : {"app:/main.lua", "imlui:/fonts", "app://x/", "app:/a/../b/", "app:", "C:/x/"}) {
+        EXPECT_FALSE(PakMount::fromBytes(*writePak(bad, files), "bad", &error)) << bad;
+        EXPECT_NE(error.find("invalid mount point"), std::string::npos) << error;
+    }
+    // imlui_pack writes the canonical folder form of what it's given.
+    const auto pak = PakMount::fromBytes(makePak(dir, "app:/ui", {{"a.txt", "a"}}), "pack", &error);
+    ASSERT_TRUE(pak) << error;
+    EXPECT_EQ(pak->mountPoint(), "app:/ui/");
+}
+
+// Whatever lies next to the executable named *.pak, mountPaks() and PakMount::open() never throw and never read a
+// file that isn't an archive whole: the header is checked first, the size is capped (pakMaxArchiveSize), and an
+// allocation that fails is an error like any other.
+TEST(PakMount, OpenChecksTheHeaderBeforeReadingTheFile) {
+    test::TempDir dir;
+    // Large junk: rejected by its magic.
+    {
+        std::ofstream out{dir.path() / "junk.pak", std::ios::binary};
+        const std::string chunk(1 << 20, 'j');
+        for (int i = 0; i < 16; ++i)
+            out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+    }
+    std::string error;
+    EXPECT_FALSE(PakMount::open(dir.path() / "junk.pak", &error));
+    EXPECT_NE(error.find("bad magic"), std::string::npos) << error;
+    // Shorter than the magic, empty, a folder, missing.
+    dir.write("short.pak", "IMLUI");
+    dir.write("empty.pak", "");
+    std::filesystem::create_directories(dir.path() / "folder.pak");
+    for (const char* name : {"short.pak", "empty.pak", "folder.pak", "missing.pak"}) {
+        error.clear();
+        EXPECT_NO_THROW(EXPECT_FALSE(PakMount::open(dir.path() / name, &error))) << name;
+        EXPECT_NE(error, "") << name;
+    }
+    // The right magic, then garbage: read, then rejected by the parser.
+    dir.write("garbage.pak", "IMLUIPAK" + std::string(1000, '\xff'));
+    EXPECT_FALSE(PakMount::open(dir.path() / "garbage.pak", &error));
+    EXPECT_NE(error.find("garbage.pak"), std::string::npos) << error;
+
+    Resources res;
+    EXPECT_NO_THROW(EXPECT_EQ(mountPaks(res, dir.path()), 0));
+    EXPECT_TRUE(res.describe().empty());
+}
+
 // ------------------------------------------------------------------ override order
 
 TEST(PackedResources, EmbeddedThenPakThenDirectory) {
@@ -538,6 +592,47 @@ TEST(DefaultConfig, DevSourceFoldersGoOnTop) {
         const EngineConfig cfg = defaultConfig(1, argv, {testApp((dir.path() / "gone").string())});
         EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'loose' }");
     }
+}
+
+// A package's source folder serves only what its selection (its manifest group) selects, like the embedded copy:
+// a file next to the sources that the build wouldn't ship isn't found in development either.
+TEST(DefaultConfig, DevSourceFoldersServeTheirSelectionOnly) {
+    const test::ScopedEnv dev{"IMLUI_DEV_PATHS", "1"};
+    test::TempDir dir;
+    std::string exe = (dir.path() / "bin" / "app.exe").string();
+    char* argv[] = {exe.data()};
+    dir.write("src/main.lua", "return Text { text = 'source' }");
+    dir.write("src/scratch.txt", "not in the manifest");
+    dir.write("src/resources.lua", "return { prefix = 'app', include = '**/*.lua' }");
+    ResourcePackage app = testApp((dir.path() / "src").string());
+    app.selection =
+        ResourceSelection{.files = {}, .include = {"**/*.lua"}, .exclude = {}, .unmatched = {"resources.lua"}};
+
+    const EngineConfig cfg = defaultConfig(1, argv, {app});
+    EXPECT_EQ(text(cfg.resources.read("app:/main.lua")), "return Text { text = 'source' }");
+    EXPECT_FALSE(cfg.resources.exists("app:/scratch.txt"));
+    EXPECT_FALSE(cfg.resources.exists("app:/resources.lua"));
+    EXPECT_EQ(text(cfg.resources.read("app:/data.txt")), "embedded data"); // not selected there: the embedded copy
+}
+
+// The executable's folder comes from the OS when argv is the process's own command line (a program started through
+// PATH has a bare name in argv[0]); a list a host makes up is taken as given (the tests above rely on it).
+TEST(DefaultConfig, FindsTheRealExecutable) {
+    const auto exe = platform::executablePath();
+    ASSERT_TRUE(exe);
+    EXPECT_TRUE(exe->is_absolute());
+    EXPECT_TRUE(std::filesystem::is_regular_file(*exe));
+    EXPECT_TRUE(exe->stem().string().starts_with("imlui_tests")) << exe->string();
+
+    std::string made = "made/up/app.exe";
+    std::string script = "x.lua";
+    const char* args[] = {made.c_str(), script.c_str()};
+    const auto given = platform::processArguments(2, args);
+    EXPECT_FALSE(given.ofThisProcess);
+    ASSERT_EQ(given.args.size(), 2U);
+    EXPECT_EQ(given.args[0], std::filesystem::path{made});
+    EXPECT_EQ(given.args[1], std::filesystem::path{script});
+    EXPECT_TRUE(platform::processArguments(0, nullptr).args.empty());
 }
 
 TEST(DefaultConfig, PackagesWithoutFilesMountTheirSourceFolder) {

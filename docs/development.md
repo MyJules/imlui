@@ -222,7 +222,8 @@ doesn't depend on `Engine`.
 - **C++**: `import imlui.log;`, then `imlui::log::info("loaded {} in {} ms", path, ms)`. The levels are `trace`,
   `debug`, `info`, `warn` and `error`, with `std::format` syntax. Formatting happens on the caller's side, so
   spdlog only receives the finished string. There's also `log::write(level, msg, source)` (source tag, for
-  example `"lua"`), `log::setLevel(level)` and `log::addFileSink(path)`.
+  example `"lua"`), `log::setLevel(level)` and `log::addFileSink(path)` (a `std::filesystem::path`, so any file name on Windows;
+  returns false, with the reason logged, when the file can't be opened; safe to call while other threads log).
 - Output goes to stderr in color: `[HH:MM:SS.mmm] [imlui] [level] msg`. The default level is `debug`.
   Messages at `warn` and above are flushed immediately.
 - **Lua**: `log.info("x = %d", x)` and the other levels, plus `print(...)` at info level. Script errors are logged
@@ -360,26 +361,34 @@ On this target:
   `notify`/`emit`, `__gc` lifetime, singletons (also `shared_ptr` ones), `overload` and reinstalling into a new
   state.
 - `resources_test.cpp` covers the resource system: name normalization and resolving (`..` can't leave a prefix, OS
-  paths are rejected), `DirectoryMount` (read, exists, list, modified, the read cache), mount stacking and mount
-  points in `Resources`, and the Lua side through the harness: `require "imlui"` and components through the
+  paths are rejected), `DirectoryMount` (read, exists, list, modified, the read cache, a `ResourceSelection`
+  serving only the manifest's files and new files matching a pattern, a listed manifest served, the previous bytes
+  served while a changed file is locked (`test::FileLock`, `imlui.test.file_lock`: a handle without sharing on
+  Windows, no permissions elsewhere), no exceptions for names that aren't UTF-8), mount stacking and mount points in
+  `Resources` (`listRecursive` of a folder with or without its trailing slash), and the Lua side through the harness: `require "imlui"` and components through the
   searchers, chunk names in errors, and `ui.resource.*` resolving against the calling script. It uses two support
   modules: `test::TempDir` (`imlui.test.temp_dir`, a temporary folder removed afterwards, with `write` and `touch`)
   and `test::MemoryMount` (`imlui.test.memory_mount`, an immutable in-memory mount, like an embedded one).
 - `resources_packed_test.cpp` covers the packed mounts: the compression rule, `EmbeddedMount` (stored and
   compressed files, zero-copy reads, decompression on first read, concurrent reads, bad paths, corrupt data),
   `.pak` archives written by the `imlui_pack` code (`tools::packFiles`) and read by `PakMount` (every truncation,
-  a bad magic or version, an escaping path and corrupt compressed data are rejected cleanly; an archive built by
+  a bad magic or version, an escaping path, a mount point that isn't a folder name and corrupt compressed data are
+  rejected cleanly; `PakMount::open` checks the header before reading a large junk file and never throws; an archive built by
   `imlui_add_pak` in `tests/CMakeLists.txt` from the smoke app, `tests/data/smoke_pak.lua`, opens), the override order embedded < `.pak` < directory, the library's
   embedded files and their packages against the sources, `defaultConfig` (release-style from embedded data alone;
   `.pak` archives in name order under the `app/` and `imlui/` override folders next to the executable; a package's
-  dev source folder on top, skipped with `IMLUI_DEV_PATHS=0` or when missing; a script argument replacing every
+  dev source folder on top, serving only its selection, skipped with `IMLUI_DEV_PATHS=0` or when missing; the real
+  executable path from `imlui.platform.process`; a script argument replacing every
   `app:/` mount, relative paths falling back to the executable's folder; a package without files mounting its source
   folder even with `IMLUI_DEV_PATHS=0`, and nothing but a logged error when that folder is missing), and the harness
   on the library's packages (`Options::embedded`: embedded data, or the source folders in a build that doesn't embed). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
+- `log_test.cpp` covers `log::addFileSink`: a log file whose name is outside the ANSI code page, and a file that
+  can't be opened reported as `false` without an exception.
 - `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns, one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
-  base folder, the sandbox, bad shapes), `manifestDependencies` and the dependency file format, merging groups into
+  base folder, a listed file spelled differently on disk, the sandbox, bad shapes), `collectFiles` past entries
+that can't be queried, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
   hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is
@@ -413,8 +422,9 @@ which names the groups' folders and depends on the manifest alone); `imlui_rc --
 build, only when embedding) rewrites `<name>.files` when the manifest's set of files changed, so a file added to a globbed folder
 re-embeds even where Ninja misses the folder's new time. `imlui_pack` builds `.pak` archives
 (`imlui_add_pak(<name> <manifest>)`, or by hand: `imlui_pack out.pak app:/ <folder> [files...]`). Their shared code
-is the `imlui_resource_tools` library (`tools/lib/`, links the zstd compressor and `imlui_lua`, the Lua wrapper; it
-doesn't link `imlui`, which is embedded with it), and the archive writer is `imlui_pack_lib` (links `imlui_core` for
+is the `imlui_resource_tools` library (`tools/lib/`, links the zstd compressor, `imlui_lua`, the Lua wrapper, and
+`imlui_glob`, the manifest patterns, which the library also uses for dev source folders; it doesn't link `imlui`,
+which is embedded with it), and the archive writer is `imlui_pack_lib` (links `imlui_core` for
 `imlui.resources.pak_format`, not the library's files). Generated modules are not checked by `tidy`; the generator is. To see what a manifest
 selects, run `build/<preset>/bin/imlui_rc --list <manifest> <file>` and read the file.
 

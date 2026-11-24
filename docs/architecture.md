@@ -237,7 +237,7 @@ read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. An optional set of hidden paths (a package's manifest) is left out of `read`, `exists`, `list` and `modified`. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged). |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer, and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged). |
 | `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
 | `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
@@ -255,7 +255,9 @@ and is logged, without an exception (reads come from Lua's C frames).
    Material Icons, the codepoints and the font licenses), the two groups of the library's manifest. Then the host's
    packages, the `app` argument, such as `imlui::embedded::my_app::packages()`.
 2. **Archives:** every `*.pak` next to the executable, in file name order (`mountPaks`), each at the mount point
-   stored in it. An archive that can't be read is logged and skipped.
+   stored in it. An archive that can't be read is logged and skipped: `PakMount::open` checks the magic before
+   reading the file whole, refuses one over `pakMaxArchiveSize` (4 GiB), reports an allocation that fails, and never
+   throws, so junk named `*.pak` can't stop the app from starting.
 3. **Override folders** next to the executable, named after a prefix, where they exist: `<exe folder>/app/` at
    `app:/`, `<exe folder>/imlui/` at `imlui:/` (so `imlui/fonts/` overrides fonts), and the same for the prefix of
    any other package.
@@ -265,9 +267,18 @@ and is logged, without an exception (reads come from Lua's C frames).
    the environment variable `IMLUI_DEV_PATHS=0` skips them at runtime. A package without embedded files
    (`IMLUI_EMBED_RESOURCES=OFF`, the default in dev builds) has only this folder: it's mounted even with
    `IMLUI_DEV_PATHS=0`, and when it doesn't exist (the executable was moved to another machine) an error names it.
-   The folder's mount hides the package's `hidden` paths: the manifest itself when it lies in the folder (the
-   library's `src/resources/resources.lua`), so there is no `imlui:/resources.lua` or `app:/resources.lua` in dev
-   builds either, as in embedded ones.
+   The folder is mounted with the package's `selection` (module `imlui.resources.selection`: the group's `files`,
+   `include` and `exclude`, and the manifest's own path, which no pattern matches), so it serves exactly the files
+   the build embeds or packs: a file next to the sources that the manifest doesn't select isn't found in development
+   either, instead of failing only once shipped. A new file that matches a pattern is served at once (hot reload),
+   as the next build would embed it. So there is no `imlui:/resources.lua` or `app:/resources.lua` in dev builds
+   either, unless the manifest lists itself in `files`, and then it's served from the folder like any other file.
+
+The executable's folder (archives and override folders) is where the OS says the executable is
+(`imlui.platform.process`: `GetModuleFileNameW` on Windows, `/proc/self/exe` on Linux) when `argv` is the process's
+own command line, not `argv[0]`, which is a bare name when the program was found through `PATH` and relative to the
+current folder otherwise. A list the host makes up (tests) is taken as given. On Windows the script argument is
+taken from the UTF-16 command line (`CommandLineToArgvW`), since `argv` is in the ANSI code page.
 
 The entry is `app:/main.lua` (`EngineConfig::entry`, which a host can change). A script on the command line replaces
 the app: no package, archive or folder is mounted at `app:/`; the script's folder is mounted there instead (on top,
@@ -345,7 +356,10 @@ return {
   that match a pattern are picked up on the next build. Only the folders a pattern can match under are scanned (its
   leading segments without a wildcard: `ui/icons/*.png` scans `ui/icons/`).
 - The manifest itself is never matched by a pattern, so a manifest next to the files isn't embedded; list it in
-  `files` to embed it.
+  `files` to embed it (a dev build's folder mount then serves it too).
+- A listed file must be spelled as on disk, case included (`Main.lua` for `main.lua` is an error): resource names are
+  case-sensitive, and on a file system that ignores case the wrong spelling would be embedded under a name the dev
+  folder mount doesn't serve.
 - Every path stays under `base`: a `..` segment, an absolute path, a `\` or a `:` is an error, and so is a listed
   file that doesn't exist, an unknown field, a value of the wrong type, a missing or malformed `prefix`, a group
   that selects nothing, and a `compress` entry that isn't one of the group's files. Errors name the manifest and, in
@@ -354,7 +368,7 @@ return {
   `error`, ...), without `dofile`, `loadfile`, `load` and `collectgarbage`, and no `io`, `os`, `require`, `string`
   or `debug`. Bytecode is refused. A Lua error is reported at the manifest's `file:line`.
 
-The tools evaluate manifests at build time (`imlui.tools.resource_manifest`, with `imlui.tools.glob`), through the
+The tools evaluate manifests at build time (`imlui.tools.resource_manifest`, with `imlui.resources.glob`), through the
 `lua` wrapper module, which is its own library (`imlui_lua`) because `imlui_rc` can't link the `imlui` library it
 embeds files into. The library's manifest is `src/resources/resources.lua`: the folder it sits in (`base = "."`, the
 manifest itself excluded) at `imlui:/` and the fonts from `external/fonts/` (`base = "../../external/fonts"`) at
@@ -376,8 +390,9 @@ exports:
 - `imlui::embedded::<name>::packages()`: a `std::vector<ResourcePackage>`, one per group in manifest order, each
   with its mount point, its `EmbeddedMount` (created on first use and shared) and, when the build has
   `IMLUI_DEV_PATHS=ON` (`imlui_rc --dev-paths`), the group's absolute `base` folder as the dev source folder ("" with
-  `OFF`, so a release binary holds no source paths) and `hidden`: the manifest's path in that folder when it lies
-  there. Hosts pass it to `defaultConfig`.
+  `OFF`, so a release binary holds no source paths) and its `selection`: the group's `files`, `include` and
+  `exclude`, plus the manifest's path in that folder when it lies there (nullopt without a source folder). Hosts
+  pass it to `defaultConfig`.
 - `mount(Resources&)`: mounts every group's files at its mount point.
 
 A mount's origin is `embedded '<name>'`, or `embedded '<name> (<mount point>)'` when the manifest has several groups.
@@ -389,7 +404,10 @@ listing, which NTFS updates lazily, so a file added to a scanned folder can be m
 custom target `imlui_resources_<target>_<name>_list` therefore runs `imlui_rc --list` on every build: it evaluates the
 manifest and rewrites the file list (`<name>.files`, an input of the embedding) only when the set of files changed.
 That's cheap (no file is read), and the tool rewrites its other outputs only when they change too, so touching a file
-without changing it rebuilds nothing.
+without changing it rebuilds nothing. Each output is replaced whole (written to `<file>.tmp` and renamed over it), so
+an interrupted run never leaves a truncated blob or module that looks up to date. A changed blob rebuilds the module
+even when the module's text is unchanged: clang lists a file pulled in with `#embed` in the module's own dependency
+file, like a header.
 
 #### Embedding or not
 
@@ -398,7 +416,7 @@ The CMake option `IMLUI_EMBED_RESOURCES` decides whether `imlui_add_resources` e
 from the source folders anyway (they're mounted on top), so embedding them would only make each edit of a Lua file,
 an image or a font re-embed, recompile the generated module and relink. Without embedding, `imlui_rc --source-dirs`
 generates the same module `imlui.embedded.<name>` with the same `packages()` and `mount()`, but no blob: each package
-has its mount point and its group's `base` folder, `files` is null, and `mount()` mounts the folders. The module
+has its mount point, its group's `base` folder and selection, `files` is null, and `mount()` mounts the folders. The module
 depends on the manifest only (no dependency file, no file list target), so editing, adding or removing a resource
 file needs no build at all (`ninja: no work to do`), and hot reload picks it up. Changing the manifest regenerates
 the module: the manifest is still evaluated at build time for its groups' mount points and folders.
@@ -443,7 +461,8 @@ gets the libraries in a working order.
 | Index | per file: u32 length + path, u64 offset (from the start of the archive), u64 stored size, u64 size, u32 flags (bit 0: zstd) |
 | Blobs | each file's stored bytes |
 
-`parsePak` checks the magic and the version, the mount point, that every path is normalized and appears once and
+`parsePak` checks the magic and the version, that the mount point is a full folder name in canonical form (`app:/`,
+`imlui:/fonts/`; not `app:/main.lua`, which would be mounted as a folder of that name), that every path is normalized and appears once and
 every blob lies inside the archive, and caps the sizes, so a truncated or corrupt archive is rejected with a reason instead of being
 read out of bounds.
 
@@ -451,9 +470,11 @@ read out of bounds.
 `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` does it from CMake (by default `bin/<name>.pak`, next to the
 executables, `bin/<config>/<name>.pak` with a multi-config generator; tracked like `imlui_add_resources`: a
 dependency file and the list target `<name>_list`). `writePak` refuses what the reader would reject or a field would
-truncate (a file over the size cap, a duplicate path, a string longer than its u32 length), and `imlui_pack` writes
+truncate (a file over the size cap, an archive over `pakMaxArchiveSize`, a duplicate path, a string longer than its
+u32 length), and `imlui_pack` writes
 `<out.pak>.tmp` and renames it over the output, so a failed run never leaves a partial archive.
-`imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand. An archive keeps its single
+`imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand (a folder under the base that
+can't be listed fails the run rather than packing an incomplete archive). An archive keeps its single
 mount point (format version 1 is unchanged), so **the groups of a manifest packed into one archive must share their
 prefix**: the archive is mounted at the deepest folder that holds every group's mount point, and each group's files
 are stored under their folder below it (`tools::mergeGroups`). The library's manifest, with groups at `imlui:/` and
@@ -473,7 +494,7 @@ which uses a submodule, is the example).
 |---|---|
 | `CMakeLists.txt` | Project setup: `project(imlui VERSION 0.1.0)`, the options `IMLUI_BUILD_TESTS` and `IMLUI_INSTALL` (both default `ON` only at the top level), the CMake helpers, the install folders (`GNUInstallDirs`), `external/`, `src/` (`add_subdirectory(src)`), the tools, the install rules (`IMLUI_INSTALL`), the tests and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level, and no global flags. |
 | `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`, and the options `IMLUI_DEV_PATHS` and `IMLUI_EMBED_RESOURCES`: default the opposite of `IMLUI_DEV_PATHS`, both `OFF` is a configure error), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`, `ImluiInstall.cmake` and `imluiConfig.cmake.in` (the install rules and the package, see [Install layout](#install-layout)). The functions are global once included, so a parent project calls them after `add_subdirectory`; the installed package's config includes `ImluiResources.cmake` and `ImluiWarnings.cmake` the same way. Each file has an include guard. The sanitizer flags are also usage requirements of `imlui_lua` (so of everything that links imlui), as importing a module needs the flags it was built with; an app includes `ImluiSanitizers.cmake` itself before `add_subdirectory` only to instrument its targets that don't link imlui. |
-| `src/CMakeLists.txt` | The library targets: `imlui_lua` (`wrap/lua.cppm`), `imlui_core` (every other `.cppm` under `src/`, globbed), `imlui` (alias `imlui::imlui`: the library's own files, `imlui_add_resources(imlui resources/resources.lua NAME imlui)`, and `imlui/app/default_config.cpp`, linking `imlui_core`), with `IMLUI_INSTALL=ON` the install's embedded copy `imlui_files_install` (see [Embedding or not](#embedding-or-not)), and their install rules (CMake records a module file set's install folder only from rules in the target's own directory). |
+| `src/CMakeLists.txt` | The library targets: `imlui_lua` (`wrap/lua.cppm`), `imlui_glob` (`imlui/resources/glob.cppm`, shared with the resource tools), `imlui_core` (every other `.cppm` under `src/`, globbed, and the implementation unit `imlui/app/config.cpp`), `imlui` (alias `imlui::imlui`: the library's own files, `imlui_add_resources(imlui resources/resources.lua NAME imlui)`, and `imlui/app/default_config.cpp`, linking `imlui_core`), with `IMLUI_INSTALL=ON` the install's embedded copy `imlui_files_install` (see [Embedding or not](#embedding-or-not)), and their install rules (CMake records a module file set's install folder only from rules in the target's own directory). |
 | `src/imlui/`, `src/wrap/` | The library's modules (see the module map below). |
 | `src/resources/` | The library's resources: `resources.lua` (the manifest) and the Lua side (`imlui.lua`), embedded at `imlui:/`. No `.cppm` here, so the module globs never see it. |
 | `tools/` | `imlui_rc` and `imlui_pack`, the build-time resource tools, with the aliases `imlui::imlui_rc` and `imlui::imlui_pack`. `imlui_add_resources` and `imlui_add_pak` run them by those names, which an installed package defines too (imported executables), so the helpers work the same in every mode. |
@@ -490,7 +511,7 @@ library's own rules in `src/CMakeLists.txt`):
 | Path under `<prefix>` | What |
 |---|---|
 | `bin/` | `imlui_rc`, `imlui_pack`: imported as `imlui::imlui_rc`, `imlui::imlui_pack`, which the helpers run. |
-| `lib/` | `imlui_core` (the modules, exported as `imlui::imlui`, which an app links), `imlui_files` (the library's own files, embedded, and `defaultConfig()`: `imlui::imlui_files`, linked by `imlui::imlui`), `imlui_lua` (`imlui::imlui_lua`), all static. The build tree's target `imlui` isn't installed. |
+| `lib/` | `imlui_core` (the modules, exported as `imlui::imlui`, which an app links), `imlui_files` (the library's own files, embedded, and `defaultConfig()`: `imlui::imlui_files`, linked by `imlui::imlui`), `imlui_lua` (`imlui::imlui_lua`), `imlui_glob` (`imlui::imlui_glob`), all static. The build tree's target `imlui` isn't installed. |
 | `lib/imlui/` | The vendored static libraries the library needs: `imlui::ext_lua`, `ext_imgui`, `ext_glfw`, `ext_spdlog` (compiled, `SPDLOG_COMPILED_LIB`, bundled fmt), `ext_stb_image`, `ext_zstd` (the decompressor). Link-only for the app, except through the modules' BMIs. |
 | `lib/cmake/imlui/` | `imluiConfig.cmake` (finds Threads and OpenGL, includes the targets and the helpers), `imluiConfigVersion.cmake` (`SameMinorVersion`: 0.1 accepts 0.1.*, not 0.2), `imluiTargets*.cmake`, `cxx-modules/` (which module each interface unit provides, per configuration), `ImluiResources.cmake`, `ImluiWarnings.cmake`, `ImluiStd.cmake` (builds the module `std` in the app, below). |
 | `include/imlui/modules/` | The module interface units, as laid out in `src/` (`imlui/...`, `wrap/...`). Not `imlui.embedded.imlui`: in an install it's private to `imlui_files`, whose archive holds the blob. |
@@ -542,8 +563,9 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on scope exit |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
-| `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink`, `setLevel` |
+| `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink), `setLevel` |
 | `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
+| `imlui.platform.process` | `executablePath()` (from the OS: `GetModuleFileNameW`, `/proc/self/exe`), `processArguments(argc, argv)` (`ProcessArguments`: the arguments as paths, from the UTF-16 command line on Windows when `argv` is the process's own, and whether it is) |
 | `zstd` | The zstd decompressor: `zstd::contentSize(frame)`, `zstd::decompress(frame, out)`. The tools wrap the compressor themselves (`zstd.compress`, in `tools/lib/`). |
 
 ### Color (`src/imlui/color/`)
@@ -644,13 +666,15 @@ See [Registering C++ types](extending.md).
 | `imlui.resources.name` | `ResourceName`, `parseName`, `normalizeName`, `normalizePath`, `hasPrefix`, `resolveName(base, name)`, `folderOf` |
 | `imlui.resources.data` | `ResourceData`: the bytes `read` returns and the handle that keeps them alive (`bytes`, `data`, `size`, `text`, `owner`) |
 | `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `modified`, `origin`); `ResourceTime` |
-| `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache holding each file's latest buffer, and optional hidden paths |
+| `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache holding each file's latest buffer, and an optional `ResourceSelection` |
+| `imlui.resources.glob` | `globMatch(pattern, path)`, `globRoot`, `globProblem`: manifest patterns. Its own library, `imlui_glob`, shared by the tools and the library |
+| `imlui.resources.selection` | `ResourceSelection`: a manifest group's `files`, `include`, `exclude` and `unmatched` paths; `contains(path)`, `mayContainUnder(folder)` |
 | `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
 | `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |
-| `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry` |
-| `imlui.resources.package` | `ResourcePackage`: an embedded group's mount point, files, dev source folder and the paths its folder mount hides; `imlui::embedded::<name>::packages()` returns one per manifest group |
+| `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry`, `pakMaxFileSize`, `pakMaxArchiveSize` |
+| `imlui.resources.package` | `ResourcePackage`: an embedded group's mount point, files, dev source folder and its `ResourceSelection`; `imlui::embedded::<name>::packages()` returns one per manifest group |
 | `imlui.resources.pak_mount` | `PakMount`: a `.pak` archive in memory; `open(file, error)`, `fromBytes(bytes, name, error)`, `mountPoint()` |
-| `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive`, `modified`, `origin`, `prefixes`, `describe` |
+| `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive` (a folder name with or without its trailing `/`, like `list`), `modified`, `origin`, `prefixes`, `describe` |
 
 ### Images (`src/imlui/image/`)
 
@@ -664,7 +688,7 @@ See [Registering C++ types](extending.md).
 
 | Module | Purpose |
 |---|---|
-| `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload, `exitAfterFrames`), `defaultConfig(argc, argv, std::vector<ResourcePackage>)` and `defaultConfig(argc, argv, {a::packages(), b::packages()})`, `mountPaks(resources, folder, skipPrefix)` |
+| `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload, `exitAfterFrames`), `defaultConfig(argc, argv, std::vector<ResourcePackage>)` and `defaultConfig(argc, argv, {a::packages(), b::packages()})`, `mountPaks(resources, folder, skipPrefix)`. Declarations only: the definitions are in the implementation units `config.cpp` (in `imlui_core`) and `default_config.cpp` (in the target that holds the library's files), so the module has no private module fragment, which would forbid other units |
 | `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `resources()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
 | `imlui` | Umbrella for apps: `import imlui;` |
 
@@ -680,15 +704,14 @@ The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke te
 | `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::packages()` (one `ResourcePackage` per manifest group), `mount(Resources&)`. The library has `imlui.embedded.imlui` (two packages: `imlui:/`, `imlui:/fonts/`). |
 | `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
 | `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data, compress)`, `compressible(path)`: the compression rule and its override |
-| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `utf8`/`pathFromUtf8` |
-| `imlui.tools.glob` | `tools/lib/` | `globMatch(pattern, path)`, `globRoot`, `globProblem`: manifest patterns |
-| `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup`, `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), `manifestDependencies`, `manifestListing` |
+| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through `<file>.tmp` and a rename), `utf8`/`pathFromUtf8` |
+| `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup` (with the selection as written: `listed`, `include`, `exclude`), `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), `manifestDependencies`, `manifestListing` |
 | `imlui.tools.depfile` | `tools/lib/` | `depfileText`, `writeDepfile`: Make-style dependency files for Ninja |
 | `imlui.tools.rc` | `tools/lib/` | `runRc`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |
 | `imlui.tools.pack` | `tools/` | `runPack`, `packFiles(mountPoint, files, error)`, `mergeGroups(manifest, error)`: the `imlui_pack` tool |
 
 The tools are built from `tools/` with the same toolchain. `imlui_rc` doesn't link the library, which is embedded
-with it (only `imlui_lua`, the Lua wrapper); `imlui_pack` links `imlui_core`, for the archive format (not the
+with it (only `imlui_lua`, the Lua wrapper, and `imlui_glob`, the patterns); `imlui_pack` links `imlui_core`, for the archive format (not the
 library's files, so editing them never rebuilds it or re-packs the `.pak` archives).
 
 ## Third-party code

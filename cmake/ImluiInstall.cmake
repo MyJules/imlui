@@ -5,7 +5,7 @@
 #
 #   <prefix>/
 #     bin/                       imlui_rc, imlui_pack                  (imported executables imlui::imlui_rc, ...)
-#     lib/                       imlui, imlui_core, imlui_lua          (imlui::imlui, imlui::imlui_core, ...)
+#     lib/                       imlui, imlui_core, imlui_lua, imlui_glob (imlui::imlui, imlui::imlui_core, ...)
 #     lib/imlui/                 the vendored static libraries         (imlui::ext_lua, ext_imgui, ext_glfw, ...)
 #     lib/cmake/imlui/           imluiConfig.cmake, imluiConfigVersion.cmake, imluiTargets*.cmake, the helpers
 #                                (ImluiResources.cmake, ImluiWarnings.cmake, ImluiStd.cmake: the config builds the
@@ -25,8 +25,8 @@ include(CMakePackageConfigHelpers)
 set(IMLUI_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/imlui)
 set(ext ${PROJECT_SOURCE_DIR}/external)
 
-# The library (imlui, imlui_lua) and its modules are installed by src/CMakeLists.txt: CMake records where a module
-# file set is installed (for the exported module list) only from install rules in the target's own directory.
+# The library (imlui, imlui_lua, imlui_glob) and its modules are installed by src/CMakeLists.txt: CMake records where
+# a module file set is installed (for the exported module list) only from install rules in the target's own directory.
 
 # ------------------------------------------------------------------ resource tools
 install(TARGETS imlui_rc imlui_pack EXPORT imluiTargets RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

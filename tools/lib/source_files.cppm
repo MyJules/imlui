@@ -16,12 +16,20 @@ struct SourceFile {
 };
 
 /// Names `files` relative to `base`, or every regular file under `base` (recursively) when `files` is empty.
-/// nullopt, with the reason in `error`, when a file is missing, outside `base`, or two files get the same path.
+/// nullopt, with the reason in `error`, when a file is missing, outside `base`, two files get the same path, or a
+/// folder under `base` can't be listed (an incomplete list would make an incomplete archive). Entries that can't be
+/// queried (a link to nothing) aren't files and are left out.
 [[nodiscard]] std::optional<std::vector<SourceFile>>
 collectFiles(const std::filesystem::path& base, const std::vector<std::filesystem::path>& files, std::string& error);
 
 /// The contents of `file`; nullopt when it can't be read.
 [[nodiscard]] std::optional<std::vector<std::byte>> readFile(const std::filesystem::path& file);
+
+/// Writes `bytes` to `file` through a temporary file next to it (`<file>.tmp`) renamed over it, so `file` holds
+/// either its old or its new contents, never a partial write (an interrupted build, a full disk). The folder must
+/// exist. False, with the reason in `error` when given, when it can't be written; the old file is then untouched.
+[[nodiscard]] bool replaceFile(const std::filesystem::path& file, std::span<const std::byte> bytes,
+                               std::string* error = nullptr);
 
 /// A UTF-8 string as a path, and back (on Windows a plain std::string would be read in the ANSI code page).
 [[nodiscard]] std::filesystem::path pathFromUtf8(std::string_view s);
@@ -61,6 +69,29 @@ std::optional<std::vector<std::byte>> readFile(const fs::path& file) {
     return bytes;
 }
 
+bool replaceFile(const fs::path& file, std::span<const std::byte> bytes, std::string* error) {
+    fs::path temporary = file;
+    temporary += ".tmp";
+    std::error_code ec;
+    {
+        std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        out.close();
+        if (!out) {
+            fs::remove(temporary, ec);
+            if (error) *error = "can't write '" + utf8(temporary) + "'";
+            return false;
+        }
+    }
+    fs::rename(temporary, file, ec);
+    if (ec) {
+        if (error) *error = "can't replace '" + utf8(file) + "': " + ec.message();
+        fs::remove(temporary, ec);
+        return false;
+    }
+    return true;
+}
+
 std::optional<std::vector<SourceFile>> collectFiles(const fs::path& base, const std::vector<fs::path>& files,
                                                     std::string& error) {
     std::error_code ec;
@@ -70,10 +101,17 @@ std::optional<std::vector<SourceFile>> collectFiles(const fs::path& base, const 
         return std::nullopt;
     }
     std::vector<fs::path> inputs = files;
-    if (inputs.empty())
+    if (inputs.empty()) {
         for (auto it = fs::recursive_directory_iterator(root, ec); !ec && it != fs::recursive_directory_iterator();
-             it.increment(ec))
-            if (it->is_regular_file(ec)) inputs.push_back(it->path());
+             it.increment(ec)) {
+            std::error_code entryEc; // its own: an entry that can't be queried isn't a file, and the walk goes on
+            if (it->is_regular_file(entryEc)) inputs.push_back(it->path());
+        }
+        if (ec) {
+            error = "can't list the files under '" + utf8(root) + "': " + ec.message();
+            return std::nullopt;
+        }
+    }
 
     std::vector<SourceFile> out;
     for (const auto& input : inputs) {

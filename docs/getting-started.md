@@ -289,7 +289,7 @@ alone, say).
 
 | `IMLUI_DEV_PATHS` | Effect |
 |---|---|
-| `ON` (default) | Every package remembers the folder its files come from (the `base` of its group in the resource manifest: the app's `src/resources/`, imlui's `src/resources/` and `external/fonts/`, ...), and `defaultConfig` mounts those folders (over the embedded copies, if any), so editing them hot-reloads without rebuilding. In an app that's the app's own `src/resources/`, and `vendor/imlui/src/resources/` and `vendor/imlui/external/fonts/` for the library. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime where the files are embedded. |
+| `ON` (default) | Every package remembers the folder its files come from (the `base` of its group in the resource manifest: the app's `src/resources/`, imlui's `src/resources/` and `external/fonts/`, ...), and `defaultConfig` mounts those folders (over the embedded copies, if any), so editing them hot-reloads without rebuilding. Each folder serves only the files its manifest group selects, as the build embeds them: a file the manifest leaves out isn't found in development either, and a new file that matches a pattern is there at once. In an app that's the app's own `src/resources/`, and `vendor/imlui/src/resources/` and `vendor/imlui/external/fonts/` for the library. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores them at runtime where the files are embedded. |
 | `OFF` | No source paths are compiled in: the app runs from its embedded files. Use this for a build you move or ship. |
 
 Either way, files next to the executable override the embedded ones: any `*.pak` archive, which mounts itself where

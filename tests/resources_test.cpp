@@ -10,6 +10,7 @@ import imlui.resources.name;
 import imlui.resources.mount;
 import imlui.resources.directory_mount;
 import imlui.lua.errors;
+import imlui.test.file_lock;
 import imlui.test.headless_frame;
 import imlui.test.memory_mount;
 import imlui.test.temp_dir;
@@ -180,28 +181,147 @@ TEST(DirectoryMount, FreesSupersededBuffersOnceNothingHoldsThem) {
     EXPECT_TRUE(versions.back().expired());
 }
 
-TEST(DirectoryMount, HidesTheFilesItIsToldTo) {
+// A selection (a manifest group's `files`, `include` and `exclude`; a dev build's source folder) limits the mount to
+// the files the build would embed: the others aren't read, found, timed or listed, and folders without a selected file
+// don't show. A file added later that matches a pattern is served at once (hot reload), as the next build embeds it.
+TEST(DirectoryMount, ServesOnlyItsSelection) {
     test::TempDir dir;
     dir.write("resources.lua", "return {}");
     dir.write("main.lua", "return 1");
-    dir.write("sub/resources.lua", "-- not hidden: another path");
-    DirectoryMount mount{dir.path(), {"resources.lua"}};
-    EXPECT_FALSE(mount.read("resources.lua"));
-    EXPECT_FALSE(mount.exists("resources.lua"));
-    EXPECT_FALSE(mount.modified("resources.lua"));
-    EXPECT_EQ(mount.list(""), (std::vector<std::string>{"main.lua", "sub/"}));
-    EXPECT_EQ(text(mount.read("sub/resources.lua")), "-- not hidden: another path");
-    EXPECT_EQ(mount.list("sub"), (std::vector<std::string>{"resources.lua"}));
+    dir.write("notes.txt", "not selected");
+    dir.write("ui/Card.lua", "card");
+    dir.write("ui/tests/CardTest.lua", "excluded");
+    dir.write("docs/readme.md", "nothing selected in here");
+    dir.write("data/listed.json", "{}");
+    dir.write("data/other.json", "{}");
+    dir.write("sub/resources.lua", "-- another path: a pattern matches it");
+    DirectoryMount mount{dir.path(), ResourceSelection{.files = {"data/listed.json"},
+                                                       .include = {"**/*.lua"},
+                                                       .exclude = {"ui/tests/**"},
+                                                       .unmatched = {"resources.lua"}}};
+    EXPECT_EQ(text(mount.read("main.lua")), "return 1");
+    EXPECT_EQ(text(mount.read("ui/Card.lua")), "card");
+    EXPECT_EQ(text(mount.read("data/listed.json")), "{}");
+    EXPECT_EQ(text(mount.read("sub/resources.lua")), "-- another path: a pattern matches it");
+    for (const char* unlisted : {"resources.lua", "notes.txt", "ui/tests/CardTest.lua", "data/other.json"}) {
+        EXPECT_FALSE(mount.read(unlisted)) << unlisted;
+        EXPECT_FALSE(mount.exists(unlisted)) << unlisted;
+        EXPECT_FALSE(mount.modified(unlisted)) << unlisted;
+    }
+    EXPECT_TRUE(mount.modified("main.lua"));
+    EXPECT_EQ(mount.list(""), strings({"data/", "main.lua", "sub/", "ui/"}));
+    EXPECT_EQ(mount.list("ui"), strings({"Card.lua"}));
+    EXPECT_EQ(mount.list("data"), strings({"listed.json"}));
+    EXPECT_TRUE(mount.list("docs").empty());
+    EXPECT_FALSE(mount.exists("docs"));
+    EXPECT_FALSE(mount.exists("ui/tests"));
+    EXPECT_TRUE(mount.exists("ui"));
+
+    // New files: one a pattern matches is there at once, one nothing selects isn't.
+    dir.write("ui/New.lua", "new");
+    dir.write("docs/more.md", "still nothing");
+    EXPECT_EQ(text(mount.read("ui/New.lua")), "new");
+    EXPECT_EQ(mount.list("ui"), strings({"Card.lua", "New.lua"}));
+    EXPECT_FALSE(mount.exists("docs/more.md"));
+    dir.write("docs/guide.lua", "a pattern matches it");
+    EXPECT_TRUE(mount.exists("docs"));
+    EXPECT_EQ(mount.list("docs"), strings({"guide.lua"}));
+}
+
+// No pattern matches the manifest, but a manifest listed in `files` is a resource like any other: served by the dev
+// folder (not hidden, which would fall back to a stale embedded copy).
+TEST(DirectoryMount, ServesAManifestItsSelectionLists) {
+    test::TempDir dir;
+    dir.write("resources.lua", "return { prefix = 'app', files = { 'resources.lua' } }");
+    DirectoryMount listed{
+        dir.path(), ResourceSelection{.files = {"resources.lua"}, .include = {"**"}, .unmatched = {"resources.lua"}}};
+    EXPECT_EQ(text(listed.read("resources.lua")), "return { prefix = 'app', files = { 'resources.lua' } }");
+    EXPECT_TRUE(listed.modified("resources.lua"));
+    EXPECT_EQ(listed.list(""), strings({"resources.lua"}));
+    DirectoryMount matched{dir.path(), ResourceSelection{.include = {"**"}, .unmatched = {"resources.lua"}}};
+    EXPECT_FALSE(matched.read("resources.lua"));
+    EXPECT_TRUE(matched.list("").empty());
+}
+
+TEST(ResourceSelection, ContainsAndFolders) {
+    const ResourceSelection s{.files = {"a/b/listed.txt"}, .include = {"ui/**/*.lua", "*.png"}, .exclude = {"ui/x/**"}};
+    EXPECT_TRUE(s.contains("a/b/listed.txt"));
+    EXPECT_TRUE(s.contains("ui/Card.lua"));
+    EXPECT_TRUE(s.contains("logo.png"));
+    EXPECT_FALSE(s.contains("ui/x/Card.lua"));
+    EXPECT_FALSE(s.contains("sub/logo.png"));
+    EXPECT_TRUE(s.mayContainUnder(""));
+    EXPECT_TRUE(s.mayContainUnder("a"));
+    EXPECT_TRUE(s.mayContainUnder("a/b"));
+    EXPECT_FALSE(s.mayContainUnder("a/b/listed.txt"));
+    EXPECT_TRUE(s.mayContainUnder("ui/deep/er"));
+    EXPECT_FALSE(s.mayContainUnder("docs"));
+    EXPECT_FALSE(ResourceSelection{}.mayContainUnder(""));
+}
+
+// A changed file that can't be opened right now (an editor holding it without sharing while it saves) is served from
+// its previous bytes, not dropped (which would fall back to a stale embedded copy), and modified() keeps reporting the
+// time of those bytes until a read succeeds, so a hot reload polling it tries again.
+TEST(DirectoryMount, ServesThePreviousVersionWhileAChangedFileCantBeRead) {
+    test::TempDir dir;
+    dir.write("a.lua", "v1");
+    DirectoryMount mount{dir.path()};
+    const auto v1 = mount.modified("a.lua");
+    ASSERT_TRUE(v1);
+    ASSERT_EQ(text(mount.read("a.lua")), "v1");
+
+    dir.write("a.lua", "v2");
+    dir.touch("a.lua", 10);
+    {
+        test::FileLock lock{dir.path() / "a.lua"};
+        if (!lock.locked()) GTEST_SKIP() << "can't lock a file here";
+        const auto v2 = mount.modified("a.lua");
+        ASSERT_TRUE(v2);
+        EXPECT_NE(*v2, *v1) << "the change is seen";
+        EXPECT_EQ(text(mount.read("a.lua")), "v1") << "the previous bytes, not nothing";
+        EXPECT_EQ(mount.modified("a.lua"), v1) << "still changed for the next poll";
+    }
+    EXPECT_EQ(text(mount.read("a.lua")), "v2");
+    EXPECT_NE(mount.modified("a.lua"), v1);
+
+    // A file that was never read and can't be: missing, and no time, until it can be.
+    dir.write("b.lua", "b");
+    {
+        test::FileLock lock{dir.path() / "b.lua"};
+        if (!lock.locked()) GTEST_SKIP() << "can't lock a file here";
+        EXPECT_TRUE(mount.modified("b.lua"));
+        EXPECT_FALSE(mount.read("b.lua"));
+        EXPECT_FALSE(mount.modified("b.lua"));
+    }
+    EXPECT_EQ(text(mount.read("b.lua")), "b");
+    EXPECT_TRUE(mount.modified("b.lua"));
+}
+
+// Mounts are called from Lua's C frames, so a DirectoryMount never throws: a name that isn't valid UTF-8 (which the
+// file system can't convert) is simply not found, also below an existing file.
+TEST(DirectoryMount, NeverThrows) {
+    test::TempDir dir;
+    dir.write("main.lua", "return 1");
+    DirectoryMount mount{dir.path()};
+    for (const char* bad : {"\xff", "main.lua/\xff", "\xc3(x", "sub/\xed\xa0\x80.lua"}) {
+        EXPECT_NO_THROW({
+            EXPECT_FALSE(mount.read(bad));
+            EXPECT_FALSE(mount.exists(bad));
+            EXPECT_TRUE(mount.list(bad).empty());
+            EXPECT_FALSE(mount.modified(bad));
+        }) << bad;
+    }
+    EXPECT_EQ(text(mount.read("main.lua")), "return 1");
 }
 
 // Names are case-sensitive, as in the embedded and .pak mounts, also where the file system isn't (Windows): a wrong
-// case in any segment isn't found, so it fails in development too, and can't get around a hidden file.
+// case in any segment isn't found, so it fails in development too, and can't get around the selection.
 TEST(DirectoryMount, NamesAreCaseSensitive) {
     test::TempDir dir;
     dir.write("Main.lua", "main");
     dir.write("Sub/Data.txt", "data");
     dir.write("resources.lua", "return {}");
-    DirectoryMount mount{dir.path(), {"resources.lua"}};
+    DirectoryMount mount{dir.path(), ResourceSelection{.include = {"**"}, .unmatched = {"resources.lua"}}};
     EXPECT_EQ(text(mount.read("Main.lua")), "main");
     EXPECT_EQ(text(mount.read("Sub/Data.txt")), "data");
     EXPECT_TRUE(mount.modified("Sub/Data.txt"));
@@ -277,6 +397,13 @@ TEST(Resources, MountsInsideAFolder) {
     EXPECT_EQ(res.list("imlui:/"), strings({"assets/", "imlui.lua"}));
     EXPECT_EQ(res.list("imlui:/assets"), strings({"fonts/"}));
     EXPECT_EQ(res.listRecursive("imlui:/"), strings({"imlui:/assets/fonts/Roboto.ttf", "imlui:/imlui.lua"}));
+    // A folder name with or without its trailing slash, as in list(): the folder, not its parent.
+    EXPECT_EQ(res.listRecursive("imlui:/assets"), strings({"imlui:/assets/fonts/Roboto.ttf"}));
+    EXPECT_EQ(res.listRecursive("imlui:/assets/fonts"), strings({"imlui:/assets/fonts/Roboto.ttf"}));
+    EXPECT_EQ(res.listRecursive("imlui:/assets/fonts/"), strings({"imlui:/assets/fonts/Roboto.ttf"}));
+    EXPECT_EQ(res.list("imlui:/assets/fonts"), res.list("imlui:/assets/fonts/"));
+    EXPECT_TRUE(res.listRecursive("imlui:/imlui.lua").empty()); // a file isn't a folder
+    EXPECT_TRUE(res.listRecursive("not a name").empty());
     EXPECT_EQ(res.describe(), strings({"imlui:/ <- memory 'memory'", "imlui:/assets/fonts/ <- memory 'memory'"}));
 }
 

@@ -52,9 +52,7 @@ std::string depfileText(const fs::path& target, std::span<const fs::path> depend
 
 bool writeDepfile(const fs::path& file, const fs::path& target, std::span<const fs::path> dependencies) {
     const std::string text = depfileText(target, dependencies);
-    std::ofstream stream{file, std::ios::binary | std::ios::trunc};
-    stream << text;
-    return static_cast<bool>(stream);
+    return replaceFile(file, std::as_bytes(std::span{text}));
 }
 
 } // namespace imlui::tools

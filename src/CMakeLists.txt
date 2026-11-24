@@ -2,6 +2,7 @@
 # this folder (CMAKE_CURRENT_SOURCE_DIR):
 #
 #   imlui_lua    the Lua wrapper (module `lua`)
+#   imlui_glob   the resource manifests' glob patterns (module `imlui.resources.glob`), shared with the resource tools
 #   imlui_core   every other module under src/
 #   imlui        what apps link in the build tree, with the alias imlui::imlui: the library's own files
 #                (resources/resources.lua, the generated module imlui.embedded.imlui), linking imlui_core PUBLIC
@@ -47,20 +48,43 @@ if(IMLUI_SANITIZER_COMPILE_OPTIONS)
     target_link_options(imlui_lua INTERFACE ${IMLUI_SANITIZER_LINK_OPTIONS})
 endif()
 
+# ------------------------------------------------------------------ glob patterns (module `imlui.resources.glob`)
+# Its own library, like imlui_lua: the resource tools select a manifest's files with it at build time, and the library
+# matches a dev source folder's reads against the same patterns (ResourceSelection), but imlui_rc can't link imlui_core.
+# It links imlui_lua only for the module `std` and the flags importing it needs (-ftrapv in Debug, the sanitizers).
+add_library(imlui_glob STATIC)
+target_sources(imlui_glob
+    PUBLIC
+        FILE_SET CXX_MODULES
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES imlui/resources/glob.cppm
+)
+target_link_libraries(imlui_glob PUBLIC imlui_lua)
+target_compile_features(imlui_glob PUBLIC cxx_std_20)
+set_target_properties(imlui_glob PROPERTIES EXPORT_NAME imlui_glob)
+imlui_set_warnings(imlui_glob)
+imlui_set_hardening(imlui_glob)
+
 # ------------------------------------------------------------------ library (modules)
 add_library(imlui_core STATIC)
 file(GLOB_RECURSE IMLUI_MODULES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cppm)
-list(REMOVE_ITEM IMLUI_MODULES ${CMAKE_CURRENT_SOURCE_DIR}/wrap/lua.cppm)
+list(REMOVE_ITEM IMLUI_MODULES ${CMAKE_CURRENT_SOURCE_DIR}/wrap/lua.cppm
+                               ${CMAKE_CURRENT_SOURCE_DIR}/imlui/resources/glob.cppm)
 target_sources(imlui_core
     PUBLIC
         FILE_SET CXX_MODULES
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${IMLUI_MODULES}
 )
-target_link_libraries(imlui_core PUBLIC imlui_lua PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image ext::zstd)
-# imlui.platform.window colors the title bar through DWM (DwmSetWindowAttribute).
+# Implementation units (`module x;`, no interface): imlui.app.config's definitions. Its other one, default_config.cpp,
+# is compiled into the target that holds the library's files (below).
+target_sources(imlui_core PRIVATE imlui/app/config.cpp)
+target_link_libraries(imlui_core PUBLIC imlui_lua imlui_glob
+                                 PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image ext::zstd)
+# imlui.platform.window colors the title bar through DWM (DwmSetWindowAttribute); imlui.platform.process reads the
+# command line as UTF-16 (CommandLineToArgvW, shell32).
 if(WIN32)
-    target_link_libraries(imlui_core PRIVATE dwmapi)
+    target_link_libraries(imlui_core PRIVATE dwmapi shell32)
 endif()
 target_compile_features(imlui_core PUBLIC cxx_std_20)
 imlui_set_warnings(imlui_core)
@@ -105,7 +129,7 @@ if(IMLUI_INSTALL)
 
     # Here rather than in ImluiInstall.cmake: CMake records where a module file set is installed (the module list it
     # exports) only from install rules in the target's own directory. The modules keep src/'s layout.
-    install(TARGETS imlui_core imlui_lua imlui_files_install EXPORT imluiTargets
+    install(TARGETS imlui_core imlui_lua imlui_glob imlui_files_install EXPORT imluiTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         FILE_SET CXX_MODULES DESTINATION ${IMLUI_INSTALL_MODULEDIR}
     )
