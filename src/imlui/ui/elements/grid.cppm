@@ -1,0 +1,77 @@
+// Grid: children in a table with `columns` cells per row, as a typed element (TypeBuilder).
+module;
+
+#include <algorithm>
+
+export module imlui.ui.elements.grid;
+
+import lua;
+import imgui;
+import imlui.lua.node;
+import imlui.ui.renderer;
+import imlui.types.element;
+import imlui.types.frame;
+import imlui.types.type_builder;
+
+export namespace imlui {
+
+/// Grid { columns = 2, spacing = 8, border = false, width = 0, children... }
+class Grid final : public Element {
+public:
+    static void declare(TypeBuilder<Grid>& type);
+
+    void render(Frame& frame) override;
+
+    [[nodiscard]] int columns() const;
+    void setColumns(int columns);
+    [[nodiscard]] float spacing() const; ///< dp between cells
+    void setSpacing(float spacing);
+    [[nodiscard]] bool border() const;
+    void setBorder(bool border);
+
+private:
+    int m_columns = 2;
+    float m_spacing = 8.0f;
+    bool m_border = false;
+};
+
+} // namespace imlui
+
+module :private;
+
+namespace imlui {
+
+void Grid::declare(TypeBuilder<Grid>& type) {
+    type.property("columns", &Grid::columns, &Grid::setColumns)
+        .property("spacing", &Grid::spacing, &Grid::setSpacing)
+        .property("border", &Grid::border, &Grid::setBorder);
+}
+
+void Grid::render(Frame& frame) {
+    const int cols = std::max(1, m_columns);
+    ImGuiTableFlags f = ImGuiTableFlags_SizingStretchSame;
+    if (m_border) f |= ImGuiTableFlags_Borders;
+    const float pad = frame.dp(m_spacing) * 0.5f;
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {pad, pad});
+    if (ImGui::BeginTable("##grid", cols, f, {frame.size("width"), 0})) {
+        // Not frame.forEachChild(): that skips hidden children, and a hidden child keeps its (empty) cell here,
+        // so the other cells don't move when it toggles. Non-visual children (timers, dialogs) take no cell.
+        Renderer& r = frame.renderer();
+        lua::State* state = frame.node().state();
+        r.forEachChild(frame.node(), [&](int idx) {
+            if (r.isVisual(state, idx)) ImGui::TableNextColumn();
+            r.render(state, idx);
+        });
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
+}
+
+int Grid::columns() const { return m_columns; }
+void Grid::setColumns(int columns) { m_columns = columns; }
+float Grid::spacing() const { return m_spacing; }
+void Grid::setSpacing(float spacing) { m_spacing = spacing; }
+bool Grid::border() const { return m_border; }
+void Grid::setBorder(bool border) { m_border = border; }
+
+} // namespace imlui
