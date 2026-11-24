@@ -5,6 +5,7 @@ export module imlui.ui.elements.radio_button;
 
 import std;
 
+import imgui;
 import lua;
 import imlui.widgets;
 import imlui.lua.node;
@@ -26,6 +27,8 @@ public:
     static void declare(TypeBuilder<RadioButton>& type);
 
     void render(Frame& frame) override;
+    /// The ring and its label.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -89,5 +92,9 @@ const std::string& RadioButton::text() const { return m_text; }
 void RadioButton::setText(std::string text) { m_text = std::move(text); }
 bool RadioButton::checked() const { return m_checked; }
 void RadioButton::setChecked(bool checked) { m_checked = checked; }
+
+std::optional<ImVec2> RadioButton::intrinsicSize(const Frame&, float) {
+    return md::radioSize(Frame::labelId(m_text, "rb").c_str());
+}
 
 } // namespace imlui

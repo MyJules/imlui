@@ -3,6 +3,7 @@ export module imlui.ui.elements.chip;
 
 import std;
 
+import imgui;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -21,6 +22,8 @@ public:
     static void declare(TypeBuilder<Chip>& type);
 
     void render(Frame& frame) override;
+    /// Its label, icon and padding.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -80,5 +83,9 @@ const std::string& Chip::variant() const { return m_variant; }
 void Chip::setVariant(std::string variant) { m_variant = std::move(variant); }
 const std::string& Chip::icon() const { return m_icon; }
 void Chip::setIcon(std::string icon) { m_icon = std::move(icon); }
+
+std::optional<ImVec2> Chip::intrinsicSize(const Frame&, float) {
+    return md::chipSize(Frame::labelId(m_text, "chip").c_str(), m_checked, md::chipVariant(m_variant), m_icon);
+}
 
 } // namespace imlui

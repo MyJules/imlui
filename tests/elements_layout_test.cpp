@@ -24,6 +24,8 @@ import imlui.ui.elements.tab_bar;
 import imlui.ui.elements.tree_node;
 import imlui.test.headless_frame;
 import imlui.test.last_item_probe;
+import imlui.theme.dpi;
+import imlui.theme.theme;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
 import imlui.ui.layout_cache;
@@ -42,6 +44,7 @@ public:
             .property("intrinsic", &Probe::intrinsic, &Probe::setIntrinsic);
     }
     std::optional<ImVec2> intrinsicSize(const Frame&, float) override {
+        ++m_queries;
         if (!m_intrinsic) return std::nullopt;
         return ImVec2{m_w, m_h};
     }
@@ -63,6 +66,8 @@ public:
     [[nodiscard]] ImVec2 pos() const { return m_pos; }
     [[nodiscard]] float itemWidth() const { return m_itemWidth; }
     [[nodiscard]] int renders() const { return m_renders; }
+    /// How often intrinsicSize() ran (TypeRegistry memoizes it per frame and maxWidth).
+    [[nodiscard]] int queries() const { return m_queries; }
     /// Whether it could be seen when it last rendered (not clipped away).
     [[nodiscard]] bool seen() const { return m_seen; }
 
@@ -72,6 +77,7 @@ private:
     ImVec2 m_pos{-1.0f, -1.0f};
     float m_itemWidth = 0.0f;
     int m_renders = 0;
+    int m_queries = 0;
     bool m_seen = false;
     bool m_intrinsic = false;
 };
@@ -1111,32 +1117,115 @@ TEST_F(LayoutTest, AnElementAtARecycledAddressStartsFresh) {
 // ------------------------------------------------------------ Intrinsic sizes
 
 // An intrinsic size must be exactly what the element then renders at (or layouts would keep asking for frames):
-// Text, Icon, Button, IconButton and Spacer report theirs; wrapping or aligned Text and fills don't.
+// every built-in leaf whose size follows from its props, the font and the theme reports its own (fills: what they take
+// of the available width), and stacks compose theirs from their children's. Checked at several zooms (the theme
+// re-applied at each), where sizes aren't whole pixels. The last ones report none: a titled Separator (ImGui draws it
+// to the window's edge), a fill height, a custom element without one, and a stack holding one.
 TEST_F(LayoutTest, IntrinsicSizesAreWhatTheElementsRender) {
-    run(R"(
+    // A window tall enough for all of them: ImGui doesn't lay out a child window (a Card) out of view, so it would
+    // keep its old size there.
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.height = 30000.0f, .builtins = true}};
+    h.registerType<Probe>("Probe");
+    h.registerType<Measure>("Measure");
+    ASSERT_EQ(h.run(R"(
         root = Measure {
             Text { "Hello" }, Text { "" }, Text { "Two\nlines", style = "headlineSmall" },
+            Text { "centered", align = "center" }, Text { "at the end", align = "end", style = "titleLarge" },
+            Text { "A paragraph long enough to wrap over a few lines of the window, and then some more words.",
+                   wrap = true },
             Icon { "home" }, Icon { "home", size = 40 },
             Button { "OK" }, Button { "Save", icon = "save", variant = "tonal" }, Button { "Go", variant = "text" },
             Button { variant = "fab", icon = "add" }, Button { "Compose", variant = "fab", icon = "edit" },
-            Button { "Wide", width = 200, height = 50 }, IconButton { "menu" },
-            Spacer {}, Spacer { width = 30, height = 12 },
-            Text { "wrapped", wrap = true }, Text { "centered", align = "center" },
-            Button { "fill", fillWidth = true }, Spacer { fill = true }, Probe {} })");
-    m_h.renderFrames("root", 2);
-    Measure* m = m_h.instance<Measure>("root");
-    ASSERT_NE(m, nullptr);
-    ASSERT_EQ(m->results.size(), 19u);
-    for (std::size_t i = 0; i < m->results.size(); ++i) {
-        const Measure::Result& r = m->results[i];
-        if (i >= 14) {
-            EXPECT_FALSE(r.intrinsic) << i << " " << r.type;
-            continue;
+            Button { "Wide", width = 200, height = 50 }, Button { "fill", fillWidth = true },
+            Button { "minus", width = -40 }, IconButton { "menu" },
+            Spacer {}, Spacer { width = 30, height = 12 }, Spacer { fill = true }, Spacer { width = -30, height = 4 },
+            Link { "imlui", url = "https://example.com" },
+            Checkbox { "Check" }, Checkbox {}, Switch { "Wi-Fi" }, Switch {}, RadioButton { "One" },
+            RadioGroup { model = { "a", "bb", "ccc" } }, RadioGroup { model = { "a", "bb" }, horizontal = true },
+            Chip { "Filter" }, Chip { "Selected", checked = true },
+            Chip { "Assist", variant = "assist", icon = "event" },
+            ProgressBar { value = 0.5 }, ProgressBar { fillWidth = true }, ProgressBar { width = 100 },
+            CircularProgress { value = 0.3 }, CircularProgress { size = 30 },
+            BusyIndicator {}, BusyIndicator { running = false, size = 20 },
+            Divider {}, Divider { width = 120 }, Separator {},
+            TextField { label = "Name" }, TextField { width = 200, supportingText = "Help" },
+            TextField { password = true, variant = "outlined" }, TextArea { label = "Notes" }, TextArea { height = 30 },
+            Slider {}, Slider { width = 150 },
+            SpinBox { label = "Count" }, SpinBox { width = 150, variant = "outlined" },
+            ComboBox { model = { "a", "b" } }, ComboBox { model = { "a" }, width = 100, supportingText = "Pick" },
+            SegmentedButton { model = { "Day", "Week", "Month" } }, SegmentedButton { model = { "A" }, width = 90 },
+            ListItem { "Item" }, ListItem { "Two", supportingText = "lines" },
+            Plot { values = { 1, 2, 3 } }, Plot { values = { 1 }, width = 100, height = 40 },
+            ColorPicker { color = "#ff0000", label = "Color" }, Canvas {}, Canvas { width = 100, height = 50 },
+            NavigationItem { "Home", icon = "home" }, Image { width = 40, height = 30 }, Image {},
+            Section { "Header" }, Section { "Open", supportingText = "two lines", expanded = true, Text { "inside" } },
+            TopAppBar { title = "Title" }, TopAppBar { title = "Medium", variant = "medium", IconButton { "search" } },
+            NavigationBar { NavigationItem { "A", icon = "home" }, NavigationItem { "B", icon = "star" } },
+            Column { Text { "a" }, Button { "b" } },
+            Column { padding = 12, spacing = 4, align = "center", Text { "x" }, Icon { "home" }, TextField {} },
+            Column { width = 200, Text { "a" } }, Column { padding = 3, Checkbox { "c" } }, Column { TextField {} },
+            Row { Text { "a" }, Button { "b" } }, Row { justify = "end", Text { "x" } },
+            Row { justify = "spaceBetween", Chip { "a" }, Chip { "b" } }, Row { justify = "center", Icon { "home" } },
+            Row { Text { "a" }, Spacer { fill = true }, Button { "b" } },
+            Row { align = "top", spacing = 0, Icon { "home" }, Text { "x" } },
+            Row { Text { "label" }, Text { "wraps in its share of the row, over a few lines", wrap = true } },
+            Card { Text { "in a card" }, Button { "OK" } }, Card { width = 300, padding = 8, Column { Text { "a" } } },
+            Card { variant = "outlined", height = 90, Text { "fixed" } },
+            Column { Row { Column { Text { "deep" }, Button { "b" } }, Icon { "home" } },
+                     Card { Row { Text { "x" } } } },
+            Separator { "Titled" }, TextArea { height = -1 }, Probe {}, Column { Probe {} },
+            Row { Text { "a" }, Probe {} },
+            Card { Probe {} } })"),
+              "");
+    constexpr std::size_t none = 6; // the last ones
+    for (const float scale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+        setZoom(scale);
+        reapplyTheme();
+        h.renderFrames("root", 3); // a Card's child window fits its content a frame later (ImGui)
+        Measure* m = h.instance<Measure>("root");
+        ASSERT_NE(m, nullptr);
+        ASSERT_GT(m->results.size(), none);
+        for (std::size_t i = 0; i < m->results.size(); ++i) {
+            const Measure::Result& r = m->results[i];
+            if (i >= m->results.size() - none) {
+                EXPECT_FALSE(r.intrinsic) << scale << " " << i << " " << r.type;
+                continue;
+            }
+            ASSERT_TRUE(r.intrinsic) << scale << " " << i << " " << r.type;
+            EXPECT_FLOAT_EQ(r.intrinsic->x, r.rendered.x) << scale << " " << i << " " << r.type;
+            EXPECT_FLOAT_EQ(r.intrinsic->y, r.rendered.y) << scale << " " << i << " " << r.type;
         }
-        ASSERT_TRUE(r.intrinsic) << i << " " << r.type;
-        EXPECT_FLOAT_EQ(r.intrinsic->x, r.rendered.x) << i << " " << r.type;
-        EXPECT_FLOAT_EQ(r.intrinsic->y, r.rendered.y) << i << " " << r.type;
-        EXPECT_GT(r.rendered.y, 0.0f) << i << " " << r.type;
+    }
+    setZoom(1.0f);
+    reapplyTheme();
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Wrapping text is as wide and as tall as it wraps in the width it's given, at any width; so is a Column (or a
+// Card) of it.
+TEST_F(LayoutTest, WrappedTextReportsTheSizeItWrapsTo) {
+    run(R"(
+        local words = "The quick brown fox jumps over the lazy dog, again and again, until the line runs out."
+        local function measured(w)
+            return Column { width = w, Measure { id = "m" .. w, Text { words, wrap = true },
+                                                 Column { Text { words, wrap = true, style = "titleMedium" } },
+                                                 Card { Text { words, wrap = true } } } }
+        end
+        root = Column { measured(60), measured(150), measured(333), measured(790) })");
+    m_h.renderFrames("root", 3);
+    float lastHeight = 1e9f;
+    for (const int w : {60, 150, 333, 790}) {
+        Measure* m = m_h.instance<Measure>("m" + std::to_string(w));
+        ASSERT_NE(m, nullptr);
+        ASSERT_EQ(m->results.size(), 3u);
+        for (const Measure::Result& r : m->results) {
+            ASSERT_TRUE(r.intrinsic) << w << " " << r.type;
+            EXPECT_FLOAT_EQ(r.intrinsic->x, r.rendered.x) << w << " " << r.type;
+            EXPECT_FLOAT_EQ(r.intrinsic->y, r.rendered.y) << w << " " << r.type;
+        }
+        EXPECT_LE(m->results[0].rendered.x, static_cast<float>(w)) << w;
+        EXPECT_LT(m->results[0].rendered.y, lastHeight) << w; // wider: fewer lines
+        lastHeight = m->results[0].rendered.y;
     }
     EXPECT_TRUE(luaui::errors().empty());
 }
@@ -1164,6 +1253,92 @@ TEST_F(LayoutTest, IntrinsicSizesPlaceChildrenOnTheirFirstFrame) {
     EXPECT_TRUE(probe("action").seen());
     // Nothing was misplaced, so nothing asks for another frame.
     EXPECT_GT(secondsUntilFrame(), 0.0);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Stacks of children with intrinsic sizes have one too, so nested containers are in place on their first frame:
+// a stack centered in a Column, a Column at the end of a justified Row, a Column that fills its share of a Row (it
+// holds a fill), a Column centered by height in a Row. Nothing renders unseen, nothing asks for another frame.
+TEST_F(LayoutTest, NestedContainersArePlacedOnTheirFirstFrame) {
+    run(R"(
+        title = Probe { w = 40, h = 20, intrinsic = true } ok = Probe { w = 20, intrinsic = true }
+        cancel = Probe { w = 30, intrinsic = true }
+        ended = Probe { w = 50, intrinsic = true }
+        label = Probe { w = 50, intrinsic = true } after = Probe { w = 20, intrinsic = true }
+        tall = Probe { w = 10, h = 60, intrinsic = true } a = Probe { h = 10, intrinsic = true }
+        b = Probe { h = 10, intrinsic = true }
+        root = Column {
+            Column { align = "center", Column { title, Row { spacing = 0, ok, cancel } } },
+            Row { justify = "end", Column { padding = 5, ended } },
+            Row { spacing = 0, label, Column { ProgressBar { fillWidth = true } }, after },
+            Row { spacing = 0, tall, Column { spacing = 0, a, b } } })");
+    m_h.renderFrame("root");
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    // The centered stack is as wide as its widest row: the title (40) under OK and Cancel (50).
+    EXPECT_FLOAT_EQ(probe("title").pos().x, x0 + (contentWidth() - 50.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(probe("ok").pos().x, probe("title").pos().x);
+    EXPECT_FLOAT_EQ(probe("cancel").pos().x, probe("ok").pos().x + 20.0f);
+    // The padded column (5 + 50) at the row's end.
+    EXPECT_FLOAT_EQ(probe("ended").pos().x, x0 + contentWidth() - 50.0f);
+    // The column holding a fill takes what the probes leave.
+    EXPECT_FLOAT_EQ(probe("after").pos().x, x0 + contentWidth() - 20.0f);
+    // The two-probe column (10 + spacing 0 + 10) centered by height next to the 60px probe.
+    EXPECT_FLOAT_EQ(probe("a").pos().y, probe("tall").pos().y + 20.0f);
+    for (const char* name : {"title", "ok", "cancel", "ended", "label", "after", "tall", "a", "b"})
+        EXPECT_TRUE(probe(name).seen()) << name;
+    EXPECT_GT(secondsUntilFrame(), 0.0); // nothing was misplaced or unseen
+    // And they stay there.
+    const ImVec2 title = probe("title").pos(), ended = probe("ended").pos(), a = probe("a").pos();
+    m_h.renderFrames("root", 3);
+    EXPECT_FLOAT_EQ(probe("title").pos().x, title.x);
+    EXPECT_FLOAT_EQ(probe("ended").pos().x, ended.x);
+    EXPECT_FLOAT_EQ(probe("a").pos().y, a.y);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Composing sizes neither syncs an element more than once a frame (a Column in a Row in a Column: the outer stack's
+// `align` asks the Row, which asks the inner Column, which asks its children, and then each renders) nor computes an
+// intrinsic size more than once a frame for one available width.
+TEST_F(LayoutTest, ComposedSizesSyncEachElementOncePerFrame) {
+    run(R"(
+        counts = {}
+        local function counted(name, value)
+            return function() counts[name] = (counts[name] or 0) + 1 return value end
+        end
+        p = Probe { w = counted("probe", 20), intrinsic = true }
+        root = Column { align = "center", padding = counted("outer", 0),
+                        Row { justify = counted("row", "start"),
+                              Column { padding = counted("inner", 2), Text { text = counted("text", "label") }, p },
+                              Icon { name = counted("icon", "home") } } })");
+    m_h.renderFrames("root", 3);
+    const int queries = probe("p").queries();
+    run("counts = {}");
+    m_h.renderFrames("root", 2);
+    for (const char* name : {"outer", "row", "inner", "text", "probe", "icon"})
+        check(std::string{"counts."} + name + " == 2");
+    EXPECT_LE(probe("p").queries() - queries, 2 * 2); // at most two widths a frame (the outer box's, the row's)
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A custom element without an intrinsic size makes its Column fall back to the layout cache: no intrinsic size, so
+// a centered parent renders it unseen on its first frame, and it is in place on the next.
+TEST_F(LayoutTest, AStackWithACustomChildFallsBackToTheCache) {
+    run(R"(
+        custom = Probe { w = 40 }
+        root = Column { align = "center", Measure { id = "m", Column { custom, Text { "x" } } } })");
+    m_h.renderFrame("root");
+    Measure* m = m_h.instance<Measure>("m");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 1u);
+    EXPECT_FALSE(m->results[0].intrinsic);
+    run("root = Column { align = 'center', Column { custom, Text { 'x' } } }");
+    m_h.renderFrame("root");
+    EXPECT_FALSE(probe("custom").seen()); // its first frame in this place: measured, not seen
+    EXPECT_GE(renderWhileRequested("root"), 1);
+    EXPECT_TRUE(probe("custom").seen());
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    EXPECT_FLOAT_EQ(probe("custom").pos().x, x0 + (contentWidth() - 40.0f) * 0.5f);
+    EXPECT_GT(secondsUntilFrame(), 0.0); // settled
     EXPECT_TRUE(luaui::errors().empty());
 }
 

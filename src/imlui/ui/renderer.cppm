@@ -42,11 +42,12 @@ public:
         /// Syncs and renders the element `node`, of a registered type. Runs inside the renderer's per-element
         /// wrapper.
         virtual void renderElement(Renderer& renderer, const luaui::Node& node) = 0;
-        /// Whether the element `node` fills the available width when its `width` is unset (its type's own default,
-        /// TypeBuilder::fillsWidth / fillsWidthWhen). May sync the element's properties.
-        [[nodiscard]] virtual bool fillsWidth(const luaui::Node& node) = 0;
+        /// Whether the element `node` fills the available width when its `width` is unset: its type's own default
+        /// (TypeBuilder::fillsWidth / fillsWidthWhen) or its content (Element::contentFillsWidth). Syncs the
+        /// element's properties; computed once a frame.
+        [[nodiscard]] virtual bool fillsWidth(Renderer& renderer, const luaui::Node& node) = 0;
         /// The element's intrinsic size with `maxWidth` available (Element::intrinsicSize): nullopt when its type
-        /// can't tell before rendering. Syncs the element's properties.
+        /// can't tell before rendering. Syncs the element's properties; computed once a frame per `maxWidth`.
         [[nodiscard]] virtual std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
                                                                   float maxWidth) = 0;
         /// The element's identity: its instance's ScriptObject::objectId(), unique for the process's lifetime and
@@ -131,7 +132,8 @@ public:
 
     /// True unless the element at `idx` is of a registered non-visual type (Timer, Dialog, ...).
     [[nodiscard]] bool isVisual(lua::State* state, int idx) const;
-    /// Whether the element at `idx` fills the available width when its `width` is unset (Types::fillsWidth).
+    /// Whether the element at `idx` fills the available width when its `width` is unset (Types::fillsWidth: its
+    /// type's policy or its content).
     [[nodiscard]] bool fillsWidth(lua::State* state, int idx);
     /// The element's intrinsic size (Element::intrinsicSize) with `maxWidth` available, if its type knows it.
     [[nodiscard]] std::optional<ImVec2> intrinsicSize(const luaui::Node& node, float maxWidth);
@@ -144,6 +146,10 @@ public:
     /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box), by their
     /// intrinsic widths or else last frame's (imlui.ui.layout_cache).
     void renderStack(const luaui::Node& node);
+    /// The size renderStack(node) takes with `maxWidth` available, composed from the visual children's intrinsic
+    /// sizes (and ImGui's whole-pixel line advance); {0, 0} without visual children. nullopt when a child has none,
+    /// or when an aligned stack is in an auto-sized window (it aligns in the widest child of the last frame).
+    [[nodiscard]] std::optional<ImVec2> stackSize(const luaui::Node& node, float maxWidth);
 
     /// Pops up `node.menu` (a Menu element) anchored to the last item when
     /// `clicked`; renders it while open.
@@ -224,7 +230,7 @@ bool Renderer::isVisual(lua::State* state, int idx) const {
     return m_types.kind(Node{state, idx}.type()) != Types::Kind::NonVisual;
 }
 
-bool Renderer::fillsWidth(lua::State* state, int idx) { return m_types.fillsWidth(Node{state, idx}); }
+bool Renderer::fillsWidth(lua::State* state, int idx) { return m_types.fillsWidth(*this, Node{state, idx}); }
 
 std::optional<ImVec2> Renderer::intrinsicSize(const Node& node, float maxWidth) {
     return m_types.intrinsicSize(*this, node, maxWidth);
@@ -272,6 +278,10 @@ void Renderer::renderStack(const Node& node) {
                                  ImGui::GetStyle().ItemSpacing.y);
         bool unseen = false;
         float fillOffset = 0.0f;
+        // Every child starts at the stack's left edge, set explicitly: ImGui starts a new line at the window's
+        // whole-pixel indent, which would put the children after the first a fraction of a pixel left of it in a
+        // stack that starts at a fractional x (after a Text in a Row), and their sizes would no longer compose.
+        ImGui::SetCursorScreenPos({x0, ImGui::GetCursorScreenPos().y});
         if (align > 0.0f) {
             const float width = sizeProp(c, "width");
             if (width != 0.0f ? width < 0.0f : fillsWidth(state, idx)) {
@@ -309,6 +319,42 @@ void Renderer::renderStack(const Node& node) {
         first = false;
     });
     if (fit) layout::recordSize(widestKey, {widest, 0.0f});
+}
+
+std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
+    const auto spacing = node.number("spacing");
+    const float align = alignFactor(node.string("align", "start"));
+    if (align > 0.0f && layout::shrinkToFit()) return std::nullopt; // aligned in last frame's widest child
+    lua::State* state = node.state();
+    const float lineGap = ImGui::GetStyle().ItemSpacing.y;
+    float width = 0.0f, bottom = 0.0f, y = 0.0f;
+    bool first = true, known = true;
+    forEachChild(node, [&](int idx) {
+        if (!known || !isVisual(state, idx)) return;
+        const Node c{state, idx};
+        if (!c.boolean("visible", true)) return;
+        if (!first && spacing) y += static_cast<float>(*spacing) * dpiScale() - lineGap;
+        const std::optional<ImVec2> size = intrinsicSize(c, maxWidth);
+        if (!size) {
+            known = false;
+            return;
+        }
+        float offset = 0.0f;
+        if (align > 0.0f) {
+            // Placed like renderStack places it: a fill by the box's width (less N), anything else by its own.
+            const float w = sizeProp(c, "width");
+            const bool fills = w != 0.0f ? w < 0.0f : fillsWidth(state, idx);
+            const float placed = fills ? resolveSize(w != 0.0f ? w : -1.0f, maxWidth, 0.0f) : size->x;
+            offset = std::max(0.0f, (maxWidth - placed) * align);
+        }
+        width = std::max(width, offset + size->x);
+        bottom = std::max(bottom, y + size->y);
+        // ImGui's next line starts on a whole pixel (ItemSize truncates the cursor), from a stack that starts on one.
+        y = std::trunc(y + size->y + lineGap);
+        first = false;
+    });
+    if (!known) return std::nullopt;
+    return ImVec2{width, bottom};
 }
 
 void Renderer::attachMenu(const Node& node, bool clicked) {

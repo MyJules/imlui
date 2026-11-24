@@ -3,6 +3,7 @@ export module imlui.ui.elements.color_picker;
 
 import std;
 
+import imgui;
 import imlui.color;
 import imlui.widgets.color_field;
 import imlui.types.element;
@@ -22,6 +23,8 @@ public:
     static void declare(TypeBuilder<ColorPicker>& type);
 
     void render(Frame& frame) override;
+    /// The swatch field: its width (fixed, a fill of `maxWidth`, or its hex and label) and 56dp.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     /// Unset shows white.
     [[nodiscard]] const std::optional<Color>& color() const;
@@ -65,5 +68,9 @@ const std::string& ColorPicker::label() const { return m_label; }
 void ColorPicker::setLabel(std::string label) { m_label = std::move(label); }
 bool ColorPicker::alpha() const { return m_alpha; }
 void ColorPicker::setAlpha(bool alpha) { m_alpha = alpha; }
+
+std::optional<ImVec2> ColorPicker::intrinsicSize(const Frame& frame, float maxWidth) {
+    return md::colorFieldSize(m_color.value_or(Color{1, 1, 1, 1}), m_label, frame.widthIn(maxWidth));
+}
 
 } // namespace imlui

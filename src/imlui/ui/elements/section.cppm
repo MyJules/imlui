@@ -23,6 +23,8 @@ public:
     static void declare(TypeBuilder<Section>& type);
 
     void render(Frame& frame) override;
+    /// Its header, and while expanded its stack (Frame::stackSize) indented 16dp below it.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] std::optional<std::string> title() const;
     void setTitle(std::optional<std::string> title);
@@ -68,6 +70,18 @@ void Section::render(Frame& frame) {
         frame.renderStack();
         ImGui::Unindent(frame.dp(16));
     }
+}
+
+std::optional<ImVec2> Section::intrinsicSize(const Frame& frame, float maxWidth) {
+    const ImVec2 header = md::expanderSize(m_supportingText, frame.widthIn(maxWidth));
+    if (!m_expanded) return header;
+    const float indent = frame.dp(16);
+    const std::optional<ImVec2> stack = frame.stackSize(std::max(0.0f, maxWidth - indent));
+    if (!stack) return std::nullopt;
+    if (stack->x == 0.0f && stack->y == 0.0f) return header; // no visual children
+    // The stack starts on the line after the header (ImGui: a whole pixel, the item spacing below).
+    const float top = std::trunc(header.y + ImGui::GetStyle().ItemSpacing.y);
+    return ImVec2{std::max(header.x, indent + stack->x), top + stack->y};
 }
 
 std::optional<std::string> Section::title() const { return m_title; }

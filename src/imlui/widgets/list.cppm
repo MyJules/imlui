@@ -21,9 +21,13 @@ struct ListItemOptions {
 
 /// One- or two-line list item. Returns true when clicked.
 bool listItem(const char* id, const ListItemOptions& o);
+/// The size of listItem() with the same options (`o.width` resolved like itemWidth(): 0 is the natural 320dp).
+[[nodiscard]] ImVec2 listItemSize(const ListItemOptions& o);
 
 /// Collapsible section header; toggles `*open`. Returns true when clicked.
 bool expander(const char* id, std::string_view title, std::string_view supporting, bool* open, float width = -1.0f);
+/// The size of expander() with the same `supporting` text and `width`.
+[[nodiscard]] ImVec2 expanderSize(std::string_view supporting, float width = -1.0f);
 
 } // namespace imlui::md
 
@@ -31,13 +35,21 @@ module :private;
 
 namespace imlui::md {
 
+ImVec2 listItemSize(const ListItemOptions& o) {
+    return {itemWidth(o.width, dp(320)), dp(o.supporting.empty() ? 56 : 72)};
+}
+
+ImVec2 expanderSize(std::string_view supporting, float width) {
+    return {itemWidth(width, dp(320)), dp(supporting.empty() ? 48 : 64)};
+}
+
 bool listItem(const char* id, const ListItemOptions& o) {
     const Scheme& s = scheme();
     const bool two = !o.supporting.empty();
-    const float h = dp(two ? 72 : 56);
-    const float w = itemWidth(o.width, dp(320));
+    const ImVec2 size = listItemSize(o);
+    const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, {w, h});
+    bool clicked = ImGui::InvisibleButton(id, size);
     const bool dis = itemDisabled();
     const ImGuiID iid = ImGui::GetItemID();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
@@ -79,10 +91,10 @@ bool listItem(const char* id, const ListItemOptions& o) {
 bool expander(const char* id, std::string_view title, std::string_view supporting, bool* open, float width) {
     const Scheme& s = scheme();
     const bool two = !supporting.empty();
-    const float h = dp(two ? 64 : 48);
-    const float w = itemWidth(width, dp(320));
+    const ImVec2 size = expanderSize(supporting, width);
+    const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, {w, h});
+    bool clicked = ImGui::InvisibleButton(id, size);
     if (clicked) *open = !*open;
     const bool dis = itemDisabled();
     const ImGuiID iid = ImGui::GetItemID();

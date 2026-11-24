@@ -5,6 +5,7 @@ export module imlui.ui.elements.navigation_item;
 
 import std;
 
+import imgui;
 import imlui.widgets;
 import imlui.ui.navigation_scope;
 import imlui.types.element;
@@ -24,6 +25,9 @@ public:
     static void declare(TypeBuilder<NavigationItem>& type);
 
     void render(Frame& frame) override;
+    /// A bar or rail destination: the width its container gives it; a drawer item: its width (a fill of `maxWidth`
+    /// unless set), 56dp.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& icon() const;
     void setIcon(std::string icon);
@@ -83,5 +87,16 @@ bool NavigationItem::selected() const { return m_selected; }
 void NavigationItem::setSelected(bool selected) { m_selected = selected; }
 const std::string& NavigationItem::badge() const { return m_badge; }
 void NavigationItem::setBadge(std::string badge) { m_badge = std::move(badge); }
+
+std::optional<ImVec2> NavigationItem::intrinsicSize(const Frame& frame, float maxWidth) {
+    // The style of the scope it is asked in, which is the one it renders in: its container asks inside its scope.
+    const NavigationScope::Context& context = NavigationScope::current();
+    switch (context.style) {
+    case NavigationScope::Style::Bar: return md::navigationBarItemSize(context.itemWidth);
+    case NavigationScope::Style::Rail: return md::navigationRailItemSize(context.itemWidth);
+    case NavigationScope::Style::Drawer: break;
+    }
+    return md::navigationItemSize(frame.widthIn(maxWidth));
+}
 
 } // namespace imlui

@@ -27,6 +27,8 @@ public:
     static void declare(TypeBuilder<Canvas>& type);
 
     void render(Frame& frame) override;
+    /// Its width (a fill of `maxWidth`, or fixed) and height (200dp unless set). None for a fill height.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] bool animated() const;
     void setAnimated(bool animated);
@@ -95,5 +97,11 @@ void Canvas::render(Frame& frame) {
 
 bool Canvas::animated() const { return m_animated; }
 void Canvas::setAnimated(bool animated) { m_animated = animated; }
+
+std::optional<ImVec2> Canvas::intrinsicSize(const Frame& frame, float maxWidth) {
+    const float height = frame.size("height");
+    if (height < 0) return std::nullopt; // fills a height known only where it renders
+    return ImVec2{frame.widthIn(maxWidth), height > 0 ? height : frame.dp(200)};
+}
 
 } // namespace imlui

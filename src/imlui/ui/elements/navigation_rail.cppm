@@ -50,8 +50,10 @@ namespace {
 /// Renders `child` horizontally centered in [x, x + width] at `y`, by its intrinsic width or else its width on the
 /// last frame (a child that fills: the rail's). Unseen on its first frame without either. Returns its height.
 float renderCentered(Frame::Child& child, float x, float width, float y) {
-    const bool unseen = !child.fillsWidth() && !child.expectedSize(width);
-    ImGui::SetCursorScreenPos({x + std::floor((width - child.expectedWidth(width, width)) * 0.5f), y});
+    const bool fills = child.fillsWidth();
+    const bool unseen = !fills && !child.expectedSize(width);
+    const float w = fills ? width : child.expectedWidth(width, width);
+    ImGui::SetCursorScreenPos({x + std::floor((width - w) * 0.5f), y});
     if (unseen)
         child.renderUnseen();
     else
@@ -97,6 +99,8 @@ void NavigationRail::render(Frame& frame) {
         const float spacing = frame.dp(m_spacing);
         // The children's IDs are in the region's ID scope: read their sizes in it too.
         const float align = Frame::alignFactor(m_align);
+        // The destinations' scope, also while they are measured: a NavigationItem's size depends on it.
+        const NavigationScope scope{{NavigationScope::Style::Rail, w}};
         float total = 0.0f;
         bool first = true;
         if (align > 0.0f) {
@@ -107,7 +111,6 @@ void NavigationRail::render(Frame& frame) {
             });
         }
         float iy = q.y + std::max(0.0f, std::floor((regionH - bottomMargin - total) * align));
-        const NavigationScope scope{{NavigationScope::Style::Rail, w}};
         first = true;
         frame.forEachChild([&](Frame::Child& child) {
             if (!child.isVisual()) {

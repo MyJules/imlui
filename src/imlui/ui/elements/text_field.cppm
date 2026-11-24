@@ -4,6 +4,7 @@ export module imlui.ui.elements.text_field;
 
 import std;
 
+import imgui;
 import imlui.widgets.text_field;
 import imlui.types.element;
 import imlui.types.frame;
@@ -24,6 +25,9 @@ public:
     static void declare(TypeBuilder<TextField>& type);
 
     void render(Frame& frame) override;
+    /// Its width (natural 280dp, fixed, or a fill of `maxWidth`), the field (a TextArea: `height`, else 120dp) and its
+    /// supporting text. None for a fill height.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -138,5 +142,20 @@ void TextField::setReadOnly(bool readOnly) { m_readOnly = readOnly; }
 bool TextField::error() const { return m_error; }
 void TextField::setError(bool error) { m_error = error; }
 bool TextField::multiline() const { return m_multiline; }
+
+std::optional<ImVec2> TextField::intrinsicSize(const Frame& frame, float maxWidth) {
+    const float height = frame.size("height");
+    if (height < 0) return std::nullopt; // fills a height known only where it renders
+    md::TextFieldOptions o;
+    o.label = m_label;
+    o.trailingIcon = m_trailingIcon;
+    o.supporting = m_supportingText;
+    o.outlined = m_variant == "outlined";
+    o.password = m_password || m_echoMode == "password";
+    o.multiline = m_multiline;
+    o.width = frame.widthIn(maxWidth);
+    o.height = height;
+    return md::textFieldSize(o);
+}
 
 } // namespace imlui

@@ -14,9 +14,13 @@ export namespace imlui::md {
 
 /// Linear progress (M3 2024: gap + stop indicator). `fraction` < 0 = indeterminate.
 void progress(float fraction, float width = -1.0f);
+/// The size of progress() with `width` (resolved like itemWidth(): 0 is the natural 240dp).
+[[nodiscard]] ImVec2 progressSize(float width = -1.0f);
 
 /// Circular progress. `fraction` < 0 = indeterminate.
 void circularProgress(float fraction, float diameter = 0.0f, float thickness = 4.0f);
+/// The size of circularProgress() with `diameter` (0 or less: 48dp).
+[[nodiscard]] ImVec2 circularProgressSize(float diameter = 0.0f);
 
 } // namespace imlui::md
 
@@ -24,11 +28,18 @@ module :private;
 
 namespace imlui::md {
 
+ImVec2 progressSize(float width) { return {itemWidth(width, dp(240)), dp(4) + dp(8)}; }
+
+ImVec2 circularProgressSize(float diameter) {
+    const float d = diameter > 0 ? diameter : dp(48);
+    return {d, d};
+}
+
 void progress(float fraction, float width) {
     const Scheme& s = scheme();
-    const float w = itemWidth(width, dp(240)), h = dp(4), gap = dp(4);
+    const float w = progressSize(width).x, h = dp(4), gap = dp(4);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::Dummy({w, h + dp(8)});
+    ImGui::Dummy(progressSize(width));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float y = p.y + dp(4), x1 = p.x + w;
     auto seg = [&](float a, float b, Color c) {
@@ -57,10 +68,10 @@ void progress(float fraction, float width) {
 
 void circularProgress(float fraction, float diameter, float thickness) {
     const Scheme& s = scheme();
-    const float d = diameter > 0 ? diameter : dp(48);
+    const float d = circularProgressSize(diameter).x;
     const float th = dp(thickness);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::Dummy({d, d});
+    ImGui::Dummy(circularProgressSize(diameter));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c{p.x + d * 0.5f, p.y + d * 0.5f};
     const float r = d * 0.5f - th * 0.5f - dp(2);

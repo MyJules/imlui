@@ -28,15 +28,23 @@ public:
     /// Called on every rendered frame the element is visible, after the property sync.
     virtual void render(Frame& frame) = 0;
 
-    /// The size render() will take, known before rendering, when the element can tell cheaply (a Text's line, a
-    /// Button, an Icon): layouts that place children by their sizes (Row, the stack `align`, TopAppBar actions) use
-    /// it instead of the size of the last frame, so the element is in place from its first frame and the frame it
-    /// changes. It must match what render() then takes exactly (the group of what it draws), or the layout cache
-    /// keeps asking for frames to settle. `maxWidth` is the width available where it will render (only content that
-    /// wraps depends on it). nullopt (the default): unknown, the layout uses the last frame's size. An element whose
-    /// width fills (Frame::size("width") < 0) usually returns nullopt: its parent decides its width. Its properties
-    /// are synced; `frame` is the element's own.
+    /// The size render() will take when the width available at its cursor is `maxWidth`, known before rendering:
+    /// layouts that place children by their sizes (Row, the stack `align`, TopAppBar actions) use it instead of the
+    /// size of the last frame, so the element is in place from its first frame and on the frame it changes. It must
+    /// match what render() then takes exactly (the group of what it draws), or the layout cache keeps asking for
+    /// frames to settle: measure with the helper render() draws with (md::buttonSize for md::button, ...). A fill
+    /// reports the width it takes in `maxWidth` (its parent passes the width it gives it: a Row a fill's share), and
+    /// a container composes its children's sizes (Frame::stackSize). nullopt (the default): unknown, the layout
+    /// uses the last frame's size. An element whose width depends on `maxWidth` must fill (TypeBuilder::fillsWidth,
+    /// or contentFillsWidth()), so that a Row gives it a share and asks with that. Its properties are synced;
+    /// `frame` is the element's own. Computed once a frame per `maxWidth` (TypeRegistry memoizes it).
     [[nodiscard]] virtual std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth);
+
+    /// Whether the element's width follows the available width because of what it holds, beyond its type's size
+    /// policy (TypeBuilder::fillsWidth): a Column that holds a fill, a Row that has fills or justifies its
+    /// children. Layouts treat it like a fill (a Row gives it a share of the free width). Not consulted when a
+    /// `width` is set. Default false. Computed once a frame (TypeRegistry memoizes it).
+    [[nodiscard]] virtual bool contentFillsWidth(const Frame& frame);
 
     /// Called once, right after the first property sync (the first render, method call from Lua or parent
     /// access, whichever comes first), so before the first render().
@@ -87,6 +95,7 @@ auto findId(std::uint64_t id) { return std::ranges::find(ticking, id, &Ticking::
 Element::~Element() { setTicking(false); }
 
 std::optional<ImVec2> Element::intrinsicSize(const Frame&, float) { return std::nullopt; }
+bool Element::contentFillsWidth(const Frame&) { return false; }
 void Element::componentComplete() {}
 void Element::destroyed() {}
 void Element::tick(double) {}

@@ -18,9 +18,12 @@ export namespace imlui::md {
 /// text in the available width.
 void text(std::string_view s, TextStyle style, std::optional<Color> color = std::nullopt, bool wrap = false,
           float align = 0.0f);
-/// The size text() takes for unwrapped, start-aligned text (one item per line, as ImGui measures it); nullopt for
-/// text too long to measure cheaply (ImGui lays it out differently), which a caller then measures by rendering.
-[[nodiscard]] std::optional<ImVec2> textSize(std::string_view s, TextStyle style);
+/// The size text() takes with the same arguments where `maxWidth` is available at the cursor (wrapping text wraps
+/// at it; aligned text is offset in it, so it is as wide as its offset and its line). nullopt for unwrapped text too
+/// long to measure cheaply (ImGui lays it out another way) and for wrapping text in an auto-sized window's box (it
+/// wraps past the box's width): a caller then measures it by rendering.
+[[nodiscard]] std::optional<ImVec2> textSize(std::string_view s, TextStyle style, bool wrap = false, float align = 0.0f,
+                                             float maxWidth = 0.0f);
 
 /// A standalone icon item (size in dp).
 void icon(std::string_view name, float size = 24.0f, std::optional<Color> color = std::nullopt);
@@ -30,8 +33,10 @@ void icon(std::string_view name, float size = 24.0f, std::optional<Color> color 
 /// Plain tooltip (inverseSurface) for the last item.
 void tooltip(std::string_view s);
 
-/// 1dp outlineVariant line across the available width.
-void divider(float insetStart = 0.0f, float insetEnd = 0.0f);
+/// 1dp outlineVariant line across `width` (0: the available width).
+void divider(float insetStart = 0.0f, float insetEnd = 0.0f, float width = 0.0f);
+/// The size of divider() `width` wide.
+[[nodiscard]] ImVec2 dividerSize(float width);
 
 } // namespace imlui::md
 
@@ -39,26 +44,36 @@ module :private;
 
 namespace imlui::md {
 
+namespace {
+
+/// Where text() puts a `w` wide line in `avail`: offset by the free width times `align`, if there is any.
+float alignOffset(float w, float avail, float align) { return avail > w ? (avail - w) * align : 0.0f; }
+
+} // namespace
+
 void text(std::string_view s, TextStyle style, std::optional<Color> color, bool wrap, float align) {
     FontScope fs{style};
     if (color) ImGui::PushStyleColor(ImGuiCol_Text, color->vec4());
     // Unwrapped text stays on one line even in a box that mirrors its edge as ImGui's wrap position.
     ImGui::PushTextWrapPos(wrap ? layout::textWrapPos() : -1.0f);
     if (align > 0.0f && !wrap) {
-        float w = ImGui::CalcTextSize(s.data(), s.data() + s.size()).x;
-        float avail = layout::availableWidth();
-        if (avail > w) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - w) * align);
+        const float w = ImGui::CalcTextSize(s.data(), s.data() + s.size()).x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + alignOffset(w, layout::availableWidth(), align));
     }
     ImGui::TextUnformatted(s.data(), s.data() + s.size());
     ImGui::PopTextWrapPos();
     if (color) ImGui::PopStyleColor();
 }
 
-std::optional<ImVec2> textSize(std::string_view s, TextStyle style) {
-    // ImGui::TextUnformatted measures text up to this long in one CalcTextSize(); longer text goes another way.
-    if (s.size() > 2000) return std::nullopt;
+std::optional<ImVec2> textSize(std::string_view s, TextStyle style, bool wrap, float align, float maxWidth) {
+    if (wrap && layout::shrinkToFit()) return std::nullopt;
+    // ImGui::TextUnformatted measures unwrapped text up to this long in one CalcTextSize(); longer text goes another
+    // way. Wrapping text is measured in one, wrapped at the wrap position (at least a pixel from the cursor).
+    if (!wrap && s.size() > 2000) return std::nullopt;
     FontScope fs{style};
-    return ImGui::CalcTextSize(s.data(), s.data() + s.size());
+    ImVec2 size = ImGui::CalcTextSize(s.data(), s.data() + s.size(), false, wrap ? std::max(1.0f, maxWidth) : 0.0f);
+    if (align > 0.0f && !wrap) size.x += alignOffset(size.x, maxWidth, align);
+    return size;
 }
 
 ImVec2 iconSize(float size) { return {dp(size), dp(size)}; }
@@ -91,10 +106,12 @@ void tooltip(std::string_view s) {
     ImGui::PopStyleColor(2);
 }
 
-void divider(float insetStart, float insetEnd) {
+ImVec2 dividerSize(float width) { return {width, dp(1)}; }
+
+void divider(float insetStart, float insetEnd, float width) {
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float w = layout::availableWidth();
-    ImGui::Dummy({w, dp(1)});
+    const float w = width > 0.0f ? width : layout::availableWidth();
+    ImGui::Dummy(dividerSize(w));
     hLine(ImGui::GetWindowDrawList(), p.x + dp(insetStart), p.x + w - dp(insetEnd), p.y, scheme().outlineVariant,
           dp(1));
 }

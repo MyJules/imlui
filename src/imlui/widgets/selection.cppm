@@ -15,10 +15,16 @@ export namespace imlui::md {
 
 /// Checkbox with optional label; toggles `*v`. Returns true when clicked.
 bool checkbox(const char* label, bool* v);
+/// The size of checkbox(label).
+[[nodiscard]] ImVec2 checkboxSize(const char* label);
 /// Radio button with optional label. Returns true when clicked.
 bool radio(const char* label, bool selected);
+/// The size of radio(label).
+[[nodiscard]] ImVec2 radioSize(const char* label);
 /// Material switch; toggles `*v`. Returns true when clicked.
 bool switchToggle(const char* label, bool* v, bool withIcons = true);
+/// The size of switchToggle(label).
+[[nodiscard]] ImVec2 switchSize(const char* label);
 
 enum class ChipVariant { Filter, Assist, Suggestion, Input };
 
@@ -27,10 +33,15 @@ enum class ChipVariant { Filter, Assist, Suggestion, Input };
 
 /// Chip. Returns true when clicked.
 bool chip(const char* label, bool selected, ChipVariant v = ChipVariant::Filter, std::string_view leadingIcon = {});
+/// The size of chip() with the same arguments.
+[[nodiscard]] ImVec2 chipSize(const char* label, bool selected, ChipVariant v = ChipVariant::Filter,
+                              std::string_view leadingIcon = {});
 
-/// Segmented button: one of `items` selected. Returns true when changed.
+/// Segmented button: one of `items` selected. Returns true when changed. Draws nothing without items.
 bool segmented(const char* id, const std::vector<std::string>& items, int* current, float width = 0.0f,
                const std::vector<std::string>& icons = {});
+/// The size of segmented() with the same items and `width` (resolved like itemWidth()); {0, 0} without items.
+[[nodiscard]] ImVec2 segmentedSize(const std::vector<std::string>& items, float width = 0.0f);
 
 } // namespace imlui::md
 
@@ -42,15 +53,71 @@ namespace {
 float controlRowHeight() { return dp(40); }
 /// Center of the `h` x `h` box at `p`, on whole pixels: even-sized circles and boxes around it stay symmetric.
 ImVec2 pixelCenter(ImVec2 p, float h) { return {std::round(p.x + h * 0.5f), std::round(p.y + h * 0.5f)}; }
+/// The width of a checkbox's or radio button's label with its margins (0 without one).
+float markLabelWidth(std::string_view text) {
+    return text.empty() ? 0.0f : dp(4) + measure(TextStyle::BodyLarge, text).x + dp(4);
+}
+
+/// A chip's measurements.
+struct ChipLayout {
+    bool lead = false; ///< a leading icon (or the check of a selected filter chip)
+    float iconW = 0.0f;
+    float padL = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+};
+
+ChipLayout chipLayout(std::string_view text, bool selected, ChipVariant v, std::string_view leadingIcon) {
+    ChipLayout l;
+    const bool check = v == ChipVariant::Filter && selected;
+    l.lead = check || hasIcon(leadingIcon);
+    l.h = dp(32);
+    l.iconW = l.lead ? dp(18) + dp(8) : 0.0f;
+    l.padL = l.lead ? dp(8) : dp(16);
+    l.w = l.padL + l.iconW + measure(TextStyle::LabelLarge, text).x + dp(16);
+    return l;
+}
+
+/// A segmented button's height, and its width (`width` resolved) for `items`.
+ImVec2 segmentedLayout(const std::vector<std::string>& items, float width) {
+    float natural = 0;
+    for (auto& it : items) natural = std::max(natural, measure(TextStyle::LabelLarge, it).x + dp(24) * 2 + dp(26));
+    return {itemWidth(width, natural * static_cast<float>(items.size())), dp(40)};
+}
 } // namespace
+
+ImVec2 checkboxSize(const char* label) {
+    const float h = controlRowHeight();
+    return {h + markLabelWidth(visibleLabel(label)), h};
+}
+
+ImVec2 radioSize(const char* label) {
+    const float h = controlRowHeight();
+    return {h + markLabelWidth(visibleLabel(label)), h};
+}
+
+ImVec2 switchSize(const char* label) {
+    const std::string_view text = visibleLabel(label);
+    const float labelW = text.empty() ? 0.0f : dp(12) + measure(TextStyle::BodyLarge, text).x;
+    return {dp(52) + labelW, controlRowHeight()};
+}
+
+ImVec2 chipSize(const char* label, bool selected, ChipVariant v, std::string_view leadingIcon) {
+    const ChipLayout l = chipLayout(visibleLabel(label), selected, v, leadingIcon);
+    return {l.w, l.h};
+}
+
+ImVec2 segmentedSize(const std::vector<std::string>& items, float width) {
+    if (items.empty()) return {0.0f, 0.0f};
+    return segmentedLayout(items, width);
+}
 
 bool checkbox(const char* label, bool* v) {
     const Scheme& s = scheme();
     const float box = dp(18), h = controlRowHeight();
     const std::string_view text = visibleLabel(label);
-    const float labelW = text.empty() ? 0.0f : dp(4) + measure(TextStyle::BodyLarge, text).x + dp(4);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, {h + labelW, h});
+    bool clicked = ImGui::InvisibleButton(label, checkboxSize(label));
     if (clicked) *v = !*v;
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
@@ -77,9 +144,8 @@ bool radio(const char* label, bool selected) {
     const Scheme& s = scheme();
     const float h = controlRowHeight();
     const std::string_view text = visibleLabel(label);
-    const float labelW = text.empty() ? 0.0f : dp(4) + measure(TextStyle::BodyLarge, text).x + dp(4);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, {h + labelW, h});
+    bool clicked = ImGui::InvisibleButton(label, radioSize(label));
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
@@ -101,9 +167,8 @@ bool switchToggle(const char* label, bool* v, bool withIcons) {
     const Scheme& s = scheme();
     const float tw = dp(52), th = dp(32), h = controlRowHeight();
     const std::string_view text = visibleLabel(label);
-    const float labelW = text.empty() ? 0.0f : dp(12) + measure(TextStyle::BodyLarge, text).x;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, {tw + labelW, h});
+    bool clicked = ImGui::InvisibleButton(label, switchSize(label));
     if (clicked) *v = !*v;
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
@@ -152,12 +217,10 @@ ChipVariant chipVariant(std::string_view n) {
 bool chip(const char* label, bool selected, ChipVariant v, std::string_view leadingIcon) {
     const Scheme& s = scheme();
     const std::string_view text = visibleLabel(label);
-    ImVec2 ts = measure(TextStyle::LabelLarge, text);
     const bool check = v == ChipVariant::Filter && selected;
-    const bool lead = check || hasIcon(leadingIcon);
-    const float h = dp(32), iconW = lead ? dp(18) + dp(8) : 0.0f;
-    const float padL = lead ? dp(8) : dp(16), padR = dp(16);
-    const float w = padL + iconW + ts.x + padR;
+    const ChipLayout l = chipLayout(text, selected, v, leadingIcon);
+    const bool lead = l.lead;
+    const float h = l.h, iconW = l.iconW, padL = l.padL, w = l.w;
     ImVec2 p = ImGui::GetCursorScreenPos();
     bool clicked = ImGui::InvisibleButton(label, {w, h});
     const bool dis = itemDisabled();
@@ -188,10 +251,8 @@ bool segmented(const char* id, const std::vector<std::string>& items, int* curre
                const std::vector<std::string>& icons) {
     if (items.empty()) return false;
     const Scheme& s = scheme();
-    const float h = dp(40);
-    float natural = 0;
-    for (auto& it : items) natural = std::max(natural, measure(TextStyle::LabelLarge, it).x + dp(24) * 2 + dp(26));
-    const float w = itemWidth(width, natural * static_cast<float>(items.size()));
+    const ImVec2 size = segmentedLayout(items, width);
+    const float w = size.x, h = size.y;
     const float segW = w / static_cast<float>(items.size());
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::PushID(id);

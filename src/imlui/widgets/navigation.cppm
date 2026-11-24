@@ -16,16 +16,22 @@ export namespace imlui::md {
 /// Navigation drawer item: 56dp pill with icon, label and optional badge text. Returns true when clicked.
 bool navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                     std::string_view badge = {}, float width = -1.0f);
+/// The size of navigationItem() with `width` (resolved like itemWidth(): 0 is the natural 280dp).
+[[nodiscard]] ImVec2 navigationItemSize(float width = -1.0f);
 
 /// Navigation bar destination, `width` x 80dp: a 24dp icon in a 64x32dp pill indicator (secondaryContainer when
 /// selected) above a labelMedium label. `badge` puts a small badge on the icon. Returns true when clicked.
 bool navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                        std::string_view badge, float width);
+/// The size of navigationBarItem() `width` wide.
+[[nodiscard]] ImVec2 navigationBarItemSize(float width);
 
 /// Navigation rail destination, `width` x 56dp: a 24dp icon in a 56x32dp pill indicator with the label below.
 /// Returns true when clicked.
 bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                         std::string_view badge, float width);
+/// The size of navigationRailItem() `width` wide.
+[[nodiscard]] ImVec2 navigationRailItemSize(float width);
 
 } // namespace imlui::md
 
@@ -33,13 +39,15 @@ module :private;
 
 namespace imlui::md {
 
+ImVec2 navigationItemSize(float width) { return {itemWidth(width, dp(280)), dp(56)}; }
+
 bool navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                     std::string_view badge, float width) {
     const Scheme& s = scheme();
-    const float h = dp(56);
-    const float w = itemWidth(width, dp(280));
+    const ImVec2 size = navigationItemSize(width);
+    const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, {w, h});
+    bool clicked = ImGui::InvisibleButton(id, size);
     const bool dis = itemDisabled();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
     const ImGuiID iid = ImGui::GetItemID();
@@ -95,12 +103,18 @@ void drawBadge(ImDrawList* dl, ImVec2 iconCenter, std::string_view badge) {
     drawTextV(dl, TextStyle::LabelSmall, x0 + (bw - tw) * 0.5f, y0 + dp(8), s.onError, badge);
 }
 
+constexpr DestinationLayout barDestination{.height = 80, .indicatorWidth = 64, .indicatorTop = 12, .labelCenter = 56};
+constexpr DestinationLayout railDestination{.height = 56, .indicatorWidth = 56, .indicatorTop = 0, .labelCenter = 44};
+
+ImVec2 destinationSize(float width, const DestinationLayout& l) { return {std::max(1.0f, width), dp(l.height)}; }
+
 bool destination(const char* id, std::string_view iconName, std::string_view label, bool selected,
                  std::string_view badge, float width, const DestinationLayout& l) {
     const Scheme& s = scheme();
-    const float w = std::max(1.0f, width), h = dp(l.height);
+    const ImVec2 size = destinationSize(width, l);
+    const float w = size.x, h = size.y;
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const bool clicked = ImGui::InvisibleButton(id, {w, h});
+    const bool clicked = ImGui::InvisibleButton(id, size);
     const bool dis = itemDisabled();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
     const ImGuiID iid = ImGui::GetItemID();
@@ -141,14 +155,16 @@ bool destination(const char* id, std::string_view iconName, std::string_view lab
 
 bool navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                        std::string_view badge, float width) {
-    return destination(id, iconName, label, selected, badge, width,
-                       {.height = 80, .indicatorWidth = 64, .indicatorTop = 12, .labelCenter = 56});
+    return destination(id, iconName, label, selected, badge, width, barDestination);
 }
+
+ImVec2 navigationBarItemSize(float width) { return destinationSize(width, barDestination); }
 
 bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                         std::string_view badge, float width) {
-    return destination(id, iconName, label, selected, badge, width,
-                       {.height = 56, .indicatorWidth = 56, .indicatorTop = 0, .labelCenter = 44});
+    return destination(id, iconName, label, selected, badge, width, railDestination);
 }
+
+ImVec2 navigationRailItemSize(float width) { return destinationSize(width, railDestination); }
 
 } // namespace imlui::md

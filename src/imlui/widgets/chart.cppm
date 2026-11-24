@@ -25,6 +25,8 @@ struct ChartOptions {
 
 /// Line / bar chart with grid, gradient area and hover readout.
 void chart(const char* id, const std::vector<float>& values, const ChartOptions& o);
+/// The size of chart() with the same options (`o.width` resolved like itemWidth(): 0 is the natural 320dp).
+[[nodiscard]] ImVec2 chartSize(const ChartOptions& o);
 
 } // namespace imlui::md
 
@@ -82,12 +84,14 @@ AxisRange axisRange(const std::vector<float>& values, const ChartOptions& o) {
 
 } // namespace
 
+ImVec2 chartSize(const ChartOptions& o) { return {itemWidth(o.width, dp(320)), o.height > 0 ? o.height : dp(160)}; }
+
 void chart(const char* id, const std::vector<float>& values, const ChartOptions& o) {
     const Scheme& s = scheme();
-    const float w = itemWidth(o.width, dp(320));
-    const float h = o.height > 0 ? o.height : dp(160);
+    const ImVec2 size = chartSize(o);
+    const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton(id, {w, h});
+    ImGui::InvisibleButton(id, size);
     const bool hov = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const Color c = o.color.value_or(s.primary);

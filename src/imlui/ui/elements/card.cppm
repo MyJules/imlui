@@ -3,6 +3,7 @@ export module imlui.ui.elements.card;
 
 import std;
 
+import imgui;
 import imlui.color;
 import imlui.widgets;
 import imlui.types.element;
@@ -22,6 +23,8 @@ public:
     static void declare(TypeBuilder<Card>& type);
 
     void render(Frame& frame) override;
+    /// Its width, and around its stack (Frame::stackSize) when no `height` is set.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     /// "elevated" | "filled" | "outlined".
     [[nodiscard]] const std::string& variant() const;
@@ -72,6 +75,17 @@ void Card::render(Frame& frame) {
         frame.renderStack();
     }
     md::endCard();
+}
+
+std::optional<ImVec2> Card::intrinsicSize(const Frame& frame, float maxWidth) {
+    const float height = frame.size("height");
+    if (height < 0) return std::nullopt; // fills a height known only where it renders
+    const float width = frame.widthIn(maxWidth, frame.dp(320));
+    if (height > 0) return md::cardSize(width, m_padding, height, 0.0f);
+    // The stack renders in the card's content region: its width less the padding on both sides.
+    const std::optional<ImVec2> stack = frame.stackSize(std::max(0.0f, width - 2.0f * frame.dp(m_padding)));
+    if (!stack) return std::nullopt;
+    return md::cardSize(width, m_padding, 0.0f, stack->y);
 }
 
 const std::string& Card::variant() const { return m_variant; }

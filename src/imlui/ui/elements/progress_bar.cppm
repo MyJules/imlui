@@ -3,6 +3,9 @@ module;
 
 export module imlui.ui.elements.progress_bar;
 
+import std;
+
+import imgui;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -20,6 +23,8 @@ public:
     static void declare(TypeBuilder<ProgressBar>& type);
 
     void render(Frame& frame) override;
+    /// Its natural 240dp, a fixed width, or a fill of `maxWidth`; 12dp high.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] double value() const;
     void setValue(double value);
@@ -52,5 +57,9 @@ double ProgressBar::value() const { return m_value; }
 void ProgressBar::setValue(double value) { m_value = value; }
 bool ProgressBar::indeterminate() const { return m_indeterminate; }
 void ProgressBar::setIndeterminate(bool indeterminate) { m_indeterminate = indeterminate; }
+
+std::optional<ImVec2> ProgressBar::intrinsicSize(const Frame& frame, float maxWidth) {
+    return md::progressSize(frame.widthIn(maxWidth));
+}
 
 } // namespace imlui

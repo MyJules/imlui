@@ -22,6 +22,8 @@ public:
     static void declare(TypeBuilder<Separator>& type);
 
     void render(Frame& frame) override;
+    /// A plain rule's (Divider); none with a text: ImGui draws that to the window's edge, not the layout box's.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
@@ -58,5 +60,10 @@ void Separator::render(Frame& frame) {
 
 const std::string& Separator::text() const { return m_text; }
 void Separator::setText(std::string text) { m_text = std::move(text); }
+
+std::optional<ImVec2> Separator::intrinsicSize(const Frame& frame, float maxWidth) {
+    if (m_text.empty()) return Divider::intrinsicSize(frame, maxWidth);
+    return std::nullopt;
+}
 
 } // namespace imlui

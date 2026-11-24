@@ -26,6 +26,9 @@ public:
     static void declare(TypeBuilder<TopAppBar>& type);
 
     void render(Frame& frame) override;
+    /// Its width (a fill of `maxWidth` unless set) and its variant's height (taller only for an action taller than
+    /// the 64dp row). None while an action has no intrinsic size.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     [[nodiscard]] const std::string& title() const;
     void setTitle(std::string title);
@@ -114,6 +117,22 @@ void TopAppBar::render(Frame& frame) {
     }
     ImGui::SetCursorScreenPos(p);
     ImGui::Dummy({w, h});
+}
+
+std::optional<ImVec2> TopAppBar::intrinsicSize(const Frame& frame, float maxWidth) {
+    const float barH = frame.dp(64);
+    const float w = frame.widthIn(maxWidth);
+    float h = m_variant == "medium" ? frame.dp(112) : m_variant == "large" ? frame.dp(152) : barH;
+    // The actions are centered in the 64dp row, asked with the bar's width like render() asks them.
+    bool known = true;
+    frame.forEachChild([&](Frame::Child& child) {
+        if (!child.isVisual() || !known) return;
+        const std::optional<ImVec2> size = child.intrinsicSize(w);
+        known = size.has_value();
+        if (known) h = std::max(h, (barH - size->y) * 0.5f + size->y);
+    });
+    if (!known) return std::nullopt;
+    return ImVec2{w, h};
 }
 
 const std::string& TopAppBar::title() const { return m_title; }

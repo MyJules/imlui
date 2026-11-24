@@ -44,11 +44,11 @@ void Spacer::render(Frame& frame) {
     ImGui::Dummy({frame.resolvedWidth(1.0f), frame.resolvedHeight(1.0f)});
 }
 
-std::optional<ImVec2> Spacer::intrinsicSize(const Frame& frame, float) {
-    // Fixed or unset (1px); a fill is its parent's to give.
-    const float w = frame.size("width"), h = frame.size("height");
-    if (w < 0.0f || h < 0.0f) return std::nullopt;
-    return ImVec2{w > 0.0f ? w : 1.0f, h > 0.0f ? h : 1.0f};
+std::optional<ImVec2> Spacer::intrinsicSize(const Frame& frame, float maxWidth) {
+    // Fixed, unset (1px) or a fill of `maxWidth`; a fill height depends on where it renders.
+    const float h = frame.size("height");
+    if (h < 0.0f) return std::nullopt;
+    return ImVec2{frame.widthIn(maxWidth, 1.0f), h > 0.0f ? h : 1.0f};
 }
 
 bool Spacer::fill() const { return m_fill; }
