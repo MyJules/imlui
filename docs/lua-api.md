@@ -37,8 +37,20 @@ Every constructor registers its `id` (`ui.registerId(props)`), the Lua-side `Rep
 | outside every component instance and delegate: the entry script, the top level of a `require`d module (whoever requires it first) | the **app** scope, `ui.ids` | yes |
 | while a [component](#componentfn---constructor) function runs (nested elements included) | that **instance's** `ids` table, the second argument of `fn(props, ids)` | no |
 | while a [`Repeater` / `ListView` delegate](#repeater--model-delegate-) runs | that **delegate instance's** `ids`, the third argument of `delegate(item, index, ids)` | no |
-| by a `Loader`'s `item` function or a `Responsive` class function (also at render time) | the scope the `Loader` / `Responsive` was created in | as that scope |
-| anywhere else at run time: a handler, a binding, a timer | the app scope | yes |
+| later, by a function of an element built in a component instance or delegate (see below) | that instance's or delegate's `ids` | no |
+| later, by a timer, watcher or `onFrame` callback set up while an instance or delegate was being built | that instance's or delegate's `ids` | no |
+| later, by any other code (functions of app-level elements, timers set at app level) | the app scope | yes |
+
+**Functions run in their element's scope.** Every element built in a component instance or delegate remembers that
+scope, and its functions run in it whenever imlui calls them: its bindings (`text = function(self) ... end`), its
+`on*` handlers (from C++ widgets and registered types alike, `on<Name>Changed` included), a `Canvas`'s `onPaint`,
+and the functions the Lua-side containers call (`model`, `condition`, a `Loader`'s `item`, a `Responsive` class
+function). So a button inside a component that builds a `Text { id = "row" }` when clicked registers it in that
+instance's `ids`, and two instances don't clash. `ui.setTimeout`, `ui.setInterval`, `ui.watch` and `ui.onFrame`
+capture the scope that is active when they're called, and run their callback in it. The scope is popped however the
+call ends (a to-be-closed variable), so a handler that raises can't leave it behind. Not covered: the getter and
+setter of a `bind(getter, setter)` (they run in whatever scope is active, app level when imlui calls them), and
+functions of an app-level element, which run in whatever scope is active (app level whenever the engine calls them).
 
 So two instances of a component can both declare `id = "field"`: each reaches its own as `ids.field`, and neither
 is a free name. A nested component instance has its own `ids`, which the outer one doesn't see. The app-level ids
@@ -98,10 +110,12 @@ Card { title = "Totals",
   item get theirs when they're built or shown (at render time). A `ListView` (not inline) is its delegates' parent.
 - An element that is a child in several places has the parent that took it last.
 - It's a **weak** reference: it never keeps the parent alive.
-- Assigning it (`self.parent = x`) raises an error; `parent = ...` in a constructor is reported and ignored.
+- It's read-only. `parent = ...` in a constructor is reported and ignored. Assigning it later stores a field that the
+  next sync of the element drops (debug builds report it), so it has no lasting effect.
 
-`parent` lives behind the element's metatable (a per-element proxy), not in the table itself: `rawget(el, "parent")`
-is `nil`, and it isn't a property the C++ side syncs.
+`parent` isn't stored in the element. It's in one side table (`parents[element] = parent`, weak keys and values),
+which the metatable that all elements of a type share reads: `rawget(el, "parent")` is `nil`, and it isn't a
+property the C++ side syncs. Writes to elements don't go through any hook.
 
 Indices (`currentIndex`, `currentRow`, delegate `index`) are **1-based**.
 
@@ -110,8 +124,9 @@ Indices (`currentIndex`, `currentRow`, delegate `index`) are **1-based**.
 ### `element(name) -> constructor`
 
 Returns a constructor for element type `name`. Calling it with a table **turns that table into the element**
-(it is not copied): the prelude sets `__type`, gives the table its metatable (for [`parent`](#selfparent)), sets
-its children's `parent` and registers `id`. The table's identity matters because it is the element's ImGui ID and
+(it is not copied): the prelude sets `__type`, gives the table the metatable that all elements of the type share
+(for its methods and [`parent`](#selfparent)), sets its children's `parent`, remembers the id scope it's built in and
+registers `id`. The table's identity matters because it is the element's ImGui ID and
 holds its per-element state.
 
 ```lua
@@ -120,8 +135,9 @@ Button "OK"      -- a non-table argument becomes the first positional value: { "
 ```
 
 For a type registered from C++ with `Engine::registerType<T>()`, the constructor also creates the C++ instance
-(stored in the table as `__native`), and the table's metatable makes the type's methods callable:
-`gauge:reset()`. See [Registering C++ types](extending.md).
+(stored in the table as `__native`), and the type's shared metatable makes its methods callable:
+`gauge:reset()`. (`Repeater`, `ListView`, `If`, `Loader` and `Responsive` get the metatable at once and their
+instance at their first render.) See [Registering C++ types](extending.md).
 
 ### `types() -> { name, ... }`
 
@@ -328,7 +344,7 @@ If { condition = function() return s.loggedIn end,
 ### `Loader { item }`
 
 Shows exactly one element: `item`, or the result of calling `item`. Useful for page switching. An `item` function
-runs in the [id scope](#element-ids) the `Loader` was created in, so elements it builds lazily inside a component
+runs in the [id scope](#element-ids) the `Loader` was built in, so elements it builds lazily inside a component
 register their ids in that instance's `ids`.
 
 ```lua
@@ -376,7 +392,7 @@ An inline container (like `Loader`) that shows the element given for the current
 given falls back to the nearest smaller class that is, or else to the smallest one given. `false` shows nothing.
 Build each element once, as below: switching classes then keeps their state, scroll positions included (a
 `ScrollView` restores its offset when it's rendered in another place). A class may also be a function `fn(self)` returning the element,
-called whenever the `Responsive` renders, in the [id scope](#element-ids) the `Responsive` was created in.
+called whenever the `Responsive` renders, in the [id scope](#element-ids) the `Responsive` was built in.
 
 ```lua
 Row { align = "top", spacing = 0,
