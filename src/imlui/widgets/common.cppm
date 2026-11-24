@@ -21,6 +21,7 @@ import imlui.theme.scheme;
 import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.theme.theme;
+import imlui.ui.frame_request;
 
 export namespace imlui::md {
 
@@ -46,7 +47,7 @@ inline constexpr float hugeExtent = 3.4e38f;
 /// Visible part of an ImGui label ("Text##id" -> "Text").
 [[nodiscard]] std::string_view visibleLabel(const char* label);
 
-/// Smoothly moves a per-id stored value towards `target`.
+/// Smoothly moves a per-id stored value towards `target`. Requests another frame while it moves.
 float animate(ImGuiID id, float target, float speed = 14.0f);
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
 float stateLayer(ImGuiID id, bool hovered, bool active);
@@ -90,9 +91,14 @@ std::string_view visibleLabel(const char* label) {
 
 float animate(ImGuiID id, float target, float speed) {
     float* v = ImGui::GetStateStorage()->GetFloatRef(id, target);
-    float dt = ImGui::GetIO().DeltaTime;
+    // The first frame after an idle wait has a long DeltaTime. Capping it keeps a
+    // transition that starts then (hover, press) from jumping to its end.
+    float dt = std::min(ImGui::GetIO().DeltaTime, 1.0f / 30.0f);
     *v += (target - *v) * std::min(1.0f, dt * speed);
-    if (std::fabs(*v - target) < 0.0015f) *v = target;
+    if (std::fabs(*v - target) < 0.0015f)
+        *v = target;
+    else
+        requestFrame();
     return *v;
 }
 

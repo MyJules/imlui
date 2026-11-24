@@ -558,14 +558,16 @@ Signals: `onRowClicked(self, row)`.
 
 ### Canvas
 
-Custom drawing from Lua. The canvas is an invisible button, and `onPaint` draws on it every frame, clipped to
-its rectangle.
+Custom drawing from Lua. The canvas is an invisible button, and `onPaint` draws on it every rendered frame,
+clipped to its rectangle. Frames are [rendered on demand](architecture.md#frame-loop), so a canvas that animates
+(its drawing depends on `p.time`) needs `animated = true`.
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
 | `width` | number | fill | |
 | `height` | number | `200` | |
 | `onPaint` | `function(self, p)` | — | Draws with the painter `p`. |
+| `animated` | bool | `false` | Requests a frame every frame while the canvas is shown, so time-based drawing keeps moving. |
 
 Signals: `onClicked(self, x, y)`, with the position in dp relative to the canvas.
 

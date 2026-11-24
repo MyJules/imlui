@@ -6,6 +6,7 @@ The `material-ui` branch, newest first:
 
 | Commit | Change |
 |---|---|
+| (phase D) | **DPI scaling, user zoom and on-demand rendering.** The effective scale is the monitor content scale times a user zoom (`ui.zoom`/`ui.setZoom`, `ui.dpiScale`, Ctrl + `=`/`-`/`0` and Ctrl + wheel, `ui.setZoomShortcuts`). Moving the window to a monitor with another DPI re-applies the theme at the new scale. The root window's `width`/`height` are dp, and negative "fill minus" sizes are scaled too. The engine sleeps in `glfwWaitEventsTimeout` and renders only after input (a 0.3 s settle period), while animations, indeterminate indicators, `Canvas { animated = true }`, snackbars, tooltips, text carets and timers request frames, or on `ui.requestFrame()`. Idle CPU on a static gallery page dropped from a full core to almost nothing. New module `imlui.ui.frame_request`. The gallery gets a UI zoom slider. |
 | `31dc92b` | Code style: an exception for including `<gtest/gtest.h>` in tests. Binding notes from phase A in the refactor spec. |
 | `0714daf` | **Module refactor phase A.** Foundation modules split to the code style: `src/wrap/` (`lua`, `lua.stack_guard`, `imgui`, `imlui.log`, `imlui.platform.window`), `imlui.color.*`, `imlui.theme.*`, `imlui.lua.*`. CMake globs `src/*.cppm`. |
 | `1e92ca3` | Temporary module refactor spec (`docs/refactor-spec.md`). |
@@ -42,7 +43,4 @@ The work happens in separate worktrees and branches, which merge into `material-
 
 ## Planned
 
-- **Phase D: DPI scaling and user zoom.** Correct scaling when the window moves between monitors with different
-  DPI, plus a user-controlled zoom factor.
-- **On-demand rendering.** Render only when something changed (input, animation, timers, bindings that may have
-  changed) instead of rendering every frame.
+Nothing scheduled yet.

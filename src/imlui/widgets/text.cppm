@@ -11,6 +11,7 @@ import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.typography;
 import imlui.theme.font_scope;
+import imlui.ui.frame_request;
 import imlui.widgets.common;
 
 export namespace imlui::md {
@@ -56,7 +57,11 @@ void icon(std::string_view name, float size, std::optional<Color> color) {
 }
 
 void tooltip(std::string_view s) {
-    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) return;
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) {
+        // Hovered but the tooltip delay hasn't passed: keep frames coming until it shows.
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) requestFrameAfter(0.1);
+        return;
+    }
     ImGui::PushStyleColor(ImGuiCol_PopupBg, scheme().inverseSurface.vec4());
     ImGui::PushStyleColor(ImGuiCol_Text, scheme().inverseOnSurface.vec4());
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {dp(8), dp(4)});

@@ -213,14 +213,22 @@ These take [color specs](theming.md#color-specs) (role, `role/alpha`, hex, `{r,g
 
 ## Timers and frames
 
-Timers run at the start of a frame, so their resolution is one frame. Callbacks may add or clear timers.
+Frames are **rendered on demand** (see [Architecture](architecture.md#frame-loop)): after input, while an animation
+or indeterminate indicator is moving, when a timer comes due, and when a script asks for one. When nothing changes,
+the app sleeps. Timers run at the start of a frame, and the engine wakes up for the next one, so an interval keeps
+its rate even with no input. Callbacks may add or clear timers.
 
 | Function | Description |
 |---|---|
 | `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds. |
 | `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. |
 | `clearTimer(id)` | Cancels a timeout or interval. |
-| `onFrame(fn)` | Calls `fn(time)` at the start of every frame, after the timers. It can't be removed. |
+| `onFrame(fn)` | Calls `fn(time)` at the start of every **rendered** frame, after the timers. It can't be removed. |
+| `requestFrame(ms?)` | Asks for a frame now, or after `ms` milliseconds. Call it from `onFrame` (or a binding) while something you draw keeps changing on its own. |
+
+Anything that changes because of a click, a key or a timer needs nothing extra. Only state that changes by
+itself over time, such as a binding that reads `time()`, needs `requestFrame()`, a timer, or a `Canvas` with
+`animated = true`.
 
 ```lua
 local id = setInterval(function() s.seconds = s.seconds + 1 end, 1000)
@@ -228,6 +236,37 @@ setTimeout(function() clearTimer(id) end, 10000)
 ```
 
 For a timer declared as an element, see the [`Timer` element](elements.md#timer).
+
+## Scaling and zoom
+
+Sizes in scripts are in **dp**. One dp is `dpiScale()` pixels, where
+
+`dpiScale() = contentScale() × zoom()`
+
+- `contentScale()` is the monitor's content scale (1.5 at 150 % Windows scaling). It follows the window when it
+  moves to a monitor with a different DPI, and the theme is re-applied at the new scale.
+- `zoom()` is a user zoom factor (1 = 100 %), for example from a settings slider.
+
+The root `ApplicationWindow`'s `width`/`height` are dp at 100 % zoom: they're multiplied by the content scale (not
+by the zoom) when the native window size is set.
+
+| Function | Description |
+|---|---|
+| `zoom() -> number` | The user zoom, including a change requested this frame. |
+| `setZoom(z)` | Sets the user zoom, clamped to 0.5..3.0. It takes effect at the start of the next frame. |
+| `dpiScale() -> number` | The effective dp → pixel factor. |
+| `contentScale() -> number` | The monitor content scale. |
+| `setZoomShortcuts(on)` | Turns the built-in zoom shortcuts on or off (on by default, and again after a reload). |
+
+**Built-in shortcuts:** Ctrl + `=` or `+` zooms in, Ctrl + `-` zooms out, Ctrl + `0` resets to 100 %, and
+Ctrl + mouse wheel zooms in and out. The steps are 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250 and 300 %.
+
+```lua
+Slider { value = bind(zoom, setZoom), from = 0.5, to = 2, stepSize = 0.1 }
+```
+
+The gallery's slider applies the zoom on release instead, because zooming moves the slider under the mouse while
+you drag it.
 
 ## Snackbar
 
@@ -296,7 +335,12 @@ it. The ones not wrapped are marked **native only**.
 | `native.time() -> seconds` | Backs `time()`. |
 | `native.deltaTime() -> seconds` | **Native only.** Duration of the last frame. |
 | `native.fps() -> number` | Backs `fps()`. |
-| `native.dpiScale() -> number` | **Native only.** Current dp → pixel factor. |
+| `native.dpiScale() -> number` | Backs `dpiScale()`. |
+| `native.contentScale() -> number` | Backs `contentScale()`. |
+| `native.zoom() -> number` | Backs `zoom()`. |
+| `native.setZoom(z)` | Backs `setZoom()`. |
+| `native.setZoomShortcuts(on)` | Backs `setZoomShortcuts()`. |
+| `native.requestFrame(seconds?)` | Backs `requestFrame()`. Note: **seconds**, where `requestFrame` takes ms. |
 | `native.textSize(text, style?) -> w, h` | Backs `textSize()`. |
 | `native.setTitle(title)` | Backs `setTitle()`. |
 | `native.quit()` | Backs `quit()`. |

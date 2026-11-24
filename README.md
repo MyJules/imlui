@@ -79,6 +79,8 @@ tree, so you don't need to rebuild.
 - **Components**: `require "StatCard"` loads `StatCard.lua` from the script's folder, the same way
   QML files work as components.
 - **Common props**: `visible`, `enabled`, `tooltip`, `width`/`height` (dp; `-1` or `fillWidth = true` to fill).
+- **Scaling and zoom**: dp follow the monitor DPI times a user zoom: `setZoom(1.25)`, `zoom()`, or Ctrl + `=`/`-`/`0`
+  and Ctrl + wheel. Frames are rendered on demand; `requestFrame()` asks for one.
 - **Icons**: any [Material Icons](https://fonts.google.com/icons) name, e.g. `icon = "add"` on `Button`,
   `IconButton`, `Chip`, `ListItem` and `NavigationItem`, or `leadingIcon`/`trailingIcon` on fields.
 - **Layout**:

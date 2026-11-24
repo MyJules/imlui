@@ -11,6 +11,7 @@ import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
 import imlui.widgets.common;
+import imlui.ui.frame_request;
 
 export namespace imlui::md {
 
@@ -42,6 +43,7 @@ void progress(float fraction, float width) {
         seg(fraction > 0.0f ? ax + gap : p.x, x1, s.secondaryContainer);
         if (fraction < 1.0f) dl->AddCircleFilled({x1 - h * 0.5f, y + h * 0.5f}, h * 0.5f, col(s.primary));
     } else {
+        requestFrame(); // indeterminate: animates continuously
         float t = static_cast<float>(std::fmod(ImGui::GetTime() * 0.55, 1.0));
         auto ease = [](float x) { x = std::clamp(x, 0.0f, 1.0f); return x * x * (3 - 2 * x); };
         float a1 = ease(t * 1.4f - 0.1f), b1 = ease(t * 1.4f + 0.25f);
@@ -78,6 +80,7 @@ void circularProgress(float fraction, float diameter, float thickness) {
         arc(top, end, s.primary);
         if (f < 1.0f) arc(end + gapA, top + 2 * pi - (f > 0 ? gapA : 0.0f), s.secondaryContainer);
     } else {
+        requestFrame();
         float t = static_cast<float>(ImGui::GetTime());
         float a0 = t * 5.0f;
         float span = 0.35f + 0.5f * (1.0f + std::sin(t * 2.6f)) * pi * 0.65f;

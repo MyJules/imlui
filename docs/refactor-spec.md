@@ -19,7 +19,7 @@ up), so adding/removing module files needs no CMake edits.
 | `imlui.color` | `src/imlui/color/color.cppm` | `struct Color` (fields `r,g,b,a`; `withAlpha`, `vec4`, `u32`, `static from`), `mix`, `overlay`, `parseHex`, `toHex` |
 | `imlui.color.oklch` | `src/imlui/color/oklch.cppm` | `struct Oklch`, `toOklch`, `fromOklch`, `toneToOkL` |
 | `imlui.color.tonal_palette` | `src/imlui/color/tonal_palette.cppm` | `struct TonalPalette { float hue, chroma; Color tone(float) const; }` |
-| `imlui.theme.dpi` | `src/imlui/theme/dpi.cppm` | `float dpiScale()`, `void setDpiScale(float)`, `float dp(float)` |
+| `imlui.theme.dpi` | `src/imlui/theme/dpi.cppm` | `float dpiScale()`, `contentScale`/`setContentScale`, `zoom`/`setZoom`, `zoomStep`, `float dp(float)` (phase D) |
 | `imlui.theme.scheme` | `src/imlui/theme/scheme.cppm` | `struct Scheme` (same fields), `struct RoleEntry`, `std::span<const RoleEntry> roles()` (was `kRoles`), `findRole` (both overloads), `generateScheme` |
 | `imlui.theme.typography` | `src/imlui/theme/typography.cppm` | `enum class TextStyle`, `enum class Weight`, `struct TextStyleInfo`, `const TextStyleInfo& textStyleInfo(TextStyle)` (was `kTextStyles[i]`), `textStyleFromName`, `loadFonts(dir)` (text fonts only, no dpi arg — dpi lives in `imlui.theme.dpi`), `font`, `fontSize`, `fontPixels` (both overloads), `pushFont` |
 | `imlui.theme.icons` | `src/imlui/theme/icons.cppm` | `loadIcons(dir)` (icon font + codepoints), `iconFont`, `iconText`, `hasIcon` |

@@ -11,8 +11,9 @@ import imlui.lua.node;
 
 export namespace imlui {
 
-/// Reads a size property in dp: > 0 px (scaled), < 0 "fill minus", 0 auto.
-/// For width keys, `fillWidth = true` means "fill" (-1).
+/// Reads a size property in dp and returns pixels: > 0 a fixed size, -1 "fill",
+/// < -1 "fill minus |v| dp", 0 auto. Fixed and fill-minus sizes are scaled by dp();
+/// -1 stays -1. For width keys, `fillWidth = true` means "fill" (-1).
 [[nodiscard]] float sizeProp(const luaui::Node& node, const char* key);
 
 /// "Label###id": the visible text may change every frame without changing the ImGui ID.
@@ -30,7 +31,7 @@ namespace imlui {
 float sizeProp(const luaui::Node& node, const char* key) {
     if (key[0] == 'w' && node.boolean("fillWidth", false)) return -1.0f;
     float v = node.numf(key, 0.0f);
-    return v > 0 ? dp(v) : v;
+    return (v > 0 || v < -1.0f) ? dp(v) : v;
 }
 
 std::string labelId(std::string_view text, const char* id) {

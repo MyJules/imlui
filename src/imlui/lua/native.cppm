@@ -21,13 +21,18 @@ import imlui.theme.typography;
 import imlui.theme.theme;
 import imlui.lua.node;
 import imlui.lua.theme_table;
+import imlui.ui.frame_request;
 
 export namespace imlui::luaui {
 
-/// App-level actions the host provides to scripts. Empty functions are no-ops.
+/// App-level actions the host provides to scripts. Empty functions are no-ops,
+/// except the zoom hooks, which fall back to imlui.theme.dpi directly.
 struct NativeHooks {
     std::function<void()> quit, reload;
     std::function<void(const std::string&)> setTitle;
+    std::function<float()> zoom;        ///< current or pending zoom
+    std::function<void(float)> setZoom; ///< schedules a zoom change for the next frame
+    std::function<void(bool)> setZoomShortcuts;
 };
 
 /// Makes `require("imlui.native")` available in `state`. `hooks` is stored in
@@ -133,6 +138,38 @@ constexpr NativeFn nativeFns[] = {
          lua::pushnumber(state, dpiScale());
          return 1;
      }},
+    {"contentScale",
+     [](lua::State* state) -> int {
+         lua::pushnumber(state, contentScale());
+         return 1;
+     }},
+    {"zoom",
+     [](lua::State* state) -> int {
+         auto& fn = hostHooks(state).zoom;
+         lua::pushnumber(state, fn ? fn() : zoom());
+         return 1;
+     }},
+    {"setZoom",
+     [](lua::State* state) -> int {
+         if (!lua::isnumber(state, 1)) lua::error(state, "setZoom expects a number");
+         const float z = static_cast<float>(lua::tonumber(state, 1));
+         if (auto& fn = hostHooks(state).setZoom)
+             fn(z);
+         else
+             setZoom(z);
+         return 0;
+     }},
+    {"setZoomShortcuts",
+     [](lua::State* state) -> int {
+         if (auto& fn = hostHooks(state).setZoomShortcuts) fn(lua::toboolean(state, 1));
+         return 0;
+     }},
+    // requestFrame([seconds]): render a frame now, or after `seconds`.
+    {"requestFrame",
+     [](lua::State* state) -> int {
+         requestFrameAfter(lua::isnumber(state, 1) ? lua::tonumber(state, 1) : 0.0);
+         return 0;
+     }},
     {"textSize",
      [](lua::State* state) -> int {
          std::string_view s = lua::tostring(state, 1);
@@ -184,6 +221,7 @@ constexpr NativeFn nativeFns[] = {
          io.AddMousePosEvent(static_cast<float>(lua::tonumber(state, 1)), static_cast<float>(lua::tonumber(state, 2)));
          if (!lua::isnoneornil(state, 3)) io.AddMouseButtonEvent(0, lua::toboolean(state, 3));
          if (lua::isnumber(state, 4)) io.AddMouseWheelEvent(0.0f, static_cast<float>(lua::tonumber(state, 4)));
+         requestFramesFor(0.3); // like real input: let the UI react and settle
          return 0;
      }},
 };
