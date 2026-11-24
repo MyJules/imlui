@@ -64,8 +64,11 @@ bool applyPendingTheme();
 [[nodiscard]] int imguiColorIndex(std::string_view name);
 
 /// Resolves a color spec: a role name ("primary"), a hex string ("#ff0000")
-/// or a role with alpha ("onSurface/0.6").
+/// or a role with alpha ("onSurface/0.6"). Roles come from the current theme.
 [[nodiscard]] std::optional<Color> resolveColor(std::string_view spec);
+
+/// Like resolveColor(spec), but roles are looked up in `scheme`.
+[[nodiscard]] std::optional<Color> resolveColor(std::string_view spec, const Scheme& scheme);
 
 } // namespace imlui
 
@@ -264,7 +267,9 @@ int imguiColorIndex(std::string_view name) {
     return -1;
 }
 
-std::optional<Color> resolveColor(std::string_view spec) {
+std::optional<Color> resolveColor(std::string_view spec) { return resolveColor(spec, theme().scheme); }
+
+std::optional<Color> resolveColor(std::string_view spec, const Scheme& scheme) {
     if (spec.empty()) return std::nullopt;
     if (spec.front() == '#') return parseHex(spec);
     float alpha = -1.0f;
@@ -273,7 +278,7 @@ std::optional<Color> resolveColor(std::string_view spec) {
         alpha = static_cast<float>(std::atof(a.c_str()));
         spec = spec.substr(0, slash);
     }
-    if (const Color* c = findRole(theme().scheme, spec)) return alpha >= 0 ? c->withAlpha(alpha) : *c;
+    if (const Color* c = findRole(scheme, spec)) return alpha >= 0 ? c->withAlpha(alpha) : *c;
     return parseHex(spec);
 }
 

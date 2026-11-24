@@ -10,12 +10,12 @@ from the default theme on every (re)load: seed `#6750A4`, dark, `preset = "mater
 ```lua
 theme {
     preset    = "material",   -- or "imgui-dark" | "imgui-light" | "imgui-classic"
-    seed      = "#6750A4",    -- hex; the scheme is generated from it
+    seed      = "#6750A4",    -- any color spec; the scheme is generated from it
     dark      = true,
     spacing   = 8,            -- base spacing unit (dp)
     fontScale = 1.0,
     shape     = { extraSmall = 4, small = 8, medium = 12, large = 16, extraLarge = 28 },
-    colors    = { primary = "#FF5722" },                       -- override any color role
+    colors    = { primary = "#FF5722", surface = "surfaceContainerLow" }, -- override any color role
     imgui     = { WindowBg = "#101010" },                      -- override any ImGuiCol_*
     style     = { FrameRounding = 6, ItemSpacing = { 10, 6 } } -- override ImGuiStyle fields
 }
@@ -24,13 +24,13 @@ theme {
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `preset` | string | `"material"` | `"material"` maps the scheme onto `ImGuiStyle`. `"imgui-dark"`, `"imgui-light"` and `"imgui-classic"` use ImGui's stock styles instead. Material widgets always draw with the scheme. |
-| `seed` | hex string | `"#6750A4"` | Seed color. An invalid value reports an error and keeps the default. |
+| `seed` | color | `"#6750A4"` | Seed color: hex, `{r,g,b,a}`, or a role (`"primary"`, `"tertiary/1"`) of the theme currently in effect. An invalid value reports an error and keeps the default. |
 | `dark` | bool | `true` | Dark or light scheme. |
 | `spacing` | number | `8` | Base unit for ImGui paddings and spacings. It's also the default gap in `Column` and `Row`. |
 | `fontScale` | number | `1.0` | Multiplies every text size. Glyphs are rasterized at the final size, so text stays sharp. |
 | `shape` | table | see above | Material shape scale: corner radii in dp. |
-| `colors` | `{ role = color }` | — | Overrides generated roles. Values are hex or `{r,g,b,a}`. An unknown role reports an error. |
-| `imgui` | `{ ImGuiColName = color }` | — | Raw ImGui color overrides by name (`"WindowBg"`, `"Text"`, ...), applied after the preset. Values are hex or `{r,g,b,a}`. |
+| `colors` | `{ role = color }` | — | Overrides generated roles. Values are [color specs](#color-specs); role names refer to the scheme generated from this table's `seed`/`dark` (before any overrides). An unknown role or invalid color reports an error. |
+| `imgui` | `{ ImGuiColName = color }` | — | Raw ImGui color overrides by name (`"WindowBg"`, `"Text"`, ...), applied after the preset. Values are [color specs](#color-specs), with roles from this table's generated scheme. An unknown name or invalid color reports an error. |
 | `style` | `{ Field = n \| {x, y} }` | — | Raw `ImGuiStyle` overrides, applied after the preset. An unknown field reports an error. |
 
 `style` accepts these fields: `Alpha`, `DisabledAlpha`, `WindowPadding`, `WindowRounding`, `WindowBorderSize`,
@@ -121,8 +121,10 @@ Element color props (`color = ...`), Canvas painter colors and `color.*` functio
 | hex: `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA` (`#` optional) | `"#FF5722"`, `"#00000080"` |
 | table `{r, g, b[, a]}` in 0..1 | `{ 1, 0.34, 0.13, 1 }` |
 
-Roles are resolved against the scheme **currently in effect**, so `color = "primary"` follows theme changes. In
-the theme table itself (`seed`, `colors`, `imgui`), only hex and tables are accepted.
+Roles are resolved against the scheme **currently in effect**, so `color = "primary"` follows theme changes. The
+theme table itself (`seed`, `colors`, `imgui`) accepts the same specs, but there `colors` and `imgui` roles mean the
+scheme generated from that table's seed, so `colors = { surface = "surfaceContainerLow" }` uses the new scheme's
+`surfaceContainerLow`. `seed` roles come from the theme in effect before the call.
 
 ## Typography
 

@@ -1,10 +1,5 @@
 # Architecture
 
-> The module layout below is the **target layout** of the ongoing module refactor (`docs/refactor-spec.md`).
-> Phase A (foundation modules) has landed. Phases B (widgets) and C (UI and app) are being split, so on the
-> `material-ui` branch `widgets.cppm`, `renderer.cppm` and `engine.cppm` are still single files. Behavior is
-> the same either way.
-
 ## Layers
 
 ```mermaid
@@ -57,8 +52,9 @@ flowchart TD
    `snackbar()`. Overlays draw above everything else.
 6. Draws the **error overlay** if any script errors were recorded (see below).
 7. `window.endFrame()`: clears to the current `WindowBg` color, renders the ImGui draw data and swaps buffers.
-8. Copies the title from the root `ApplicationWindow` to the native window. The native title is only updated
-   when it changes.
+8. Copies `Renderer::windowTitle()` to the native window: the root `ApplicationWindow`'s `title` prop if it has
+   one, else the last `ui.setTitle()` (the `setTitle` hook stores it in the renderer), else `"imlui"`. The native
+   title is only updated when it changes.
 
 **Live resize.** On Windows, the OS runs a modal loop while the user drags the window border, so
 `glfwPollEvents()` doesn't return. The engine registers `renderFrame` as the window's **refresh callback**, and
@@ -223,7 +219,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.elements.inputs` | `Slider`, `SpinBox`, `TextField`, `TextArea`, `ComboBox`, `ColorPicker` |
 | `imlui.ui.elements.data` | `ProgressBar`, `CircularProgress`, `BusyIndicator`, `Plot`, `Table`, `Canvas` |
 | `imlui.ui.elements.system` | `Snackbar`, `Timer`, `ImGuiDemo` |
-| `imlui.ui.elements` | `registerBuiltinElements(Renderer&)`: calls all of the above |
+| `imlui.ui.elements.builtin` | `registerBuiltinElements(Renderer&)`: calls all of the above |
+| `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
 
 ### App (`src/imlui/app/`)
 

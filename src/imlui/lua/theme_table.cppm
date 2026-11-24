@@ -42,22 +42,27 @@ Theme themeFromTable(lua::State* state, int idx) {
         if (lua::getfield(state, tbl, k) == lua::Type::Number) out = static_cast<float>(lua::tonumber(state, -1));
         lua::pop(state);
     };
-    auto colorAt = [&](int i) -> std::optional<Color> {
-        if (lua::type(state, i) == lua::Type::String) return parseHex(lua::tostring(state, i));
+    // Strings may be hex, a role name or "role/alpha"; roles resolve against `scheme`.
+    auto colorAt = [&](int i, const Scheme& scheme) -> std::optional<Color> {
+        if (lua::type(state, i) == lua::Type::String) return resolveColor(lua::tostring(state, i), scheme);
         if (lua::type(state, i) == lua::Type::Table) return Node::colorFromTable(state, i);
         return std::nullopt;
     };
 
     if (auto p = str("preset")) t.preset = *p;
-    if (auto s = str("seed")) {
-        if (auto c = parseHex(*s)) t.seed = *c;
-        else reportError("theme: invalid seed color '" + *s + "'");
+    // The seed has no scheme of its own yet, so its roles come from the current theme.
+    if (lua::getfield(state, idx, "seed") != lua::Type::Nil) {
+        if (auto c = colorAt(lua::gettop(state), theme().scheme)) t.seed = *c;
+        else reportError("theme: invalid seed color '" + lua::toStringAny(state, -1) + "'");
     }
+    lua::pop(state);
     if (lua::getfield(state, idx, "dark") != lua::Type::Nil) t.dark = lua::toboolean(state, -1);
     lua::pop(state);
     num(idx, "spacing", t.spacing);
     num(idx, "fontScale", t.fontScale);
     t.scheme = generateScheme(t.seed, t.dark);
+    // `colors` / `imgui` role names refer to this table's generated scheme, before overrides.
+    const Scheme generated = t.scheme;
 
     if (lua::getfield(state, idx, "shape") == lua::Type::Table) {
         int s = lua::gettop(state);
@@ -76,7 +81,7 @@ Theme themeFromTable(lua::State* state, int idx) {
         while (lua::next(state, ct)) {
             std::string role{lua::tostring(state, -2)};
             Color* target = findRole(t.scheme, role);
-            auto c = colorAt(lua::gettop(state));
+            auto c = colorAt(lua::gettop(state), generated);
             if (!target) reportError("theme.colors: unknown role '" + role + "'");
             else if (!c) reportError("theme.colors." + role + ": invalid color");
             else *target = *c;
@@ -92,9 +97,10 @@ Theme themeFromTable(lua::State* state, int idx) {
         while (lua::next(state, ct)) {
             std::string name{lua::tostring(state, -2)};
             int ci = imguiColorIndex(name);
-            auto c = colorAt(lua::gettop(state));
+            auto c = colorAt(lua::gettop(state), generated);
             if (ci < 0) reportError("theme.imgui: unknown ImGuiCol '" + name + "'");
-            else if (c) t.imguiColors.emplace_back(ci, *c);
+            else if (!c) reportError("theme.imgui." + name + ": invalid color");
+            else t.imguiColors.emplace_back(ci, *c);
             lua::pop(state);
         }
     }

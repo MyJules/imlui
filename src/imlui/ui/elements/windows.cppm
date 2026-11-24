@@ -36,7 +36,8 @@ void renderMenuBar(Renderer& r, const Node& n) {
 }
 
 void applicationWindow(Renderer& r, const Node& n) {
-    r.setWindowTitle(n.string("title", "imlui"));
+    // A `title` prop wins every frame; without one, ui.setTitle() (or the default) sticks.
+    if (n.has("title")) r.setWindowTitle(n.string("title", "imlui"));
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);

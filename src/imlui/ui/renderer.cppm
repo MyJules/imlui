@@ -35,7 +35,8 @@ public:
     /// Timer, Dialog) take no layout space.
     void registerElement(std::string name, ElementFn fn, bool visual = true);
 
-    /// Title requested by the root ApplicationWindow (empty if none).
+    /// Native window title: the root ApplicationWindow's `title` prop, else the
+    /// last ui.setTitle(), else "imlui".
     [[nodiscard]] const std::string& windowTitle() const;
     void setWindowTitle(std::string title);
 
@@ -104,7 +105,7 @@ private:
         bool visual = true;
     };
     std::map<std::string, Entry, std::less<>> m_elements;
-    std::string m_title;
+    std::string m_title{"imlui"};
 };
 
 } // namespace imlui

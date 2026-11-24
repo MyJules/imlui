@@ -107,7 +107,7 @@ Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
     registerBuiltinElements(m_renderer);
     m_hooks.quit = [this] { requestQuit(); };
     m_hooks.reload = [this] { requestReload(); };
-    m_hooks.setTitle = [this](const std::string& title) { m_window.setTitle(title); };
+    m_hooks.setTitle = [this](const std::string& title) { m_renderer.setWindowTitle(title); };
 }
 
 Engine::~Engine() { closeState(m_state); }
