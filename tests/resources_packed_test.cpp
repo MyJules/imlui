@@ -39,7 +39,8 @@ std::string text(std::optional<std::span<const std::byte>> bytes) {
 
 std::span<const std::byte> bytesOf(std::string_view s) { return std::as_bytes(std::span{s.data(), s.size()}); }
 
-/// Whether the library's own files are embedded (IMLUI_EMBED_RESOURCES=ON); dev builds mount their source folders.
+/// Whether the library's own files are embedded (IMLUI_EMBED_RESOURCES=ON or IMLUI_INSTALL=ON); otherwise dev builds
+/// mount their source folders.
 #ifdef IMLUI_TEST_EMBED_RESOURCES
 constexpr bool libraryEmbedded = true;
 #else

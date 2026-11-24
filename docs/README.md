@@ -25,13 +25,13 @@ Save the script while the app is running and it reloads immediately.
 
 | Page | What it covers |
 |---|---|
-| [Getting started](getting-started.md) | Prerequisites, using imlui in your app (git submodule, `add_subdirectory`, `src/CMakeLists.txt`, `main.cpp`, `src/resources/`), the imlui-gallery example, hot reload, dev and ship builds (`IMLUI_DEV_PATHS`, `IMLUI_EMBED_RESOURCES`), shipping, a first script, building imlui on its own |
-| [Architecture](architecture.md) | Layers, the frame loop, property resolution, signals, inline containers, hot reload, the module map, third-party wrappers |
+| [Getting started](getting-started.md) | Prerequisites, using imlui in your app (adding it with `add_subdirectory`, `FetchContent` or `find_package`; `src/CMakeLists.txt`, `main.cpp`, `src/resources/`), the imlui-gallery example, hot reload, dev and ship builds (`IMLUI_DEV_PATHS`, `IMLUI_EMBED_RESOURCES`), shipping, a first script, building imlui on its own |
+| [Architecture](architecture.md) | Layers, the frame loop, property resolution, signals, inline containers, hot reload, resources, the repository and install layouts, the module map, third-party wrappers |
 | [Lua API](lua-api.md) | The script environment: `state`, `watch`, `bind`, `component`, `Repeater`/`ListView`/`If`/`Loader`, theme functions, timers, snackbar, logging, `native` |
 | [Elements](elements.md) | Every built-in element: props, defaults, signals, two-way props, common props, the Canvas painter |
 | [Registering C++ types](extending.md) | Extending imlui from C++, QML style: element types (`Element`, `TypeBuilder`, `Frame`), properties, signals, methods, singletons, `LuaConvert`, lifetime, threading, ticking elements, the built-ins as examples, the example in imlui-gallery |
 | [Theming](theming.md) | Material 3 scheme generation, color roles, the `theme{}` table, color specs, typography, icons, state layers |
-| [Development](development.md) | Code style, module conventions, adding elements and native functions, logging, clang-tidy, clice, tests, scripted UI tests |
+| [Development](development.md) | Code style, module conventions, adding elements and native functions, logging, clang-tidy, clice, tests (including the package tests), scripted UI tests |
 | [Status / changelog](changelog.md) | What exists today and what is in progress |
 
 The C++ code style lives in [`../CODE_STYLE.md`](../CODE_STYLE.md).

@@ -1,8 +1,11 @@
 # Packing resource files into an executable (imlui_add_resources) or a .pak archive (imlui_add_pak), as a resource
-# manifest lists them. The tools that do the work are built from tools/ (imlui_rc, imlui_pack). See
-# docs/architecture.md, "Resource manifests" and "Embedding and archives". imlui's CMakeLists.txt includes this file,
-# so an app that adds imlui as a subproject calls these functions after add_subdirectory(vendor/imlui), on its own
-# targets and manifests (relative paths are relative to the calling CMakeLists.txt).
+# manifest lists them. The tools that do the work are imlui::imlui_rc and imlui::imlui_pack: built from tools/ when
+# imlui is a subproject (add_subdirectory, FetchContent; aliases of imlui_rc and imlui_pack), imported executables of
+# an installed package (find_package). See docs/architecture.md, "Resource manifests" and "Embedding and archives".
+# imlui's CMakeLists.txt includes this file, and so does the installed package's imluiConfig.cmake, so an app calls
+# these functions after add_subdirectory / FetchContent_MakeAvailable / find_package, on its own targets and manifests
+# (relative paths are relative to the calling CMakeLists.txt). The options below are defined here for the same reason:
+# they exist in the app's build in every mode.
 #
 #   imlui_add_resources(<target> <manifest> [NAME <name>] [EMBED ON|OFF])
 #
@@ -29,11 +32,32 @@
 #   imlui_add_pak(<name> <manifest> [OUTPUT <file>])
 #
 #     Adds the target <name> (built by `all`) that writes a .pak archive with the files of <manifest>, encoded the
-#     same way and tracked the same way (dependency file, file list target <name>_list). The groups of the manifest must share a prefix: the
-#     archive is mounted at the deepest folder holding all their mount points. OUTPUT defaults to <name>.pak in the
-#     runtime output folder (CMAKE_RUNTIME_OUTPUT_DIRECTORY, else the current binary dir), where defaultConfig()
-#     mounts every *.pak it finds next to the executable, at the mount point stored in the archive.
+#     same way and tracked the same way (dependency file, file list target <name>_list). The groups of the manifest
+#     must share a prefix: the archive is mounted at the deepest folder holding all their mount points. OUTPUT
+#     defaults to <name>.pak in the runtime output folder (CMAKE_RUNTIME_OUTPUT_DIRECTORY, else the current binary
+#     dir), where defaultConfig() mounts every *.pak it finds next to the executable, at the mount point stored in the
+#     archive.
 include_guard(GLOBAL)
+
+# Dev builds bake each embedded block's source folder into it (imlui_add_resources), and defaultConfig() mounts those
+# folders over the embedded copies, so editing an app's scripts hot-reloads. OFF for a release: no source paths.
+option(IMLUI_DEV_PATHS "Mount the source folders of embedded files over them (hot reload while editing)" ON)
+# Whether imlui_add_resources embeds the files (unless a call says EMBED ON|OFF). Dev builds don't by default: they
+# load the files from the source folders anyway, so editing a Lua file, an image or a font needs no build at all.
+# Without embedding the source folders are the only copy, so OFF needs IMLUI_DEV_PATHS=ON.
+if(IMLUI_DEV_PATHS)
+    set(_imlui_embed_default OFF)
+else()
+    set(_imlui_embed_default ON)
+endif()
+option(IMLUI_EMBED_RESOURCES "Embed the files of resource manifests (default: OFF with IMLUI_DEV_PATHS, else ON)"
+       ${_imlui_embed_default})
+unset(_imlui_embed_default)
+if(NOT IMLUI_EMBED_RESOURCES AND NOT IMLUI_DEV_PATHS)
+    message(FATAL_ERROR "IMLUI_EMBED_RESOURCES=OFF needs IMLUI_DEV_PATHS=ON: without the embedded files and without "
+                        "the source folders an executable would have no resources. For a build you ship, set "
+                        "-DIMLUI_DEV_PATHS=OFF -DIMLUI_EMBED_RESOURCES=ON (a fresh build folder gets ON by default).")
+endif()
 
 # The absolute path of manifest argument <manifest> (relative to the current source dir), in <out>.
 function(_imlui_manifest_path out caller manifest)
@@ -53,7 +77,7 @@ endfunction()
 # parent folder's listing, which NTFS updates lazily. Comparing the listing is cheap (no file is read).
 function(_imlui_manifest_listing out manifest file target)
     add_custom_target(${target}
-        COMMAND imlui_rc --list ${manifest} ${file}
+        COMMAND imlui::imlui_rc --list ${manifest} ${file}
         BYPRODUCTS ${file}
         COMMENT "Checking the file list of ${manifest}"
         VERBATIM
@@ -97,8 +121,8 @@ function(imlui_add_resources target manifest)
         _imlui_manifest_listing(listing ${manifest} ${dir}/${name}.files imlui_resources_${name}_list)
         add_custom_command(
             OUTPUT ${dir}/${name}.cppm ${dir}/${name}.bin
-            COMMAND imlui_rc ${flags} ${manifest} ${name} ${dir}
-            DEPENDS imlui_rc ${manifest} ${listing}
+            COMMAND imlui::imlui_rc ${flags} ${manifest} ${name} ${dir}
+            DEPENDS imlui::imlui_rc ${manifest} ${listing}
             DEPFILE ${dir}/${name}.d
             COMMENT "Embedding ${manifest} (imlui.embedded.${name})"
             VERBATIM
@@ -107,8 +131,8 @@ function(imlui_add_resources target manifest)
         # Only the mount points and source folders: regenerated when the manifest changes, never for its files.
         add_custom_command(
             OUTPUT ${dir}/${name}.cppm
-            COMMAND imlui_rc --source-dirs ${manifest} ${name} ${dir}
-            DEPENDS imlui_rc ${manifest}
+            COMMAND imlui::imlui_rc --source-dirs ${manifest} ${name} ${dir}
+            DEPENDS imlui::imlui_rc ${manifest}
             COMMENT "Listing the source folders of ${manifest} (imlui.embedded.${name}, not embedded)"
             VERBATIM
         )
@@ -145,8 +169,8 @@ function(imlui_add_pak name manifest)
     _imlui_manifest_listing(listing ${manifest} ${CMAKE_CURRENT_BINARY_DIR}/${name}.pak.files ${name}_list)
     add_custom_command(
         OUTPUT ${output}
-        COMMAND imlui_pack --depfile ${depfile} ${output} ${manifest}
-        DEPENDS imlui_pack ${manifest} ${listing}
+        COMMAND imlui::imlui_pack --depfile ${depfile} ${output} ${manifest}
+        DEPENDS imlui::imlui_pack ${manifest} ${listing}
         DEPFILE ${depfile}
         COMMENT "Packing ${manifest} into ${file}"
         VERBATIM

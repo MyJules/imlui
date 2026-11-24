@@ -26,13 +26,14 @@ target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${CMAKE_CURRENT_B
                                                IMLUI_SMOKE_APP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/smoke_app")
 # Both shapes of a generated module, whatever IMLUI_EMBED_RESOURCES says: the smoke app's manifest embedded
 # (imlui.embedded.smoke_embedded) and, in dev builds, not embedded (imlui.embedded.smoke_sources: source folders only).
-# The library's own imlui.embedded.imlui follows the option, which IMLUI_TEST_EMBED_RESOURCES tells the tests.
+# The library's own imlui.embedded.imlui follows the option, or is always embedded with IMLUI_INSTALL=ON
+# (IMLUI_LIBRARY_EMBEDS, src/CMakeLists.txt), which IMLUI_TEST_EMBED_RESOURCES tells the tests.
 imlui_add_resources(imlui_tests data/smoke_app/resources.lua NAME smoke_embedded EMBED ON)
 if(IMLUI_DEV_PATHS)
     imlui_add_resources(imlui_tests data/smoke_app/resources.lua NAME smoke_sources EMBED OFF)
     target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_DEV_PATHS=1)
 endif()
-if(IMLUI_EMBED_RESOURCES)
+if(IMLUI_LIBRARY_EMBEDS)
     target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_EMBED_RESOURCES=1)
 endif()
 
@@ -66,3 +67,7 @@ function(imlui_add_smoke_test name target expect)
     set_tests_properties(${name} PROPERTIES TIMEOUT 120 RUN_SERIAL ON)
 endfunction()
 imlui_add_smoke_test(smoke.imlui_smoke_host imlui_smoke_host "embedded 'smoke_app (app:/)' main.lua")
+
+# The package tests: a consumer app built with imlui added by add_subdirectory, FetchContent and find_package
+# (package/CMakeLists.txt, label `package`).
+add_subdirectory(package)

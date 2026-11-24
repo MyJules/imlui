@@ -285,9 +285,12 @@ cmake --build --preset clang-asan
 ctest --preset clang-asan           # includes the smoke test: the test host runs under the sanitizers
 ```
 
-The presets are dev builds (`IMLUI_DEV_PATHS=ON`), so nothing is embedded (`IMLUI_EMBED_RESOURCES` defaults to `OFF`):
-the library's `imlui.embedded.imlui` only names `src/resources/` and `external/fonts/`, and editing those needs no
-build. The tests check whichever shape the build has, plus both shapes of the smoke app's manifest in every
+The presets are dev builds (`IMLUI_DEV_PATHS=ON`), so `imlui_add_resources` doesn't embed (`IMLUI_EMBED_RESOURCES`
+defaults to `OFF`), except for the library's own files: built on its own, imlui has its install rules on
+(`IMLUI_INSTALL`), and an installable library always embeds them (`src/CMakeLists.txt`). Its source folders are still
+mounted over the embedded copies, so editing `src/resources/` hot-reloads; the next build re-embeds. With
+`-DIMLUI_INSTALL=OFF` the library's `imlui.embedded.imlui` only names `src/resources/` and `external/fonts/`, as in an
+app's dev build, and editing those needs no build. The tests check whichever shape the build has, plus both shapes of the smoke app's manifest in every
 configuration (`imlui.embedded.smoke_embedded`, `EMBED ON`; `imlui.embedded.smoke_sources`, `EMBED OFF`, dev builds
 only). Before merging resource changes, also build and test the embedded configurations, in their own build folders:
 
@@ -384,6 +387,31 @@ is the `imlui_resource_tools` library (`tools/lib/`, links the zstd compressor a
 doesn't link `imlui`, which is embedded with it), and the archive writer is `imlui_pack_lib` (links `imlui` for
 `imlui.resources.pak_format`). Generated modules are not checked by `tidy`; the generator is. To see what a manifest
 selects, run `build/<preset>/bin/imlui_rc --list <manifest> <file>` and read the file.
+
+### Package tests
+
+`tests/package/` checks that an app can consume imlui each way [Getting started](getting-started.md#1-adding-imlui-to-your-project)
+describes. `tests/package/consumer/` is a minimal app (`main.cpp`, `src/resources/` embedded as
+`imlui.embedded.consumer`, `src/pak/` as `consumer_data.pak`, its own `CMAKE_RUNTIME_OUTPUT_DIRECTORY`, every helper)
+whose `CMakeLists.txt` adds imlui as `IMLUI_CONSUMER_MODE` says. `tests/package/run.cmake` configures and builds it
+with this build's generator, compilers and build type, then runs it alone in an empty folder with
+`IMLUI_DEV_PATHS=0` and `IMLUI_EXIT_AFTER_FRAMES=5`; its `main.lua` asserts that `imlui:/`, `imlui:/fonts/` and the
+archive are mounted. It must exit with 0 and log no error.
+
+| Test (label `package`) | imlui added with |
+|---|---|
+| `package.subdirectory` | `add_subdirectory(<this checkout>)` |
+| `package.fetchcontent` | `FetchContent_Declare(imlui SOURCE_DIR <this checkout>)` + `FetchContent_MakeAvailable` (a `GIT_REPOSITORY` works the same: `-DIMLUI_GIT_REPOSITORY=<url> -DIMLUI_GIT_TAG=<rev>` on the consumer) |
+| `package.install` | not an app: `cmake --install` of this build into `build/<preset>/tests/package/prefix`, the fixture of the two below |
+| `package.find_package` | `find_package(imlui 0.1 CONFIG REQUIRED)` on that prefix; the app is configured with `IMLUI_DEV_PATHS=OFF`, so the executable carries everything |
+| `package.fetchcontent_find` | `FetchContent_Declare(... FIND_PACKAGE_ARGS 0.1 CONFIG)`: fails unless it took the installed package |
+
+They're slow the first time: each consumer builds the whole library (add_subdirectory, FetchContent) or compiles the
+installed modules' BMIs again (find_package), a few minutes in all. Their build folders
+(`build/<preset>/tests/package/<mode>/`) are kept, so later runs only rebuild what changed. They run one at a time
+(`RUN_SERIAL`). `ctest --preset clang-debug -L package` runs only them, `-LE package` everything else, and
+`-DIMLUI_PACKAGE_TESTS=OFF` leaves them out. They aren't added in sanitizer builds (the consumer would need the same
+instrumentation) or with a multi-config generator, and the two install tests need `IMLUI_INSTALL=ON`.
 
 ### The headless frame harness
 

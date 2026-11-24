@@ -1,0 +1,20 @@
+# imluiConfig.cmake: the installed imlui package (cmake/ImluiInstall.cmake). An app's
+#
+#   find_package(imlui 0.1 CONFIG REQUIRED)
+#
+# gets what add_subdirectory gives it: the target imlui::imlui (C++20 modules: the app's CMake rebuilds their BMIs,
+# which needs CMake 3.28+ and Ninja), the resource tools imlui::imlui_rc and imlui::imlui_pack, the helpers
+# imlui_add_resources, imlui_add_pak, imlui_set_warnings and imlui_set_hardening (none applied unless called), and
+# the options IMLUI_DEV_PATHS and IMLUI_EMBED_RESOURCES for the app's own imlui_add_resources calls. The library
+# carries its own files (embedded), whatever the app's options say.
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+find_dependency(OpenGL)
+
+include(${CMAKE_CURRENT_LIST_DIR}/imluiTargets.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/ImluiWarnings.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/ImluiResources.cmake)
+
+check_required_components(imlui)

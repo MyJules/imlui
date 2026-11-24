@@ -645,7 +645,7 @@ build/clang-debug/bin/imlui_gallery                               # the last pag
   `tick()` to the main thread twice a second with `Engine::post`. The gallery pauses it while another page is
   shown, so idle pages render no frames.
 - `CMakeLists.txt` adds imlui (`add_subdirectory(vendor/imlui)`) and `src/`. `src/CMakeLists.txt` lists both module
-  files in the executable's own `CXX_MODULES` file set, links `imlui`, applies
+  files in the executable's own `CXX_MODULES` file set, links `imlui::imlui`, applies
   `imlui_set_warnings`/`imlui_set_hardening`, and embeds `src/resources/` (listed in `src/resources/resources.lua`)
   with `imlui_add_resources(imlui_gallery resources/resources.lua NAME gallery)`. In dev builds the package carries
   the `src/resources/` folder's path and `defaultConfig` mounts it over the embedded copy, so the scripts

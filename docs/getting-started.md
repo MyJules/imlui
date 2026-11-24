@@ -1,9 +1,9 @@
 # Getting started
 
-imlui is a library. An app vendors this repository as a git submodule, adds it to its CMake build with
-`add_subdirectory`, and links the `imlui` target: a few lines of C++ host (`main.cpp`) plus the app's Lua scripts,
-embedded from a resource manifest (`src/resources/resources.lua`). The [imlui-gallery](#the-example-app-imlui-gallery)
-repository is the complete example.
+imlui is a library. An app adds it to its CMake build in one of three ways (a git submodule with `add_subdirectory`,
+`FetchContent`, or `find_package` on an installed copy), links `imlui::imlui`, and is then a few lines of C++ host
+(`main.cpp`) plus its Lua scripts, embedded from a resource manifest (`src/resources/resources.lua`). The
+[imlui-gallery](#the-example-app-imlui-gallery) repository is the complete example.
 
 ## Prerequisites
 
@@ -24,11 +24,11 @@ Icons Round are in `external/fonts/`, and the library embeds them.
 
 ## Using imlui in your app
 
-An app's repository looks like this (the names other than `vendor/imlui` are up to you):
+An app's repository looks like this (the names are up to you; `vendor/imlui` only with a submodule):
 
 ```
 my_app/
-  CMakeLists.txt        project setup, add_subdirectory(vendor/imlui), add_subdirectory(src)
+  CMakeLists.txt        project setup, imlui (see below), add_subdirectory(src)
   CMakePresets.json     clang-debug, clang-release, clang-asan (copy imlui's)
   src/
     CMakeLists.txt      the app's targets and imlui_add_resources
@@ -36,23 +36,18 @@ my_app/
     resources/
       resources.lua     the resource manifest: which files are embedded as app:/
       main.lua          the entry script, plus components, images, data
-  vendor/imlui/         this repository, as a git submodule
+  vendor/imlui/         this repository, as a git submodule (the first way below)
 ```
 
 imlui is laid out the same way: its targets are in `src/CMakeLists.txt` and its own resources in `src/resources/`.
 Keeping the resources in their own folder means a manifest pattern like `**` can't pick up C++ sources, and the
 module globs (`*.cppm`) don't see the scripts.
 
-### 1. Add imlui as a submodule
+### 1. Adding imlui to your project
 
-```sh
-git submodule add -b material-ui <imlui repository URL> vendor/imlui
-```
-
-A clone of the app then needs `git clone --recursive`, or `git submodule update --init` after a plain clone. To
-move to a newer imlui: `git submodule update --remote vendor/imlui`, build, and commit the new submodule commit.
-
-### 2. CMakeLists.txt and src/CMakeLists.txt
+Every way gives the app the same names: the target `imlui::imlui`, the helpers `imlui_add_resources`,
+`imlui_add_pak`, `imlui_set_warnings` and `imlui_set_hardening`, and the options `IMLUI_DEV_PATHS` and
+`IMLUI_EMBED_RESOURCES` (table below). The top-level `CMakeLists.txt` starts the same way in all three:
 
 ```cmake
 cmake_minimum_required(VERSION 3.28)
@@ -63,40 +58,102 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+```
 
+followed by one of these, then `add_subdirectory(src)`.
+
+**a) Git submodule and `add_subdirectory`** (what imlui-gallery does). The app's repository pins the imlui commit,
+and changing `vendor/imlui` while working on the app is a normal edit-build loop.
+
+```sh
+git submodule add -b material-ui <imlui repository URL> vendor/imlui
+```
+
+```cmake
 # Optional: IMLUI_SANITIZERS (the clang-asan preset) instruments the app's targets too, not only imlui's.
 include(vendor/imlui/cmake/ImluiSanitizers.cmake)
-
 add_subdirectory(vendor/imlui)
-add_subdirectory(src)
 ```
+
+A clone of the app then needs `git clone --recursive`, or `git submodule update --init` after a plain clone. To
+move to a newer imlui: `git submodule update --remote vendor/imlui`, build, and commit the new submodule commit.
+
+**b) `FetchContent`**: CMake clones imlui at configure time into the build folder. Nothing to vendor; the commit is
+pinned in `CMakeLists.txt`. imlui's own dependencies are vendored in its repository, so nothing else is fetched.
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(imlui
+    GIT_REPOSITORY <imlui repository URL>   # also a local clone: a path or a file:// URL
+    GIT_TAG        <commit or tag>          # a commit hash keeps the build reproducible
+    FIND_PACKAGE_ARGS 0.1 CONFIG            # optional (CMake 3.24+): prefer an installed imlui (c) if there is one
+)
+FetchContent_MakeAvailable(imlui)
+```
+
+With `FIND_PACKAGE_ARGS`, `FetchContent_MakeAvailable` first tries `find_package(imlui 0.1 CONFIG)` and clones only
+when that finds nothing (`-DCMAKE_PREFIX_PATH=<prefix>` points it at an install,
+`-DFETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER` always clones). `-DFETCHCONTENT_SOURCE_DIR_IMLUI=<path>` builds a local
+checkout instead of cloning, handy while changing both.
+
+**c) `find_package` on an installed imlui**: build and install imlui once, with the compiler and generator the app
+uses (clang + Ninja), then point the app's configure at the prefix:
+
+```sh
+# in imlui's checkout
+cmake --preset clang-release -B build/install -DIMLUI_DEV_PATHS=OFF
+cmake --build build/install
+cmake --install build/install --prefix C:/libs/imlui
+```
+
+```cmake
+find_package(imlui 0.1 CONFIG REQUIRED)   # configure the app with -DCMAKE_PREFIX_PATH=C:/libs/imlui
+```
+
+The package is `SameMinorVersion`-compatible: while imlui is 0.x, `find_package(imlui 0.1)` accepts 0.1.*, not
+0.2. An installed imlui always carries its own files (Lua, fonts) embedded, whatever the app's options say
+(`IMLUI_INSTALL`, [Architecture](architecture.md#install-layout), which also lists what is installed where).
+
+C++20 modules aren't installed as compiled BMIs, which belong to one compiler and one set of flags: the module
+sources are, and the app's CMake (3.28+, Ninja) compiles their BMIs again inside the app's build (the first build
+and after a reinstall: a minute or two). So the app needs the same compiler (clang), and the installed libraries
+must be ABI-compatible with it: the same target, and on Windows the same C runtime (a Debug app links a Debug
+install: `/MDd` and `/MD` don't mix). Installing a dev build (`IMLUI_DEV_PATHS=ON`) works too, but its embedded
+files name its source folders, which then override them while they exist.
+
+**What the app gets**, in all three ways:
+
+| What | Notes |
+|---|---|
+| target `imlui::imlui` | The library, with its C++20 modules (`import imlui;`, also `imgui` and the other wrappers) and its own embedded files (`src/resources/imlui.lua`, the fonts). Linking it is enough, also for modules that `import imgui;`. In Debug it adds `-ftrapv` to the targets that link it: a BMI records that setting, and clang refuses to import a module built with a different one. As a subproject the target is also called `imlui`. |
+| `imlui_add_resources(<target> <manifest> [NAME <name>] [EMBED ON\|OFF])` | Embeds the files a manifest lists into `<target>` as module `imlui.embedded.<name>` ([Shipping an app](#shipping-an-app)); in dev builds it only records their folders ([Dev and ship builds](#dev-and-ship-builds)). `EMBED` overrides `IMLUI_EMBED_RESOURCES` for this call. |
+| `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` | A target that builds a `.pak` archive (default: `<name>.pak` in `CMAKE_RUNTIME_OUTPUT_DIRECTORY`). |
+| `imlui_set_warnings(<target>)`, `imlui_set_hardening(<target>)` | imlui's warning policy (strict flags, `-Werror`) and Debug hardening ([CODE_STYLE.md](../CODE_STYLE.md#warnings-and-compiler-checks)), only on the targets you call them on. |
+| targets `imlui::imlui_rc`, `imlui::imlui_pack` | The build-time resource tools the functions above run: built on demand from source (a, b), or the installed executables (c). |
+| option `IMLUI_DEV_PATHS` (default `ON`) | Dev builds bake each embedded group's source folder in, for hot reload; `OFF` for a build you ship ([Dev and ship builds](#dev-and-ship-builds)). Applies to the app's `imlui_add_resources` calls, and as a subproject to the library's own files too. |
+| option `IMLUI_EMBED_RESOURCES` (default: the opposite of `IMLUI_DEV_PATHS`) | Whether `imlui_add_resources` embeds the files: `OFF` in dev builds, so editing a resource needs no build; `ON` for a build you ship. `OFF` needs `IMLUI_DEV_PATHS=ON`. |
+| variable `imlui_VERSION` | `0.1.0`: the `project()` version, or the found package's. |
+| options `IMLUI_BUILD_TESTS`, `IMLUI_INSTALL` | As a subproject (a, b): default `OFF` (`ON` when imlui is the top-level project). |
+| cache variable `IMLUI_SANITIZERS` | As a subproject: e.g. `address,undefined` (see `cmake/ImluiSanitizers.cmake`). |
+
+As a subproject imlui sets no global flags, doesn't set `CMAKE_RUNTIME_OUTPUT_DIRECTORY` or
+`CMAKE_EXPORT_COMPILE_COMMANDS`, adds no install rules and has no `tidy` target: those are the app's choice. Its
+vendored libraries do keep their own target names in the app's build (`glfw`, `spdlog`, `gtest`, ...), so an app that
+adds another copy of one of them by those names clashes; an installed imlui exports them as `imlui::ext_*` instead.
+
+### 2. src/CMakeLists.txt
+
+The same in all three ways:
 
 ```cmake
 # src/CMakeLists.txt: paths are relative to src/
 add_executable(my_app main.cpp)
 target_sources(my_app PRIVATE FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES my_type.cppm) # if any
-target_link_libraries(my_app PRIVATE imlui)
+target_link_libraries(my_app PRIVATE imlui::imlui)
 imlui_set_warnings(my_app)   # imlui's warning policy: strict flags, -Werror
 imlui_set_hardening(my_app)  # -ftrapv in Debug
 imlui_add_resources(my_app resources/resources.lua NAME my_app)  # generates module imlui.embedded.my_app
 ```
-
-`add_subdirectory(vendor/imlui)` gives the parent project:
-
-| What | Notes |
-|---|---|
-| target `imlui` | The library, with its C++20 modules (`import imlui;`, also `imgui` and the other wrappers) and its own embedded files (`src/resources/imlui.lua`, the fonts). Linking it is enough, also for modules that `import imgui;`. |
-| `imlui_add_resources(<target> <manifest> [NAME <name>] [EMBED ON\|OFF])` | Embeds the files a manifest lists into `<target>` as module `imlui.embedded.<name>` ([Shipping an app](#shipping-an-app)); in dev builds it only records their folders ([Dev and ship builds](#dev-and-ship-builds)). `EMBED` overrides `IMLUI_EMBED_RESOURCES` for this call. |
-| `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` | A target that builds a `.pak` archive (default: `<name>.pak` in `CMAKE_RUNTIME_OUTPUT_DIRECTORY`). |
-| `imlui_set_warnings(<target>)`, `imlui_set_hardening(<target>)` | imlui's warning policy and Debug hardening ([CODE_STYLE.md](../CODE_STYLE.md#warnings-and-compiler-checks)). |
-| targets `imlui_rc`, `imlui_pack` | The build-time resource tools the functions above run; built on demand. |
-| option `IMLUI_DEV_PATHS` (default `ON`) | Dev builds bake each embedded group's source folder in, for hot reload; `OFF` for a build you ship ([Dev and ship builds](#dev-and-ship-builds)). Applies to the app's `imlui_add_resources` too. |
-| option `IMLUI_EMBED_RESOURCES` (default: the opposite of `IMLUI_DEV_PATHS`) | Whether `imlui_add_resources` embeds the files: `OFF` in dev builds, so editing a resource needs no build; `ON` for a build you ship. `OFF` needs `IMLUI_DEV_PATHS=ON`. |
-| option `IMLUI_BUILD_TESTS` | Default `OFF` as a subproject (`ON` when imlui is built on its own). |
-| cache variable `IMLUI_SANITIZERS` | e.g. `address,undefined` (see `cmake/ImluiSanitizers.cmake`). |
-
-imlui doesn't set `CMAKE_RUNTIME_OUTPUT_DIRECTORY` or `CMAKE_EXPORT_COMPILE_COMMANDS` when it isn't the top-level
-project, and has no `tidy` target then: those are the app's choice.
 
 ### 3. main.cpp
 
@@ -302,3 +359,11 @@ ctest --preset clang-debug
 Every `src/**/*.cppm` file is picked up by a `CONFIGURE_DEPENDS` glob (in `src/CMakeLists.txt`), so adding or removing a
 module needs no CMake edits. `compile_commands.json` is exported, which clangd, clice and clang-tidy use. To try a
 library change in a real app, see [Development](development.md#trying-changes-in-an-app).
+
+Built on its own, imlui also has install rules and a CMake package (`IMLUI_INSTALL`, `ON` when it's the top-level
+project): `cmake --install build/clang-release --prefix <prefix>` lays out a prefix that apps use with
+`find_package(imlui CONFIG)` ([way c](#1-adding-imlui-to-your-project)). With `IMLUI_INSTALL=ON` the library always
+embeds its own files, even in a dev build, since an installed copy has no source folders to read; configure with
+`-DIMLUI_INSTALL=OFF` to get the dev builds' no-embedding back for the library itself. The package tests
+(`ctest --preset clang-debug -L package`, see [Development](development.md#package-tests)) build a small app against
+imlui in each of the three ways.

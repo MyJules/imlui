@@ -1,11 +1,18 @@
 cmake_minimum_required(VERSION 3.28)
-project(imlui LANGUAGES C CXX)
+project(imlui VERSION 0.1.0 LANGUAGES C CXX)
 
-# imlui is a library: an app adds this repository as a subproject (`add_subdirectory(vendor/imlui)`, see
-# docs/getting-started.md) and gets the targets `imlui` and the resource tools, plus the CMake helpers
-# imlui_add_resources, imlui_add_pak, imlui_set_warnings and imlui_set_hardening. Built on its own, it builds the
-# library, the tools and the tests. Paths below are relative to this project (PROJECT_SOURCE_DIR,
-# CMAKE_CURRENT_*), never to the top-level project.
+# imlui is a library. An app consumes it in one of three ways (docs/getting-started.md, "Adding imlui to your
+# project"): add_subdirectory (e.g. a git submodule in vendor/imlui), FetchContent, or find_package(imlui CONFIG) on
+# an installed copy (cmake --install). Each gives the targets imlui::imlui, imlui::imlui_rc and imlui::imlui_pack and
+# the CMake helpers imlui_add_resources, imlui_add_pak, imlui_set_warnings and imlui_set_hardening. Built on its own,
+# it builds the library, the tools and the tests. Paths below are relative to this project (PROJECT_SOURCE_DIR,
+# CMAKE_CURRENT_*), never to the top-level project, and nothing here sets global flags.
+
+# project() sets imlui_VERSION in this folder only. A parent that added imlui (add_subdirectory, or FetchContent, which
+# adds it from inside a function) sees it through the cache, as it would see find_package's.
+if(NOT PROJECT_IS_TOP_LEVEL)
+    set(imlui_VERSION ${imlui_VERSION} CACHE INTERNAL "imlui's version, for the project that added it")
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,33 +28,25 @@ if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 endif()
 
-# The helpers are functions, so once included here they're callable from the parent project too.
+# The helpers are functions, so once included here they're callable from the parent project too. ImluiResources also
+# defines the options IMLUI_DEV_PATHS and IMLUI_EMBED_RESOURCES (the installed package's config includes it too).
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 include(ImluiWarnings)
 include(ImluiSanitizers)
 include(ImluiResources)
 
-# Dev builds bake each embedded block's source folder into it (imlui_add_resources, also for the parent project's
-# calls), and defaultConfig() mounts those folders over the embedded copies, so editing src/resources/ or an app's
-# scripts hot-reloads. OFF for a release: no source paths.
-option(IMLUI_DEV_PATHS "Mount the source folders of embedded files over them (hot reload while editing)" ON)
-# Whether imlui_add_resources embeds the files (also for the parent project's calls, unless a call says EMBED ON|OFF).
-# Dev builds don't by default: they load the files from the source folders anyway, so editing a Lua file, an image
-# or a font needs no build at all. Without embedding the source folders are the only copy, so OFF needs
-# IMLUI_DEV_PATHS=ON.
-if(IMLUI_DEV_PATHS)
-    set(IMLUI_EMBED_DEFAULT OFF)
-else()
-    set(IMLUI_EMBED_DEFAULT ON)
-endif()
-option(IMLUI_EMBED_RESOURCES "Embed the files of resource manifests (default: OFF with IMLUI_DEV_PATHS, else ON)"
-       ${IMLUI_EMBED_DEFAULT})
-if(NOT IMLUI_EMBED_RESOURCES AND NOT IMLUI_DEV_PATHS)
-    message(FATAL_ERROR "IMLUI_EMBED_RESOURCES=OFF needs IMLUI_DEV_PATHS=ON: without the embedded files and without "
-                        "the source folders an executable would have no resources. For a build you ship, set "
-                        "-DIMLUI_DEV_PATHS=OFF -DIMLUI_EMBED_RESOURCES=ON (a fresh build folder gets ON by default).")
-endif()
 option(IMLUI_BUILD_TESTS "Build the imlui unit and smoke tests" ${PROJECT_IS_TOP_LEVEL})
+# Install rules and the CMake package (find_package(imlui CONFIG), cmake/ImluiInstall.cmake). An installed library
+# can't read its source folders, so with IMLUI_INSTALL=ON the library always embeds its own files
+# (src/CMakeLists.txt), whatever IMLUI_EMBED_RESOURCES says; the app's imlui_add_resources calls still follow it.
+option(IMLUI_INSTALL "Add imlui's install rules and CMake package (forces the library to embed its own files)"
+       ${PROJECT_IS_TOP_LEVEL})
+# Where an install puts the vendored headers the modules include (their global module fragments), relative to the
+# prefix: their targets' INSTALL_INTERFACE include folders (external/CMakeLists.txt) and the install rules agree on it.
+# The module interface units go to IMLUI_INSTALL_MODULEDIR (src/CMakeLists.txt).
+include(GNUInstallDirs)
+set(IMLUI_INSTALL_EXT_INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR}/imlui/ext)
+set(IMLUI_INSTALL_MODULEDIR ${CMAKE_INSTALL_INCLUDEDIR}/imlui/modules)
 
 add_subdirectory(external)
 
@@ -56,6 +55,11 @@ add_subdirectory(src)
 
 # ------------------------------------------------------------------ resource tools (imlui_rc, imlui_pack)
 add_subdirectory(tools)
+
+# ------------------------------------------------------------------ install rules and package config
+if(IMLUI_INSTALL)
+    include(ImluiInstall)
+endif()
 
 # ------------------------------------------------------------------ tests
 if(IMLUI_BUILD_TESTS)

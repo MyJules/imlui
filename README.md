@@ -27,19 +27,29 @@ Full docs are in [`docs/`](docs/README.md): [getting started](docs/getting-start
 
 ## Using it
 
-imlui is a library: an app vendors this repository as a git submodule and adds it with `add_subdirectory`. The
+imlui is a library (CMake package `imlui`, version 0.1.0): an app adds it with `add_subdirectory` (e.g. a git
+submodule), `FetchContent`, or `find_package` on an installed copy, and links `imlui::imlui`. The
 [imlui-gallery](docs/getting-started.md#the-example-app-imlui-gallery) repository is the example app (every element,
-a live theme editor, and C++ types). In short ([Getting started](docs/getting-started.md) has the details):
+a live theme editor, and C++ types). In short ([Getting started](docs/getting-started.md#1-adding-imlui-to-your-project)
+has the details):
 
 ```cmake
+# one of:
 add_subdirectory(vendor/imlui)                          # git submodule add -b material-ui <url> vendor/imlui
+
+include(FetchContent)
+FetchContent_Declare(imlui GIT_REPOSITORY <url> GIT_TAG <commit> FIND_PACKAGE_ARGS 0.1 CONFIG)
+FetchContent_MakeAvailable(imlui)
+
+find_package(imlui 0.1 CONFIG REQUIRED)                 # after cmake --install of imlui; CMAKE_PREFIX_PATH=<prefix>
+
 add_subdirectory(src)                                   # the app's targets: src/CMakeLists.txt
 ```
 
 ```cmake
 # src/CMakeLists.txt
 add_executable(my_app main.cpp)
-target_link_libraries(my_app PRIVATE imlui)
+target_link_libraries(my_app PRIVATE imlui::imlui)
 imlui_set_warnings(my_app)
 imlui_set_hardening(my_app)
 imlui_add_resources(my_app resources/resources.lua NAME my_app) # resources/main.lua etc., embedded as app:/
@@ -60,7 +70,8 @@ int main(int argc, char** argv) {
 ```
 cmake --preset clang-debug
 cmake --build build/clang-debug
-ctest --preset clang-debug
+ctest --preset clang-debug               # ctest ... -L package: only the package tests (slow the first time)
+cmake --install build/clang-debug --prefix <prefix>   # the package for find_package(imlui)
 ```
 
 Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3, stb_image 2.34,
@@ -94,11 +105,11 @@ resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded
 | `src/imlui/types/` | `imlui.types.*`: the C++ type system: `ScriptObject`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
 | `src/imlui/resources/` | `imlui.resources*`: resource names (`app:/main.lua`), the `Mount` interface, `DirectoryMount`, `EmbeddedMount`, `PakMount` and the `.pak` format, `Resources` (stacked mounts) |
 | `tools/` | build-time tools: `imlui_rc` (embeds the files a Lua resource manifest lists, for `imlui_add_resources`) and `imlui_pack` (builds `.pak` archives, `imlui_add_pak`) |
-| `cmake/` | the helpers an app calls after `add_subdirectory`: `imlui_add_resources`/`imlui_add_pak` (`ImluiResources.cmake`), `imlui_set_warnings`/`imlui_set_hardening` (`ImluiWarnings.cmake`), sanitizers, the `tidy` target |
+| `cmake/` | the helpers an app calls after adding imlui (in every mode): `imlui_add_resources`/`imlui_add_pak` (`ImluiResources.cmake`), `imlui_set_warnings`/`imlui_set_hardening` (`ImluiWarnings.cmake`); sanitizers, the `tidy` target, the install rules and package config (`ImluiInstall.cmake`, `imluiConfig.cmake.in`) |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
-| `tests/` | GoogleTest unit tests and the smoke test (`ctest --preset clang-debug`); `smoke_host/` is a tiny test app host, `data/` the fixtures (`smoke_app/`, test images) |
-| `src/CMakeLists.txt` | the library targets `imlui_lua` and `imlui` (module globs) and the embedding of `src/resources/` |
+| `tests/` | GoogleTest unit tests and the smoke test (`ctest --preset clang-debug`); `smoke_host/` is a tiny test app host, `data/` the fixtures (`smoke_app/`, test images), `package/` the package tests (a consumer app built with add_subdirectory, FetchContent and find_package) |
+| `src/CMakeLists.txt` | the library targets `imlui_lua` and `imlui` (`imlui::imlui`; module globs), the embedding of `src/resources/` and their install rules |
 | `src/resources/` | the library's resources: `resources.lua` (manifest: this folder at `imlui:/`, the fonts from `external/fonts/` at `imlui:/fonts/`) and `imlui.lua`, the DSL (elements, `state`, `bind`, `Repeater`, `theme`, timers) |
 
 ## Concepts

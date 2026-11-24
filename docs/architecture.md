@@ -396,21 +396,58 @@ already covers every folder of that prefix.
 
 ## Repository layout
 
-imlui is a library repository; apps live in their own repositories and vendor it as a git submodule (see
-[Getting started](getting-started.md#using-imlui-in-your-app); [imlui-gallery](getting-started.md#the-example-app-imlui-gallery)
-is the example).
+imlui is a library repository; apps live in their own repositories and add it with `add_subdirectory` (a git
+submodule), `FetchContent`, or `find_package` on an installed copy (see
+[Getting started](getting-started.md#1-adding-imlui-to-your-project); [imlui-gallery](getting-started.md#the-example-app-imlui-gallery),
+which uses a submodule, is the example).
 
 | Path | What |
 |---|---|
-| `CMakeLists.txt` | Project setup: the options (`IMLUI_DEV_PATHS`, `IMLUI_EMBED_RESOURCES` (default: the opposite of `IMLUI_DEV_PATHS`; both `OFF` is a configure error), `IMLUI_BUILD_TESTS`, default `ON` only at the top level), the CMake helpers, `external/`, `src/` (`add_subdirectory(src)`), the tools, the tests and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level. |
-| `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`. The functions are global once included, so a parent project calls them after `add_subdirectory`. Each file has an include guard; an app includes `ImluiSanitizers.cmake` itself before `add_subdirectory` so its own targets are instrumented too. |
-| `src/CMakeLists.txt` | The library targets: `imlui_lua` (`wrap/lua.cppm`) and `imlui` (every other `.cppm` under `src/`, globbed), and `imlui_add_resources(imlui resources/resources.lua NAME imlui)`. |
+| `CMakeLists.txt` | Project setup: `project(imlui VERSION 0.1.0)`, the options `IMLUI_BUILD_TESTS` and `IMLUI_INSTALL` (both default `ON` only at the top level), the CMake helpers, the install folders (`GNUInstallDirs`), `external/`, `src/` (`add_subdirectory(src)`), the tools, the install rules (`IMLUI_INSTALL`), the tests and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level, and no global flags. |
+| `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`, and the options `IMLUI_DEV_PATHS` and `IMLUI_EMBED_RESOURCES`: default the opposite of `IMLUI_DEV_PATHS`, both `OFF` is a configure error), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`, `ImluiInstall.cmake` and `imluiConfig.cmake.in` (the install rules and the package, see [Install layout](#install-layout)). The functions are global once included, so a parent project calls them after `add_subdirectory`; the installed package's config includes `ImluiResources.cmake` and `ImluiWarnings.cmake` the same way. Each file has an include guard; an app that adds imlui as a subproject includes `ImluiSanitizers.cmake` itself before `add_subdirectory` so its own targets are instrumented too. |
+| `src/CMakeLists.txt` | The library targets: `imlui_lua` (`wrap/lua.cppm`) and `imlui` (every other `.cppm` under `src/`, globbed; alias `imlui::imlui`), `imlui_add_resources(imlui resources/resources.lua NAME imlui)` (always embedded with `IMLUI_INSTALL=ON`), and their install rules (CMake records a module file set's install folder only from rules in the target's own directory). |
 | `src/imlui/`, `src/wrap/` | The library's modules (see the module map below). |
 | `src/resources/` | The library's resources: `resources.lua` (the manifest) and the Lua side (`imlui.lua`), embedded at `imlui:/`. No `.cppm` here, so the module globs never see it. |
-| `tools/` | `imlui_rc` and `imlui_pack`, the build-time resource tools. `imlui_add_resources` and `imlui_add_pak` call them by target name, so they resolve from a parent project too. |
-| `tests/` | `imlui_tests` (GoogleTest), `support/` (test-only modules), `smoke_host/` (the test app host `imlui_smoke_host`), `data/` (fixtures: `smoke_app/`, `smoke_pak.lua`, test images), `smoke_run.cmake`. |
+| `tools/` | `imlui_rc` and `imlui_pack`, the build-time resource tools, with the aliases `imlui::imlui_rc` and `imlui::imlui_pack`. `imlui_add_resources` and `imlui_add_pak` run them by those names, which an installed package defines too (imported executables), so the helpers work the same in every mode. |
+| `tests/` | `imlui_tests` (GoogleTest), `support/` (test-only modules), `smoke_host/` (the test app host `imlui_smoke_host`), `data/` (fixtures: `smoke_app/`, `smoke_pak.lua`, test images), `smoke_run.cmake`, `package/` (the package tests: a consumer app built with each way of adding imlui, see [Development](development.md#package-tests)). |
 | `external/` | Vendored third-party code (see [Third-party code](#third-party-code)). |
 | `docs/` | This documentation. |
+
+## Install layout
+
+With `IMLUI_INSTALL=ON` (the default when imlui is the top-level project), `cmake --install <build> --prefix <prefix>`
+installs a CMake package that apps load with `find_package(imlui 0.1 CONFIG)` (`cmake/ImluiInstall.cmake`, and the
+library's own rules in `src/CMakeLists.txt`):
+
+| Path under `<prefix>` | What |
+|---|---|
+| `bin/` | `imlui_rc`, `imlui_pack`: imported as `imlui::imlui_rc`, `imlui::imlui_pack`, which the helpers run. |
+| `lib/` | `imlui`, `imlui_lua` (static): `imlui::imlui`, `imlui::imlui_lua`. |
+| `lib/imlui/` | The vendored static libraries the library needs: `imlui::ext_lua`, `ext_imgui`, `ext_glfw`, `ext_spdlog` (compiled, `SPDLOG_COMPILED_LIB`, bundled fmt), `ext_stb_image`, `ext_zstd` (the decompressor). Link-only for the app, except through the modules' BMIs. |
+| `lib/cmake/imlui/` | `imluiConfig.cmake` (finds Threads and OpenGL, includes the targets and the helpers), `imluiConfigVersion.cmake` (`SameMinorVersion`: 0.1 accepts 0.1.*, not 0.2), `imluiTargets*.cmake`, `cxx-modules/` (which module each interface unit provides, per configuration), `ImluiResources.cmake`, `ImluiWarnings.cmake`. |
+| `include/imlui/modules/` | The module interface units, as laid out in `src/` (`imlui/...`, `wrap/...`), and `embedded/imlui.cppm` with `embedded/imlui.bin`, the blob it `#embed`s. |
+| `include/imlui/ext/<name>/` | The vendored headers the wrappers include in their global module fragments: `lua/` (`lua.h`, `lualib.h`, `lauxlib.h`, `luaconf.h`), `imgui/` (the ImGui headers, the GLFW and OpenGL3 backend headers, `imlui_imconfig.h`), `glfw/GLFW/`, `spdlog/spdlog/` (with the bundled fmt), `stb/stb_image.h`, `zstd/` (`zstd.h`, `zstd_errors.h`). Each is its `imlui::ext_*` target's include folder; under `imlui/` so they never meet another copy of the same library. |
+| `share/imlui/licenses/` | The vendored code's licenses and the fonts'. |
+
+C++20 modules aren't installed as BMIs: a BMI belongs to one compiler version and one set of flags. The interface
+units are installed, and the exported targets carry what compiling them needs (`IMPORTED_CXX_MODULES_*`: the
+compile features, `$<$<CONFIG:Debug>:-ftrapv>`, and the link libraries whose usage requirements give the include
+folders and definitions, e.g. `IMGUI_USER_CONFIG="imlui_imconfig.h"`, `SPDLOG_COMPILED_LIB`, the `STBI_*` options).
+The app's CMake (3.28+, Ninja) adds a synthetic target per imported module target and configuration and compiles
+the BMIs in the app's build. Hence:
+
+- The vendored libraries are exported, not just linked: the wrappers' global module fragments include their headers,
+  and the BMI compile needs their include folders and definitions.
+- The warning flags of `imlui_set_warnings` are `$<BUILD_INTERFACE:...>`, so they aren't exported: a newer clang's new
+  warning mustn't break the app's build of imlui's BMIs. `-ftrapv` (Debug) is, and is also an interface option of
+  `imlui_lua` (so of `imlui`): clang refuses to import a BMI built with a different overflow setting, so everything
+  that imports imlui must be compiled with the same one, in every mode.
+- The library always embeds its own files with `IMLUI_INSTALL=ON` (`IMLUI_LIBRARY_EMBEDS` in `src/CMakeLists.txt`):
+  the installed package has `imlui.embedded.imlui` with its blob, not the source folders. A dev build
+  (`IMLUI_DEV_PATHS=ON`) installs the absolute source folders too, which `defaultConfig` mounts over the embedded
+  copies while they exist; install a build configured with `-DIMLUI_DEV_PATHS=OFF` to ship.
+- `IMLUI_DEV_PATHS` and `IMLUI_EMBED_RESOURCES` are defined by `ImluiResources.cmake`, so they exist in the app's build
+  in every mode (with their defaults) and govern the app's own `imlui_add_resources` calls.
 
 ## Module map (target layout)
 

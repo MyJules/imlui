@@ -139,6 +139,15 @@ Both repositories share one layout: the top-level `CMakeLists.txt` sets the proj
 lists). imlui's Lua side moved from `lua/` to `src/resources/`, its manifest from the root to
 `src/resources/resources.lua`; the gallery's `app/` became `src/resources/`.
 
+## 7. CMake package *(done)*
+
+imlui is consumable three ways, all giving `imlui::imlui`, `imlui::imlui_rc`, `imlui::imlui_pack`, the helpers and
+the options `IMLUI_DEV_PATHS` / `IMLUI_EMBED_RESOURCES`: `add_subdirectory`, `FetchContent` (also with
+`FIND_PACKAGE_ARGS`), and `find_package(imlui CONFIG)` on an install (`IMLUI_INSTALL`, default `ON` at the top level).
+The install carries the module interface units, the vendored libraries as `imlui::ext_*` with their headers under
+`include/imlui/ext/`, and the library's files always embedded; the app's CMake rebuilds the BMIs. `project()` has the
+version (0.1.0, `SameMinorVersion`). The package tests (label `package`) build a consumer app in each mode.
+
 ## Next
 
 Follow-ups noticed during the cleanup, not scheduled yet:
