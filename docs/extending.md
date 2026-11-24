@@ -215,8 +215,11 @@ one line.)
 For a child that is still a handler-function element, read its props through `child.node()`
 (`child.node().string("title")`).
 
-Each visual element is wrapped in an ImGui group and an ImGui ID scope (the element table's address), so plain
-ImGui IDs such as `"##gauge"` are unique per element, and the element counts as one item in a `Row`.
+Each visual element is wrapped in an ImGui group and an ImGui ID scope (made from its instance's
+`ScriptObject::objectId()`, unique and never reused), so plain ImGui IDs such as `"##gauge"` are unique per element,
+ImGui state kept under them (`ImGui::GetStateStorage()`, an open tree, a scroll position) belongs to this element
+only, and the element counts as one item in a `Row`. A container that renders a child's children itself, rather than
+the child, pushes the child's scope around them with `child.pushId()` / `ImGui::PopID()`.
 
 The common props keep working on typed elements without being declared, exactly as on handler-function elements:
 the renderer skips the element when `visible` is false, wraps it in `BeginDisabled` when `enabled` is false, in an
@@ -393,7 +396,10 @@ size or for `as<T>()`, and then renders it, syncs it on the first of these, and 
 tables in between (a signal handler, a `notify` write-back: anything run through `luaui::safeCall`, which counts in
 `luaui::changes()`) makes the next of them sync again, so a change a handler made earlier in the frame is rendered
 in the same frame. Property reads (bindings, bind sources, `__children`) run through `luaui::safeRead` and don't
-count. `TypeRegistry::sync(node)`, method calls and `tick()` always sync.
+count. `TypeRegistry::sync(node)`, method calls and `tick()` always sync. A skip also checks a fingerprint of the
+element's declared fields, so a write to them that bypassed the count is synced anyway, and a debug build reports it
+as a script error: C++ that writes a Lua table writes through `luaui::Node::set` (or calls `luaui::noteChange()`
+after a raw `lua::setfield`), and a binding only reads.
 
 `componentComplete()` runs once, right after the first sync, wherever that happens (first render, first method
 call, or a parent's `as<T>()`). An exception thrown by `componentComplete()`, `tick()` or `destroyed()` is

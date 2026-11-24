@@ -5,6 +5,11 @@
 // Renderer reaches through the Renderer::Types interface (the registry implements it; this module can't import
 // the registry, whose Frames render children through the Renderer). render() wraps each element (visible,
 // enabled, layout group, tooltip, ID scope) and lets the registry sync and render its instance.
+//
+// An element's identity is its instance's id (ScriptObject::objectId(), through Types::elementId), not its table's
+// address: Lua may collect a table and allocate a new one at the same address, which must start fresh instead of
+// inheriting the dead element's ImGui state (an open tree, a scroll position, a text edit) or its size in the layout
+// cache. The ImGui ID scope of an element and its layout cache key are both made from that id.
 export module imlui.ui.renderer;
 
 import std;
@@ -44,6 +49,10 @@ public:
         /// can't tell before rendering. Syncs the element's properties.
         [[nodiscard]] virtual std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
                                                                   float maxWidth) = 0;
+        /// The element's identity: its instance's ScriptObject::objectId(), unique for the process's lifetime and
+        /// never reused (created now if the table has none yet). 0 when it has no instance: an unregistered type,
+        /// or a constructor that threw (reported).
+        [[nodiscard]] virtual std::uint64_t elementId(const luaui::Node& node) = 0;
 
         virtual ~Types() = default;
     };
@@ -61,11 +70,20 @@ public:
     [[nodiscard]] ImageCache* images() const;
     void setImages(ImageCache* images);
 
-    /// Renders the element at stack index `idx`. Returns false if it was
-    /// hidden (visible = false) or of an unknown type ("unknown element type" is reported). A visual element's size
-    /// (its group's) is recorded in the layout cache (imlui.ui.layout_cache) under `ImGui::GetID(table pointer)` in
-    /// the current ID scope, the key Frame::Child::id() gives it.
+    /// Renders the element at stack index `idx`. Returns false if it was hidden (visible = false), of an unknown
+    /// type ("unknown element type" is reported) or has no instance (its constructor threw). It renders in its own
+    /// ImGui ID scope (pushElementId), and a visual element's size (its group's) is recorded in the layout cache
+    /// (imlui.ui.layout_cache) under elementImGuiId(): the key Frame::Child::id() gives it.
     bool render(lua::State* state, int idx);
+
+    /// The element's identity (Types::elementId): unique, never reused; 0 without an instance.
+    [[nodiscard]] std::uint64_t elementId(const luaui::Node& node);
+    /// The ImGui ID of the element in the current ID scope, made from elementId(): the ID of the scope render()
+    /// pushes for it, and its key in the layout cache.
+    [[nodiscard]] ImGuiID elementImGuiId(const luaui::Node& node);
+    /// Pushes the element's ImGui ID scope, the one render() renders it in (pop with ImGui::PopID()): for a
+    /// container that renders a child's children itself (TabBar renders the current Tab's content).
+    void pushElementId(const luaui::Node& node);
 
     /// Calls f(stackIndex) for every child element. Children come from the
     /// element's array part, or from its `__children(self)` function
@@ -145,6 +163,17 @@ namespace imlui {
 
 using luaui::Node;
 
+namespace {
+
+/// An element id as the "pointer" ImGui hashes for an ID (ImGui::GetID/PushID(const void*) hash the pointer's bytes,
+/// unlike the string overloads, which treat "###" specially).
+const void* idKey(std::uint64_t id) {
+    static_assert(sizeof(void*) >= sizeof(std::uint64_t), "element ids are hashed as pointers");
+    return reinterpret_cast<const void*>(static_cast<std::uintptr_t>(id));
+}
+
+} // namespace
+
 Renderer::Renderer(Types& types) : m_types{types} {}
 
 const std::string& Renderer::windowTitle() const { return m_title; }
@@ -162,8 +191,10 @@ bool Renderer::render(lua::State* state, int idx) {
         return false;
     }
     if (!n.boolean("visible", true)) return false;
-    const ImGuiID id = ImGui::GetID(n.ptr());
-    ImGui::PushID(n.ptr());
+    const std::uint64_t key = elementId(n);
+    if (key == 0) return false; // no instance: its constructor threw, which was reported
+    const ImGuiID id = ImGui::GetID(idKey(key));
+    ImGui::PushID(idKey(key));
     const bool disabled = n.has("enabled") && !n.boolean("enabled", true);
     if (disabled) ImGui::BeginDisabled();
     // Every visual element is exactly one layout item (a group), so
@@ -180,6 +211,10 @@ bool Renderer::render(lua::State* state, int idx) {
     ImGui::PopID();
     return true;
 }
+
+std::uint64_t Renderer::elementId(const Node& node) { return m_types.elementId(node); }
+ImGuiID Renderer::elementImGuiId(const Node& node) { return ImGui::GetID(idKey(elementId(node))); }
+void Renderer::pushElementId(const Node& node) { ImGui::PushID(idKey(elementId(node))); }
 
 void Renderer::renderChildren(const Node& node) {
     forEachChild(node, [&](int idx) { render(node.state(), idx); });
@@ -250,7 +285,7 @@ void Renderer::renderStack(const Node& node) {
             } else {
                 // Placed by its intrinsic width, else by its width on the last frame; render() records the one it
                 // takes (another frame if it differs). On its first frame without either, it renders unseen.
-                const ImGuiID key = ImGui::GetID(c.ptr());
+                const ImGuiID key = elementImGuiId(c);
                 std::optional<float> w;
                 if (const auto intrinsic = intrinsicSize(c, avail))
                     w = intrinsic->x;

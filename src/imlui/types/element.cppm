@@ -6,7 +6,9 @@
 // method called from Lua runs on it and when a parent asks for it (Frame::Child::as<T>()).
 //
 // An element can also ask for tick() at the start of every frame (setTicking(true)), whether or not it is
-// rendered, e.g. a Timer on a hidden page. Its properties are synced before each tick().
+// rendered, e.g. a Timer on a hidden page. Its properties are synced before each tick(). The ticking list holds the
+// elements by id (ScriptObject::objectId()) next to their address: a tick() may destroy other elements and create new
+// ones (at a dead one's address), and a stale entry must not match them.
 export module imlui.types.element;
 
 import std;
@@ -52,10 +54,11 @@ public:
     /// Whether tick() is called every frame.
     [[nodiscard]] bool isTicking() const;
 
-    /// The ticking elements, in the order they started ticking (TypeRegistry runs them).
-    [[nodiscard]] static std::vector<Element*> tickingElements();
-    /// True while `element` is alive and ticking (a pointer from tickingElements() may have died since).
-    [[nodiscard]] static bool isTicking(const Element* element);
+    /// The ids (objectId()) of the ticking elements, in the order they started ticking (TypeRegistry runs them).
+    [[nodiscard]] static std::vector<std::uint64_t> tickingElements();
+    /// The ticking element with id `id`, or nullptr when it stopped ticking or died since the id was taken. Ids are
+    /// never reused, so an element created later at a dead one's address can't answer for it.
+    [[nodiscard]] static Element* findTicking(std::uint64_t id);
 
 protected:
     /// Turns tick() on or off. The destructor turns it off.
@@ -70,7 +73,14 @@ namespace imlui {
 
 namespace {
 
-std::vector<Element*> ticking; // main thread only, like everything that touches Lua
+struct Ticking {
+    std::uint64_t id;
+    Element* element;
+};
+
+std::vector<Ticking> ticking; // main thread only, like everything that touches Lua
+
+auto findId(std::uint64_t id) { return std::ranges::find(ticking, id, &Ticking::id); }
 
 } // namespace
 
@@ -81,17 +91,24 @@ void Element::componentComplete() {}
 void Element::destroyed() {}
 void Element::tick(double) {}
 
-bool Element::isTicking() const { return isTicking(this); }
+bool Element::isTicking() const { return findId(objectId()) != ticking.end(); }
 
-std::vector<Element*> Element::tickingElements() { return ticking; }
+std::vector<std::uint64_t> Element::tickingElements() {
+    std::vector<std::uint64_t> ids;
+    ids.reserve(ticking.size());
+    for (const Ticking& t : ticking)
+        ids.push_back(t.id);
+    return ids;
+}
 
-bool Element::isTicking(const Element* element) {
-    return std::find(ticking.begin(), ticking.end(), element) != ticking.end();
+Element* Element::findTicking(std::uint64_t id) {
+    const auto it = findId(id);
+    return it == ticking.end() ? nullptr : it->element;
 }
 
 void Element::setTicking(bool on) {
-    const auto it = std::find(ticking.begin(), ticking.end(), this);
-    if (on && it == ticking.end()) ticking.push_back(this);
+    const auto it = findId(objectId());
+    if (on && it == ticking.end()) ticking.push_back({objectId(), this});
     if (!on && it != ticking.end()) ticking.erase(it);
 }
 

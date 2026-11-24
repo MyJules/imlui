@@ -26,7 +26,7 @@ flowchart TD
 |---|---|
 | **Lua script** | Builds the element tree and returns the root. It owns all state and all decisions, including theme, window title and size. |
 | **DSL prelude** (`src/resources/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment, the `require` searcher for components and `ui.resource`. |
-| **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. A table's identity (its pointer) is its ImGui ID, so elements keep per-widget state such as animations and focus across frames. |
+| **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. An element's identity is its C++ instance's id (`ScriptObject::objectId()`, see [Element identity](#element-identity)), from which its ImGui ID scope is made, so elements keep per-widget state such as animations and focus across frames, and an element never inherits a dead one's. |
 | **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type". |
 | **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
 | **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They call Material widgets, write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
@@ -246,10 +246,10 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   time (`layout::keepFrames` 600 frames and `layout::keepSeconds` 60s: on-demand rendering renders few frames while
   idle, an animation many a second), and above `layout::maxEntries` (16384, about 2 MB) the least recently used go
   first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
-  `ImGui::GetID(element table)` in the parent's ID scope, stable for as long as the table lives: `TabBar` pages are
-  the same tables every time, and `Repeater`/`ListView` keep a delegate while the item at its index doesn't change.
-  A new table that reuses a collected one's address starts from that size and converges like any stale size. A new
-  ImGui context starts empty.
+  the element's ImGui ID in the parent's ID scope, made from its identity (see [Element identity](#element-identity)),
+  stable for as long as the element lives: `TabBar` pages are the same elements every time, and `Repeater`/`ListView`
+  keep a delegate while the item at its index doesn't change. A new element never finds a dead one's entry, even
+  when Lua allocated its table at the dead one's address. A new ImGui context starts empty.
 - **First appearance.** A child with neither an intrinsic size nor a cached one, which a layout must place
   horizontally by its width (under a non-start stack `align`; in a `Row` that has fills or justifies; a `TopAppBar`
   action; a non-filling `NavigationRail` child), renders **unseen** for its first frame
@@ -262,7 +262,14 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   again. A fill-minus child under `align = "center"` is centered with N/2 on each side on its first frame.
 - **One sync a frame.** A layout's questions about a child (`fillsWidth`, `intrinsicSize`, `as<T>()`) and its
   render share one property sync while no Lua code that may change tables ran in between (`luaui::changes()`), so
-  a `Row` child's bindings run once a frame; a handler that ran in between makes the render sync again.
+  a `Row` child's bindings run once a frame; a handler that ran in between makes the render sync again. The skip
+  doesn't trust the count alone: each sync keeps a fingerprint of the element table's declared fields (their raw
+  values: numbers, booleans and strings by value, tables and functions by identity), and a skip compares it, so a
+  write that bypassed the count (a raw `lua_setfield` from C++, a binding that writes its own element) still reaches
+  the render on the same frame. A debug build reports such a write as a script error (`Gauge: a declared field of the
+  element table changed without luaui::changes() counting it ...`): the code that made it probably writes other
+  tables the same way, which no fingerprint sees (what bindings read, a nested model table changed in place). C++
+  that writes Lua writes through `luaui::Node::set` (or calls `luaui::noteChange()`).
 - **`Row` is a flex row.** Before rendering it asks each child whether it fills, gives the fills equal shares of
   the width the others take (their expected widths), and renders each fill in a box of its share (fill-minus
   resolves against it, wrapping text wraps at it). Every other child's box ends where the children after it start.
@@ -283,6 +290,27 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   `Chip`, a custom element that doesn't implement it) is one frame behind when their size changes, and settles on
   the requested frame; wrapping or aligned `Text` has no intrinsic size. Such a child's first-ever appearance is
   unseen for a frame where its width places things, and a few pixels off vertically for a frame in a centered `Row`.
+
+### Element identity
+
+Every `ScriptObject` gets an id when it's constructed (`objectId()`): a 64-bit count, unique for the process's
+lifetime and never reused. Lua frees an element table's memory when it collects it and may allocate the next table
+at the same address, so an address isn't an identity across time; the id is. It identifies an element wherever
+something outlives a frame:
+
+- **ImGui ID scope and layout cache key.** The renderer asks the registry for the element's id
+  (`Renderer::Types::elementId`, which creates the instance of a table built without the constructor) and pushes it
+  as the element's ImGui ID scope; `Frame::Child::id()` is the same ID seen from the parent, and the layout cache
+  key. So a new element never inherits a dead one's cached size (misplaced for a frame) or its ImGui state (an open
+  tree, a scroll position, a text edit in progress). A container that renders a child's children itself pushes the
+  child's scope with `Frame::Child::pushId()` (`TabBar`'s pages). An element without an instance (its constructor
+  threw, which is reported) isn't rendered.
+- **Ticking.** The ticking list holds `(id, Element*)`. `Element::tickingElements()` returns ids and
+  `Element::findTicking(id)` the element only while that very element lives and ticks, so a `tick()` whose handler
+  destroys a later element and creates another at its address can't make the loop tick the newcomer in the dead
+  one's place.
+
+A hot reload builds new elements, so they start fresh too: no cached sizes and no ImGui state from the old tree.
 
 ## Hot reload
 
@@ -767,7 +795,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `keepFrames`/`keepSeconds`/`maxEntries`, `cacheEntries`: the last measured sizes by ImGui ID (kept while hidden, bounded by age and an LRU cap), and another frame when a layout placed something by a stale size (convergence) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
-| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `renderUnseen`, `isVisual`, `fillsWidth`, `intrinsicSize`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
+| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `renderUnseen`, `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
 | `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view` (also `ListView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer` |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: registers every built-in class under its Lua name and aliases |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
@@ -779,12 +807,12 @@ See [Registering C++ types](extending.md).
 | Module | Purpose |
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
-| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives) |
-| `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
-| `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)` |
+| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives) |
+| `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `pushId`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
+| `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)`; the ticking list by id (`tickingElements()`, `findTicking(id)`) |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag, fills-width policy) |
 | `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `fillsWidth`/`fillsWidthWhen` (an unset width fills; a `Row` shares space with it), `extends<Base>` (a subclass's declaration extends its base's) |
-| `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state; the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`, `fillsWidth`, `intrinsicSize`), so the renderer renders every element through it |
+| `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state; the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`, `fillsWidth`, `intrinsicSize`, `elementId`), so the renderer renders every element through it |
 
 ### Resources (`src/imlui/resources/`)
 
