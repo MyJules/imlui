@@ -101,7 +101,16 @@ struct LuaConvert<T> {
 template <std::floating_point T>
 struct LuaConvert<T> {
     static constexpr std::string_view name = "number";
-    static void push(lua::State* s, T v) { lua::pushnumber(s, static_cast<lua::Number>(v)); }
+    /// Whole numbers push as Lua integers, like luaui::pushValue (what Node::set and Node::emit use), so a
+    /// value written back reads the same in Lua (`tostring(5)` is "5", not "5.0").
+    static void push(lua::State* s, T v) {
+        const auto d = static_cast<lua::Number>(v);
+        constexpr auto limit = static_cast<lua::Number>(std::numeric_limits<lua::Integer>::max());
+        if (d >= -limit && d < limit && static_cast<lua::Number>(static_cast<lua::Integer>(d)) == d)
+            lua::pushinteger(s, static_cast<lua::Integer>(d));
+        else
+            lua::pushnumber(s, d);
+    }
     static bool check(lua::State* s, int idx) { return lua::isnumber(s, idx); }
     static T get(lua::State* s, int idx) { return static_cast<T>(lua::tonumber(s, idx)); }
 };
