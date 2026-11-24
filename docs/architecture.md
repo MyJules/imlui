@@ -172,7 +172,10 @@ Only a binding whose value changes by itself (for example from `time()`) needs `
 
 A bind object is recognized by a raw `__bind` field, and its `t`, `k`, `get` and `set` fields are read raw too
 (here and in the DSL): a value with an `__index` metamethod (a proxy, an object) is a plain value, and its
-`__index` doesn't run.
+`__index` doesn't run. The element's own fields are read raw when its metatable is one that all elements of its
+type share (methods and `parent` only, marked `__imlui_shared`, see
+[Element ids and parent links](#element-ids-and-parent-links)); an element with a metatable of its own (a script's)
+is read through its `__index`.
 
 Type coercion: numbers read where strings are expected are converted. Other values convert like `tostring()`; a
 `__tostring` that raises is reported for that value (which reads as `""`) instead of cutting the pass short. Colors accept a role name, `role/alpha`,
@@ -337,12 +340,22 @@ A hot reload builds new elements, so they start fresh too: no cached sizes and n
 
 ### Element ids and parent links
 
-Both live in the DSL (`src/resources/imlui.lua`); the C++ side never sees them.
+Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element functions in their scope and reads
+`parent` through the types' shared metatables.
 
 - **Id scopes.** A stack of scopes, each `{ ids, what }`. `ui.component(fn)` pushes a new scope around
-  `fn(props, ids)`, `repeaterChildren` one around each `delegate(item, index, ids)` it builds, and a `Loader` or
-  `Responsive` pushes the scope it was created in around its `item` / class function (they run at render time,
-  when the stack is otherwise empty). The resource searcher runs a module's top level with an empty stack.
+  `fn(props, ids)` and `repeaterChildren` one around each `delegate(item, index, ids)` it builds. Every element
+  built while the stack isn't empty is recorded in `scopeOf[element] = scope` (weak keys). The resource searcher
+  runs a module's top level with an empty stack.
+- **Functions in their element's scope.** At load the DSL hands `scopeOf` and `inScope(scope, fn, ...)` to C++
+  (`native.setScopeHooks`, kept at registry keys by `imlui.lua.element_scope`). Every C++ call of an element's
+  function goes through `luaui::scopedArgs(state, element, nargs)`: when the element has a scope, it inserts
+  `inScope` and the scope below the function and the call goes through them; otherwise the call is unchanged (one
+  registry lookup and one table lookup). The callers: `Node::push` (bindings), `Node::emit`, `ScriptObject::emit`
+  and `notify` (typed signals, `on<Name>Changed`), `Canvas`'s `onPaint`. On the Lua side, `resolve` (`model`,
+  `condition`, `Loader.item`, `Responsive` class functions) does the same with `scopeOf[self]`, and `setTimeout`,
+  `setInterval`, `watch` and `onFrame` wrap their callback in the scope active when they are called (no wrapper at
+  app level).
   `ui.registerId` registers into the innermost scope, or into `ui.ids` (app level, checked with `ui.checkId`) when
   the stack is empty; only `ui.ids` is behind the free names (`ui.env`). Pushes pop through a to-be-closed
   variable (`local _ <close> = POP_SCOPE`), so a component or delegate that raises leaves the stack as it found it.
@@ -352,11 +365,15 @@ Both live in the DSL (`src/resources/imlui.lua`); the C++ side never sees them.
 - **Duplicates.** The first element registered under an id in a scope keeps it; another one is reported with the
   scope's description (`the app scope`, `component (file:line)`, `Repeater delegate (file:line)`). `ui.__load`
   starts with an empty `ui.ids`, and a hot reload has a new state anyway.
-- **Parent links.** Every constructor (`finishElement`) gives the element a metatable of its own: `__index` is a
-  per-element weak-valued proxy table holding `parent`, whose own metatable falls back to the element's previous
-  `__index` (a registered type's methods table; shared per methods table), and `__newindex` stores every field
-  raw except `parent`, which raises. Reads of other missing fields, the C++ prop reads included, stay table
-  lookups (element, proxy, methods), no function call. The constructor then links its children (positional,
+- **Parent links.** One side table, `parents[element] = parent` (weak keys and values; `imlui.types.parents`,
+  in the registry). Every element shares its type's metatable (`TypeRegistry`'s `pushTypeMeta`; `types.meta(name)`
+  gives it to the Lua-side containers before they have an instance), whose `__index` is a C function: `parent`
+  from `parents`, anything else from the methods table. Elements of a type that isn't registered share the DSL's
+  `PLAIN_META`. Both metatables carry `__imlui_shared`, and `Node::pushRaw` (every C++ property read) skips such a
+  metatable: it reads the table raw, so no property read calls `__index` (a script's own metatable on an element
+  still runs). No element has a metatable or proxy of its own, and writes go straight to the table. A raw
+  `parent` field (a script assigned it) would shadow the side table, so `syncInstance` drops it, and reports it in
+  debug builds. The constructor (`finishElement`) links its children (positional,
   `menu` / `menuBar` / `header` / `otherwise`, a `Responsive`'s classes) to its *holder*: itself, or for an inline
   container its own parent, so inline containers are skipped. When an inline container gets a parent, its
   children are re-linked to the new holder. Delegates and `Loader` / `Responsive` items are linked when built or

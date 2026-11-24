@@ -288,18 +288,113 @@ TEST_F(ElementScopesTest, AnInlineRootHoldsItsChildren) {
     run("assert(made[1].parent == rep and shown.parent == load and rep.parent == nil)");
 }
 
+// `parent` lives in a side table, read through the type's shared metatable: assigning it stores a raw field, which
+// the next sync drops (debug builds report it), so the parent stays the container's.
 TEST_F(ElementScopesTest, ParentIsReadOnly) {
     run(R"(
-        child = Text {}
+        child = Text { "child" }
         root = Column { child }
-        local ok, err = pcall(function() child.parent = Column {} end)
-        assert(not ok and tostring(err):find("'parent' is read-only", 1, true), tostring(err))
-        assert(child.parent == root)
-        local ok2 = pcall(function() root.parent = child end)
-        assert(not ok2 and root.parent == nil, "the root's parent is read-only too"))");
-    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+        child.parent = Column {})");
+    m_h.renderFrame("root");
+    run("assert(child.parent == root and rawget(child, 'parent') == nil)");
+#ifdef NDEBUG
+    EXPECT_EQ(reportedWith("'parent' is read-only"), 0);
+#else
+    EXPECT_EQ(reportedWith("Text: 'parent' is read-only (its container sets it)"), 1);
+#endif
     run("bad = Text { parent = 1 }; assert(bad.parent == nil)");
-    EXPECT_EQ(reportedWith("Text: 'parent' is read-only"), 1);
+    EXPECT_EQ(reportedWith("Text: 'parent' is read-only (the element's container sets it); the value is ignored"), 1);
+}
+
+// No per-element metatables: elements of a type share the type's, the Lua-side containers included (whose instance
+// is still created at the first render, not by the constructor).
+TEST_F(ElementScopesTest, ElementsOfATypeShareOneMetatable) {
+    run(R"(
+        local a, b = Button { "a" }, Button { "b" }
+        assert(getmetatable(a) ~= nil and getmetatable(a) == getmetatable(b))
+        assert(getmetatable(a) == require("imlui.types").meta("Button"))
+        assert(getmetatable(a) ~= getmetatable(Text {}))
+        local function rep() return Repeater { model = 1, delegate = function() return Text {} end } end
+        r1, r2 = rep(), rep()
+        assert(getmetatable(r1) ~= nil and getmetatable(r1) == getmetatable(r2))
+        assert(rawget(r1, "__native") == nil, "a Repeater's instance is made at its first render")
+        local l1, l2 = ListView { model = 0, delegate = function() end }, ListView {}
+        assert(getmetatable(l1) == getmetatable(l2))
+        assert(getmetatable(If {}) == getmetatable(If {}) and getmetatable(Loader {}) == getmetatable(Loader {}))
+        assert(getmetatable(Responsive {}) == getmetatable(Responsive {}))
+        root = Column { r1 })");
+    m_h.renderFrame("root");
+    run("assert(getmetatable(r1) == getmetatable(r2))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
+// ------------------------------------------------------------------ functions run in their element's scope
+
+TEST_F(ElementScopesTest, AHandlerRegistersTheElementsItBuildsInItsInstance) {
+    run(R"(
+        Clicker = component(function(props, ids)
+            props.out.ids = ids
+            return Button { "Add", onClicked = function() props.out.made = Text { id = "made" } end }
+        end)
+        one, two = {}, {}
+        root1 = Clicker { out = one }
+        root2 = Clicker { out = two })");
+    m_h.renderFrame("root1");
+    m_h.click("root1", 20, 20);
+    run(R"(
+        assert(one.made ~= nil and one.ids.made == one.made, "the handler's element isn't in its instance's ids")
+        assert(two.made == nil and two.ids.made == nil)
+        assert(ui.ids.made == nil, "the handler's element went to app level"))");
+    m_h.renderFrame("root2");
+    m_h.click("root2", 20, 20);
+    run("assert(two.ids.made == two.made and one.ids.made == one.made and one.made ~= two.made)");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
+TEST_F(ElementScopesTest, BindingsTimersWatchersAndSignalsOfTypedElementsRunInTheirScope) {
+    run(R"(
+        s = state { n = 0 }
+        keep = {}
+        Busy = component(function(props, ids)
+            busyIds = ids
+            ui.setTimeout(function() keep.timeout = Text { id = "fromTimeout" } end, 0)
+            ui.watch(s, "n", function() keep.watch = keep.watch or Text { id = "fromWatch" } end)
+            return Column {
+                Text { text = function() keep.binding = keep.binding or Text { id = "fromBinding" }; return "x" end },
+                Timer { interval = 50, onTriggered = function() keep.timer = keep.timer or Text { id = "fromTimer" } end },
+            }
+        end)
+        root = Busy {})");
+    m_h.renderFrames("root", 12);
+    run("s.n = 1");
+    run(R"(
+        for _, id in ipairs { "fromTimeout", "fromWatch", "fromBinding", "fromTimer" } do
+            assert(busyIds[id] ~= nil and busyIds[id] == keep[({ fromTimeout = "timeout", fromWatch = "watch",
+                   fromBinding = "binding", fromTimer = "timer" })[id]], id .. " isn't in the instance's ids")
+            assert(ui.ids[id] == nil, id .. " went to app level")
+        end)");
+    // An app-level watcher and timer stay at app level.
+    run(R"(
+        ui.watch(s, "n", function() keep.appWatch = Text { id = "appWatch" } end)
+        s.n = 2
+        assert(ui.ids.appWatch == keep.appWatch))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
+TEST_F(ElementScopesTest, AHandlerThatRaisesLeavesTheScopeStackIntact) {
+    run(R"(
+        Failing = component(function(props, ids)
+            failingIds = ids
+            return Button { "Fail", onClicked = function() keepHalf = Text { id = "half" }; error("handler boom") end }
+        end)
+        root = Failing {})");
+    m_h.renderFrame("root");
+    m_h.click("root", 20, 20);
+    EXPECT_EQ(reportedWith("handler boom"), 1);
+    run(R"(
+        assert(failingIds.half == keepHalf)
+        after = Text { id = "afterHandler" }
+        assert(ui.ids.afterHandler == after, "the scope of the failed handler stayed active"))");
 }
 
 TEST_F(ElementScopesTest, ParentLinksKeepOtherFieldsAndMethodsWorking) {

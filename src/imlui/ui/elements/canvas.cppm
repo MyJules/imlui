@@ -8,6 +8,7 @@ import std;
 import lua;
 import imgui;
 import imlui.theme.dpi;
+import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.painter;
@@ -90,7 +91,7 @@ void Canvas::render(Frame& frame) {
     ImDrawList* dl = frame.drawList();
     dl->PushClipRect(p, {p.x + w, p.y + h}, true);
     luaui::beginPaint(dl, p);
-    luaui::safeCall(state, 2, 0);
+    luaui::safeCall(state, luaui::scopedArgs(state, n.index(), 2), 0);
     luaui::endPaint();
     dl->PopClipRect();
 }

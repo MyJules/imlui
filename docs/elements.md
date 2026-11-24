@@ -66,7 +66,7 @@ These are handled by the renderer (`Renderer::render`) for every element.
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `id` | string | — | Makes the element reachable by name: `nameField.text` at app level, `ids.nameField` inside a [component or delegate](lua-api.md#element-ids), which has its own scope. Ids are weak (they don't keep the element alive); a duplicate in a scope is reported, and so is an app-level id that collides with a `ui` member or a Lua global, since the name would resolve to that instead. Every constructor registers it (`ui.registerId`), the Lua-side `Repeater`, `ListView`, `If`, `Loader` and `Responsive` included: `ListView { id = "list" }` is `list`. |
-| `parent` | element | — | *Read-only, Lua side.* The element that lays this one out (inline containers are skipped), `nil` for the root: `self.parent` in a binding or handler. A weak reference; assigning it raises an error. See [`self.parent`](lua-api.md#selfparent). |
+| `parent` | element | — | *Read-only, Lua side.* The element that lays this one out (inline containers are skipped), `nil` for the root: `self.parent` in a binding or handler. A weak reference, kept in a side table; assigning it has no effect (the next sync drops the field; debug builds report it). See [`self.parent`](lua-api.md#selfparent). |
 | `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) |
 | `enabled` | bool | `true` | `false` disables the element and everything inside it, with the Material disabled colors. |
 | `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. |

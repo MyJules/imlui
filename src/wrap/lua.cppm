@@ -103,6 +103,9 @@ void pushboolean(State* state, bool b);
 void pushnumber(State* state, Number n);
 void pushinteger(State* state, Integer n);
 void pushstring(State* state, std::string_view s);
+/// Pushes a NUL-terminated string through lua_pushstring, whose cache (by address) makes pushing the same string
+/// constant again cheap: for keys pushed over and over (property names).
+void pushcstring(State* state, const char* s);
 void pushcfunction(State* state, CFunction f);
 void pushcclosure(State* state, CFunction f, int n);
 void pushlightuserdata(State* state, void* p);
@@ -246,6 +249,7 @@ void pushboolean(State* state, bool b) { lua_pushboolean(state, b ? 1 : 0); }
 void pushnumber(State* state, Number n) { lua_pushnumber(state, n); }
 void pushinteger(State* state, Integer n) { lua_pushinteger(state, n); }
 void pushstring(State* state, std::string_view s) { lua_pushlstring(state, s.data(), s.size()); }
+void pushcstring(State* state, const char* s) { lua_pushstring(state, s); }
 void pushcfunction(State* state, CFunction f) { lua_pushcfunction(state, f); }
 void pushcclosure(State* state, CFunction f, int n) { lua_pushcclosure(state, f, n); }
 void pushlightuserdata(State* state, void* p) { lua_pushlightuserdata(state, p); }

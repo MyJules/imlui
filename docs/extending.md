@@ -592,8 +592,10 @@ so the sync can skip unchanged values.
 
 - The DSL constructor (`Gauge { ... }`) creates the C++ instance **immediately**, through the default
   constructor, and stores it in the element table as `__native`, a full userdata with a `__gc` metamethod. The
-  element table gets a metatable that falls back to the type's methods table, which is how `cpu:reset()` works
-  (every constructed element has a metatable: it also serves the read-only [`parent`](lua-api.md#selfparent)).
+  element table gets the metatable all elements of the type share (`require("imlui.types").meta(name)`), whose
+  `__index` finds the type's methods, which is how `cpu:reset()` works, and the read-only
+  [`parent`](lua-api.md#selfparent). Property reads from C++ (`Node`) skip a shared metatable: they read the table
+  itself.
   Element tables otherwise stay what they always were: plain tables with `__type` and array children.
 - Nothing else holds the instance: its link back to the table is weak. When Lua collects the element table, the
   userdata goes with it, `destroyed()` runs and the instance is deleted. Elements that the UI keeps (the tree

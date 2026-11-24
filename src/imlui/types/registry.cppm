@@ -2,11 +2,12 @@
 //
 // install(state) runs for every new Lua state (each hot reload) before the DSL loads, and sets up:
 //
-//  * `require("imlui.types")`: { names(), isType(name), attach(element), tick(now), tickingCount() }. The DSL's
-//    constructors call attach() for registered types, which creates the C++ instance right away and stores
-//    it in the element table as `__native`, a full userdata whose __gc deletes the instance. The table gets a
-//    metatable whose __index is the type's methods table, so `element:reset()` works. The instance
-//    holds only a weak link back to the table, so collecting the table destroys the instance.
+//  * `require("imlui.types")`: { names(), isType(name), attach(element), meta(name), tick(now), tickingCount(),
+//    parents }. The DSL's constructors call attach() for registered types, which creates the C++ instance right
+//    away and stores it in the element table as `__native`, a full userdata whose __gc deletes the instance. The
+//    table gets the metatable all elements of its type share (meta(name)): its __index finds the type's methods,
+//    so `element:reset()` works, and `element.parent` in `parents` (weak keys and values, filled by the DSL). The
+//    instance holds only a weak link back to the table, so collecting the table destroys the instance.
 //  * one global per singleton: a userdata whose __index reads properties (getters) and methods, and
 //    whose __newindex writes properties (setters) and stores `on*` signal handlers.
 //  * a sentinel whose __gc detaches the singletons when the state closes.
@@ -17,8 +18,8 @@
 //
 // The registry is what the Renderer dispatches to (Renderer::Types): rendering an element of a registered
 // type syncs the declared properties from the element table into the instance (setters run only on a changed
-// value; nil resets a property to its default), and then calls Element::render(). Elements that aren't rendered are synced
-// lazily: before a method called from Lua runs on them, and when a parent or another element asks for them
+// value; nil resets a property to its default), and then calls Element::render(). Elements that aren't rendered are
+// synced lazily: before a method called from Lua runs on them, and when a parent or another element asks for them
 // (sync(), Frame::Child::as<T>()). componentComplete() runs once, right after the first sync. Ticking
 // elements (Element::setTicking) are synced and ticked at the start of every frame by tick(now), which
 // ui.__tick calls, rendered or not. While a frame renders, an element is synced once: a layout's questions about a
@@ -170,6 +171,7 @@ constexpr const char* instanceMetaKey = "imlui.instance";
 constexpr const char* singletonMetaKey = "imlui.singleton";
 constexpr const char* methodsKey = "imlui.methods";   ///< { [TypeInfo*] = { name = closure } }
 constexpr const char* typeMetaKey = "imlui.typemeta"; ///< { [TypeInfo*] = element table metatable }
+constexpr const char* parentsKey = "imlui.parents";   ///< { [element] = parent }, weak keys and values
 constexpr const char* singletonsKey = "imlui.singletons";
 constexpr const char* sentinelKey = "imlui.types.sentinel";
 constexpr const char* markerKey = "__imlui";
@@ -432,6 +434,18 @@ void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) 
                                "it (a raw write from C++, or a binding that writes); synced again. Write through "
                                "luaui::Node::set, or call luaui::noteChange() after the write");
     }
+    // `parent` is read through the metatable from the parents table, so a raw field (a script assigned it) would
+    // shadow it: dropped here. (A script's write counts as a change, so the element syncs again after it.)
+    lua::pushcstring(state, "parent");
+    if (lua::rawget(state, tbl) != lua::Type::Nil) {
+        lua::pushstring(state, "parent");
+        lua::pushnil(state);
+        lua::rawset(state, tbl);
+        if constexpr (reportBypassedWrites)
+            luaui::reportError(b.type->name() + ": 'parent' is read-only (its container sets it); the value assigned "
+                                                "to it is dropped");
+    }
+    lua::pop(state);
     b.syncing = true;
     // Protected: an error in the loop is reported, not raised, and can't skip the reset below (`syncing` left set
     // would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.) It only reads
@@ -553,8 +567,36 @@ void pushMethodsTable(lua::State* state, const TypeInfo& info) {
     }
 }
 
-/// Pushes the metatable of `info`'s element tables ({ __index = methods table }). Made on first use and kept in
-/// the registry (with the methods table), so a type registered after the state was installed works too.
+/// Pushes the parents table: { [element] = parent }, weak keys and values. The DSL sets the entries (`types.parents`,
+/// see src/resources/imlui.lua), `element.parent` reads them through the type's metatable (typeIndex).
+void pushParents(lua::State* state) {
+    if (lua::getfield(state, lua::registryIndex, parentsKey) == lua::Type::Table) return;
+    lua::pop(state);
+    lua::newtable(state);
+    lua::createtable(state, 0, 1);
+    lua::pushstring(state, "kv");
+    lua::setfield(state, -2, "__mode");
+    lua::setmetatable(state, -2);
+    lua::pushvalue(state, -1);
+    lua::setfield(state, lua::registryIndex, parentsKey);
+}
+
+/// __index of element tables (t, k): `parent` from the parents table, anything else from the methods table.
+/// Upvalues: the methods table, the parents table, the string "parent".
+int typeIndex(lua::State* state) {
+    if (lua::rawequal(state, 2, lua::upvalueindex(3))) {
+        lua::pushvalue(state, 1);
+        lua::rawget(state, lua::upvalueindex(2));
+    } else {
+        lua::pushvalue(state, 2);
+        lua::rawget(state, lua::upvalueindex(1));
+    }
+    return 1;
+}
+
+/// Pushes the metatable that every element table of type `info` shares ({ __index = typeIndex }: the type's methods,
+/// and `parent`). Made on first use and kept in the registry (with the methods table), so a type registered after
+/// the state was installed works too.
 void pushTypeMeta(lua::State* state, const TypeInfo& info) {
     pushPerType(state, typeMetaKey, &info);
     if (!lua::isnil(state, -1)) return;
@@ -562,11 +604,16 @@ void pushTypeMeta(lua::State* state, const TypeInfo& info) {
     pushMethodsTable(state, info);        // methods
     pushRegistryTable(state, methodsKey); // methods, M
     lua::pushvalue(state, -2);
-    lua::rawsetp(state, -2, &info);      // M[info] = methods
-    lua::pop(state);                     // methods
-    lua::createtable(state, 0, 1);       // methods, meta
-    lua::insert(state, -2);              // meta, methods
-    lua::setfield(state, -2, "__index"); // meta
+    lua::rawsetp(state, -2, &info); // M[info] = methods
+    lua::pop(state);                // methods
+    pushParents(state);             // methods, parents
+    lua::pushstring(state, "parent");
+    lua::pushcclosure(state, &typeIndex, 3); // index
+    lua::createtable(state, 0, 2);           // index, meta
+    lua::insert(state, -2);                  // meta, index
+    lua::setfield(state, -2, "__index");     // meta
+    lua::pushboolean(state, true);
+    lua::setfield(state, -2, luaui::sharedMetaMarker); // property reads skip it (Node::pushRaw)
     pushRegistryTable(state, typeMetaKey);
     lua::pushvalue(state, -2);
     lua::rawsetp(state, -2, &info); // registry[typeMetaKey][info] = meta
@@ -631,6 +678,17 @@ int libNames(lua::State* state) {
     return 1;
 }
 
+/// meta(name): the metatable every element table of type `name` shares (nil for an unknown type), for element
+/// tables that get their instance later (the Lua-side containers).
+int libMeta(lua::State* state) {
+    const TypeInfo* info = lua::isstring(state, 1) ? upvalueRegistry(state)->find(lua::tostring(state, 1)) : nullptr;
+    if (info)
+        pushTypeMeta(state, *info);
+    else
+        lua::pushnil(state);
+    return 1;
+}
+
 int libIsType(lua::State* state) {
     lua::pushboolean(state, lua::isstring(state, 1) && upvalueRegistry(state)->find(lua::tostring(state, 1)));
     return 1;
@@ -640,7 +698,8 @@ int libIsType(lua::State* state) {
 int libAttach(lua::State* state) {
     if (lua::istable(state, 1)) {
         lua::getfield(state, 1, "__type");
-        const TypeInfo* info = lua::isstring(state, -1) ? upvalueRegistry(state)->find(lua::tostring(state, -1)) : nullptr;
+        const TypeInfo* info =
+            lua::isstring(state, -1) ? upvalueRegistry(state)->find(lua::tostring(state, -1)) : nullptr;
         lua::pop(state);
         if (info) attachInstance(state, 1, *info);
     }
@@ -703,8 +762,7 @@ Box* syncBox(const Node& node, const TypeInfo& info, Sync mode) {
 
 } // namespace
 
-TypeRegistry::TypeRegistry()
-    : m_instances{[this](const Node& node) -> ScriptObject* { return renderSync(node); }} {}
+TypeRegistry::TypeRegistry() : m_instances{[this](const Node& node) -> ScriptObject* { return renderSync(node); }} {}
 
 TypeInfo& TypeRegistry::addType(std::unique_ptr<TypeInfo> info) {
     TypeInfo& ref = *info;
@@ -731,7 +789,8 @@ const TypeInfo* TypeRegistry::find(std::string_view name) const {
 std::vector<std::string> TypeRegistry::typeNames() const {
     std::vector<std::string> out;
     out.reserve(m_types.size());
-    for (const auto& [name, info] : m_types) out.push_back(name);
+    for (const auto& [name, info] : m_types)
+        out.push_back(name);
     return out;
 }
 
@@ -851,14 +910,16 @@ void TypeRegistry::install(lua::State* state) {
     lua::settop(state, top);
 
     // require("imlui.types")
-    lua::createtable(state, 0, 5);
-    const lua::CFunction lib[] = {&libNames, &libIsType, &libAttach, &libTick, &libTickingCount};
-    const char* libNamesList[] = {"names", "isType", "attach", "tick", "tickingCount"};
+    lua::createtable(state, 0, 7);
+    const lua::CFunction lib[] = {&libNames, &libIsType, &libAttach, &libMeta, &libTick, &libTickingCount};
+    const char* libNamesList[] = {"names", "isType", "attach", "meta", "tick", "tickingCount"};
     for (std::size_t i = 0; i < std::size(lib); ++i) {
         lua::pushlightuserdata(state, this);
         lua::pushcclosure(state, lib[i], 1);
         lua::setfield(state, -2, libNamesList[i]);
     }
+    pushParents(state);
+    lua::setfield(state, -2, "parents");
     lua::getglobal(state, "package");
     lua::getfield(state, -1, "loaded");
     lua::pushvalue(state, -3);
@@ -897,7 +958,8 @@ void TypeRegistry::install(lua::State* state) {
 }
 
 void TypeRegistry::activate(lua::State* state) {
-    for (const Singleton& s : m_singletons) s.object->relink(state);
+    for (const Singleton& s : m_singletons)
+        s.object->relink(state);
 }
 
 void TypeRegistry::detachState(lua::State* state) {

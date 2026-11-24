@@ -22,6 +22,7 @@ export module imlui.types.script_object;
 import std;
 
 import lua;
+import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.lua_convert;
@@ -79,7 +80,11 @@ public:
         const int top = lua::gettop(state);
         if (!pushSelf()) return false;
         const std::string key{signal};
-        lua::getfield(state, top + 1, key.c_str());
+        // A singleton's handlers are behind its userdata's __index; an element's are fields of its table.
+        if (m_singleton)
+            lua::getfield(state, top + 1, key.c_str());
+        else
+            luaui::Node{state, top + 1}.pushRaw(key.c_str());
         if (!lua::isfunction(state, -1)) {
             lua::settop(state, top);
             return false;
@@ -91,6 +96,7 @@ public:
         }
         (LuaConvert<LuaArgType<Args>>::push(state, args), ...);
         nargs += static_cast<int>(sizeof...(Args));
+        if (!m_singleton) nargs = luaui::scopedArgs(state, top + 1, nargs);
         const bool ok = luaui::safeCall(state, nargs, 0);
         lua::settop(state, top);
         requestFrame();
@@ -272,13 +278,16 @@ void ScriptObject::notify(std::string_view property) {
     }
 
     const std::string signal = changedSignal(property);
-    if (lua::getfield(state, self, signal.c_str()) == lua::Type::Function) {
+    const lua::Type handler =
+        m_singleton ? lua::getfield(state, self, signal.c_str()) : luaui::Node{state, self}.pushRaw(signal.c_str());
+    if (handler == lua::Type::Function) {
         int nargs = 1;
         if (!m_singleton) {
             lua::pushvalue(state, self);
             ++nargs;
         }
         lua::pushvalue(state, value);
+        if (!m_singleton) nargs = luaui::scopedArgs(state, self, nargs);
         luaui::safeCall(state, nargs, 0);
     }
     lua::settop(state, top);
