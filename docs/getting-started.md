@@ -13,8 +13,8 @@ Clang.
 | **Visual Studio or Build Tools, with a Windows SDK** | On Windows, clang uses the MSVC STL and the Windows SDK libraries. If clang can't find them, configure from a *Developer PowerShell for VS*. |
 | OpenGL | Provided by the system driver (`find_package(OpenGL)`). |
 
-You don't install anything else. Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4 and spdlog 1.15.3 are vendored in
-`external/` and built as plain static libraries. Roboto Regular/Medium and Material Icons Round are in
+You don't install anything else. Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3 and zstd 1.5.7 are vendored
+in `external/` and built as plain static libraries. Roboto Regular/Medium and Material Icons Round are in
 `external/fonts/`.
 
 ## Configure and build
@@ -29,9 +29,11 @@ cmake --build --preset clang-debug    # same as: cmake --build build/clang-debug
 | `clang-debug` | `build/clang-debug` | Debug |
 | `clang-release` | `build/clang-release` | Release |
 
-The app is `build/<preset>/bin/imlui_app` (`.exe` on Windows). After each build, `lua/`, the fonts and the
-Lua-only examples (`examples/gallery/`, `examples/counter/`) are copied next to the executable, so the `bin/` folder
-runs on its own. Examples with C++ code have their own executables (see [examples/README.md](../examples/README.md)).
+The app is `build/<preset>/bin/imlui_app` (`.exe` on Windows). It carries its files inside: the library embeds
+`lua/imlui.lua` and the fonts, and `imlui_app` embeds the gallery, its default app. The executable runs on its own,
+copied anywhere. The Lua-only examples (`examples/gallery/`, `examples/counter/`) are also copied next to it after
+each build, so `imlui_app examples/counter/main.lua` works in a release build too. Examples with C++ code have their
+own executables, which embed their scripts the same way (see [examples/README.md](../examples/README.md)).
 
 Every `src/**/*.cppm` file is picked up by a `CONFIGURE_DEPENDS` glob, so adding or removing a module needs no
 CMake edits. `compile_commands.json` is always exported, which clangd, clice and clang-tidy use.
@@ -79,11 +81,39 @@ cmake --preset clang-debug -DIMLUI_DEV_PATHS=OFF
 
 | `IMLUI_DEV_PATHS` | Effect |
 |---|---|
-| `ON` (default) | The app is compiled with `IMLUI_SOURCE_DIR` set to the source tree. `lua/imlui.lua` and the default script (`examples/gallery/main.lua`) are read from the source tree, and so are relative script paths such as `examples/counter/main.lua`, so editing them hot-reloads without rebuilding. |
-| `OFF` | Everything is read from the copies next to the executable. Use this for a build you move or ship. |
+| `ON` (default) | The app is compiled with `IMLUI_SOURCE_DIR` set to the source tree. `lua/` and the default script's folder (`examples/gallery/`) are mounted from the source tree over the embedded copies, and relative script paths such as `examples/counter/main.lua` are found there, so editing them hot-reloads without rebuilding. Setting the environment variable `IMLUI_DEV_PATHS=0` ignores the source tree at runtime. |
+| `OFF` | The app runs from its embedded files. Use this for a build you move or ship. |
 
-Fonts are always loaded from `fonts/` next to the executable (mounted as `imlui:/fonts/`). The app's files are
+Either way, files next to the executable override the embedded ones: a `lua/` folder (`imlui:/`), a `fonts/` folder
+(`imlui:/fonts/`), the default script's folder (`examples/gallery/` for `imlui_app`), and any `*.pak` archive, which
+mounts itself where it was built for (see [Shipping an app](#shipping-an-app)). The app's files are
 [resources](lua-api.md#resources): the script's folder is `app:/`, `lua/` is `imlui:/`.
+
+## Shipping an app
+
+An app with its own host embeds its scripts and data with `imlui_add_resources`, like `examples/custom_types`:
+
+```cmake
+imlui_add_resources(my_app NAME my_app PREFIX app BASE ${CMAKE_CURRENT_SOURCE_DIR} FILES main.lua
+                    DIRECTORY components assets)
+```
+
+```cpp
+import imlui;
+import imlui.embedded.my_app;
+
+int main(int argc, char** argv) {
+    imlui::Engine engine{imlui::defaultConfig(argc, argv, nullptr, "app/main.lua", imlui::embedded::my_app::mount)};
+    return engine.run();
+}
+```
+
+The executable then needs nothing next to it. Text and fonts are stored zstd-compressed and decompressed on first
+read. The default script is `app/main.lua` relative to the executable, so an `app/` folder next to it overrides
+single embedded `app:/` files. To update files without rebuilding, ship a `.pak` next to the executable:
+`imlui_add_pak(patch PREFIX app BASE ... FILES ...)` in CMake, or `imlui_pack patch.pak app:/ <folder>` by hand.
+Archives override embedded files, and loose folders override both (see
+[Architecture](architecture.md#embedding-and-archives)).
 
 ## Your first script
 

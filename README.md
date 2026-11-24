@@ -35,10 +35,12 @@ build/clang-debug/bin/imlui_app examples/counter/main.lua
 build/clang-debug/bin/imlui_custom_types             # C++ element types and a singleton (docs/extending.md)
 ```
 
-Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3) and are
-built as plain libraries. Project code only uses them through module wrappers.
+Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3, zstd 1.5.7) and
+are built as plain libraries. Project code only uses them through module wrappers.
 
-`external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0).
+`external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0). The library embeds
+them and `lua/imlui.lua` (zstd-compressed), and `imlui_add_resources` embeds an app's own files the same way, so an
+executable runs on its own; a `.pak` archive or loose files next to it still override.
 ImGui 1.92 rasterizes glyphs on demand, so every text style and icon size stays sharp, including
 when the theme's `fontScale` changes.
 
@@ -58,7 +60,8 @@ tree, so you don't need to rebuild.
 | `src/imlui/ui/` | `imlui.ui.renderer` (walks the Lua element tree every frame and renders each element through the type registry), `imlui.ui.props`, `imlui.ui.frame_request`, `imlui.ui.navigation_scope`, `imlui.ui.size_class` |
 | `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in elements, one typed `Element` class per module (`button.cppm`, `row.cppm`, ...), and `registerBuiltinTypes` (`builtin.cppm`) |
 | `src/imlui/types/` | `imlui.types.*`: the C++ type system: `ScriptObject`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
-| `src/imlui/resources/` | `imlui.resources*`: resource names (`app:/main.lua`), the `Mount` interface, `DirectoryMount`, `Resources` (stacked mounts) |
+| `src/imlui/resources/` | `imlui.resources*`: resource names (`app:/main.lua`), the `Mount` interface, `DirectoryMount`, `EmbeddedMount`, `PakMount` and the `.pak` format, `Resources` (stacked mounts) |
+| `tools/` | build-time tools: `imlui_rc` (embeds files, for `imlui_add_resources`) and `imlui_pack` (builds `.pak` archives, `imlui_add_pak`); `cmake/ImluiResources.cmake` |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |

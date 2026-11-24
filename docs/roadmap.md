@@ -101,9 +101,9 @@ Ship an app as one executable with its Lua scripts, fonts, images and data. Deci
 Order, one commit per step:
 
 1. *(done)* `Resources` with directory mounts, and the engine and Lua switched to it (no visible change).
-2. Embedded mounts, `imlui_add_resources` and zstd. The library embeds its own Lua and fonts.
-3. Self-contained examples, and a test that runs a release build without the source tree.
-4. `.pak` mounts and the `imlui_pack` tool.
+2. *(done)* Embedded mounts, `imlui_add_resources` and zstd. The library embeds its own Lua and fonts.
+3. *(done)* Self-contained examples, and a test that runs a release build without the source tree.
+4. *(done)* `.pak` mounts and the `imlui_pack` tool.
 5. Fonts declared from Lua.
 6. The PNG/JPG `Image` element.
 

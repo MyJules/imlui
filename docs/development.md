@@ -216,7 +216,8 @@ conventions they share, and new built-ins follow them:
 ## clang-tidy and clice
 
 - `.clang-tidy` turns on only `readability-identifier-naming`, configured for the naming rules above, and filters
-  out vendored headers. Run it on every module (`src/**/*.cppm`) and `app/main.cpp` with the `tidy` target:
+  out vendored headers. Run it on every module (`src/**/*.cppm`, `tools/**/*.cppm`) and `app/main.cpp` with the
+  `tidy` target:
 
   ```sh
   cmake --build build/clang-debug --target tidy
@@ -301,6 +302,37 @@ suppressions. Run `clang-asan` before merging larger changes.
   searchers, chunk names in errors, and `ui.resource.*` resolving against the calling script. It uses two support
   modules: `test::TempDir` (`imlui.test.temp_dir`, a temporary folder removed afterwards, with `write` and `touch`)
   and `test::MemoryMount` (`imlui.test.memory_mount`, an immutable in-memory mount, like an embedded one).
+- `resources_packed_test.cpp` covers the packed mounts: the compression rule, `EmbeddedMount` (stored and
+  compressed files, zero-copy reads, decompression on first read, concurrent reads, bad paths, corrupt data),
+  `.pak` archives written by the `imlui_pack` code (`tools::packFiles`) and read by `PakMount` (every truncation,
+  a bad magic or version, an escaping path and corrupt compressed data are rejected cleanly; an archive built by
+  `imlui_add_pak` in `tests/CMakeLists.txt` opens), the override order embedded < `.pak` < directory, the library's
+  embedded files against the sources, and a release-style setup: `defaultConfig` with no source tree and nothing
+  next to the executable, then with a `.pak` and a loose `lua/` folder, and the harness on embedded data only
+  (`Options::embedded`). The tests link `imlui_pack_lib` for the writer.
+- **Smoke tests** (`smoke.imlui_app`, `smoke.imlui_custom_types`, `tests/smoke_run.cmake`) run each app like a
+  shipped release: the executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
+  empty folder under `build/<preset>/tests/smoke/` and started with `IMLUI_DEV_PATHS=0` and
+  `IMLUI_EXIT_AFTER_FRAMES=5`. It must exit with 0, log that its entry script came from its embedded data, and log
+  no error. They open a window, so they need a desktop session.
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `IMLUI_EXIT_AFTER_FRAMES=n` | Quit after `n` rendered frames, with exit code 1 when a script error was reported (`EngineConfig::exitAfterFrames`, read by `defaultConfig`). For smoke runs. |
+| `IMLUI_DEV_PATHS=0` | Ignore the source tree compiled into a dev build (`IMLUI_SOURCE_DIR`): run from the embedded data and the files next to the executable, like a release build. |
+| `GALLERY_PAGE=n` | Open the gallery on page `n`. |
+
+### Resource tools
+
+`tools/` builds two host tools with the same toolchain (see [Architecture](architecture.md#embedding-and-archives)):
+`imlui_rc`, which `imlui_add_resources` runs to write the blob and the `imlui.embedded.<name>` module into
+`build/<preset>/<dir>/imlui_resources/`, and `imlui_pack`, which builds `.pak` archives (`imlui_add_pak`, or by
+hand: `imlui_pack out.pak app:/ <folder> [files...]`). Their shared code is the `imlui_resource_tools` library
+(`tools/lib/`, links the zstd compressor; it doesn't link `imlui`, which is embedded with it), and the archive
+writer is `imlui_pack_lib` (links `imlui` for `imlui.resources.pak_format`). Generated modules are not checked by
+`tidy`; the generator is.
 
 ### The headless frame harness
 
@@ -311,7 +343,7 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 
 | Member | What |
 |---|---|
-| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_LUA_DIR` (`lua/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. |
+| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_LUA_DIR` (`lua/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), or the library's embedded files with `.embedded = true`, and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. |
 | `registerType<T>(name)`, `renderer()`, `types()` | Register element types before the Lua state starts; the renderer (window title) and the registry. |
 | `resources()`, `loadedResources()` | The harness's `Resources`: mount more (`app:/` on a `test::TempDir`) before the state starts. The names the Lua state read or loaded. |
 | `run(code) -> std::string` | Runs Lua in the UI script environment (`ui.env`: constructors, `state`, `bind`, ids, `ui`), starting the state on first use: the registered types, the real `imlui.native` with empty host hooks, the painter library, the resource loader and `imlui:/imlui.lua`. Returns the error message, `""` on success: `ASSERT_EQ(h.run("..."), "")`. Assignments to free names stay in the environment. |

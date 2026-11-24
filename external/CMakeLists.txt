@@ -74,3 +74,22 @@ if(IMLUI_HAS_WNO_CHARACTER_CONVERSION)
     target_compile_options(gtest PRIVATE -Wno-character-conversion)
     target_compile_options(gtest_main PRIVATE -Wno-character-conversion)
 endif()
+
+# ---------------------------------------------------------------- zstd 1.5.7
+# Only lib/common, lib/compress and lib/decompress are vendored (no legacy formats, dictionary builder, programs
+# or tests). The runtime (imlui) links only the decompressor; the build-time resource tools (tools/) also link the
+# compressor. Single-threaded, no hand-written assembly (portable across the MSVC and GNU targets clang builds).
+set(ZSTD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib)
+file(GLOB ZSTD_COMMON_SOURCES CONFIGURE_DEPENDS ${ZSTD_DIR}/common/*.c)
+file(GLOB ZSTD_DECOMPRESS_SOURCES CONFIGURE_DEPENDS ${ZSTD_DIR}/decompress/*.c)
+file(GLOB ZSTD_COMPRESS_SOURCES CONFIGURE_DEPENDS ${ZSTD_DIR}/compress/*.c)
+add_library(zstd_decompress STATIC ${ZSTD_COMMON_SOURCES} ${ZSTD_DECOMPRESS_SOURCES})
+add_library(zstd_compress STATIC ${ZSTD_COMPRESS_SOURCES})
+foreach(target zstd_decompress zstd_compress)
+    target_include_directories(${target} PUBLIC ${ZSTD_DIR})
+    target_compile_definitions(${target} PRIVATE ZSTD_DISABLE_ASM ZSTD_LEGACY_SUPPORT=0 ZSTD_MULTITHREAD_SUPPORT_DEFAULT=0)
+    set_target_properties(${target} PROPERTIES LINKER_LANGUAGE C SYSTEM ON)
+endforeach()
+target_link_libraries(zstd_compress PUBLIC zstd_decompress) # lib/common lives in the decompressor
+add_library(ext::zstd ALIAS zstd_decompress)
+add_library(ext::zstd_compress ALIAS zstd_compress)
