@@ -18,8 +18,10 @@ build/clang-debug/bin/imlui_custom_types
 
 Lua-only examples run on the generic `imlui_app` host. They need no build step: `imlui_app` copies every example
 folder without a `CMakeLists.txt` next to its binary. A relative script path is tried relative to the current
-directory first, then under the source tree (dev builds, so edits hot-reload) or the binary's folder.
+directory first, then under the source tree (dev builds, so edits hot-reload) or the binary's folder. The gallery is
+also embedded into `imlui_app` as its default app, so `imlui_app` with no argument runs on its own.
 
 Examples with C++ code have their own `CMakeLists.txt` and executable, added by `examples/CMakeLists.txt` when
-`IMLUI_BUILD_EXAMPLES` is `ON` (the default). To add one, create a folder like `custom_types/` and add an
-`add_subdirectory` line to [`CMakeLists.txt`](CMakeLists.txt).
+`IMLUI_BUILD_EXAMPLES` is `ON` (the default). They embed their scripts with `imlui_add_resources`, so the executable
+needs nothing next to it (`custom_types/` embeds its `main.lua`). To add one, create a folder like `custom_types/`
+and add an `add_subdirectory` line to [`CMakeLists.txt`](CMakeLists.txt).

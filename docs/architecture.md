@@ -213,9 +213,30 @@ earlier one. `read` returns a span that stays valid as long as the mount lives; 
 | Mount | Notes |
 |---|---|
 | `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; every buffer it ever read stays alive until the mount is destroyed, so spans (and the font atlas) can point into them. Reports modification times. |
+| `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
+| `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
-`defaultConfig` mounts `imlui:/` on `<root>/lua`, `imlui:/fonts/` on `fonts/` next to the executable, and `app:/`
-on the entry script's folder. The fonts are added to the ImGui atlas without a copy
+`EmbeddedMount` and `PakMount` share `PackedMount`: a sorted table of files, each stored as is or as one zstd frame.
+A stored file is served straight from the embedded data or the archive buffer (zero-copy). A compressed one is
+decompressed on its first read, under the mount's mutex, and the buffer is kept until the mount is destroyed, so
+spans stay valid. Corrupt compressed data reads as a missing file and is logged.
+
+`defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
+
+1. **Embedded:** the library's own files, `imlui:/` (`lua/`) and `imlui:/fonts/` (Roboto, Material Icons, the
+   codepoints and the font licenses), always. Then the app's embedded files (`mountApp`, such as
+   `imlui::embedded::gallery::mount`), when no script is given on the command line.
+2. **Archives:** every `*.pak` next to the executable, in file name order (`mountPaks`), each at the mount point
+   stored in it. An archive that can't be read is logged and skipped.
+3. **Folders**, where they exist: `imlui:/` on `<root>/lua`, `imlui:/fonts/` on `fonts/` next to the executable,
+   and `app:/` on the entry script's folder (always mounted when the script is a command-line argument). The root
+   is the source tree in dev builds (`IMLUI_DEV_PATHS=ON`; the environment variable `IMLUI_DEV_PATHS=0` ignores it
+   at runtime), otherwise the executable's folder.
+
+So a dev build reads `lua/` and the example from the source tree (hot reload), and a release build runs from its
+embedded data alone, while a `.pak` or loose files next to it still override single files.
+
+The fonts are added to the ImGui atlas without a copy
 (`FontDataOwnedByAtlas = false`), pointing into the bytes the mount keeps, so the `Resources` in `EngineConfig`
 must outlive the atlas. The Engine keeps it for its whole lifetime, and the atlas dies with the window in `run()`.
 
@@ -242,6 +263,40 @@ frame) deletes it; one that was never uploaded is deleted at once. At shutdown t
 textures with the window, and the cache deletes the data after the ImGui context is gone. `smooth = false` uses
 the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
 
+### Embedding and archives
+
+`imlui_add_resources(<target> PREFIX <prefix> BASE <dir> [NAME <name>] [MOUNT <folder>] [FILES ...] [DIRECTORY ...])`
+(`cmake/ImluiResources.cmake`) embeds files into a target. At build time the `imlui_rc` tool (`tools/`) encodes each
+file and writes `<name>.bin` (the stored bytes, back to back) and the module `imlui.embedded.<name>` into the build
+tree. The module pulls the blob in with `#embed`, a clang extension in C++ whose `-Wc23-extensions` warning is turned
+off only around that line of the generated file. It holds a static table of `EmbeddedMount::Record`s
+`{path, offset, storedSize, size, compressed}` and exports `imlui::embedded::<name>::files()` (the mount, created on
+first use and shared) and `mount(Resources&)` (at `<prefix>:/`, or `<prefix>:/<folder>/` with `MOUNT`). The custom
+command depends on every listed file, so editing one re-embeds it, and `DIRECTORY` is globbed again on every build.
+The tool rewrites its outputs only when they change, so touching a file without changing it rebuilds nothing.
+
+**Compression** (`imlui.tools.resource_encoding`, shared by both tools): a file is stored as one zstd frame (level 19)
+when it is at least 64 bytes, its extension isn't an already-compressed format (PNG, JPEG, zstd, zip, ...), and
+compression saves at least 10 %. Otherwise it's stored as is. `lua/imlui.lua` shrinks to about a third, the fonts to
+about half.
+
+The library embeds its own files this way (`CMakeLists.txt`), and so do `imlui_app` (the gallery, its default app)
+and `imlui_custom_types` (its `main.lua`).
+
+**`.pak` archives** (`imlui.resources.pak_format`) use the same encoding. The layout, with little-endian integers:
+
+| Part | Contents |
+|---|---|
+| Header | `IMLUIPAK`, u32 version (1), u32 file count, u32 length + the mount point (`app:/`) |
+| Index | per file: u32 length + path, u64 offset (from the start of the archive), u64 stored size, u64 size, u32 flags (bit 0: zstd) |
+| Blobs | each file's stored bytes |
+
+`parsePak` checks the magic and the version, the mount point, that every path is normalized and every blob lies
+inside the archive, and caps the sizes, so a truncated or corrupt archive is rejected with a reason instead of being
+read out of bounds. `imlui_pack <out.pak> <mount point> <base folder> [file...]` builds an archive by hand, and
+`imlui_add_pak(<name> PREFIX ... BASE ... [OUTPUT <file>] [MOUNT ...] [FILES ...] [DIRECTORY ...])` builds one from
+CMake (by default `bin/<name>.pak`, next to the executables).
+
 ## Module map (target layout)
 
 All project code is C++20 modules in `src/`. Each module exports one class or one family of functions, and the
@@ -257,6 +312,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink`, `setLevel` |
 | `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize` |
+| `zstd` | The zstd decompressor: `zstd::contentSize(frame)`, `zstd::decompress(frame, out)`. The tools wrap the compressor themselves (`zstd.compress`, in `tools/lib/`). |
 
 ### Color (`src/imlui/color/`)
 
@@ -353,6 +409,10 @@ See [Registering C++ types](extending.md).
 | `imlui.resources.name` | `ResourceName`, `parseName`, `normalizeName`, `normalizePath`, `hasPrefix`, `resolveName(base, name)`, `folderOf` |
 | `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `modified`, `origin`); `ResourceTime` |
 | `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache |
+| `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
+| `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |
+| `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry` |
+| `imlui.resources.pak_mount` | `PakMount`: a `.pak` archive in memory; `open(file, error)`, `fromBytes(bytes, name, error)`, `mountPoint()` |
 | `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive`, `modified`, `origin`, `prefixes`, `describe` |
 
 ### Images (`src/imlui/image/`)
@@ -367,17 +427,32 @@ See [Registering C++ types](extending.md).
 
 | Module | Purpose |
 |---|---|
-| `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload), `defaultConfig(argc, argv, sourceDir, defaultScript)` |
+| `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload, `exitAfterFrames`), `defaultConfig(argc, argv, sourceDir, defaultScript, mountApp)`, `mountPaks(resources, folder)` |
 | `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `resources()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
 | `imlui` | Umbrella for apps: `import imlui;` |
 
-`app/main.cpp` is the host. It has no `#include`, only `import imlui;`, and calls
-`Engine{defaultConfig(argc, argv, IMLUI_SOURCE_DIR)}.run()`.
+`app/main.cpp` is the host. It has no `#include`, only `import imlui;` and `import imlui.embedded.gallery;`, and
+calls `Engine{defaultConfig(argc, argv, IMLUI_SOURCE_DIR, "examples/gallery/main.lua",
+imlui::embedded::gallery::mount)}.run()`.
+
+### Generated and tool modules
+
+| Module | Where | Purpose |
+|---|---|---|
+| `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::files()`, `mount(Resources&)`. The library has `imlui.embedded.imlui` and `imlui.embedded.imlui_fonts`. |
+| `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
+| `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data)`, `compressible(path)`: the compression rule |
+| `imlui.tools.resource_spec` | `tools/lib/` | `ResourceSpec`, `readSpec`, `collectFiles`, `readFile`: the tools' input |
+| `imlui.tools.rc` | `tools/lib/` | `runRc`: the `imlui_rc` tool (writes the blob and the generated module) |
+| `imlui.tools.pack` | `tools/` | `runPack`, `packFiles(mountPoint, files, error)`: the `imlui_pack` tool |
+
+The tools are built from `tools/` with the same toolchain. `imlui_rc` doesn't link the library, which is embedded
+with it; `imlui_pack` does, for the archive format.
 
 ## Third-party code
 
 Vendored code in `external/` is built as ordinary static libraries (`ext::lua`, `ext::imgui`, `ext::spdlog`,
-`ext::stb_image`, `glfw`), with module scanning turned off. Project code never includes their headers directly. Only the wrapper
+`ext::stb_image`, `ext::zstd`, `glfw`), with module scanning turned off. Project code never includes their headers directly. Only the wrapper
 modules above do, in their global module fragment.
 
 - **Dear ImGui 1.92.9b** is built with the GLFW and OpenGL 3 backends, `IMGUI_DISABLE_OBSOLETE_FUNCTIONS`, and a
@@ -388,4 +463,7 @@ modules above do, in their global module fragment.
 - **GLFW 3.4** and **spdlog 1.15.3** are built via `add_subdirectory`.
 - **stb_image 2.34** (`external/stb/`, public domain or MIT) is compiled as C in `external/imlui_stb_image.c` with
   only the PNG and JPEG decoders, no stdio and a 16384-pixel size limit.
+- **zstd 1.5.7** (BSD, `external/zstd/LICENSE`): only `lib/common`, `lib/compress` and `lib/decompress`, single
+  threaded, without the hand-written assembly or the legacy formats. The library links only the decompressor
+  (`ext::zstd`); the build-time tools also link the compressor (`ext::zstd_compress`).
 - **Fonts**: Roboto Regular and Medium, plus Material Icons Round with its `.codepoints` file (Apache 2.0).

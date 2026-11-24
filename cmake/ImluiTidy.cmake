@@ -1,5 +1,5 @@
-# The `tidy` target: runs clang-tidy (the naming checks in .clang-tidy) on every module in src/ and on app/main.cpp,
-# and fails on any finding (--warnings-as-errors=*).
+# The `tidy` target: runs clang-tidy (the naming checks in .clang-tidy) on every module in src/ and tools/ and on
+# app/main.cpp, and fails on any finding (--warnings-as-errors=*).
 #
 #   cmake --build build/clang-debug --target tidy
 #
@@ -14,7 +14,8 @@ if(NOT IMLUI_CLANG_TIDY)
 endif()
 
 file(GLOB_RECURSE IMLUI_TIDY_FILES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cppm)
-list(APPEND IMLUI_TIDY_FILES ${CMAKE_SOURCE_DIR}/app/main.cpp)
+file(GLOB_RECURSE IMLUI_TIDY_TOOL_FILES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tools/*.cppm)
+list(APPEND IMLUI_TIDY_FILES ${IMLUI_TIDY_TOOL_FILES} ${CMAKE_SOURCE_DIR}/app/main.cpp)
 
 set(IMLUI_TIDY_STAMPS)
 foreach(file IN LISTS IMLUI_TIDY_FILES)
@@ -24,7 +25,7 @@ foreach(file IN LISTS IMLUI_TIDY_FILES)
         OUTPUT ${stamp}
         COMMAND ${IMLUI_CLANG_TIDY} -p ${CMAKE_BINARY_DIR} --quiet --warnings-as-errors=* ${file}
         COMMAND ${CMAKE_COMMAND} -E touch ${stamp}
-        DEPENDS ${file} ${CMAKE_SOURCE_DIR}/.clang-tidy imlui imlui_app
+        DEPENDS ${file} ${CMAKE_SOURCE_DIR}/.clang-tidy imlui imlui_app imlui_pack
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "clang-tidy ${rel}"
         VERBATIM

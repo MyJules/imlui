@@ -40,6 +40,8 @@ import imlui.resources;
 import imlui.resources.directory_mount;
 import imlui.theme.font_library;
 import imlui.image.image_cache;
+import imlui.embedded.imlui;
+import imlui.embedded.imlui_fonts;
 import imlui.theme.icons;
 import imlui.theme.typography;
 import imlui.ui.frame_request;
@@ -61,6 +63,9 @@ public:
         /// Registers the built-in element types (Column, Dialog, ModalNavigationDrawer, ...) first,
         /// like the Engine does; types registered afterwards replace built-ins of the same name.
         bool builtins = false;
+        /// Mounts the library's embedded files (imlui.embedded.imlui, imlui.embedded.imlui_fonts) instead of lua/
+        /// and external/fonts from the source tree, like a release build running without it.
+        bool embedded = false;
     };
 
     HeadlessFrame();
@@ -146,8 +151,13 @@ namespace imlui::test {
 HeadlessFrame::HeadlessFrame() : HeadlessFrame(Options{}) {}
 
 HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
-    m_resources.mount("imlui:/", std::make_shared<DirectoryMount>(IMLUI_LUA_DIR));
-    m_resources.mount("imlui:/fonts/", std::make_shared<DirectoryMount>(IMLUI_FONT_DIR));
+    if (m_options.embedded) {
+        embedded::imlui::mount(m_resources);
+        embedded::imlui_fonts::mount(m_resources);
+    } else {
+        m_resources.mount("imlui:/", std::make_shared<DirectoryMount>(IMLUI_LUA_DIR));
+        m_resources.mount("imlui:/fonts/", std::make_shared<DirectoryMount>(IMLUI_FONT_DIR));
+    }
     luaui::clearErrors();
     clearFrameRequests();
     m_context = ImGui::CreateContext();

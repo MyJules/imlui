@@ -153,6 +153,7 @@ private:
     int m_tickRef = lua::noRef;
     int m_overlayRef = lua::noRef;
     bool m_quit = false;
+    int m_framesRendered = 0; ///< counted only for EngineConfig::exitAfterFrames
     bool m_reload = false;
     int m_appliedWidth = 0;
     int m_appliedHeight = 0;
@@ -289,7 +290,10 @@ int Engine::run() {
         setLoopAwake(true);
         if (input) requestFramesFor(settleSeconds);
         runPosted(); // may notify() and so request a frame
-        if (secondsUntilFrame() <= 0.0) renderFrame();
+        if (secondsUntilFrame() <= 0.0) {
+            renderFrame();
+            if (m_config.exitAfterFrames > 0 && ++m_framesRendered >= m_config.exitAfterFrames) m_quit = true;
+        }
     }
     {
         std::scoped_lock lock{m_postMutex};
@@ -302,6 +306,11 @@ int Engine::run() {
     m_state = nullptr;
     m_window.destroy();
     clearFontLibrary();
+    // A smoke run (exitAfterFrames) fails when the script reported an error.
+    if (m_config.exitAfterFrames > 0 && !luaui::errors().empty()) {
+        log::error("exiting after {} frames with script errors", m_framesRendered);
+        return 1;
+    }
     return 0;
 }
 

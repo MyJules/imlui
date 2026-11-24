@@ -151,8 +151,9 @@ StatCard { title = "Frame rate", value = function() return ("%.0f fps"):format(f
 
 Scripts, fonts and data files are **resources**, named `prefix:/path`: `app:/main.lua` and the files next to it
 belong to the app, `imlui:/imlui.lua` and `imlui:/fonts/...` to the library. In a dev build `app:/` is the script's
-folder on disk. Names use forward slashes; `.` and `..` work, but `..` can't leave the prefix, and OS paths
-(`C:/x`, `/etc/x`) are not resource names.
+folder on disk. In a shipped app the files can be embedded in the executable or packed into a `.pak` archive next
+to it; the names stay the same, and files on disk override packed ones. Names use forward slashes; `.` and `..`
+work, but `..` can't leave the prefix, and OS paths (`C:/x`, `/etc/x`) are not resource names.
 
 A relative name is resolved against the folder of the **script that makes the call**: in `app:/pages/home.lua`,
 `"icons/x.svg"` is `app:/pages/icons/x.svg` and `"../data.json"` is `app:/data.json`. Full names work anywhere.

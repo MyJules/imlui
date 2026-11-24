@@ -503,15 +503,29 @@ the singletons back at it.
 ## Resources and the host config
 
 The engine loads every file through `EngineConfig::resources` (see [Architecture](architecture.md#resources)).
-`defaultConfig` mounts `imlui:/` on `lua/`, `imlui:/fonts/` on `fonts/` next to the executable and `app:/` on the
-script's folder, and sets `entry` to `app:/<script file name>`. A host can mount more, before `run()`, on the config
-or through `Engine::resources()`. A later mount overrides files of an earlier one at the same names:
+`defaultConfig` mounts the library's embedded files (`imlui:/`, `imlui:/fonts/`) and the host's embedded app files
+(its `mountApp` argument), then every `*.pak` next to the executable, then the folders that exist: `imlui:/` on
+`lua/`, `imlui:/fonts/` on `fonts/` next to the executable and `app:/` on the script's folder. It sets `entry` to
+`app:/<script file name>`. A host can mount more, before `run()`, on the config or through `Engine::resources()`. A
+later mount overrides files of an earlier one at the same names:
 
 ```cpp
 imlui::EngineConfig config = imlui::defaultConfig(argc, argv, IMLUI_SOURCE_DIR);
 config.resources.mount("app:/", std::make_shared<imlui::DirectoryMount>("overrides")); // loose files win
 config.resources.mount("plugin:/", std::make_shared<imlui::DirectoryMount>("plugins/charts"));
 imlui::Engine engine{std::move(config)};
+```
+
+To carry files inside the executable, embed them with `imlui_add_resources` (`cmake/ImluiResources.cmake`). Each
+call generates a module `imlui.embedded.<name>` whose `mount(Resources&)` mounts them:
+
+```cmake
+imlui_add_resources(my_host NAME charts PREFIX plugin MOUNT charts BASE plugins/charts DIRECTORY .)
+```
+
+```cpp
+import imlui.embedded.charts;
+imlui::embedded::charts::mount(config.resources); // plugin:/charts/..., under any folder mounted later
 ```
 
 Scripts then use `require` and `ui.resource.read("plugin:/data.json")`. A new kind of file source implements
@@ -617,9 +631,12 @@ build/clang-debug/bin/imlui_custom_types
   `time`, `frame` and `load`, read/write `paused`, signal `onTick`, method `tick()`. A worker thread posts
   `tick()` to the main thread twice a second with `Engine::post`.
 - `CMakeLists.txt` (added by `examples/CMakeLists.txt` when `IMLUI_BUILD_EXAMPLES` is `ON`, the default) lists
-  both module files in the target's own `CXX_MODULES` file set, links `imlui`, and copies `lua/`, the fonts and
-  `main.lua` (to `examples/custom_types/main.lua`) next to the binary. A new example with C++ follows the same
-  pattern: a folder with its own `CMakeLists.txt`, plus one `add_subdirectory` line in `examples/CMakeLists.txt`.
+  both module files in the target's own `CXX_MODULES` file set, links `imlui`, and embeds `main.lua` with
+  `imlui_add_resources(imlui_custom_types NAME custom_types PREFIX app ...)`. `main.cpp` passes
+  `imlui::embedded::custom_types::mount` to `defaultConfig`, so the binary runs on its own (the library embeds its
+  Lua and fonts). Dev builds mount `examples/custom_types/` from the source tree over it, so `main.lua`
+  hot-reloads. A new example with C++ follows the same pattern: a folder with its own `CMakeLists.txt`, plus one
+  `add_subdirectory` line in `examples/CMakeLists.txt`.
 
 ## Reference
 
