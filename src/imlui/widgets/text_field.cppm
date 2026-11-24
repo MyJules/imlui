@@ -11,6 +11,7 @@ import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.widgets.common;
 import imlui.widgets.field;
+import imlui.ui.frame_request;
 
 export namespace imlui::md {
 
@@ -46,6 +47,7 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
     ImGui::PushID(id);
     ImGuiStorage* st = ImGui::GetStateStorage();
     const ImGuiID focusKey = ImGui::GetID("##focused"), revealKey = ImGui::GetID("##reveal");
+    const ImGuiID clickFocusKey = ImGui::GetID("##clickFocus");
     const bool focused = st->GetBool(focusKey, false);
     bool reveal = st->GetBool(revealKey, false);
     std::string_view trailing = o.trailingIcon;
@@ -80,6 +82,10 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
     ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackResize;
     if (o.password && !reveal) flags |= ImGuiInputTextFlags_Password;
     if (o.readOnly) flags |= ImGuiInputTextFlags_ReadOnly;
+    if (st->GetBool(clickFocusKey, false)) {
+        st->SetBool(clickFocusKey, false);
+        ImGui::SetKeyboardFocusHere();
+    }
     if (o.multiline) {
         res.changed = ImGui::InputTextMultiline("##input", value.data(), value.capacity() + 1,
                                                 {f.inputW, h - inputY - dp(8)}, flags, field::inputResizeCallback,
@@ -100,11 +106,14 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
     ImGui::PopFont();
     st->SetBool(focusKey, active);
 
-    // Clicking anywhere in the container focuses the input.
+    // Clicking anywhere in the container (but the trailing icon) focuses the input, on the next frame.
     if (!active && !dis && ImGui::IsMouseHoveringRect(f.p, {f.p.x + w, f.p.y + h})) {
         hovered = true;
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive()) {
-            ImGui::SetCursorScreenPos({f.inputX, f.p.y + inputY});
+        const bool onTrailing = trail && ImGui::GetMousePos().x >= f.p.x + w - dp(50);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive() && !onTrailing &&
+            ImGui::IsWindowHovered()) {
+            st->SetBool(clickFocusKey, true);
+            requestFrame();
         }
     }
     if (trail) {

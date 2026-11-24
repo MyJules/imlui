@@ -70,7 +70,8 @@ bool spinBox(const char* id, double* v, double vmin, double vmax, double step, i
     if (iconButton("##inc", "add")) { *v += step; changed = true; }
     ImGui::EndDisabled();
     ImGui::PopStyleVar();
-    if (changed) *v = std::clamp(*v, vmin, vmax);
+    // from > to (or a NaN bound) is an empty range: like the Slider, leave the value alone instead of clamping.
+    if (changed && vmin <= vmax) *v = std::clamp(*v, vmin, vmax);
 
     ImGui::SetCursorScreenPos(f.p);
     ImGui::Dummy({w, h});

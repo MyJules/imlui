@@ -91,7 +91,11 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
         o.leadingIcon = "tag";
         auto r = textField("##hex", buf, o);
         if (r.changed)
-            if (auto nc = parseHex(buf)) { *c = *nc; changed = true; }
+            if (auto nc = parseHex(buf)) {
+                // #RGBA / #RRGGBBAA parse with an alpha, which only an alpha picker keeps.
+                *c = alpha ? *nc : nc->withAlpha(1.0f);
+                changed = true;
+            }
         ImGui::EndPopup();
     }
     ImGui::PopID();

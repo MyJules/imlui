@@ -145,6 +145,34 @@ TEST_F(DataTest, TableRowClickWritesBackAndEmitsRowClicked) {
     run(R"(assert(got == 2, tostring(got)))");
 }
 
+TEST_F(DataTest, TableRowsThatArentListsRenderEmptyAndAreReported) {
+    run(R"(root = Probe { Table { columns = { "A", "B" }, rows = { "a", { "x", "y" }, 3 }, outlined = false } })");
+    frames(2);
+    EXPECT_NEAR(probe().max().y - probe().min().y, 56.0f + 3 * 52.0f, 2.0f); // every row keeps its place
+    const auto& errors = luaui::errors();
+    ASSERT_EQ(errors.size(), 2u); // reported once each, not every frame
+    EXPECT_NE(errors[0].find("rows[1]"), std::string::npos) << errors[0];
+    EXPECT_NE(errors[1].find("rows[3]"), std::string::npos) << errors[1];
+}
+
+TEST_F(DataTest, TableColumnsAreCappedAtImGuisLimit) {
+    run(R"(
+        local columns, row = {}, {}
+        for i = 1, 600 do columns[i] = "c" .. i; row[i] = i end
+        root = Probe { Table { columns = columns, rows = { row }, outlined = false } })");
+    frames(2);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find("at most 511"), std::string::npos) << luaui::errors()[0];
+}
+
+TEST_F(DataTest, PlotOfLargeOrConstantValuesDraws) {
+    // A float `max = min + 1` doesn't change 1e9, and the axis math took log10(0).
+    run(R"(root = Probe { Plot { values = { 1e9, 1e9, 1e9 } }, Plot { values = { 5, 5 }, min = 3, max = 3 },
+                         Plot { values = { 0 / 0, 1, 2 } }, Plot { values = { 3e38, -3e38 } } })");
+    frames(2);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ------------------------------------------------------------------ Canvas
 
 TEST_F(DataTest, CanvasPaintsWithThePainterAndEmitsClickedInDp) {

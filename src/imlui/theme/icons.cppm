@@ -18,7 +18,7 @@ void loadIcons(const Resources& resources);
 /// The icon font, or nullptr if it could not be loaded.
 [[nodiscard]] ImFont* iconFont();
 
-/// UTF-8 for a Material icon name ("home", "add", ...); empty if unknown.
+/// UTF-8 for a Material icon name ("home", "add", ...); empty if unknown or beyond Unicode.
 [[nodiscard]] std::string iconText(std::string_view name);
 
 [[nodiscard]] bool hasIcon(std::string_view name);
@@ -91,8 +91,13 @@ std::string iconText(std::string_view name) {
     } else if (c < 0x800) {
         out += static_cast<char>(0xC0 | (c >> 6));
         out += static_cast<char>(0x80 | (c & 0x3F));
-    } else {
+    } else if (c < 0x10000) {
         out += static_cast<char>(0xE0 | (c >> 12));
+        out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (c & 0x3F));
+    } else if (c < 0x110000) {
+        out += static_cast<char>(0xF0 | (c >> 18));
+        out += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
         out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
         out += static_cast<char>(0x80 | (c & 0x3F));
     }

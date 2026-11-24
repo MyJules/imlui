@@ -14,10 +14,11 @@ export namespace imlui {
 /// Asks for a frame as soon as possible.
 void requestFrame();
 
-/// Asks for a frame `seconds` from now (<= 0 means as soon as possible).
+/// Asks for a frame `seconds` from now (<= 0 means as soon as possible). NaN and +infinity are ignored.
 void requestFrameAfter(double seconds);
 
-/// Asks for frames continuously for the next `seconds` (the settle period after input).
+/// Asks for frames continuously for the next `seconds` (the settle period after input). NaN and infinities are
+/// ignored.
 void requestFramesFor(double seconds);
 
 /// Seconds until a frame is due: 0 when one is due now, +infinity when nothing is pending.
@@ -76,24 +77,27 @@ void requestFrame() {
 }
 
 void requestFrameAfter(double seconds) {
+    if (std::isnan(seconds) || seconds == infinity) return;
     if (seconds <= 0) {
         requestFrame();
         return;
     }
     const double due = clockNow() + seconds;
-    auto it = std::lower_bound(pending.begin(), pending.end(), due - mergeWindow);
-    if (it != pending.end() && *it <= due + mergeWindow) return; // already covered
+    const auto at = std::lower_bound(pending.begin(), pending.end(), due - mergeWindow) - pending.begin();
+    const auto index = static_cast<std::size_t>(at);
+    if (index < pending.size() && pending[index] <= due + mergeWindow) return; // already covered
     if (pending.size() >= maxPending) {
         // Keep the earliest ones; a requester that wants a later frame re-asks once those are served.
-        if (it == pending.end()) return;
-        pending.pop_back();
+        if (index == pending.size()) return;
+        pending.pop_back(); // invalidates iterators: insert by index
     }
-    const bool earliest = it == pending.begin();
-    pending.insert(it, due);
+    const bool earliest = index == 0;
+    pending.insert(pending.begin() + at, due);
     if (earliest && !frameNow) wake();
 }
 
 void requestFramesFor(double seconds) {
+    if (!std::isfinite(seconds)) return;
     const double until = clockNow() + seconds;
     if (until <= continuousUntil) return;
     const bool wasIdle = clockNow() >= continuousUntil;

@@ -87,7 +87,7 @@ void Window::declare(TypeBuilder<Window>& type) {
 
 void Window::render(Frame& frame) {
     if (!m_open) return;
-    const std::string title = Frame::labelId(m_title, "win");
+    const std::string title = md::scopedWindowName(m_title, "win");
     ImGui::SetNextWindowPos({frame.dp(m_x), frame.dp(m_y)}, ImGuiCond_FirstUseEver);
     if (m_width > 0 || m_height > 0)
         ImGui::SetNextWindowSize({frame.dp(m_width), frame.dp(m_height)}, ImGuiCond_FirstUseEver);

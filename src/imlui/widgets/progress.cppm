@@ -77,9 +77,12 @@ void circularProgress(float fraction, float diameter, float thickness) {
         if (f < 1.0f) arc(end + gapA, top + 2 * pi - (f > 0 ? gapA : 0.0f), s.secondaryContainer);
     } else {
         requestFrame();
-        float t = static_cast<float>(ImGui::GetTime());
-        float a0 = t * 5.0f;
-        float span = 0.35f + 0.5f * (1.0f + std::sin(t * 2.6f)) * pi * 0.65f;
+        // The periodic math in double: a float time loses the sub-frame precision after a few hours.
+        constexpr double turn = 2.0 * std::numbers::pi;
+        const double t = ImGui::GetTime();
+        const auto a0 = static_cast<float>(std::fmod(t * 5.0, turn));
+        const auto wave = static_cast<float>(std::sin(std::fmod(t * 2.6, turn)));
+        const float span = 0.35f + 0.5f * (1.0f + wave) * pi * 0.65f;
         arc(a0, a0 + span, s.primary);
     }
 }

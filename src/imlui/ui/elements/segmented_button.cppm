@@ -53,10 +53,10 @@ void SegmentedButton::render(Frame& frame) {
     int cur = static_cast<int>(m_currentIndex) - 1;
     if (md::segmented("##seg", m_model, &cur, frame.size("width"), m_icons)) {
         m_currentIndex = static_cast<double>(cur + 1);
-        notify("currentIndex");
-        // Copied first: the handler's own changes can't reach m_model before the next sync, but a method
-        // call on the element syncs it.
+        // Copied before notify(): its handler (onCurrentIndexChanged, a bound setter) may replace the model, and a
+        // method call on the element syncs the new one into m_model.
         const std::string text = m_model[static_cast<std::size_t>(cur)];
+        notify("currentIndex");
         emit("onActivated", static_cast<double>(cur + 1), text);
     }
 }

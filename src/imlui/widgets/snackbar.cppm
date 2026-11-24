@@ -39,7 +39,8 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {dp(16), dp(4)});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {dp(8), 0});
-    ImGui::Begin("##imlui_snackbar", nullptr,
+    const std::string name = scopedWindowName("", "snackbar");
+    ImGui::Begin(name.c_str(), nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
     ImGui::PopStyleVar(5);

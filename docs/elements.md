@@ -170,7 +170,8 @@ The root element. It fills the native window, with no decoration, and stacks its
 ### Window
 
 A floating ImGui window with Material surface colors (`surfaceContainerLow`, an `outlineVariant` border). It
-stacks its children. Non-visual.
+stacks its children. Non-visual. Each `Window` element is its own ImGui window, which keeps its position and size
+when the title changes.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
@@ -189,7 +190,8 @@ stacks its children. Non-visual.
 ### Dialog
 
 A Material basic dialog: modal, centered over a scrim, `extraLarge` corners, a `headlineSmall` title. Escape
-closes it. It stacks its children. Non-visual.
+closes it. It stacks its children. Non-visual. A dialog may open another one from its content: the nested dialog
+shows above it, and Escape closes the top-most dialog (or a menu opened from it) first.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
@@ -277,7 +279,7 @@ non-visual children take no cell.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `columns` | integer | `2` | Column count (at least 1). |
+| `columns` | integer | `2` | Column count, 1 to 511 (ImGui's table limit). A larger value is reported as a script error and capped. |
 | `spacing` | number | `8` | Gap between cells (dp). |
 | `border` | bool | `false` | Cell borders. |
 | `width` | size | `0` (fill) | *Raw.* |
@@ -831,7 +833,7 @@ A numeric field (56dp) with decrement and increment icon buttons.
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `value` | number | `0` | **two-way.** Clamped to the range. |
-| `from`, `to` | number | `-1e9`, `1e9` | Range. |
+| `from`, `to` | number | `-1e9`, `1e9` | Range. With `from > to` the range is empty and the buttons don't clamp. |
 | `stepSize` | number | `1` | Button step. |
 | `decimals` | integer | `0` | Shown decimals. |
 | `label` | string | `""` | Floating label. |
@@ -844,7 +846,7 @@ A numeric field (56dp) with decrement and increment icon buttons.
 ### TextField / TextArea
 
 A Material text field (56dp) with a floating label. `TextArea` extends `TextField`: the same props and signals,
-multi-line.
+multi-line. Clicking anywhere in the container (but the trailing icon) focuses the input.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
@@ -898,7 +900,7 @@ A swatch with the hex value. Clicking it opens a picker popup with a hue bar and
 |---|---|---|---|
 | `color` | color | — | **two-way.** Any color spec; written back as `"#RRGGBB"` (`"#RRGGBBAA"` with alpha). Unset shows white. |
 | `label` | string | `""` | |
-| `alpha` | bool | `false` | Adds an alpha bar. |
+| `alpha` | bool | `false` | Adds an alpha bar. Without it the color stays opaque, also when the hex field gets `#RGBA` or `#RRGGBBAA`. |
 | `width` | size | `0` (natural) | *Raw.* |
 
 **Signals:** `onColorChanged(self, hex)`.
@@ -959,8 +961,8 @@ A Material data table: a 56dp header and selectable rows, inside an outlined car
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `columns` | list of strings | `{}` | Header labels; sets the column count. Nothing is drawn without columns. |
-| `rows` | list of lists | — | *Raw.* Cell values, converted to strings (`nil` is empty). |
+| `columns` | list of strings | `{}` | Header labels; sets the column count. Nothing is drawn without columns. At most 511 are shown (ImGui's table limit); more are reported as a script error. |
+| `rows` | list of lists | — | *Raw.* Cell values, converted to strings (`nil` is empty). A row that isn't a list draws empty and is reported as a script error. |
 | `currentRow` | integer | `0` | **two-way.** The selected row; `0` means none. |
 | `rowHeight` | number | `52` | Row height (dp). |
 | `outlined` | bool | `true` | Wraps the table in an outlined card. |

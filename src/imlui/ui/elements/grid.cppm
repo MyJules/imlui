@@ -5,6 +5,7 @@ import std;
 
 import lua;
 import imgui;
+import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.renderer;
 import imlui.types.element;
@@ -14,7 +15,7 @@ import imlui.types.type_builder;
 export namespace imlui {
 
 /// A table-based grid: the children fill `columns` equal-width cells per row. A hidden child keeps its empty
-/// cell; non-visual children take none.
+/// cell; non-visual children take none. At most 511 columns (ImGui's limit); more are reported.
 ///
 /// Props:   columns = 2, spacing = 8, border = false
 /// Raw:     width
@@ -43,6 +44,12 @@ module :private;
 
 namespace imlui {
 
+namespace {
+
+constexpr int maxColumns = 511; // BeginTable() asserts columns < IMGUI_TABLE_MAX_COLUMNS (512)
+
+} // namespace
+
 void Grid::declare(TypeBuilder<Grid>& type) {
     type.property("columns", &Grid::columns, &Grid::setColumns)
         .property("spacing", &Grid::spacing, &Grid::setSpacing)
@@ -50,7 +57,9 @@ void Grid::declare(TypeBuilder<Grid>& type) {
 }
 
 void Grid::render(Frame& frame) {
-    const int cols = std::max(1, m_columns);
+    if (m_columns > maxColumns)
+        luaui::reportError(std::format("Grid: columns = {}, at most {} are allowed", m_columns, maxColumns));
+    const int cols = std::clamp(m_columns, 1, maxColumns);
     ImGuiTableFlags f = ImGuiTableFlags_SizingStretchSame;
     if (m_border) f |= ImGuiTableFlags_Borders;
     const float pad = frame.dp(m_spacing) * 0.5f;

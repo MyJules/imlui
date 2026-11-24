@@ -32,6 +32,56 @@ module :private;
 
 namespace imlui::md {
 
+namespace {
+
+struct AxisRange {
+    float min, max;
+    int divisions;
+};
+
+/// The value range of the y axis, always with max > min as floats. Computed in double: for large values a float
+/// `max = min + 1` doesn't change max, and the axis math would take log10(0).
+AxisRange axisRange(const std::vector<float>& values, const ChartOptions& o) {
+    double lo = static_cast<double>(o.min), hi = static_cast<double>(o.max);
+    if (o.autoRange) {
+        lo = std::numeric_limits<double>::infinity();
+        hi = -lo;
+        for (const float v : values)
+            if (std::isfinite(v)) {
+                lo = std::min(lo, static_cast<double>(v));
+                hi = std::max(hi, static_cast<double>(v));
+            }
+        if (lo > hi) lo = hi = 0.0; // no finite values
+        if (o.bars) lo = std::min(lo, 0.0);
+    }
+    if (!std::isfinite(lo) || !std::isfinite(hi)) {
+        lo = 0.0;
+        hi = 1.0;
+    }
+    if (hi <= lo) hi = lo + std::max(1.0, std::fabs(lo) * 1e-3);
+    // A span below float precision at this magnitude would collapse when the range goes back to float.
+    hi = std::max(hi, lo + std::max(std::fabs(lo), std::fabs(hi)) * 1e-5);
+    int divisions = 4;
+    if (o.autoRange) {
+        // "Nice" axis: step of 1, 2, 2.5 or 5 x 10^n, range snapped to whole steps.
+        const double raw = (hi - lo) / 4.0;
+        const double mag = std::pow(10.0, std::floor(std::log10(raw)));
+        const double norm = raw / mag;
+        const double step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
+        lo = std::floor(lo / step) * step;
+        hi = std::ceil(hi / step) * step;
+        if (hi <= lo) hi = lo + step;
+        divisions = std::max(1, static_cast<int>(std::lround((hi - lo) / step)));
+    }
+    constexpr auto floatMax = static_cast<double>(std::numeric_limits<float>::max());
+    if (lo < -floatMax || hi > floatMax) return {0.0f, 1.0f, 4}; // beyond float's range
+    const auto mn = static_cast<float>(lo), mx = static_cast<float>(hi);
+    if (mx <= mn) return {0.0f, 1.0f, 4};
+    return {mn, mx, divisions};
+}
+
+} // namespace
+
 void chart(const char* id, const std::vector<float>& values, const ChartOptions& o) {
     const Scheme& s = scheme();
     const float w = itemWidth(o.width, dp(320));
@@ -42,25 +92,9 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const Color c = o.color.value_or(s.primary);
 
-    float mn = o.min, mx = o.max;
-    if (o.autoRange && !values.empty()) {
-        mn = *std::min_element(values.begin(), values.end());
-        mx = *std::max_element(values.begin(), values.end());
-        if (o.bars) mn = std::min(mn, 0.0f);
-    }
-    if (mx <= mn) mx = mn + 1;
-    // "Nice" axis: step of 1, 2, 2.5 or 5 x 10^n, range snapped to whole steps.
-    int divisions = 4;
-    if (o.autoRange) {
-        float raw = (mx - mn) / 4.0f;
-        float mag = std::pow(10.0f, std::floor(std::log10(raw)));
-        float norm = raw / mag;
-        float step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5f ? 2.5f : norm <= 5 ? 5 : 10) * mag;
-        mn = std::floor(mn / step) * step;
-        mx = std::ceil(mx / step) * step;
-        if (mx <= mn) mx = mn + step;
-        divisions = std::max(1, static_cast<int>(std::lround((mx - mn) / step)));
-    }
+    const AxisRange axis = axisRange(values, o);
+    const float mn = axis.min, mx = axis.max;
+    const int divisions = axis.divisions;
 
     const float gutter = dp(40), top = p.y + (o.title.empty() ? dp(8) : dp(32)), bottom = p.y + h - dp(8);
     const float x0 = p.x + gutter, x1 = p.x + w - dp(8);

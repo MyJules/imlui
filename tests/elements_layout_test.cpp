@@ -195,6 +195,16 @@ TEST_F(LayoutTest, GridHiddenChildKeepsItsCell) {
     EXPECT_GT(probe("c").pos().y, probe("a").pos().y); // c is in the second row, as before the port
 }
 
+TEST_F(LayoutTest, GridColumnsAreCappedAtImGuisLimit) {
+    run(R"(
+        a = Probe {} b = Probe {}
+        root = Grid { columns = 100000, a, b })");
+    m_h.renderFrames("root", 2);
+    EXPECT_FLOAT_EQ(probe("b").pos().y, probe("a").pos().y);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find("at most 511"), std::string::npos) << luaui::errors()[0];
+}
+
 // ------------------------------------------------------------ ScrollView / ListView
 
 TEST_F(LayoutTest, ScrollViewDefaultsPaddingAndListView) {

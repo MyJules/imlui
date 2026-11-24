@@ -15,6 +15,7 @@ import imlui.ui.elements.text_field;
 import imlui.ui.elements.text_area;
 import imlui.ui.elements.combo_box;
 import imlui.ui.elements.color_picker;
+import imlui.ui.frame_request;
 import imlui.test.headless_frame;
 import imlui.test.last_item_probe;
 
@@ -116,6 +117,19 @@ TEST_F(InputsTest, SliderReleasedOnlyAfterAChange) {
     run(R"(assert(moved == 1 and released == 1 and last == 7 and s.v == 7, moved .. " " .. released))");
 }
 
+TEST_F(InputsTest, SliderRecoversFromANaNValue) {
+    // A NaN value made animate() store a value that never converged: a frame was requested every frame.
+    run(R"(
+        s = state { v = 0 / 0 }
+        root = Probe { Slider { value = bind(s, "v"), width = 300 } })");
+    frames(5);
+    EXPECT_EQ(secondsUntilFrame(), __builtin_inf()); // nothing left to animate
+    run("s.v = 0.5");
+    frames(60); // 1 s at the harness's 60 fps: the handle settles
+    EXPECT_EQ(secondsUntilFrame(), __builtin_inf());
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ------------------------------------------------------------------ SpinBox
 
 TEST_F(InputsTest, SpinBoxPropsAndDefaults) {
@@ -155,6 +169,21 @@ TEST_F(InputsTest, SpinBoxIncrementWritesBackAndEmitsValueModified) {
     // At `to` the increment button is disabled.
     click(b.x - 2.0f - 24.0f, a.y + 28.0f);
     run(R"(assert(s.v == 5, tostring(s.v)))");
+}
+
+TEST_F(InputsTest, SpinBoxWithFromAboveToDoesntClamp) {
+    // from > to is an empty range: std::clamp(v, 5, 1) was undefined behaviour.
+    run(R"(
+        s = state { v = 3 }
+        root = Probe { SpinBox { value = bind(s, "v"), from = 5, to = 1 } })");
+    frames(2);
+    const ImVec2 a = probe().min();
+    click(a.x + 40.0f, a.y + 28.0f); // into the number, which selects it all
+    ImGui::GetIO().AddInputCharacter('7');
+    frames(2);
+    run(R"(ui.native.injectKey("Enter", true); ui.native.injectKey("Enter", false))"); // InputScalar applies it now
+    frames(3);
+    run(R"(assert(s.v == 7, tostring(s.v)))");
 }
 
 // ------------------------------------------------------------------ TextField / TextArea
@@ -219,6 +248,21 @@ TEST_F(InputsTest, TextFieldTrailingIconEmitsTrailingClicked) {
     run(R"(assert(clicks == 1, clicks))");
 }
 
+TEST_F(InputsTest, TextFieldClickInTheContainerFocusesTheInput) {
+    run(R"(
+        s = state { t = "" }
+        root = Probe { TextField { text = bind(s, "t"), width = 300 } })");
+    frames(2);
+    const ImVec2 a = probe().min();
+    // Below the input row (about 20-36 dp of the 56 dp container, without a label), inside the container.
+    click(a.x + 150.0f, a.y + 50.0f);
+    frames();
+    ImGui::GetIO().AddInputCharacter('o');
+    ImGui::GetIO().AddInputCharacter('k');
+    frames(3);
+    run(R"(assert(s.t == "ok", s.t))");
+}
+
 TEST_F(InputsTest, TextAreaIsAMultilineTextField) {
     run(R"(
         s = state { t = "first" }
@@ -275,6 +319,23 @@ TEST_F(InputsTest, ComboBoxPickingAnItemWritesBackAndEmitsActivated) {
     run(R"(assert(got == "2 b", tostring(got)))");
 }
 
+TEST_F(InputsTest, ComboBoxActivatedGetsThePickedTextWhenTheHandlerReplacesTheModel) {
+    run(R"(
+        s = state { i = 1 }
+        got = nil
+        root = Probe { ComboBox { model = { "a", "b", "c" }, currentIndex = bind(s, "i"),
+                                  onCurrentIndexChanged = function(self) self.model = {} end,
+                                  onActivated = function(_, i, text) got = i .. " " .. text end } })");
+    frames(2);
+    const ImVec2 a = probe().min(), b = probe().max();
+    click((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f); // opens the menu
+    frames(3);
+    click(a.x + 40.0f, b.y + 84.0f); // the second item
+    run(R"(assert(got == "2 b", tostring(got)))");
+    frames(2); // the empty model renders
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ------------------------------------------------------------------ ColorPicker
 
 TEST_F(InputsTest, ColorPickerPropsAndDefaults) {
@@ -307,4 +368,26 @@ TEST_F(InputsTest, ColorPickerPickingWritesBackHexAndEmitsColorChanged) {
     run(R"(assert(type(s.c) == "string" and s.c:match("^#%x%x%x%x%x%x$") and s.c ~= "#FFFFFF", tostring(s.c)))");
     run(R"(assert(got == s.c, tostring(got)))");
     run(R"(assert(calls == 1, calls))"); // once per pick
+}
+
+TEST_F(InputsTest, ColorPickerWithoutAlphaKeepsHexInputOpaque) {
+    run(R"(
+        s = state { c = "#FFFFFF" }
+        root = Probe { ColorPicker { color = bind(s, "c") } })");
+    frames(2);
+    const ImVec2 a = probe().min(), b = probe().max();
+    click((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f); // opens the picker
+    frames(3);
+    // The popup opens 4 dp below the field with 16 dp of padding. The picker's square is 240 dp less the hue bar
+    // (a frame height wide, plus the inner spacing), then a 4 dp gap and the 56 dp hex field.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float square = 240.0f - (ImGui::GetFrameHeight() + style.ItemInnerSpacing.x);
+    const float hexTop = b.y + 4.0f + 16.0f + square + style.ItemSpacing.y + 4.0f + style.ItemSpacing.y;
+    click(a.x + 16.0f + 120.0f, hexTop + 28.0f);
+    run(R"(ui.native.injectKey("A", true, true); ui.native.injectKey("A", false))");
+    frames(3);
+    for (const char ch : std::string_view{"#11223380"})
+        ImGui::GetIO().AddInputCharacter(static_cast<unsigned>(ch));
+    frames(3);
+    run(R"(assert(s.c == "#112233", tostring(s.c)))");
 }
