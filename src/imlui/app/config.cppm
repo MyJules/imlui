@@ -56,8 +56,8 @@ int mountPaks(Resources& resources, const std::filesystem::path& folder, std::st
 ///
 /// The entry is `app:/main.lua`. A script given as argv[1] replaces the app: nothing above is mounted at `app:/`,
 /// the script's folder is mounted there instead, and the entry is `app:/<file name>`. A relative argv[1] is resolved
-/// against the current folder, or the executable's folder when it doesn't exist there (the Lua-only examples are
-/// copied next to imlui_app, so `imlui_app examples/counter/main.lua` works from anywhere).
+/// against the current folder, or the executable's folder when it doesn't exist there (so scripts shipped next to
+/// the executable, `my_app scripts/tool.lua`, run from anywhere).
 [[nodiscard]] EngineConfig defaultConfig(int argc, char** argv, std::vector<ResourcePackage> app = {});
 
 /// defaultConfig() with the packages of several embedded modules, in order:

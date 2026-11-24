@@ -1,6 +1,8 @@
-# Warning policy and debug hardening for imlui's own targets (imlui, imlui_app, imlui_tests).
+# Warning policy and debug hardening for imlui's own targets (imlui, the tools, the tests), and for an app's targets:
+# an app that adds imlui as a subproject calls these on its own targets too.
 # Vendored code in external/ is never passed through here; it keeps its own flags.
 # See CODE_STYLE.md, "Warnings and compiler checks".
+include_guard(GLOBAL)
 
 # imlui_set_warnings(<target>)
 #   Zero tolerance: every warning is an error. Third-party headers reach our targets as SYSTEM

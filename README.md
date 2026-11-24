@@ -25,14 +25,37 @@ Full docs are in [`docs/`](docs/README.md): [getting started](docs/getting-start
 [registering C++ types](docs/extending.md),
 [theming](docs/theming.md), [development](docs/development.md) and [status / changelog](docs/changelog.md).
 
-## Build (clang + Ninja)
+## Using it
+
+imlui is a library: an app vendors this repository as a git submodule and adds it with `add_subdirectory`. The
+[imlui-gallery](docs/getting-started.md#the-example-app-imlui-gallery) repository is the example app (every element,
+a live theme editor, and C++ types). In short ([Getting started](docs/getting-started.md) has the details):
+
+```cmake
+add_subdirectory(vendor/imlui)                          # git submodule add -b material-ui <url> vendor/imlui
+add_executable(my_app src/main.cpp)
+target_link_libraries(my_app PRIVATE imlui)
+imlui_set_warnings(my_app)
+imlui_set_hardening(my_app)
+imlui_add_resources(my_app resources.lua NAME my_app)   # app/main.lua etc., embedded as app:/
+```
+
+```cpp
+import imlui;
+import imlui.embedded.my_app;
+
+int main(int argc, char** argv) {
+    imlui::Engine engine{imlui::defaultConfig(argc, argv, imlui::embedded::my_app::packages())};
+    return engine.run();
+}
+```
+
+## Build and test the library (clang + Ninja)
 
 ```
 cmake --preset clang-debug
 cmake --build build/clang-debug
-build/clang-debug/bin/imlui_app                      # gallery (examples/gallery/main.lua)
-build/clang-debug/bin/imlui_app examples/counter/main.lua
-build/clang-debug/bin/imlui_custom_types             # C++ element types and a singleton (docs/extending.md)
+ctest --preset clang-debug
 ```
 
 Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3, stb_image 2.34,
@@ -46,9 +69,9 @@ ImGui 1.92 rasterizes glyphs on demand, so every text style and icon size stays 
 when the theme's `fontScale` changes.
 
 Scripts **hot-reload** when you save any `.lua` file next to the script (or a file it read). In dev builds
-(`IMLUI_DEV_PATHS=ON`, the default) every embedded block also knows its source folder, so
-`lua/` and the gallery are read from the source tree and you don't need to rebuild. Hosts name no file paths: the
-app is the resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded::gallery::packages())`.
+(`IMLUI_DEV_PATHS=ON`, the default) every embedded block also knows its source folder, so `lua/` and the app's
+scripts are read from the source tree and you don't need to rebuild. Hosts name no file paths: the app is the
+resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded::my_app::packages())`.
 
 ## Layout
 
@@ -63,13 +86,13 @@ app is the resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlu
 | `src/imlui/ui/elements/` | `imlui.ui.elements.*`: the built-in elements, one typed `Element` class per module (`button.cppm`, `row.cppm`, ...), and `registerBuiltinTypes` (`builtin.cppm`) |
 | `src/imlui/types/` | `imlui.types.*`: the C++ type system: `ScriptObject`, `Element`, `Frame`, `TypeBuilder`, `LuaConvert`, `TypeRegistry` |
 | `src/imlui/resources/` | `imlui.resources*`: resource names (`app:/main.lua`), the `Mount` interface, `DirectoryMount`, `EmbeddedMount`, `PakMount` and the `.pak` format, `Resources` (stacked mounts) |
-| `tools/` | build-time tools: `imlui_rc` (embeds the files a Lua resource manifest lists, for `imlui_add_resources`) and `imlui_pack` (builds `.pak` archives, `imlui_add_pak`); `cmake/ImluiResources.cmake` |
+| `tools/` | build-time tools: `imlui_rc` (embeds the files a Lua resource manifest lists, for `imlui_add_resources`) and `imlui_pack` (builds `.pak` archives, `imlui_add_pak`) |
+| `cmake/` | the helpers an app calls after `add_subdirectory`: `imlui_add_resources`/`imlui_add_pak` (`ImluiResources.cmake`), `imlui_set_warnings`/`imlui_set_hardening` (`ImluiWarnings.cmake`), sanitizers, the `tidy` target |
 | `resources.lua` | the library's resource manifest: `lua/` at `imlui:/`, the fonts at `imlui:/fonts/` |
 | `src/imlui/app/` | `imlui.app.*`: engine (window, Lua state, frame loop, hot reload) and its config |
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
-| `tests/` | GoogleTest unit tests (`ctest --preset clang-debug`) |
+| `tests/` | GoogleTest unit tests and the smoke test (`ctest --preset clang-debug`); `smoke_host/` is a tiny test app host, `data/` the fixtures (`smoke_app/`, test images) |
 | `lua/imlui.lua` | the DSL: elements, `state`, `bind`, `Repeater`, `theme`, timers |
-| `examples/` | one self-contained folder per example ([examples/README.md](examples/README.md)): `gallery/` (every element and a live theme editor, with the `StatCard` component), `counter/`, `custom_types/` (the `imlui_custom_types` app: a C++ `Gauge` element, a `backend` singleton and its `main.lua`) |
 
 ## Concepts
 

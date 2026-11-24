@@ -64,7 +64,7 @@ Text { text = function() return ("load %.0f%%"):format(backend.load * 100) end }
 backend.onLoadChanged = function(v) print("load", v) end
 ```
 
-A complete, runnable version is the [`imlui_custom_types` example](#the-example-app).
+A complete, runnable version is in the [example app](#the-example-app), imlui-gallery.
 
 ## Contents
 
@@ -623,34 +623,34 @@ Registering a type under a built-in's name replaces the built-in: the last regis
 
 ## The example app
 
-`examples/custom_types/` is a self-contained folder with all of the example's code: `CMakeLists.txt`, `main.cpp`,
-`gauge.cppm`, `system_info.cppm` and the UI script `main.lua`. It builds the executable `imlui_custom_types`, which
-runs that `main.lua`:
+The example lives in the [imlui-gallery](getting-started.md#the-example-app-imlui-gallery) repository, an app that
+vendors imlui as a submodule. Its C++ is in `src/`, and its *C++ types* page (`app/main.lua`) uses both types:
 
 ```sh
-cmake --build build/clang-debug --target imlui_custom_types
-build/clang-debug/bin/imlui_custom_types
+cmake --preset clang-debug && cmake --build build/clang-debug    # in imlui-gallery
+build/clang-debug/bin/imlui_gallery                               # the last page: C++ types
 ```
 
-- `main.cpp` is an import-only translation unit (per CODE_STYLE). It registers the types and calls
-  `defaultConfig(argc, argv, imlui::embedded::custom_types::packages())`: no paths, the entry script is
-  `app:/main.lua`.
-- `gauge.cppm` (module `example.gauge`): **`Gauge`**, a Material arc gauge drawn with `md::strokeArc`,
+- `src/main.cpp` is an import-only translation unit (per CODE_STYLE). It calls
+  `defaultConfig(argc, argv, imlui::embedded::gallery::packages())` (no paths, the entry script is
+  `app:/main.lua`), registers `Gauge` and the `backend` singleton, and starts the singleton's worker thread.
+- `src/gauge.cppm` (module `gallery.gauge`): **`Gauge`**, a Material arc gauge drawn with `md::strokeArc`,
   `md::textTop` and `md::animate`. Properties `value`, `min`, `max`, `label`, `size`, signal `onPeak` (fired by the
   setter when the value rises past `0.9 * max`), method `reset()`, default property `value`. Clicking a gauge
   advances it by a tenth of the range and calls `notify("value")`: the first gauge is bound with
   `bind(s, "level")`, so the click writes `s.level`, and the slider and the other two gauges follow.
-- `system_info.cppm` (module `example.system_info`): **`SystemInfo`**, the singleton `backend`. Read-only
+- `src/system_info.cppm` (module `gallery.system_info`): **`SystemInfo`**, the singleton `backend`. Read-only
   `time`, `frame` and `load`, read/write `paused`, signal `onTick`, method `tick()`. A worker thread posts
-  `tick()` to the main thread twice a second with `Engine::post`.
-- `CMakeLists.txt` (added by `examples/CMakeLists.txt` when `IMLUI_BUILD_EXAMPLES` is `ON`, the default) lists
-  both module files in the target's own `CXX_MODULES` file set, links `imlui`, and embeds `main.lua`, listed in the
-  folder's `resources.lua`, with `imlui_add_resources(imlui_custom_types resources.lua)` (module
-  `imlui.embedded.custom_types`, after the folder). `main.cpp` passes
-  `imlui::embedded::custom_types::packages()` to `defaultConfig`, so the binary runs on its own (the library embeds
-  its Lua and fonts). In dev builds the package carries the folder's path, and `defaultConfig` mounts
-  `examples/custom_types/` over the embedded copy, so `main.lua` hot-reloads. A new example with C++ follows the same pattern: a folder with its own `CMakeLists.txt`, plus one
-  `add_subdirectory` line in `examples/CMakeLists.txt`.
+  `tick()` to the main thread twice a second with `Engine::post`. The gallery pauses it while another page is
+  shown, so idle pages render no frames.
+- `CMakeLists.txt` adds imlui (`add_subdirectory(vendor/imlui)`), lists both module files in the executable's own
+  `CXX_MODULES` file set, links `imlui`, applies `imlui_set_warnings`/`imlui_set_hardening`, and embeds `app/`
+  (listed in `resources.lua`) with `imlui_add_resources(imlui_gallery resources.lua NAME gallery)`. In dev builds
+  the package carries the `app/` folder's path and `defaultConfig` mounts it over the embedded copy, so the scripts
+  hot-reload.
+
+An app of your own follows the same pattern; [Getting started](getting-started.md#using-imlui-in-your-app) has the
+skeleton.
 
 ## Reference
 

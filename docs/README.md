@@ -25,11 +25,11 @@ Save the script while the app is running and it reloads immediately.
 
 | Page | What it covers |
 |---|---|
-| [Getting started](getting-started.md) | Prerequisites, building with presets, running the gallery and your own scripts, hot reload, `IMLUI_DEV_PATHS`, a first script |
+| [Getting started](getting-started.md) | Prerequisites, using imlui in your app (git submodule, `add_subdirectory`, `main.cpp`, `resources.lua`), the imlui-gallery example, hot reload, `IMLUI_DEV_PATHS`, shipping, a first script, building imlui on its own |
 | [Architecture](architecture.md) | Layers, the frame loop, property resolution, signals, inline containers, hot reload, the module map, third-party wrappers |
 | [Lua API](lua-api.md) | The script environment: `state`, `watch`, `bind`, `component`, `Repeater`/`ListView`/`If`/`Loader`, theme functions, timers, snackbar, logging, `native` |
 | [Elements](elements.md) | Every built-in element: props, defaults, signals, two-way props, common props, the Canvas painter |
-| [Registering C++ types](extending.md) | Extending imlui from C++, QML style: element types (`Element`, `TypeBuilder`, `Frame`), properties, signals, methods, singletons, `LuaConvert`, lifetime, threading, ticking elements, the built-ins as examples, the `imlui_custom_types` example |
+| [Registering C++ types](extending.md) | Extending imlui from C++, QML style: element types (`Element`, `TypeBuilder`, `Frame`), properties, signals, methods, singletons, `LuaConvert`, lifetime, threading, ticking elements, the built-ins as examples, the example in imlui-gallery |
 | [Theming](theming.md) | Material 3 scheme generation, color roles, the `theme{}` table, color specs, typography, icons, state layers |
 | [Development](development.md) | Code style, module conventions, adding elements and native functions, logging, clang-tidy, clice, tests, scripted UI tests |
 | [Status / changelog](changelog.md) | What exists today and what is in progress |

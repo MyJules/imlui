@@ -1,13 +1,14 @@
 # C++ code style
 
-These rules apply to all C++ in `src/` and `app/`. Vendored code in `external/` keeps its own style.
+These rules apply to all C++ in `src/`, `tools/` and `tests/`, and to apps built on imlui (they use
+`imlui_set_warnings` too). Vendored code in `external/` keeps its own style.
 `.clang-format` and `.clang-tidy` (naming checks) at the repo root enforce most of them.
 
 ## Language and modules
 
 - C++20, **modules only**. Headers are included only in the global module fragment
   (`module;` ... `export module x;`) of a module, and only third-party headers or the standard library.
-- `app/main.cpp` and every other non-module file use `import` only. They never `#include`.
+- An app's `main.cpp`, `tests/smoke_host/main.cpp` and every other non-module file use `import` only. They never `#include`.
   **Exception:** test files in `tests/` include `<gtest/gtest.h>`, because GoogleTest's `TEST`/`EXPECT_*` macros
   can't be exported from a module. They include nothing else and import everything they test.
 - Third-party libraries are reached through wrapper modules in `src/wrap/` (`lua`, `imgui`, `imlui.log`,
@@ -99,7 +100,7 @@ const std::string& Example::name() const { return m_name; }
 
 ## Warnings and compiler checks
 
-**Zero warnings.** Our targets (`imlui`, `imlui_app`, `imlui_tests`) build with `-Werror` and the
+**Zero warnings.** Our targets (`imlui`, the tools, `imlui_tests`, `imlui_smoke_host`, and an app's own targets) build with `-Werror` and the
 `COMPILE_WARNING_AS_ERROR` property, so any warning fails the build, in every configuration. Release can surface
 warnings Debug doesn't, so build both. The flags live in `cmake/ImluiWarnings.cmake` (`imlui_set_warnings`):
 

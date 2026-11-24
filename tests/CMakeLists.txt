@@ -15,18 +15,32 @@ imlui_set_warnings(imlui_tests)
 imlui_set_hardening(imlui_tests)
 # lua_library_test and the headless harness load lua/imlui.lua from the source tree; the harness loads the
 # Roboto fonts from external/fonts.
-target_compile_definitions(imlui_tests PRIVATE IMLUI_LUA_DIR="${CMAKE_SOURCE_DIR}/lua"
+target_compile_definitions(imlui_tests PRIVATE IMLUI_LUA_DIR="${PROJECT_SOURCE_DIR}/lua"
                                                IMLUI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
-                                               IMLUI_FONT_DIR="${CMAKE_SOURCE_DIR}/external/fonts")
-# An archive built through imlui_add_pak (examples/counter at app:/counter/, manifest data/counter_pak.lua), read
+                                               IMLUI_FONT_DIR="${PROJECT_SOURCE_DIR}/external/fonts")
+# An archive built through imlui_add_pak (the smoke app's scripts at app:/smoke/, manifest data/smoke_pak.lua), read
 # back by resources_packed_test.
-imlui_add_pak(imlui_test_pak data/counter_pak.lua OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/counter.pak)
+imlui_add_pak(imlui_test_pak data/smoke_pak.lua OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/smoke.pak)
 add_dependencies(imlui_tests imlui_test_pak)
-target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${CMAKE_CURRENT_BINARY_DIR}/counter.pak"
-                                               IMLUI_COUNTER_DIR="${CMAKE_SOURCE_DIR}/examples/counter")
+target_compile_definitions(imlui_tests PRIVATE IMLUI_TEST_PAK="${CMAKE_CURRENT_BINARY_DIR}/smoke.pak"
+                                               IMLUI_SMOKE_APP_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/smoke_app")
 
 include(GoogleTest)
 gtest_discover_tests(imlui_tests DISCOVERY_MODE PRE_TEST)
+
+# The test app host (smoke_host/main.cpp): the smoke app in data/smoke_app, embedded from its resources.lua like any
+# app's files, plus a registered C++ type (test::RenderCounter as `Probe`). Built only with the tests.
+add_executable(imlui_smoke_host smoke_host/main.cpp)
+target_sources(imlui_smoke_host
+    PRIVATE
+        FILE_SET CXX_MODULES
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/support
+        FILES support/render_counter.cppm
+)
+target_link_libraries(imlui_smoke_host PRIVATE imlui)
+imlui_set_warnings(imlui_smoke_host)
+imlui_set_hardening(imlui_smoke_host)
+imlui_add_resources(imlui_smoke_host data/smoke_app/resources.lua)
 
 # Release-style smoke runs: the executable is copied alone (with the DLLs next to it, e.g. the ASan runtime) into an
 # empty folder and started with IMLUI_DEV_PATHS=0 (no source tree) and IMLUI_EXIT_AFTER_FRAMES (quit after a few
@@ -37,7 +51,4 @@ function(imlui_add_smoke_test name target expect)
                      -DEXPECT=${expect} -P ${CMAKE_CURRENT_SOURCE_DIR}/smoke_run.cmake)
     set_tests_properties(${name} PROPERTIES TIMEOUT 120 RUN_SERIAL ON)
 endfunction()
-imlui_add_smoke_test(smoke.imlui_app imlui_app "embedded 'gallery' main.lua")
-if(TARGET imlui_custom_types)
-    imlui_add_smoke_test(smoke.imlui_custom_types imlui_custom_types "embedded 'custom_types' main.lua")
-endif()
+imlui_add_smoke_test(smoke.imlui_smoke_host imlui_smoke_host "embedded 'smoke_app (app:/)' main.lua")

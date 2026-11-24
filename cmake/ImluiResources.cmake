@@ -1,6 +1,8 @@
 # Packing resource files into an executable (imlui_add_resources) or a .pak archive (imlui_add_pak), as a resource
 # manifest lists them. The tools that do the work are built from tools/ (imlui_rc, imlui_pack). See
-# docs/architecture.md, "Resource manifests" and "Embedding and archives".
+# docs/architecture.md, "Resource manifests" and "Embedding and archives". imlui's CMakeLists.txt includes this file,
+# so an app that adds imlui as a subproject calls these functions after add_subdirectory(vendor/imlui), on its own
+# targets and manifests (relative paths are relative to the calling CMakeLists.txt).
 #
 #   imlui_add_resources(<target> <manifest> [NAME <name>])
 #
@@ -24,8 +26,9 @@
 #     Adds the target <name> (built by `all`) that writes a .pak archive with the files of <manifest>, encoded the
 #     same way and tracked the same way (dependency file, file list target <name>_list). The groups of the manifest must share a prefix: the
 #     archive is mounted at the deepest folder holding all their mount points. OUTPUT defaults to <name>.pak in the
-#     runtime output folder (bin/), where defaultConfig() mounts every *.pak it finds next to the executable, at the
-#     mount point stored in the archive.
+#     runtime output folder (CMAKE_RUNTIME_OUTPUT_DIRECTORY, else the current binary dir), where defaultConfig()
+#     mounts every *.pak it finds next to the executable, at the mount point stored in the archive.
+include_guard(GLOBAL)
 
 # The absolute path of manifest argument <manifest> (relative to the current source dir), in <out>.
 function(_imlui_manifest_path out caller manifest)
@@ -107,8 +110,10 @@ function(imlui_add_pak name manifest)
     endif()
     _imlui_manifest_path(manifest "imlui_add_pak(${name})" "${manifest}")
     set(output ${opt_OUTPUT})
-    if(NOT output)
+    if(NOT output AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
         set(output ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${name}.pak)
+    elseif(NOT output)
+        set(output ${CMAKE_CURRENT_BINARY_DIR}/${name}.pak)
     endif()
     cmake_path(ABSOLUTE_PATH output BASE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR} NORMALIZE)
     cmake_path(GET output FILENAME file)

@@ -474,8 +474,8 @@ TEST(DefaultConfig, ScriptArgumentReplacesTheApp) {
     EXPECT_TRUE(cfg.resources.exists("imlui:/imlui.lua")); // the library stays
 
     // A relative script that isn't in the current folder is looked up next to the executable.
-    dir.write("bin/examples/counter/main.lua", "return Text { text = 'next to the exe' }");
-    std::string relative = "examples/counter/main.lua";
+    dir.write("bin/scripts/hello/main.lua", "return Text { text = 'next to the exe' }");
+    std::string relative = "scripts/hello/main.lua";
     char* withRelative[] = {exe.data(), relative.data()};
     const EngineConfig next = defaultConfig(2, withRelative, {testApp(source)});
     EXPECT_EQ(next.entry, "app:/main.lua");
@@ -508,6 +508,8 @@ TEST(PakMount, OpensAnArchiveBuiltByImluiAddPak) {
     std::string error;
     const auto pak = PakMount::open(IMLUI_TEST_PAK, &error);
     ASSERT_TRUE(pak) << error;
-    EXPECT_EQ(pak->mountPoint(), "app:/counter/");
-    EXPECT_EQ(text(pak->read("main.lua")), readSource(std::string{IMLUI_COUNTER_DIR} + "/main.lua"));
+    EXPECT_EQ(pak->mountPoint(), "app:/smoke/");
+    EXPECT_EQ(text(pak->read("main.lua")), readSource(std::string{IMLUI_SMOKE_APP_DIR} + "/main.lua"));
+    EXPECT_EQ(text(pak->read("Tile.lua")), readSource(std::string{IMLUI_SMOKE_APP_DIR} + "/Tile.lua"));
+    EXPECT_FALSE(pak->exists("resources.lua")); // excluded by data/smoke_pak.lua
 }

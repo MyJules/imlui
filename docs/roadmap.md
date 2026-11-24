@@ -25,7 +25,7 @@ examples/
 ```
 
 Examples with C++ have their own `CMakeLists.txt` (`add_subdirectory`) and executable. The default script, docs
-and helper scripts follow the new paths.
+and helper scripts follow the new paths. (Since moved out: see [6. Library repository](#6-library-repository-done).)
 
 ## 2b. Type-system limitations *(done)*
 
@@ -119,6 +119,14 @@ Order, one commit per step:
    modules export `packages()`, one `ResourcePackage` per group. Dependencies through a Ninja dependency file plus a
    file list compared on every build; no configure-time globbing. A `.pak` of several groups needs one prefix and is
    mounted at their common folder.
+
+## 6. Library repository *(done)*
+
+imlui is only the library now (library, its resources, the tools, tests, docs, CMake helpers), consumable as a
+subproject (`add_subdirectory(vendor/imlui)`). There is no generic runner (`imlui_app`) and no `examples/`: the one
+example app is the separate repository imlui-gallery (the gallery plus the C++ types page), which vendors imlui as
+a git submodule. The library's smoke and `.pak` tests use their own fixtures (`tests/smoke_host/`,
+`tests/data/smoke_app/`).
 
 ## Next
 

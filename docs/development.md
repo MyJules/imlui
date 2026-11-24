@@ -6,7 +6,7 @@ The full rules are in [`CODE_STYLE.md`](../CODE_STYLE.md). `.clang-format` and `
 them. In short:
 
 - **C++20 modules only.** `#include` appears only in a module's global module fragment, and only for third-party
-  or standard headers. `app/main.cpp` uses `import` only. Test files in `tests/` are the one exception: they
+  or standard headers. `tests/smoke_host/main.cpp` (and an app's `main.cpp`) uses `import` only. Test files in `tests/` are the one exception: they
   include `<gtest/gtest.h>`, because the GoogleTest macros can't cross a module boundary, and nothing else.
 - **Third-party code goes through wrappers** in `src/wrap/` (`lua`, `imgui`, `imlui.log`,
   `imlui.platform.window`).
@@ -149,8 +149,9 @@ constructor, but a `BUILTIN` entry makes it a real `ui.*` field, so an element i
 can't shadow it. The type registry is installed before the DSL loads, so `BUILTIN` constructors of typed
 elements create their C++ instances too.
 
-**4. Docs and gallery.** Add the element to [Elements](elements.md), the README element table, and a demo in
-`examples/gallery/main.lua`.
+**4. Docs and gallery.** Add the element to [Elements](elements.md) and the README element table, and a demo to the
+gallery (`app/main.lua` in the imlui-gallery repository; see [Trying changes in an app](#trying-changes-in-an-app)),
+committed there along with the submodule update.
 
 **5. Tests.** A test file `tests/elements_<family>_test.cpp` renders it through the
 [headless frame harness](#the-headless-frame-harness): defaults, props reaching the instance, `nil` resets, two-way
@@ -185,8 +186,8 @@ conventions they share, and new built-ins follow them:
    its own members. A subclass without its own `declare` doesn't compile.
 7. **Shared state between elements** goes through a small module of its own, like `imlui.ui.navigation_scope`
    (`NavigationScope`: the navigation containers tell `NavigationItem` which style to draw in).
-8. **Test it** with the harness (`tests/elements_<family>_test.cpp`) and **compare the gallery** with the
-   screenshots from before the change, every page and a phone-sized window. Animated content (progress, canvas,
+8. **Test it** with the harness (`tests/elements_<family>_test.cpp`) and **compare the gallery** (imlui-gallery,
+   built against your checkout) with the screenshots from before the change, every page and a phone-sized window. Animated content (progress, canvas,
    chart) and timer texts differ by nature.
 
 ## Adding a native function
@@ -216,14 +217,14 @@ conventions they share, and new built-ins follow them:
 ## clang-tidy and clice
 
 - `.clang-tidy` turns on only `readability-identifier-naming`, configured for the naming rules above, and filters
-  out vendored headers. Run it on every module (`src/**/*.cppm`, `tools/**/*.cppm`) and `app/main.cpp` with the
-  `tidy` target:
+  out vendored headers. Run it on every module (`src/**/*.cppm`, `tools/**/*.cppm`) and the test host
+  (`tests/smoke_host/main.cpp`) with the `tidy` target, which exists only when imlui is the top-level project:
 
   ```sh
   cmake --build build/clang-debug --target tidy
   ```
 
-  It builds `imlui` and `imlui_app` first, then runs `clang-tidy -p build/clang-debug --warnings-as-errors=*` on
+  It builds `imlui`, `imlui_pack` and `imlui_smoke_host` first, then runs `clang-tidy -p build/clang-debug --warnings-as-errors=*` on
   each file, one Ninja command per file (so in parallel), and fails on any finding. A file is checked again when it
   or any module changed. `cmake/ImluiTidy.cmake` defines it; it's skipped when `clang-tidy` isn't found. A single
   file: `clang-tidy -p build/clang-debug src/imlui/theme/scheme.cppm`.
@@ -241,6 +242,25 @@ conventions they share, and new built-ins follow them:
 - **clice** (a C++ language server with modules support) is configured by `clice.toml` to use
   `build/clang-debug`'s compile commands. Its cache lives in `.clice/`, which is git-ignored.
 - Format with `clang-format -i <files>` (`.clang-format` at the repo root).
+
+## Trying changes in an app
+
+The library has no runner of its own: the tests cover it headlessly, and the smoke test runs `imlui_smoke_host`.
+To see a change in a real UI, build an app against your working copy. The gallery is the usual one:
+
+- **Edit inside the app's submodule.** In `imlui-gallery/vendor/imlui`, check out a branch, work and commit there,
+  and push to (or fetch from) this repository. The gallery's build picks up every change, and with
+  `IMLUI_DEV_PATHS=ON` the library's `lua/` (`vendor/imlui/lua/`) hot-reloads like the app's own scripts.
+- **Point the submodule folder at this checkout.** In the gallery, `git submodule deinit -f vendor/imlui` (empties
+  the folder), `rmdir vendor\imlui`, then `cmd /c mklink /J vendor\imlui <path to this checkout>` (a symlink
+  elsewhere) and build. Edits here, including `lua/`, show up in the running gallery at once. Before committing in
+  the gallery, put the submodule back: `rmdir vendor\imlui` (removes only the junction), then
+  `git submodule update --init`.
+
+imlui is built inside the app's build tree (`imlui-gallery/build/<preset>/vendor/imlui`), so this repository's own
+`build/` isn't involved. Once the library change is committed, update the app: `git submodule update --remote
+vendor/imlui` (or check out the commit in `vendor/imlui`), build, run, and commit the new submodule commit in the
+app.
 
 ## Building and testing
 
@@ -262,8 +282,7 @@ cmake --build --preset clang-release
 
 cmake --preset clang-asan
 cmake --build --preset clang-asan
-ctest --preset clang-asan
-build/clang-asan/bin/imlui_app      # run the gallery once under the sanitizers
+ctest --preset clang-asan           # includes the smoke test: the test host runs under the sanitizers
 ```
 
 Our targets build with a strict warning set and `-Werror`, so any warning fails the build. See
@@ -306,7 +325,7 @@ suppressions. Run `clang-asan` before merging larger changes.
   compressed files, zero-copy reads, decompression on first read, concurrent reads, bad paths, corrupt data),
   `.pak` archives written by the `imlui_pack` code (`tools::packFiles`) and read by `PakMount` (every truncation,
   a bad magic or version, an escaping path and corrupt compressed data are rejected cleanly; an archive built by
-  `imlui_add_pak` in `tests/CMakeLists.txt` opens), the override order embedded < `.pak` < directory, the library's
+  `imlui_add_pak` in `tests/CMakeLists.txt` from the smoke app, `tests/data/smoke_pak.lua`, opens), the override order embedded < `.pak` < directory, the library's
   embedded files and their packages against the sources, `defaultConfig` (release-style from embedded data alone;
   `.pak` archives in name order under the `app/` and `imlui/` override folders next to the executable; a package's
   dev source folder on top, skipped with `IMLUI_DEV_PATHS=0` or when missing; a script argument replacing every
@@ -318,11 +337,14 @@ suppressions. Run `clang-asan` before merging larger changes.
   base folder, the sandbox, bad shapes), `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: the library's embedded packages hold exactly what
   `resources.lua` lists.
-- **Smoke tests** (`smoke.imlui_app`, `smoke.imlui_custom_types`, `tests/smoke_run.cmake`) run each app like a
-  shipped release: the executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
+- **Smoke test** (`smoke.imlui_smoke_host`, `tests/smoke_run.cmake`) runs the test app host like a shipped release.
+  `imlui_smoke_host` (`tests/smoke_host/main.cpp`, built only with the tests) embeds the smoke app
+  (`tests/data/smoke_app/`: `main.lua`, a `Tile.lua` component, and a test image from a second manifest group at
+  `app:/images/`) and registers `test::RenderCounter` as `Probe`. The executable is copied alone (plus the DLLs next to it, such as the ASan runtime) into an
   empty folder under `build/<preset>/tests/smoke/` and started with `IMLUI_DEV_PATHS=0` and
   `IMLUI_EXIT_AFTER_FRAMES=5`. It must exit with 0, log that its entry script came from its embedded data, and log
-  no error. They open a window, so they need a desktop session.
+  no error. It opens a window, so it needs a desktop session. An app can reuse `tests/smoke_run.cmake` for its own
+  executable (`cmake -DEXE=... -DWORK=... -DEXPECT=... -P vendor/imlui/tests/smoke_run.cmake`).
 
 ### Environment variables
 
@@ -330,7 +352,7 @@ suppressions. Run `clang-asan` before merging larger changes.
 |---|---|
 | `IMLUI_EXIT_AFTER_FRAMES=n` | Quit after `n` rendered frames, with exit code 1 when a script error was reported (`EngineConfig::exitAfterFrames`, read by `defaultConfig`). For smoke runs. |
 | `IMLUI_DEV_PATHS=0` | Ignore the source folders compiled into a dev build's embedded packages (`ResourcePackage::sourceDir`): run from the embedded data and the files next to the executable, like a release build. |
-| `GALLERY_PAGE=n` | Open the gallery on page `n`. |
+| `GALLERY_PAGE=n` | Open the gallery (imlui-gallery) on page `n`. Read by its `main.lua`, not by imlui. |
 
 ### Resource tools
 
@@ -387,7 +409,7 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 left-button state, and an optional vertical wheel delta. `native.injectKey(key, down, ctrl?, shift?, alt?)` feeds
 a key event by name (`"Escape"`, `"Enter"`, `"Tab"`, `"A"`, `"Equal"`, ...), with the modifier states;
 `native.injectKey("Escape", true); native.injectKey("Escape", false)` presses and releases Escape over two frames. Combine it with timers to drive the real UI from a script.
-Use the `GALLERY_PAGE` environment variable to start the gallery on a given page.
+Use the `GALLERY_PAGE` environment variable to start the gallery (imlui-gallery) on a given page.
 
 ```lua
 -- click at (200, 150) half a second after start, then check the result

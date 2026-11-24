@@ -226,7 +226,7 @@ spans stay valid. Corrupt compressed data reads as a missing file and is logged.
 1. **Embedded:** the files of every `ResourcePackage` (module `imlui.resources.package`: a mount point, the files,
    a dev source folder). The library's own come first, always: `imlui:/` (`lua/`) and `imlui:/fonts/` (Roboto,
    Material Icons, the codepoints and the font licenses), the two groups of the library's manifest. Then the host's
-   packages, the `app` argument, such as `imlui::embedded::gallery::packages()`.
+   packages, the `app` argument, such as `imlui::embedded::my_app::packages()`.
 2. **Archives:** every `*.pak` next to the executable, in file name order (`mountPaks`), each at the mount point
    stored in it. An archive that can't be read is logged and skipped.
 3. **Override folders** next to the executable, named after a prefix, where they exist: `<exe folder>/app/` at
@@ -240,8 +240,7 @@ spans stay valid. Corrupt compressed data reads as a missing file and is logged.
 The entry is `app:/main.lua` (`EngineConfig::entry`, which a host can change). A script on the command line replaces
 the app: no package, archive or folder is mounted at `app:/`; the script's folder is mounted there instead (on top,
 even when it doesn't exist, so the error names it) and the entry becomes `app:/<file name>`. A relative script path
-is resolved against the current directory, then against the executable's folder, where `imlui_app`'s build copies
-the Lua-only examples.
+is resolved against the current directory, then against the executable's folder (scripts shipped next to it).
 
 So a dev build reads `lua/`, the fonts and the app from the source tree (hot reload), and a release build runs from
 its embedded data alone, while a `.pak` or loose files next to it still override single files. Hosts name no file
@@ -309,9 +308,10 @@ return {
 
 The tools evaluate manifests at build time (`imlui.tools.resource_manifest`, with `imlui.tools.glob`), through the
 `lua` wrapper module, which is its own library (`imlui_lua`) because `imlui_rc` can't link the `imlui` library it
-embeds files into. The repository has three: `resources.lua` at the root (the library: `lua/` at `imlui:/` and the
-fonts from `external/fonts/` at `imlui:/fonts/`), `examples/gallery/resources.lua` and
-`examples/custom_types/resources.lua`; `tests/data/counter_pak.lua` builds the test archive.
+embeds files into. The repository has `resources.lua` at the root (the library: `lua/` at `imlui:/` and the fonts
+from `external/fonts/` at `imlui:/fonts/`) and two test manifests: `tests/data/smoke_app/resources.lua` (the smoke
+app, embedded into `imlui_smoke_host`) and `tests/data/smoke_pak.lua` (the test archive). An app has its own, next to
+its `CMakeLists.txt`.
 
 ### Embedding and archives
 
@@ -347,7 +347,7 @@ overrides that rule for single files (true compresses any non-empty file). `lua/
 the fonts to about half.
 
 The library embeds its own files this way (`resources.lua`, module `imlui.embedded.imlui` with two packages), and so
-do `imlui_app` (the gallery, `examples/gallery/resources.lua`, as `app:/`) and `imlui_custom_types` (its `main.lua`).
+does every app (its `resources.lua`, as `app:/`) and the test host `imlui_smoke_host` (`imlui.embedded.smoke_app`).
 
 **`.pak` archives** (`imlui.resources.pak_format`) use the same encoding. The layout, with little-endian integers:
 
@@ -372,6 +372,24 @@ are stored under their folder below it (`tools::mergeGroups`). The library's man
 to the same names. Groups with different prefixes, or two groups putting a file at the same name, are an error: use
 one manifest per prefix. A version 2 with a mount point per entry wasn't worth it, since a prefix-wide archive
 already covers every folder of that prefix.
+
+## Repository layout
+
+imlui is a library repository; apps live in their own repositories and vendor it as a git submodule (see
+[Getting started](getting-started.md#using-imlui-in-your-app); [imlui-gallery](getting-started.md#the-example-app-imlui-gallery)
+is the example).
+
+| Path | What |
+|---|---|
+| `CMakeLists.txt` | The `imlui_lua` and `imlui` libraries, the tools, the tests (`IMLUI_BUILD_TESTS`, default `ON` only at the top level) and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level. |
+| `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`. The functions are global once included, so a parent project calls them after `add_subdirectory`. Each file has an include guard; an app includes `ImluiSanitizers.cmake` itself before `add_subdirectory` so its own targets are instrumented too. |
+| `src/` | The library's modules (see the module map below). |
+| `lua/` | The Lua side, embedded at `imlui:/`. |
+| `resources.lua` | The library's resource manifest. |
+| `tools/` | `imlui_rc` and `imlui_pack`, the build-time resource tools. `imlui_add_resources` and `imlui_add_pak` call them by target name, so they resolve from a parent project too. |
+| `tests/` | `imlui_tests` (GoogleTest), `support/` (test-only modules), `smoke_host/` (the test app host `imlui_smoke_host`), `data/` (fixtures: `smoke_app/`, `smoke_pak.lua`, test images), `smoke_run.cmake`. |
+| `external/` | Vendored third-party code (see [Third-party code](#third-party-code)). |
+| `docs/` | This documentation. |
 
 ## Module map (target layout)
 
@@ -508,8 +526,10 @@ See [Registering C++ types](extending.md).
 | `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `resources()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `run()` |
 | `imlui` | Umbrella for apps: `import imlui;` |
 
-`app/main.cpp` is the host. It has no `#include`, only `import imlui;` and `import imlui.embedded.gallery;`, and
-calls `Engine{defaultConfig(argc, argv, imlui::embedded::gallery::packages())}.run()`.
+The host is the app's `main.cpp`, outside this repository. It has no `#include`, only `import imlui;` and
+`import imlui.embedded.<name>;` (generated from the app's manifest), and calls
+`Engine{defaultConfig(argc, argv, imlui::embedded::<name>::packages())}.run()`, after registering its C++ types.
+The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke test.
 
 ### Generated and tool modules
 
