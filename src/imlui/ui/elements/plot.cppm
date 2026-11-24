@@ -59,6 +59,7 @@ module :private;
 namespace imlui {
 
 void Plot::declare(TypeBuilder<Plot>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("values", &Plot::values, &Plot::setValues)
         .property("kind", &Plot::kind, &Plot::setKind)
         .property("fill", &Plot::fill, &Plot::setFill)

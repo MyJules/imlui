@@ -47,6 +47,7 @@ module :private;
 namespace imlui {
 
 void Section::declare(TypeBuilder<Section>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("title", &Section::title, &Section::setTitle)
         .property("text", &Section::text, &Section::setText)
         .property("supportingText", &Section::supportingText, &Section::setSupportingText)

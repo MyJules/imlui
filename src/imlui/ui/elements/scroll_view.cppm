@@ -80,6 +80,7 @@ bool near(float a, float b) { return a - b < 0.5f && b - a < 0.5f; }
 } // namespace
 
 void ScrollView::declare(TypeBuilder<ScrollView>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("padding", &ScrollView::padding, &ScrollView::setPadding)
         .property("color", &ScrollView::color, &ScrollView::setColor)
         .property("rounding", &ScrollView::rounding, &ScrollView::setRounding)

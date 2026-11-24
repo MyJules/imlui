@@ -139,6 +139,7 @@ Every built-in element is written this way, so the built-ins are the reference e
 |---|---|
 | `render()` | Renders the child at the cursor through the renderer, with the same per-element wrapper as everywhere (see below). False if it's hidden or unknown. Afterwards a visual child is the last ImGui item (`ImGui::GetItemRectSize()`), and its size is stored for the next frame. |
 | `render(right)` | The same inside a layout box ending at screen x `right`: the child's available width (fills, `align`, text wrapping, raw ImGui item widths) is `right - cursor x`. How a layout gives a child less than its own width (a `Row` share, a column of a custom grid). |
+| `fillsWidth()` | Whether the child fills the available width: a fill or fill-minus `width` (`fillWidth`), or no `width` on a type that fills by default (`fillsWidth()` / `fillsWidthWhen()` in its `declare`). Read it before rendering to share space, like `Row`. May sync the child's properties. |
 | `isVisual()` | False for non-visual types (`Timer`, `Dialog`, ...). Layouts render those where they are and don't place, count or space them. |
 | `node()`, `type()` | The child's element table and its type name (`"Spacer"`). |
 | `id()` | A stable ImGui ID for the child in the parent's ID scope, for your own per-child state in `ImGui::GetStateStorage()`. |
@@ -146,15 +147,19 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `as<T>()` | The C++ instance of a typed child as a `T*`, with its declared properties **synced first**, so the parent reads this frame's values (`child.as<Tab>()->title()`). `nullptr` when the child isn't a typed element or not a `T`. `syncProperties()` does the sync and returns the `ScriptObject*`. |
 
 ```cpp
-void Row::render(imlui::Frame& frame) {
+// A simplified Row: each child gets an equal column of the available width, vertically centered.
+void Columns::render(imlui::Frame& frame) {
     const ImVec2 start = ImGui::GetCursorScreenPos();
+    int n = 0;
+    frame.forEachChild([&](imlui::Frame::Child& child) { n += child.isVisual() ? 1 : 0; });
+    const float colW = n > 0 ? frame.available().x / static_cast<float>(n) : 0.0f;
     float x = start.x;
     frame.forEachChild([&](imlui::Frame::Child& child) {
         if (!child.isVisual()) { child.render(); return; }   // a Timer, a Dialog, ...
         const float h = child.lastHeight();                  // measured last frame
         ImGui::SetCursorScreenPos({x, start.y + std::max(0.0f, (m_height - h) * 0.5f)});
-        child.render();
-        x += ImGui::GetItemRectSize().x + frame.dp(8);
+        child.render(x + colW);                              // fills in the child stop at its column
+        x += colW;
     });
 }
 ```
@@ -249,11 +254,17 @@ type.method("grow", imlui::overload<double>(&Shape::grow))              // doubl
     .property("size", imlui::constOverload<>(&Shape::size), imlui::overload<double>(&Shape::setSize));
 ```
 
-### `nonVisual()` and `defaultProperty(name)`
+### `nonVisual()`, `defaultProperty(name)` and `fillsWidth()`
 
 - `type.nonVisual()` makes the element take no layout space or spacing, like `Timer` or `Dialog`.
 - `type.defaultProperty("value")` lets a positional first value set the property, `Gauge { 0.5 }`, like `text`
   for `Button { "OK" }`. A table in that position is a child, not a value.
+- `type.fillsWidth()` says that an unset `width` fills the available width (the element's own default, like
+  `width = -1`), as for `Card`, `TextField` or `Slider`. A `Row` reads it **before** rendering the child and gives it
+  a share of the free width instead of letting it run to the row's edge. `type.fillsWidthWhen(pred)` decides it per
+  element from the synced instance, `pred(const T&)`: `Text` declares `.fillsWidthWhen(&Text::wrap)`, `Spacer`
+  `.fillsWidthWhen(&Spacer::fill)`. Declare it when your `render()` fills by default (`frame.resolvedWidth(
+  frame.available().x)`, `frame.size("width", -1)`); a `width` prop always wins (`Frame::Child::fillsWidth()`).
 
 ### Aliases
 

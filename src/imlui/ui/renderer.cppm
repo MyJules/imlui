@@ -34,6 +34,9 @@ public:
         /// Syncs and renders the element `node`, of a registered type. Runs inside the renderer's per-element
         /// wrapper.
         virtual void renderElement(Renderer& renderer, const luaui::Node& node) = 0;
+        /// Whether the element `node` fills the available width when its `width` is unset (its type's own default,
+        /// TypeBuilder::fillsWidth / fillsWidthWhen). May sync the element's properties.
+        [[nodiscard]] virtual bool fillsWidth(const luaui::Node& node) = 0;
 
         virtual ~Types() = default;
     };
@@ -101,6 +104,8 @@ public:
 
     /// True unless the element at `idx` is of a registered non-visual type (Timer, Dialog, ...).
     [[nodiscard]] bool isVisual(lua::State* state, int idx) const;
+    /// Whether the element at `idx` fills the available width when its `width` is unset (Types::fillsWidth).
+    [[nodiscard]] bool fillsWidth(lua::State* state, int idx);
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
     /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box).
@@ -163,6 +168,8 @@ void Renderer::renderChildren(const Node& node) {
 bool Renderer::isVisual(lua::State* state, int idx) const {
     return m_types.kind(Node{state, idx}.type()) != Types::Kind::NonVisual;
 }
+
+bool Renderer::fillsWidth(lua::State* state, int idx) { return m_types.fillsWidth(Node{state, idx}); }
 
 void Renderer::renderStack(const Node& node) {
     const auto spacing = node.number("spacing");

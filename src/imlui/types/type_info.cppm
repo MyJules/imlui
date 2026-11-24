@@ -53,6 +53,15 @@ public:
     [[nodiscard]] bool visual() const;
     void setVisual(bool visual);
 
+    /// Whether an element of this type with no `width` fills the available width (like `width = -1`): its own
+    /// default, declared with TypeBuilder::fillsWidth() / fillsWidthWhen(). Layouts that share space (Row) read it
+    /// before rendering. `object` is the synced instance; it is only looked at when a predicate was declared.
+    [[nodiscard]] bool fillsWidth(const ScriptObject* object) const;
+    /// Whether fillsWidth() needs the instance (a predicate was declared).
+    [[nodiscard]] bool fillsWidthDependsOnInstance() const;
+    void setFillsWidth(bool fills);
+    void setFillsWidthWhen(std::function<bool(const ScriptObject&)> predicate);
+
     /// The property a positional first value sets: `Gauge { 0.5 }` with defaultProperty "value".
     [[nodiscard]] const std::string& defaultProperty() const;
     void setDefaultProperty(std::string name);
@@ -81,6 +90,8 @@ private:
 
     std::string m_name;
     bool m_visual = true;
+    bool m_fillsWidth = false;
+    std::function<bool(const ScriptObject&)> m_fillsWidthWhen;
     std::string m_defaultProperty;
     std::vector<Property> m_properties;
     std::vector<Method> m_methods;
@@ -100,6 +111,19 @@ const std::string& TypeInfo::name() const { return m_name; }
 
 bool TypeInfo::visual() const { return m_visual; }
 void TypeInfo::setVisual(bool visual) { m_visual = visual; }
+
+bool TypeInfo::fillsWidth(const ScriptObject* object) const {
+    if (m_fillsWidthWhen) return object && m_fillsWidthWhen(*object);
+    return m_fillsWidth;
+}
+bool TypeInfo::fillsWidthDependsOnInstance() const { return static_cast<bool>(m_fillsWidthWhen); }
+void TypeInfo::setFillsWidth(bool fills) {
+    m_fillsWidth = fills;
+    m_fillsWidthWhen = nullptr;
+}
+void TypeInfo::setFillsWidthWhen(std::function<bool(const ScriptObject&)> predicate) {
+    m_fillsWidthWhen = std::move(predicate);
+}
 
 const std::string& TypeInfo::defaultProperty() const { return m_defaultProperty; }
 void TypeInfo::setDefaultProperty(std::string name) { m_defaultProperty = std::move(name); }

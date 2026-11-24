@@ -74,6 +74,7 @@ module :private;
 namespace imlui {
 
 void TextField::declare(TypeBuilder<TextField>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("text", &TextField::text, &TextField::setText)
         .property("label", &TextField::label, &TextField::setLabel)
         .property("placeholderText", &TextField::placeholderText, &TextField::setPlaceholderText)

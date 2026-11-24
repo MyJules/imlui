@@ -64,6 +64,7 @@ constexpr std::size_t maxColumns = 511; // BeginTable() asserts columns < IMGUI_
 } // namespace
 
 void Table::declare(TypeBuilder<Table>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("columns", &Table::columns, &Table::setColumns)
         .property("rowHeight", &Table::rowHeight, &Table::setRowHeight)
         .property("outlined", &Table::outlined, &Table::setOutlined)

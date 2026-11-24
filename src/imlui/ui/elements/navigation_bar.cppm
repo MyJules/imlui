@@ -38,6 +38,7 @@ module :private;
 namespace imlui {
 
 void NavigationBar::declare(TypeBuilder<NavigationBar>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("color", &NavigationBar::color, &NavigationBar::setColor);
 }
 

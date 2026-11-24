@@ -201,7 +201,8 @@ TEST_F(NavigationElementsTest, SpacerTakesItsSizeAndFill) {
     frames();
     EXPECT_FLOAT_EQ(rects["a"].width(), 30.0f);
     EXPECT_FLOAT_EQ(rects["a"].height(), 12.0f);
-    EXPECT_FLOAT_EQ(rects["b"].width(), 1.0f); // at least 1px
+    // `fill` is the spacer's width policy: the available width here (the window's), a share in a Row.
+    EXPECT_FLOAT_EQ(rects["b"].width(), 800.0f - 2.0f * ImGui::GetStyle().WindowPadding.x);
     EXPECT_FALSE(m_h.instance<Spacer>("a")->fill());
     EXPECT_TRUE(m_h.instance<Spacer>("b")->fill());
     expectNoErrors();

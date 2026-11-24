@@ -49,6 +49,7 @@ module :private;
 namespace imlui {
 
 void NavigationItem::declare(TypeBuilder<NavigationItem>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("icon", &NavigationItem::icon, &NavigationItem::setIcon)
         .property("text", &NavigationItem::text, &NavigationItem::setText)
         .property("selected", &NavigationItem::selected, &NavigationItem::setSelected)

@@ -44,6 +44,7 @@ module :private;
 namespace imlui {
 
 void TabBar::declare(TypeBuilder<TabBar>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("currentIndex", &TabBar::currentIndex, &TabBar::setCurrentIndex)
         .property("variant", &TabBar::variant, &TabBar::setVariant)
         .signal("onCurrentChanged");

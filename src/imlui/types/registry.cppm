@@ -95,6 +95,7 @@ public:
     // Renderer::Types: the Renderer renders every element through these.
     [[nodiscard]] Kind kind(std::string_view type) const override;
     void renderElement(Renderer& renderer, const luaui::Node& node) override;
+    [[nodiscard]] bool fillsWidth(const luaui::Node& node) override;
 
     /// The instance of the element table `node`, created now if the table has none yet. Then syncs
     /// the declared properties into it (and calls componentComplete() after the first sync). nullptr if
@@ -598,6 +599,13 @@ void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
     if (!b) return;
     Frame frame{renderer, node, &m_instances};
     b->element->render(frame);
+}
+
+bool TypeRegistry::fillsWidth(const Node& node) {
+    const TypeInfo* info = find(node.type());
+    if (!info) return false;
+    if (!info->fillsWidthDependsOnInstance()) return info->fillsWidth(nullptr);
+    return info->fillsWidth(sync(node));
 }
 
 Element* TypeRegistry::sync(const Node& node) const {

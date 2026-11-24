@@ -52,6 +52,7 @@ module :private;
 namespace imlui {
 
 void TopAppBar::declare(TypeBuilder<TopAppBar>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("title", &TopAppBar::title, &TopAppBar::setTitle)
         .property("navigationIcon", &TopAppBar::navigationIcon, &TopAppBar::setNavigationIcon)
         .property("variant", &TopAppBar::variant, &TopAppBar::setVariant)

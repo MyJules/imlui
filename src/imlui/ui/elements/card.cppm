@@ -55,6 +55,7 @@ module :private;
 namespace imlui {
 
 void Card::declare(TypeBuilder<Card>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("variant", &Card::variant, &Card::setVariant)
         .property("padding", &Card::padding, &Card::setPadding)
         .property("color", &Card::color, &Card::setColor)

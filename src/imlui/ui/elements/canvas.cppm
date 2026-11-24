@@ -42,6 +42,7 @@ module :private;
 namespace imlui {
 
 void Canvas::declare(TypeBuilder<Canvas>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("animated", &Canvas::animated, &Canvas::setAnimated).signal("onClicked").signal("onPaint");
 }
 

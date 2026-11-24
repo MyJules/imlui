@@ -51,6 +51,7 @@ module :private;
 namespace imlui {
 
 void ListItem::declare(TypeBuilder<ListItem>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("text", &ListItem::text, &ListItem::setText)
         .property("supportingText", &ListItem::supportingText, &ListItem::setSupportingText)
         .property("icon", &ListItem::icon, &ListItem::setIcon)

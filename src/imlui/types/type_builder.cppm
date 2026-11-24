@@ -193,6 +193,24 @@ public:
         return *this;
     }
 
+    /// An unset `width` fills the available width (the element's own default, like `width = -1`). A Row gives such a
+    /// child a share of its free width instead of letting it run to the row's edge.
+    TypeBuilder& fillsWidth() {
+        m_info.setFillsWidth(true);
+        return *this;
+    }
+
+    /// The same, decided per element by `predicate(const T&)` on its synced instance: `.fillsWidthWhen(&Text::wrap)`
+    /// (wrapping text takes a share of a Row), `.fillsWidthWhen(&Spacer::fill)`.
+    template <class Predicate>
+        requires std::is_invocable_r_v<bool, const Predicate&, const T&>
+    TypeBuilder& fillsWidthWhen(Predicate predicate) {
+        m_info.setFillsWidthWhen([predicate](const ScriptObject& o) {
+            return static_cast<bool>(std::invoke(predicate, static_cast<const T&>(o)));
+        });
+        return *this;
+    }
+
     /// The property set by a positional first value that isn't a child: `Gauge { 0.5 }`.
     TypeBuilder& defaultProperty(std::string name) {
         m_info.setDefaultProperty(std::move(name));

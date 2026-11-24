@@ -52,6 +52,7 @@ constexpr int maxColumns = 511; // BeginTable() asserts columns < IMGUI_TABLE_MA
 } // namespace
 
 void Grid::declare(TypeBuilder<Grid>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("columns", &Grid::columns, &Grid::setColumns)
         .property("spacing", &Grid::spacing, &Grid::setSpacing)
         .property("border", &Grid::border, &Grid::setBorder);

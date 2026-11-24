@@ -49,6 +49,11 @@ public:
         /// False for non-visual types (Timer, Dialog, ...): they take no layout space. Layouts render them
         /// where they are and don't place, count or space them.
         [[nodiscard]] bool isVisual() const;
+        /// Whether the child fills the available width: a fill or fill-minus `width` (`fillWidth`), or no `width`
+        /// on a type that fills by default (TypeBuilder::fillsWidth / fillsWidthWhen: Card, TextField, wrapping
+        /// Text, Spacer { fill }, ...). Layouts that share space (Row) give such children a share, read before
+        /// rendering them.
+        [[nodiscard]] bool fillsWidth() const;
         [[nodiscard]] const luaui::Node& node() const;
         /// The element type (`__type`), e.g. "Spacer".
         [[nodiscard]] std::string type() const;
@@ -227,6 +232,11 @@ bool Frame::Child::render(float right) {
 }
 
 bool Frame::Child::isVisual() const { return m_visual; }
+bool Frame::Child::fillsWidth() const {
+    const float w = sizeProp(m_node, "width");
+    if (w != 0.0f) return w < 0.0f;
+    return m_frame.m_renderer.fillsWidth(m_node.state(), m_node.index());
+}
 const luaui::Node& Frame::Child::node() const { return m_node; }
 std::string Frame::Child::type() const { return m_node.type(); }
 ImGuiID Frame::Child::id() const { return m_id; }

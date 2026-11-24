@@ -284,6 +284,71 @@ TEST_F(LayoutTest, RowJustifyAndFillSpacers) {
     EXPECT_FLOAT_EQ(probe("b").pos().x + 30.0f, x0 + 400.0f);
 }
 
+// Children that fill share the width the others leave: a fill width (`fillWidth`), a type that fills by default
+// (TextField, Card), each in a layout box of its share. The zero-width probes between them mark where each ends.
+TEST_F(LayoutTest, RowFillsShareTheFreeWidth) {
+    run(R"(
+        a1 = Probe { w = 0, h = 0 } a2 = Probe { w = 0, h = 0 }
+        halves = Row { width = 400, spacing = 0, Button { "A", fillWidth = true }, a1,
+                                                 Button { "B", fillWidth = true }, a2 }
+        b0 = Probe { w = 0, h = 0 } b1 = Probe { w = 0, h = 0 } b2 = Probe { w = 0, h = 0 }
+        field = Row { width = 400, spacing = 10, b0, TextField {}, b1, Button { "OK" }, b2 }
+        c1 = Probe { w = 0, h = 0 } c2 = Probe { w = 0, h = 0 }
+        cards = Row { width = 500, spacing = 0, Card { Probe {} }, c1, Card { Probe {} }, c2 })");
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    m_h.renderFrames("halves", 3);
+    EXPECT_FLOAT_EQ(probe("a1").pos().x, x0 + 200.0f);
+    EXPECT_FLOAT_EQ(probe("a2").pos().x, x0 + 400.0f);
+
+    m_h.renderFrames("field", 3);
+    const float fieldW = probe("b1").pos().x - probe("b0").pos().x - 2.0f * 10.0f; // less the gaps around it
+    const float buttonW = probe("b2").pos().x - probe("b1").pos().x - 2.0f * 10.0f;
+    EXPECT_GT(buttonW, 40.0f);
+    EXPECT_FLOAT_EQ(probe("b2").pos().x, x0 + 400.0f); // the button ends the row, nothing overflows
+    EXPECT_FLOAT_EQ(fieldW, 400.0f - buttonW - 4.0f * 10.0f);
+
+    m_h.renderFrames("cards", 3);
+    EXPECT_FLOAT_EQ(probe("c1").pos().x, x0 + 250.0f);
+    EXPECT_FLOAT_EQ(probe("c2").pos().x, x0 + 500.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A fill-minus width resolves against the child's share; a child that doesn't fill is bounded by the ones after it,
+// so a fill inside it (a Column with a filling bar) stops there.
+TEST_F(LayoutTest, RowFillMinusAndBoundedChildren) {
+    run(R"(
+        p = Probe { w = 0, h = 0 }
+        minus = Row { width = 400, spacing = 0, ProgressBar { width = -20 }, p, Probe { w = 50 } }
+        boxed = Row { width = 400, spacing = 0, Last { id = "inner", width = -20, ProgressBar { width = -20 } },
+                      Probe { w = 50 } }
+        bounded = Row { width = 400, spacing = 10, Column { Last { id = "bar", ProgressBar { fillWidth = true } } },
+                        Probe { w = 50 } })");
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    m_h.renderFrames("minus", 3);
+    EXPECT_FLOAT_EQ(probe("p").pos().x, x0 + 350.0f); // the slot is the share
+    m_h.renderFrames("boxed", 3);
+    EXPECT_FLOAT_EQ(lastSize("inner").x, 350.0f - 20.0f); // the bar is the share minus 20
+    m_h.renderFrames("bounded", 3);
+    EXPECT_FLOAT_EQ(lastSize("bar").x, 400.0f - 10.0f - 50.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Wrapping Text takes a share and wraps at it: the row stays within its width, the text runs over several lines.
+TEST_F(LayoutTest, RowWidthBoundsAWrappingText) {
+    run(R"(
+        local long = "The quick brown fox jumps over the lazy dog, again and again and again."
+        line = Last { Text { long } }
+        root = Last { Row { width = 250, spacing = 0, Probe { w = 100, h = 10 }, Text { long, wrap = true } } })");
+    m_h.renderFrame("line");
+    const ImVec2 line = lastSize("line");
+    ASSERT_GT(line.x, 300.0f);
+    m_h.renderFrames("root", 3);
+    const ImVec2 row = lastSize("root");
+    EXPECT_FLOAT_EQ(row.x, 250.0f);           // the text's share is 150
+    EXPECT_GE(row.y, 3.0f * line.y - 1.0f);  // so it runs over three lines
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(LayoutTest, RowSkipsHiddenAndRendersNonVisualChildren) {
     run(R"(
         fired = 0
