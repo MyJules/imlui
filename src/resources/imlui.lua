@@ -37,37 +37,79 @@ if not typesOk then types = nil end
 
 local ui = {}
 ui.native = native
-ui.ids = {}
-
 -------------------------------------------------------------------------------
--- Elements
+-- Element ids and their scopes
 -------------------------------------------------------------------------------
 
---- Returns a constructor for element type `name`. Calling it with a table
---- turns that table into the element (no copy), so it keeps its identity
---- for the whole lifetime of the UI — that identity is what ImGui IDs and
---- per-element state hang off.
---- For a type registered from C++ (ui.types()), the constructor also creates
---- the C++ instance (stored as `__native`), and the element's methods become
---- callable as `element:method(...)`.
-function ui.element(name)
-    local typed = types ~= nil and types.isType(name)
-    return function(props)
-        if type(props) ~= "table" then props = { props } end
-        props.__type = name
-        if typed then types.attach(props) end
-        ui.registerId(props)
-        return props
-    end
+-- Element ids live in scopes. App-level ids (ui.ids) are the ones declared outside every component instance and
+-- delegate; they are the free names of UI scripts (see ui.env). A component instance (ui.component) and a Repeater
+-- or ListView delegate each get a scope of their own, the `ids` table passed to the function that builds them: ids
+-- declared while it runs register there, are private to it and aren't free names. Every ids table is weak-valued,
+-- so an id never keeps its element alive: the tree (or whatever else references the element) does.
+local function weakIds() return setmetatable({}, { __mode = "v" }) end
+ui.ids = weakIds()
+
+-- The scope stack, innermost last: { ids = table, what = function() -> description }. Empty: app level.
+local scopes = {}
+
+-- The elements registered under an id since the last ui.__tick. Ids are weak, so until then, while a script still
+-- builds its tree (`Text { id = "title" }` as a statement, used by name in the root later), they're kept here.
+local pinned = {}
+
+-- A to-be-closed value that pops the innermost scope: `local _ <close> = POP_SCOPE` right after pushing one keeps
+-- the stack right however the block is left, a component that raises included.
+local POP_SCOPE = setmetatable({}, { __close = function() scopes[#scopes] = nil end })
+
+-- Calls fn(...) with `scope` as the innermost scope and returns its results.
+local function inScope(scope, fn, ...)
+    scopes[#scopes + 1] = scope
+    local _ <close> = POP_SCOPE
+    return fn(...)
 end
 
---- Makes `props.id` (if set) reachable by name from UI scripts (ui.ids), after checking it with ui.checkId.
---- Every element constructor calls it, the Lua-side containers (Repeater, ListView, If, Loader, Responsive) too.
-function ui.registerId(props)
-    if props.id ~= nil then
-        ui.checkId(props.id)
-        ui.ids[props.id] = props
+-- Calls fn(...) at app level (an empty scope stack) and returns its results: a module's top level runs there,
+-- whoever requires it first.
+local function atAppLevel(fn, ...)
+    local saved = scopes
+    scopes = {}
+    local _ <close> = setmetatable({}, { __close = function() scopes = saved end })
+    return fn(...)
+end
+
+-- A new scope for one instance of `kind` built by `fn`; `what()` names it in duplicate-id reports.
+local function newScope(kind, fn)
+    return {
+        ids = weakIds(),
+        what = function()
+            local info = type(fn) == "function" and debug.getinfo(fn, "S")
+            if info then return ("%s (%s:%d)"):format(kind, info.short_src, info.linedefined) end
+            return kind
+        end,
+    }
+end
+
+-- Registers element `el` under `id` in `scope` (nil: app level). The first element registered under an id keeps
+-- it; another one is reported as a duplicate. The same element again is fine.
+local function registerIn(scope, el, id)
+    local ids = scope and scope.ids or ui.ids
+    local existing = ids[id]
+    if existing == el then return end
+    if existing ~= nil then
+        ui.reportError(("duplicate element id '%s' in %s; the first element keeps it"):format(
+            tostring(id), scope and scope.what() or "the app scope"))
+        return
     end
+    if scope == nil then ui.checkId(id) end
+    ids[id] = el
+    pinned[#pinned + 1] = el
+end
+
+--- Registers `props.id` (if set) in the current scope: the innermost component instance or delegate being built,
+--- or app level (ui.ids, checked with ui.checkId) outside of them. Every element constructor calls it, the Lua-side
+--- containers (Repeater, ListView, If, Loader, Responsive) too.
+function ui.registerId(props)
+    local id = rawget(props, "id")
+    if id ~= nil then registerIn(scopes[#scopes], props, id) end
 end
 
 --- Shows a script error in the error overlay (logged once; the script keeps running).
@@ -75,9 +117,10 @@ function ui.reportError(msg)
     if native.reportError then native.reportError(msg) else native.log("error", msg) end
 end
 
---- Reports an element id that can't be referenced by name in a UI script: free names are looked up in
---- `ui`, then in the Lua globals, and only then in the element ids (see ui.env), so an id like `io` or
---- `text` would silently resolve to the global or the ui member instead. Returns false for such an id.
+--- Reports an app-level element id that can't be referenced by name in a UI script: free names are looked up in
+--- `ui`, then in the Lua globals, and only then in the app-level ids (see ui.env), so an id like `io` or `text`
+--- would silently resolve to the global or the ui member instead. Returns false for such an id. Ids in a component
+--- or delegate scope aren't free names, so registering one doesn't check it.
 function ui.checkId(id)
     if type(id) ~= "string" then return true end
     local what
@@ -90,6 +133,162 @@ function ui.checkId(id)
     end
     ui.reportError(("element id '%s' collides with %s; it can't be referenced by name — rename it"):format(id, what))
     return false
+end
+
+-------------------------------------------------------------------------------
+-- Parent links
+-------------------------------------------------------------------------------
+
+-- `element.parent` is the element that lays the element out: read-only, and weak (it never keeps the parent
+-- alive). It lives in a per-element proxy table that the element's metatable reads missing fields through
+-- (__index is the proxy, whose own metatable falls back to the element's previous __index, e.g. a registered
+-- type's methods), so reading any other missing field stays a few table lookups, no function call. __newindex
+-- stores every field but `parent` as before.
+local ownMeta = setmetatable({}, { __mode = "k" })    -- the element metatables made here
+local proxyMetas = setmetatable({}, { __mode = "k" }) -- an element's previous __index -> its proxies' metatable
+local PLAIN_PROXY_META = { __mode = "v" }
+
+local function readOnlyParent()
+    error("element property 'parent' is read-only: the element's container sets it", 3)
+end
+
+local function storeField(t, k, v)
+    if k == "parent" then readOnlyParent() end
+    rawset(t, k, v)
+end
+
+local function isElement(v) return type(v) == "table" and type(rawget(v, "__type")) == "string" end
+
+-- The parent-link proxy of element `el`, made (with the element's metatable) on first use.
+local function linkProxy(el)
+    local mt = getmetatable(el)
+    if mt ~= nil and ownMeta[mt] then return mt.__index end
+    -- A registered type's instance is attached first, so its metatable (the methods) is the one chained to.
+    if mt == nil and types ~= nil and rawget(el, "__native") == nil and isElement(el)
+        and types.isType(rawget(el, "__type")) then
+        types.attach(el)
+        mt = getmetatable(el)
+    end
+    local base = mt and mt.__index
+    local pm = PLAIN_PROXY_META
+    if base ~= nil then
+        pm = proxyMetas[base]
+        if pm == nil then
+            pm = { __mode = "v", __index = base }
+            proxyMetas[base] = pm
+        end
+    end
+    local proxy = setmetatable({}, pm)
+    local meta = {}
+    if mt then for k, v in pairs(mt) do meta[k] = v end end
+    meta.__index = proxy
+    local inner = mt and mt.__newindex
+    if inner == nil then
+        meta.__newindex = storeField
+    else
+        meta.__newindex = function(t, k, v)
+            if k == "parent" then readOnlyParent() end
+            if type(inner) == "function" then inner(t, k, v) else inner[k] = v end
+        end
+    end
+    ownMeta[meta] = true
+    setmetatable(el, meta)
+    return proxy
+end
+
+-- The parent of `el`: nil for the root, or for an element no container took yet.
+local function parentOf(el)
+    local mt = getmetatable(el)
+    if mt ~= nil and ownMeta[mt] then return rawget(mt.__index, "parent") end
+    return nil
+end
+
+-- The element that lays out the children of `el`: `el` itself, or for an inline container (Repeater, If, Loader,
+-- Responsive), which its parent splices its children into, that parent (QML's visual parent). An inline container
+-- that is the root (or isn't in a tree yet) holds its children itself.
+local function holder(el)
+    if rawget(el, "__inline") then return parentOf(el) or el end
+    return el
+end
+
+-- Element-valued props that are children too (the element renders them).
+local CHILD_KEYS = { "otherwise", "menuBar", "header", "menu" }
+local SIZE_CLASS_KEYS = { "compact", "medium", "expanded", "large", "extraLarge" }
+
+-- Calls f(child) for the children `el` holds now: positional, CHILD_KEYS, a Responsive's classes, the delegates a
+-- Repeater or ListView built and the item a Loader or Responsive shows.
+local function forEachChild(el, f)
+    for _, c in ipairs(el) do
+        if isElement(c) then f(c) end
+    end
+    for _, k in ipairs(CHILD_KEYS) do
+        local c = rawget(el, k)
+        if isElement(c) then f(c) end
+    end
+    if rawget(el, "__type") == "Responsive" then
+        for _, k in ipairs(SIZE_CLASS_KEYS) do
+            local c = rawget(el, k)
+            if isElement(c) then f(c) end
+        end
+    end
+    local list = rawget(el, "__list")
+    if list then
+        for _, c in ipairs(list) do
+            if isElement(c) then f(c) end
+        end
+    end
+    local box = rawget(el, "__box")
+    if box and isElement(box[1]) then f(box[1]) end
+end
+
+-- Makes `parent` the parent of `child` (nothing for a value that isn't an element). The children of an inline
+-- container follow it: their parent is its new holder.
+local function setParent(child, parent)
+    if not isElement(child) or child == parent then return end
+    local proxy = linkProxy(child)
+    if rawget(proxy, "parent") == parent then return end
+    rawset(proxy, "parent", parent)
+    if rawget(child, "__inline") then
+        local h = holder(child)
+        forEachChild(child, function(c) setParent(c, h) end)
+    end
+end
+
+-- The end of every constructor, once `__type` is set: the parent link proxy (a `parent` prop is reported and
+-- dropped), the children's parent links and the id.
+local function finishElement(props)
+    if rawget(props, "parent") ~= nil then
+        ui.reportError(("%s: 'parent' is read-only (the element's container sets it); the value is ignored"):format(
+            tostring(rawget(props, "__type"))))
+        rawset(props, "parent", nil)
+    end
+    linkProxy(props)
+    local h = holder(props)
+    forEachChild(props, function(c) setParent(c, h) end)
+    ui.registerId(props)
+    return props
+end
+
+-------------------------------------------------------------------------------
+-- Elements
+-------------------------------------------------------------------------------
+
+--- Returns a constructor for element type `name`. Calling it with a table
+--- turns that table into the element (no copy), so it keeps its identity
+--- for the whole lifetime of the UI — that identity is what ImGui IDs and
+--- per-element state hang off.
+--- For a type registered from C++ (ui.types()), the constructor also creates
+--- the C++ instance (stored as `__native`), and the element's methods become
+--- callable as `element:method(...)`.
+--- The constructor sets the parent links of the element's children (`child.parent`) and registers its id.
+function ui.element(name)
+    local typed = types ~= nil and types.isType(name)
+    return function(props)
+        if type(props) ~= "table" then props = { props } end
+        props.__type = name
+        if typed then types.attach(props) end
+        return finishElement(props)
+    end
 end
 
 --- Names of the element types registered from C++ with Engine::registerType<T>(), sorted.
@@ -200,10 +399,20 @@ function ui.bind(t, k)
     return { __bind = true, t = t, k = k }
 end
 
---- Reusable component: a function from props to an element tree.
---- Locals created inside are per instance (like a QML component's own properties).
+--- Reusable component: `fn(props, ids)` builds one instance's element tree. Locals created inside are per instance
+--- (like a QML component's own properties), and so is `ids`: the ids declared while fn runs (nested elements
+--- included, but not those of a nested component instance, which has its own) register there instead of at app
+--- level, so two instances don't clash and the ids aren't free names. `MyComp { id = "x" }` registers the instance's
+--- root element as `x` in the scope that creates the instance.
 function ui.component(fn)
-    return function(props) return fn(props or {}) end
+    return function(props)
+        props = props or {}
+        local scope = newScope("component", fn)
+        local root = inScope(scope, fn, props, scope.ids)
+        local id = type(props) == "table" and rawget(props, "id") or nil
+        if id ~= nil and type(root) == "table" then registerIn(scopes[#scopes], root, id) end
+        return root
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -247,8 +456,10 @@ local function repeaterChildren(self)
         local c = cache[i]
         if not c or c.item ~= item then
             if c then dropped() end
-            c = { item = item, node = self.delegate(item, i) }
+            local scope = newScope(rawget(self, "__type") .. " delegate", self.delegate)
+            c = { item = item, node = inScope(scope, self.delegate, item, i, scope.ids) }
             cache[i] = c
+            setParent(c.node, holder(self))
         end
         list[i] = c.node
     end
@@ -257,22 +468,21 @@ local function repeaterChildren(self)
     return list
 end
 
---- Repeater { model = list | count | function, delegate = function(item, index) ... end }
---- Its delegates are laid out by the parent (inside a Row they flow horizontally).
+--- Repeater { model = list | count | function, delegate = function(item, index, ids) ... end }
+--- Its delegates are laid out by the parent (inside a Row they flow horizontally), which is also their `parent`.
+--- Each delegate instance has an id scope of its own, `ids` (see ui.component).
 function ui.Repeater(p)
     p.__type = "Repeater"
     p.__inline = true
     p.__children = repeaterChildren
-    ui.registerId(p)
-    return p
+    return finishElement(p)
 end
 
 --- ListView { model = ..., delegate = ..., height = 300, spacing = 4 } — a scrolling Repeater.
 function ui.ListView(p)
     p.__type = "ListView"
     if p.delegate then p.__children = repeaterChildren end
-    ui.registerId(p)
-    return p
+    return finishElement(p)
 end
 
 --- If { condition = function() ... end, ElementA, ElementB, otherwise = ElementC }
@@ -284,8 +494,23 @@ function ui.If(p)
         if resolve(self, self.condition) then return self end
         return others
     end
-    ui.registerId(p)
-    return p
+    return finishElement(p)
+end
+
+-- Calls `fn(...)` in `scope` (nil: the current one) and returns its results. A Loader or Responsive calls its item
+-- function in the scope it was created in, so the ids of elements built there register where the Loader's own do.
+local function callIn(scope, fn, ...)
+    if scope == nil then return fn(...) end
+    return inScope(scope, fn, ...)
+end
+
+-- Shows `item` in `box` (the one-element child list of a Loader or Responsive `self`): parents it, and marks the
+-- one it replaces as dropped.
+local function show(self, box, item)
+    if box[1] == item then return end
+    if box[1] ~= nil then dropped() end
+    box[1] = item
+    setParent(item, holder(self))
 end
 
 --- Loader { item = function() return pages[s.page] end } — shows one element.
@@ -293,14 +518,13 @@ function ui.Loader(p)
     p.__type = "Loader"
     p.__inline = true
     local box = {}
+    local scope = scopes[#scopes]
+    p.__box = box
     p.__children = function(self)
-        local item = resolve(self, self.item)
-        if box[1] ~= nil and box[1] ~= item then dropped() end
-        box[1] = item
+        show(self, box, callIn(scope, resolve, self, self.item))
         return box
     end
-    ui.registerId(p)
-    return p
+    return finishElement(p)
 end
 
 --- Material 3 window size classes, smallest first.
@@ -332,16 +556,15 @@ function ui.Responsive(p)
     p.__type = "Responsive"
     p.__inline = true
     local box = {}
+    local scope = scopes[#scopes]
+    p.__box = box
     p.__children = function(self)
         local v = ui.pickSizeClass(self, ui.sizeClass())
-        if type(v) == "function" then v = v(self) end
-        v = type(v) == "table" and v or nil
-        if box[1] ~= nil and box[1] ~= v then dropped() end
-        box[1] = v
+        if type(v) == "function" then v = callIn(scope, v, self) end
+        show(self, box, type(v) == "table" and v or nil)
         return box
     end
-    ui.registerId(p)
-    return p
+    return finishElement(p)
 end
 
 -------------------------------------------------------------------------------
@@ -468,6 +691,8 @@ end
 --- Called by the engine at the start of every frame. Returns the seconds until
 --- the next timer is due (nil when there are no timers), so the engine wakes up for it.
 function ui.__tick(now)
+    -- The tree holds what it shows now; ids no longer keep their elements (see `pinned`).
+    if pinned[1] ~= nil then pinned = {} end
     -- Collect first: callbacks may add or clear timers.
     local due = {}
     for id, t in pairs(timers) do
@@ -559,7 +784,8 @@ ui.setWindowSize = native.setWindowSize     -- setWindowSize(w, h) in dp (times 
 -------------------------------------------------------------------------------
 
 -- Lookup order for free names inside UI scripts: ui.*, Lua globals (C++
--- singletons are globals), element ids (QML style: `nameField.text`), then any
+-- singletons are globals), app-level element ids (QML style: `nameField.text`;
+-- ids in a component or delegate scope are in its `ids` table instead), then any
 -- Capitalized name becomes an element constructor (so elements registered
 -- from C++ just work; registered types get typed constructors).
 ui.env = setmetatable({ ui = ui }, {
@@ -713,7 +939,8 @@ table.insert(package.searchers, 2, function(name)
     if not full then return tried end
     local chunk, err = resource.load(full, chunkEnv(full))
     if not chunk then error(err, 0) end
-    return chunk, full
+    -- A module's top level is app level, even when a component instance requires it first.
+    return function(...) return atAppLevel(chunk, ...) end, full
 end)
 ui.import = require
 
@@ -722,6 +949,7 @@ ui.import = require
 function ui.__load(name)
     if resource == nil then error("ui.__load: no resource system", 0) end
     ui.__script = name
+    ui.ids = weakIds() -- a load starts with no ids (a hot reload makes a new Lua state anyway)
     ui.__dir = name:match("^(.*/)") or name
     local chunk, err = resource.load(name, chunkEnv(name))
     if not chunk then error(err, 0) end

@@ -584,6 +584,33 @@ TEST_F(LuaResourcesTest, ComponentsInSubfoldersResolveAgainstTheirOwnFolder) {
     EXPECT_TRUE(m_frame.loadedResources().contains("app:/pages/data.txt"));
 }
 
+// A module's top level runs at app level, even when a component instance requires it first: its ids are app ids.
+TEST_F(LuaResourcesTest, AModuleRequiredInsideAComponentRegistersItsIdsAtAppLevel) {
+    m_dir.write("Shared.lua", R"(return Text { id = "sharedText" })");
+    run(R"(
+        ui.__load("app:/main.lua")
+        local C = component(function(props, ids)
+            componentIds = ids
+            local shared = require("Shared")
+            return Column { Text { id = "own" }, shared }
+        end)
+        root = C {}
+        assert(ui.ids.sharedText == root[2] and componentIds.sharedText == nil)
+        assert(componentIds.own == root[1] and ui.ids.own == nil)
+    )");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Loading the script again starts without ids: the ids of the previous load aren't duplicates.
+TEST_F(LuaResourcesTest, LoadingAgainStartsWithoutIds) {
+    run(R"(
+        first = ui.__load("app:/main.lua")
+        second = ui.__load("app:/main.lua")
+        assert(ui.ids.rootColumn == second)
+    )");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
 TEST_F(LuaResourcesTest, ModulesInImluiPrefixLoadInTheGlobalEnvironment) {
     m_frame.resources().mount("imlui:/", memory({{"extra/mod.lua", "return { env = _ENV == _G, name = ... }"}}));
     run(R"(

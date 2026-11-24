@@ -272,6 +272,7 @@ TEST_F(WindowsTest, ADialogKeepsItsWidthWithAFillAndShrinksBack) {
 
     // Wrapping text wraps at the maximum width (its longest line may be a word shorter).
     run(R"(s.label = string.rep("wrapping words ", 40))");
+    run("root = nil; collectgarbage()"); // frees the id `fill` (the first element registered keeps an id)
     run(R"(root = Column { Dialog { open = true, title = "T", WidthProbe { id = "fill", width = -1 },
                                     Text { wrap = true, text = function() return s.label end } } })");
     const float wrapped = settledWidth("fill", "wrapping text");
@@ -420,8 +421,9 @@ TEST_F(WindowsTest, SiblingDialogsOpenOneAtATime) {
     run("assert(s.a == false and s.b == true, tostring(s.a) .. ' ' .. tostring(s.b))"); // one Escape, one dialog
     EXPECT_GE(renders("b"), 2);
 
-    // The same with the waiting dialog first in the tree.
+    // The same with the waiting dialog first in the tree (once the first tree is collected, freeing its ids).
     run(R"(
+        root = nil; collectgarbage()
         s = state { a = false, b = true }
         root = Column { Dialog { title = "A", open = bind(s, "a"), Probe { id = "a" } },
                         Dialog { title = "B", open = bind(s, "b"), Probe { id = "b" } } })");

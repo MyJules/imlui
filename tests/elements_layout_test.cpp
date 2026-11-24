@@ -394,7 +394,8 @@ TEST_F(LayoutTest, ContainersInAFixedWidthColumnTakeItsWidth) {
         "Section { title = 'S' }",
     };
     for (const std::string& e : elements) {
-        run("root = Column { width = 300, Last { id = 'it', " + e + " } }");
+        // The previous tree is collected first: its `it` would keep the id (the first element registered keeps it).
+        run("root = nil; collectgarbage(); root = Column { width = 300, Last { id = 'it', " + e + " } }");
         m_h.renderFrames("root", 2);
         EXPECT_FLOAT_EQ(lastSize("it").x, 300.0f) << e;
     }
