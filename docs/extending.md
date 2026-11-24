@@ -464,7 +464,9 @@ keeps a non-owning pointer, and every Lua state the engine creates gets a global
 That object must outlive `engine.run()`. Declaring it before the `Engine` in `main` is enough.
 
 Don't keep `Element*` pointers to instances in other C++ objects: Lua decides when they die. Keep shared state
-in a singleton (or a model the singleton owns) and let elements read it through bindings.
+in a singleton (or a model the singleton owns) and let elements read it through bindings. A worker thread that
+must report back to an element holds its `handle()` instead (see
+[background work owned by an element](#background-work-owned-by-an-element)).
 
 ## Testing elements
 
@@ -562,15 +564,82 @@ lifetime needs no owner (`ResourceData{bytes}`); bytes that can be replaced (a c
 ## Threading and frame requests
 
 Lua, the element tree, `notify` and `emit` are **main-thread only**. To hand results from another thread to the
-UI, post a function to the main thread:
+UI, post a function to the main thread with `imlui::post` (module `imlui.ui.main_thread`, also in `import imlui`):
 
 ```cpp
-engine.post([&backend, result] { backend.setResult(result); }); // thread-safe; wakes the loop
+imlui::post([&backend, result] { backend.setResult(result); }); // thread-safe; wakes the loop
 ```
 
-`Engine::post` runs the function at the next loop iteration, outside any frame. The function may call `notify`
-or `emit`, which request a frame. The loop is woken through `glfwPostEmptyEvent`, so this works while the app is
-idle and sleeping. Functions still queued when `run()` returns are dropped.
+`engine.post(fn)` is the same call for code that has the `Engine`. The function runs at the next loop iteration,
+outside any frame, in the order things were posted. It may call `notify` or `emit`, which request a frame. The
+loop is woken through `glfwPostEmptyEvent`, so this works while the app is idle and sleeping. A posted function
+that throws is reported like a script error (the error overlay and the log, `posted function: <what>`), and the
+functions after it still run.
+
+Functions posted before `run()` wait and run at its first loop iteration. Functions still queued when `run()`
+returns are dropped (destroyed on the main thread without running).
+
+This is fine for objects the host owns and keeps alive (the `Engine`, a singleton held by a `shared_ptr`). It is
+**not** enough for an element: Lua owns it and deletes it when it collects the element table, when a page is
+rebuilt, and when a hot reload closes the Lua state, possibly while a worker is still busy. A worker that posts
+`[this] { notify("value"); }` would then touch a deleted object.
+
+### Background work owned by an element
+
+Take a **handle** on the main thread and give the worker only the handle and copies of its inputs:
+
+```cpp
+class Fetch final : public imlui::Element {
+public:
+    static void declare(imlui::TypeBuilder<Fetch>& type) {
+        type.property("url", &Fetch::url, &Fetch::setUrl).property("text", &Fetch::text, &Fetch::setText).nonVisual();
+    }
+    void render(imlui::Frame&) override {}
+
+    void setUrl(std::string url) {
+        if (url == m_url) return;
+        m_url = std::move(url);
+        // The worker gets copies and the handle. `this` is captured only to be used inside handle.post().
+        std::thread{[handle = handle(), this, url = m_url] {
+            std::string body = download(url, [&] { return !handle.alive(); }); // slow; polls for cancellation
+            handle.post([this, url, body = std::move(body)] { // main thread, and only while `this` lives
+                if (url != m_url) return; // a newer request replaced this one
+                m_text = body;
+                notify("text");
+            });
+        }}.detach();
+    }
+    // url(), text(), setText() ...
+
+private:
+    std::string m_url, m_text;
+};
+```
+
+`ScriptObject::handle()` (main thread) returns a `ScriptObject::Handle`, a weak, copyable, thread-safe token:
+
+| `Handle` member | What |
+|---|---|
+| `alive()` | True until the object is destroyed. Thread-safe; a worker polls it as its "cancelled" flag. |
+| `post(fn)` | Queues `fn` like `imlui::post`. On the main thread, `fn` runs **only if the object is still alive** (otherwise it is destroyed without running), so it may use the object's `this`. Returns false, dropping `fn`, when the object is already gone. |
+
+Elements and singletons both have it (it lives on `ScriptObject`). `ScriptObject`'s destructor clears the token
+on the main thread, where posted functions run too, so the object can't die between the check and `fn`. Every way
+an element dies goes through that destructor: garbage collection, a rebuilt page, and a hot reload or shutdown
+closing the Lua state (a reload closes the old state before the loop runs posted functions again).
+
+Rules for the worker thread:
+
+- **Don't join slow work in the destructor** (or in `destroyed()`): that freezes the UI, a reload or the app's exit
+  until the work finishes. Detach the thread (or let a shared object own it) and let it notice the cancellation:
+  through `handle.alive()`, which turns false once `ScriptObject`'s destructor ran (after your own destructor), or
+  a flag of your own that your destructor sets (a `std::stop_source`, or an `atomic<bool>` shared through a
+  `shared_ptr`). If you do join (`std::jthread`), stop the worker first with your own flag: `alive()` is still
+  true while your destructor runs.
+- The worker never touches the element or its members itself, only the copies it was given. Everything that reads
+  or writes the element goes into `handle.post`.
+- A detached worker may outlive the element, the `Engine`, even `main()`'s return: what it uses must stay alive
+  through its own captures, and the work should be short or cancellable.
 
 Frames are rendered on demand. `notify` and `emit` request one, and so do input and animations. An element whose
 look changes over time by itself (a clock, an indeterminate animation, a timer) must ask for the next frame from
@@ -678,7 +747,8 @@ skeleton.
 | Module | Contents |
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations; the `LuaPushable` / `LuaReadable` concepts |
-| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
+| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `handle()` (`ScriptObject::Handle`: `alive()`, `post(fn)`, for worker threads), the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
+| `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
 | `imlui.types.element` | `Element`: `render`, `componentComplete`, `destroyed`, `tick` / `setTicking` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in |

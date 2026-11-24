@@ -37,6 +37,7 @@ import imlui.resources.mount;
 import imlui.resources.name;
 import imlui.image.image_cache;
 import imlui.ui.frame_request;
+import imlui.ui.main_thread;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
 import imlui.types.script_object;
@@ -85,7 +86,9 @@ public:
     Resources& resources();
 
     /// Runs `fn` on the main thread at the next loop iteration and wakes the loop. The one Engine call
-    /// that is safe from any thread: hand results of worker threads to the UI through it.
+    /// that is safe from any thread: hand results of worker threads to the UI through it. The same as the free
+    /// imlui::post (module imlui.ui.main_thread), which code without an Engine& uses; to post to an element or
+    /// singleton that may be destroyed meanwhile, use its ScriptObject::handle().
     void post(std::function<void()> fn);
 
     void requestQuit();
@@ -123,8 +126,6 @@ private:
     /// Applies a size requested with ui.setWindowSize().
     void applyPendingWindowSize();
     void syncTitleBar();
-    /// Runs the functions queued with post().
-    void runPosted();
 
     EngineConfig m_config;
     platform::Window m_window;
@@ -149,9 +150,6 @@ private:
     FileSnapshot m_snapshot;
     std::set<std::string> m_loaded; ///< resources the Lua states read or loaded (watched for hot reload)
     std::chrono::steady_clock::time_point m_lastCheck;
-    std::mutex m_postMutex;
-    std::vector<std::function<void()>> m_posted;
-    bool m_looping = false; ///< guarded by m_postMutex: the loop runs, so post() may wake it
 };
 
 } // namespace imlui
@@ -201,20 +199,8 @@ Engine::~Engine() { closeState(m_state); }
 TypeRegistry& Engine::types() { return m_types; }
 Resources& Engine::resources() { return m_config.resources; }
 
-void Engine::post(std::function<void()> fn) {
-    std::scoped_lock lock{m_postMutex};
-    m_posted.push_back(std::move(fn));
-    if (m_looping) platform::Window::postEmptyEvent();
-}
+void Engine::post(std::function<void()> fn) { imlui::post(std::move(fn)); }
 
-void Engine::runPosted() {
-    std::vector<std::function<void()>> posted;
-    {
-        std::scoped_lock lock{m_postMutex};
-        posted.swap(m_posted);
-    }
-    for (auto& fn : posted) fn();
-}
 void Engine::requestQuit() { m_quit = true; }
 void Engine::requestReload() { m_reload = true; }
 platform::Window& Engine::window() { return m_window; }
@@ -258,10 +244,8 @@ int Engine::run() {
     // requested frame, Lua timer or file check is due, and render only then.
     setFrameWakeHandler([] { platform::Window::postEmptyEvent(); });
     requestFramesFor(settleSeconds);
-    {
-        std::scoped_lock lock{m_postMutex};
-        m_looping = true;
-    }
+    // From here on a post() from any thread wakes the loop. Functions posted before run() are run below, first.
+    setPostWakeHandler([] { platform::Window::postEmptyEvent(); });
     while (!m_window.shouldClose() && !m_quit) {
         runPosted();
         checkForChanges();
@@ -282,10 +266,8 @@ int Engine::run() {
             if (m_config.exitAfterFrames > 0 && ++m_framesRendered >= m_config.exitAfterFrames) m_quit = true;
         }
     }
-    {
-        std::scoped_lock lock{m_postMutex};
-        m_looping = false;
-    }
+    setPostWakeHandler({}); // before the window goes: a worker may be inside the handler until this returns
+    clearPosted();          // still queued: dropped (they may refer to the Lua state closed below)
     setFrameWakeHandler({});
     clearFrameRequests();
     log::info("shutting down");
