@@ -4,8 +4,9 @@
 //
 // Children are visited as Frame::Child handles. A handle renders the child through the renderer (so the
 // per-element wrapper applies: visible, enabled, group, tooltip, ID scope), tells whether it takes layout
-// space, gives its node, type and stable ImGui ID, remembers its size from the last frame (immediate-mode
-// layouts measure on the previous frame), and gives the C++ instance of a typed child with its properties
+// space, gives its node, type and stable ImGui ID, gives its size from the last frame (the layout cache:
+// immediate-mode layouts place children by the sizes they had on the previous frame, and get another frame when
+// that was stale), and gives the C++ instance of a typed child with its properties
 // synced (as<T>()).
 export module imlui.types.frame;
 
@@ -22,6 +23,7 @@ import imlui.types.script_object;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
 import imlui.ui.layout_box;
+import imlui.ui.layout_cache;
 import imlui.ui.props;
 import imlui.ui.renderer;
 
@@ -40,7 +42,7 @@ public:
 
         /// Renders the child at the ImGui cursor, through the renderer's per-element wrapper. False when it's
         /// hidden or of an unknown type. A rendered visual child is the last ImGui item afterwards (its group),
-        /// and its size is stored for lastWidth()/lastHeight() on the next frame.
+        /// and its size is recorded in the layout cache, for lastWidth()/lastHeight() on the next frame.
         bool render();
         /// Renders the child inside a layout box that ends at screen x `right`: its available width (fills, `align`,
         /// text wrapping, raw ImGui item widths) is `right - cursor x` instead of its parent's.
@@ -57,11 +59,13 @@ public:
         [[nodiscard]] const luaui::Node& node() const;
         /// The element type (`__type`), e.g. "Spacer".
         [[nodiscard]] std::string type() const;
-        /// A stable ImGui ID for the child in the parent's ID scope (the key the built-in layouts use for
-        /// per-child state in ImGui::GetStateStorage()).
+        /// A stable ImGui ID for the child in the parent's ID scope: the key of its size in the layout cache
+        /// (imlui.ui.layout_cache), and a key for per-child state in ImGui::GetStateStorage().
         [[nodiscard]] ImGuiID id() const;
 
-        /// Size of the child when it was last rendered through a Child handle (render()), or `fallback`.
+        /// Size of the child when it was last rendered (this frame or the last), or `fallback` when it wasn't.
+        /// Reading it tells the layout cache that the caller places the child by it: when the child then renders
+        /// at another size (by more than half a pixel), another frame is requested, so the layout settles.
         [[nodiscard]] float lastWidth(float fallback = 0.0f) const;
         [[nodiscard]] float lastHeight(float fallback = 0.0f) const;
 
@@ -78,8 +82,6 @@ public:
         }
 
     private:
-        [[nodiscard]] ImGuiID heightKey() const;
-
         Frame& m_frame;
         luaui::Node m_node;
         ImGuiID m_id;
@@ -207,24 +209,7 @@ Frame::Child::Child(Frame& frame, const luaui::Node& node)
     : m_frame{frame}, m_node{node}, m_id{ImGui::GetID(node.ptr())},
       m_visual{frame.m_renderer.isVisual(node.state(), node.index())} {}
 
-ImGuiID Frame::Child::heightKey() const {
-    // Seeded with the child's own ID, so it is distinct from id() and from every other child's keys.
-    ImGui::PushID(m_node.ptr());
-    const ImGuiID key = ImGui::GetID("##imlui.lastHeight");
-    ImGui::PopID();
-    return key;
-}
-
-bool Frame::Child::render() {
-    const bool rendered = m_frame.m_renderer.render(m_node.state(), m_node.index());
-    if (rendered && m_visual) {
-        const ImVec2 size = ImGui::GetItemRectSize();
-        ImGuiStorage* storage = ImGui::GetStateStorage();
-        storage->SetFloat(m_id, size.x);
-        storage->SetFloat(heightKey(), size.y);
-    }
-    return rendered;
-}
+bool Frame::Child::render() { return m_frame.m_renderer.render(m_node.state(), m_node.index()); }
 
 bool Frame::Child::render(float right) {
     const layout::BoxScope box{layout::boxTo(right)};
@@ -241,9 +226,17 @@ const luaui::Node& Frame::Child::node() const { return m_node; }
 std::string Frame::Child::type() const { return m_node.type(); }
 ImGuiID Frame::Child::id() const { return m_id; }
 
-float Frame::Child::lastWidth(float fallback) const { return ImGui::GetStateStorage()->GetFloat(m_id, fallback); }
+float Frame::Child::lastWidth(float fallback) const {
+    const std::optional<ImVec2> last = layout::lastSize(m_id);
+    const float w = last ? last->x : fallback;
+    layout::assumeWidth(m_id, w);
+    return w;
+}
 float Frame::Child::lastHeight(float fallback) const {
-    return ImGui::GetStateStorage()->GetFloat(heightKey(), fallback);
+    const std::optional<ImVec2> last = layout::lastSize(m_id);
+    const float h = last ? last->y : fallback;
+    layout::assumeHeight(m_id, h);
+    return h;
 }
 
 ScriptObject* Frame::Child::syncProperties() const {

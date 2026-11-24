@@ -17,7 +17,7 @@ import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.ui.layout_box;
-import imlui.ui.frame_request;
+import imlui.ui.layout_cache;
 import imlui.ui.props;
 
 export namespace imlui {
@@ -56,7 +56,9 @@ public:
     void setImages(ImageCache* images);
 
     /// Renders the element at stack index `idx`. Returns false if it was
-    /// hidden (visible = false) or of an unknown type ("unknown element type" is reported).
+    /// hidden (visible = false) or of an unknown type ("unknown element type" is reported). A visual element's size
+    /// (its group's) is recorded in the layout cache (imlui.ui.layout_cache) under `ImGui::GetID(table pointer)` in
+    /// the current ID scope, the key Frame::Child::id() gives it.
     bool render(lua::State* state, int idx);
 
     /// Calls f(stackIndex) for every child element. Children come from the
@@ -147,6 +149,7 @@ bool Renderer::render(lua::State* state, int idx) {
         return false;
     }
     if (!n.boolean("visible", true)) return false;
+    const ImGuiID id = ImGui::GetID(n.ptr());
     ImGui::PushID(n.ptr());
     const bool disabled = n.has("enabled") && !n.boolean("enabled", true);
     if (disabled) ImGui::BeginDisabled();
@@ -155,7 +158,10 @@ bool Renderer::render(lua::State* state, int idx) {
     const bool visual = kind == Types::Kind::Visual;
     if (visual) ImGui::BeginGroup();
     m_types.renderElement(*this, n);
-    if (visual) ImGui::EndGroup();
+    if (visual) {
+        ImGui::EndGroup();
+        layout::recordSize(id, ImGui::GetItemRectSize());
+    }
     if (n.has("tooltip")) md::tooltip(n.string("tooltip"));
     if (disabled) ImGui::EndDisabled();
     ImGui::PopID();
@@ -176,7 +182,6 @@ void Renderer::renderStack(const Node& node) {
     const auto spacing = node.number("spacing");
     const float align = alignFactor(node.string("align", "start"));
     lua::State* state = node.state();
-    ImGuiStorage* st = ImGui::GetStateStorage();
     float avail = layout::availableWidth();
     const float x0 = ImGui::GetCursorScreenPos().x;
     // In an auto-sized window the stack is as wide as its widest child (a fill there is only the window's minimum
@@ -185,7 +190,11 @@ void Renderer::renderStack(const Node& node) {
     const bool fit = align > 0.0f && layout::shrinkToFit();
     const ImGuiID widestKey = fit ? ImGui::GetID("##imlui.stackWidth") : 0;
     float widest = 0.0f;
-    if (fit) avail = std::max(avail, st->GetFloat(widestKey, 0.0f));
+    if (fit) {
+        const float last = layout::lastSize(widestKey).value_or(ImVec2{}).x;
+        layout::assumeWidth(widestKey, last);
+        avail = std::max(avail, last);
+    }
     bool first = true;
     forEachChild(node, [&](int idx) {
         if (!isVisual(state, idx)) {
@@ -197,22 +206,18 @@ void Renderer::renderStack(const Node& node) {
         if (!first && spacing)
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
                                  ImGui::GetStyle().ItemSpacing.y);
-        const ImGuiID key = ImGui::GetID(c.ptr());
         if (align > 0.0f) {
-            float w = st->GetFloat(key, 0.0f);
+            // Placed by its width on the last frame; render() records the new one (another frame if it changed).
+            const ImGuiID key = ImGui::GetID(c.ptr());
+            const float w = layout::lastSize(key).value_or(ImVec2{}).x;
+            layout::assumeWidth(key, w);
             ImGui::SetCursorScreenPos({x0 + std::max(0.0f, (avail - w) * align), ImGui::GetCursorScreenPos().y});
         }
         render(state, idx);
-        if (align > 0.0f) {
-            st->SetFloat(key, ImGui::GetItemRectSize().x);
-            widest = std::max(widest, ImGui::GetItemRectSize().x);
-        }
+        if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
         first = false;
     });
-    if (fit && std::fabs(widest - st->GetFloat(widestKey, 0.0f)) > 0.5f) {
-        st->SetFloat(widestKey, widest);
-        requestFrame();
-    }
+    if (fit) layout::recordSize(widestKey, {widest, 0.0f});
 }
 
 void Renderer::attachMenu(const Node& node, bool clicked) {

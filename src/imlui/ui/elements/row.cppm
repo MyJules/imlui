@@ -2,7 +2,8 @@
 //
 // A flex layout: children that fill (Frame::Child::fillsWidth(): a fill width, a type that fills by default, wrapping
 // Text, Spacer { fill }) share the width the others leave, each rendered in a layout box of its share. The others'
-// widths and the heights are measured on the previous frame (immediate mode), so a layout settles within one frame.
+// widths and the heights (for `align`) are the ones of the previous frame (Frame::Child::lastWidth / lastHeight,
+// immediate mode); when a child renders at another size, the layout cache asks for another frame, so the row settles.
 export module imlui.ui.elements.row;
 
 import std;
@@ -37,7 +38,6 @@ private:
     std::optional<double> m_spacing;
     std::string m_align = "center";
     std::string m_justify = "start";
-    float m_height = 0.0f; ///< tallest child on the last frame
 };
 
 } // namespace imlui
@@ -56,8 +56,8 @@ namespace {
 
 /// A visual child as the row sees it before rendering.
 struct Slot {
-    bool fills;     ///< takes a share of the free width
-    float lastW;    ///< its width on the last frame (0 on its first)
+    bool fills;  ///< takes a share of the free width
+    float lastW; ///< its width on the last frame (0 on its first; unused for fills)
 };
 
 } // namespace
@@ -68,10 +68,15 @@ void Row::render(Frame& frame) {
     const float rowW = frame.resolvedWidth(frame.available().x);
     const float rowRight = start.x + rowW;
 
-    // Pass 1: which children fill, and how wide the others were.
+    // Pass 1: which children fill, how wide the others were, and (to align them) how tall the tallest was.
+    const bool alignsHeights = m_align == "center" || m_align == "bottom";
     std::vector<Slot> slots;
+    float rowH = 0.0f;
     frame.forEachChild([&](Frame::Child& c) {
-        if (c.isVisual()) slots.push_back({c.fillsWidth(), c.lastWidth()});
+        if (!c.isVisual()) return;
+        const bool fills = c.fillsWidth();
+        slots.push_back({fills, fills ? 0.0f : c.lastWidth()});
+        if (alignsHeights) rowH = std::max(rowH, c.lastHeight());
     });
     const int count = static_cast<int>(slots.size());
     float fixedW = 0.0f;
@@ -98,7 +103,8 @@ void Row::render(Frame& frame) {
     std::vector<float> after(slots.size(), 0.0f);
     for (int i = count - 2; i >= 0; --i) {
         const auto next = static_cast<std::size_t>(i + 1);
-        after[static_cast<std::size_t>(i)] = after[next] + sp + extraGap + (slots[next].fills ? 0.0f : slots[next].lastW);
+        after[static_cast<std::size_t>(i)] =
+            after[next] + sp + extraGap + (slots[next].fills ? 0.0f : slots[next].lastW);
     }
 
     // Pass 2: place and render. A fill renders in a box of its share; any other child's box ends where the children
@@ -115,13 +121,10 @@ void Row::render(Frame& frame) {
         if (i >= slots.size()) return; // the children changed between the passes (a binding with side effects)
         const Slot& slot = slots[i];
         if (i > 0) x += sp + extraGap;
-        const float ch = c.lastHeight();
         float y = top;
-        if (m_height > 0 && ch > 0) {
-            if (m_align == "center")
-                y = top + std::max(0.0f, (m_height - ch) * 0.5f);
-            else if (m_align == "bottom")
-                y = top + std::max(0.0f, m_height - ch);
+        if (alignsHeights) {
+            const float ch = c.lastHeight();
+            if (rowH > 0 && ch > 0) y = top + std::max(0.0f, (rowH - ch) * (m_align == "center" ? 0.5f : 1.0f));
         }
         ImGui::SetCursorScreenPos({x, y});
         const float right = slot.fills ? x + share : std::max(x, rowRight - after[i]);
@@ -134,7 +137,6 @@ void Row::render(Frame& frame) {
     // Make the row's extent explicit (fills may end the row).
     ImGui::SetCursorScreenPos(start);
     ImGui::Dummy({std::max(1.0f, x - start.x), std::max(1.0f, maxH)});
-    m_height = maxH;
 }
 
 std::optional<double> Row::spacing() const { return m_spacing; }

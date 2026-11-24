@@ -142,8 +142,8 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `fillsWidth()` | Whether the child fills the available width: a fill or fill-minus `width` (`fillWidth`), or no `width` on a type that fills by default (`fillsWidth()` / `fillsWidthWhen()` in its `declare`). Read it before rendering to share space, like `Row`. May sync the child's properties. |
 | `isVisual()` | False for non-visual types (`Timer`, `Dialog`, ...). Layouts render those where they are and don't place, count or space them. |
 | `node()`, `type()` | The child's element table and its type name (`"Spacer"`). |
-| `id()` | A stable ImGui ID for the child in the parent's ID scope, for your own per-child state in `ImGui::GetStateStorage()`. |
-| `lastWidth(fallback)`, `lastHeight(fallback)` | The child's size when it was last rendered through `render()`, or `fallback` on its first frame. Immediate-mode layouts (centering, right alignment, rows) measure on the previous frame and settle within one frame. |
+| `id()` | A stable ImGui ID for the child in the parent's ID scope: the key of its size in the layout cache, and for your own per-child state in `ImGui::GetStateStorage()`. |
+| `lastWidth(fallback)`, `lastHeight(fallback)` | The child's size when it was last rendered, or `fallback` on its first frame. Immediate-mode layouts (centering, right alignment, rows) place children by last frame's sizes. Reading one tells the layout cache you placed the child by it: if the child then renders at another size, another frame is requested, so the layout settles even when nothing else asks for frames. Read them in the ID scope the child renders in. |
 | `as<T>()` | The C++ instance of a typed child as a `T*`, with its declared properties **synced first**, so the parent reads this frame's values (`child.as<Tab>()->title()`). `nullptr` when the child isn't a typed element or not a `T`. `syncProperties()` does the sync and returns the `ScriptObject*`. |
 
 ```cpp

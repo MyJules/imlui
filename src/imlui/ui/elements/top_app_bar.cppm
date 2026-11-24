@@ -14,8 +14,8 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// The Material top app bar. The children are actions, right-aligned in the 64dp top row, each centered
-/// vertically by its height on the last frame.
+/// The Material top app bar. The children are actions, right-aligned in the 64dp top row by their widths, each
+/// centered vertically by its height (sizes from the last frame: Frame::Child::lastWidth / lastHeight).
 ///
 /// Props:   title = "", navigationIcon = "", variant = "small" ("center", "medium", "large"),
 ///          color = unset (the current surface)
@@ -70,7 +70,6 @@ void TopAppBar::render(Frame& frame) {
     ImDrawList* dl = frame.drawList();
     const Color bg = m_color.value_or(md::surfaceColor());
     dl->AddRectFilled(p, {p.x + w, p.y + h}, ImGui::ColorConvertFloat4ToU32(bg.vec4()));
-    ImGuiStorage* st = ImGui::GetStateStorage();
 
     float titleX = p.x + frame.dp(16);
     if (!m_navigationIcon.empty()) {
@@ -78,9 +77,12 @@ void TopAppBar::render(Frame& frame) {
         if (md::iconButton("##nav", m_navigationIcon)) emit("onNavigation");
         titleX = p.x + frame.dp(56);
     }
-    // Actions, right-aligned by their total width on the last frame, each centered in the 64dp row.
-    const ImGuiID widthKey = ImGui::GetID("##actionsW");
-    float x = p.x + w - frame.dp(4) - st->GetFloat(widthKey, 0.0f), total = 0;
+    // Actions, right-aligned by their total width, each centered in the 64dp row.
+    float total = 0.0f;
+    frame.forEachChild([&](Frame::Child& child) {
+        if (child.isVisual()) total += child.lastWidth();
+    });
+    float x = p.x + w - frame.dp(4) - total;
     frame.forEachChild([&](Frame::Child& child) {
         if (!child.isVisual()) {
             child.render();
@@ -88,11 +90,8 @@ void TopAppBar::render(Frame& frame) {
         }
         ImGui::SetCursorScreenPos({x, p.y + (barH - child.lastHeight(frame.dp(48))) * 0.5f});
         child.render();
-        const float cw = ImGui::GetItemRectSize().x;
-        x += cw;
-        total += cw;
+        x += ImGui::GetItemRectSize().x;
     });
-    st->SetFloat(widthKey, total);
 
     const ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(s.onSurface.vec4());
     if (medium || large) {

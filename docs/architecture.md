@@ -235,8 +235,15 @@ Layout notes:
   fill width, a type declared `fillsWidth()` / `fillsWidthWhen()` such as `Card`, `TextField`, wrapping `Text`,
   `Spacer { fill }`), gives the fills equal shares of the width the others left last frame, and renders each fill in
   a box of its share (`Child::render(right)`). Every other child's box ends where the children after it start.
-- Immediate-mode layout uses *last frame's* sizes for `Row` (the widths of children that don't fill, the heights for
-  `align`, `justify`), `Column { align }` and `TopAppBar` actions. A layout settles within one frame.
+- **Sizes come up through the layout cache** (`imlui.ui.layout_cache`). Immediate-mode layouts place a child before
+  it renders, so they use the size it had on the last frame: the `Renderer` records every visual element's size
+  under its ImGui ID, and `Frame::Child::lastWidth/lastHeight` read it (`Row` widths and heights, the stack `align`,
+  `TopAppBar` actions, `NavigationRail` destinations; a `Card`'s shadow and the widest claim and child of an
+  auto-sized window are recorded the same way). **Convergence:** reading a size tells the cache the layout placed
+  the child by it; when the child then renders at another size (by more than half a pixel), the cache requests
+  another frame, so a layout settles even on a frame a `Timer` or a posted change rendered alone. A size that
+  changes on more than `layout::maxSettleFrames` frames in a row stops asking (logged once at debug level), so a
+  layout that can't settle doesn't render forever. Entries not used for two frames are dropped.
 
 ## Hot reload
 
@@ -696,6 +703,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
+| `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `cacheEntries`: last frame's sizes by ImGui ID, and another frame when a layout placed something by a stale size (convergence) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `isVisual`, `fillsWidth`, `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |

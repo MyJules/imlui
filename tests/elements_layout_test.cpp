@@ -20,7 +20,9 @@ import imlui.ui.elements.tab_bar;
 import imlui.ui.elements.tree_node;
 import imlui.test.headless_frame;
 import imlui.test.last_item_probe;
+import imlui.ui.frame_request;
 import imlui.ui.item_size;
+import imlui.ui.layout_cache;
 
 using namespace imlui;
 
@@ -72,12 +74,26 @@ private:
     ImVec2 m_text{};
 };
 
+/// A box that grows by 10 px every frame and never asks for frames: a layout that can never settle.
+class Grower final : public Element {
+public:
+    static void declare(TypeBuilder<Grower>&) {}
+    void render(Frame&) override {
+        m_w += 10.0f;
+        ImGui::Dummy({m_w, 10.0f});
+    }
+
+private:
+    float m_w = 10.0f;
+};
+
 class LayoutTest : public ::testing::Test {
 protected:
     void SetUp() override {
         m_h.registerType<Probe>("Probe");
         m_h.registerType<test::LastItemProbe>("Last");
         m_h.registerType<RawImGui>("Raw");
+        m_h.registerType<Grower>("Grower");
     }
     [[nodiscard]] ImVec2 lastSize(std::string_view name) {
         test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
@@ -98,6 +114,14 @@ protected:
         EXPECT_NE(p, nullptr) << name;
         static Probe none;
         return p ? *p : none;
+    }
+    /// On-demand rendering, like the Engine: renders frames while one is due now (requested), at most `limit`.
+    /// Returns how many it rendered.
+    int renderWhileRequested(std::string_view root, int limit = 50) {
+        int n = 0;
+        for (; n < limit && secondsUntilFrame() == 0.0; ++n)
+            m_h.renderFrame(root);
+        return n;
     }
     /// A left click at (x, y): move, press, release, one frame each.
     void click(std::string_view root, float x, float y) { m_h.click(root, x, y); }
@@ -344,8 +368,8 @@ TEST_F(LayoutTest, RowWidthBoundsAWrappingText) {
     ASSERT_GT(line.x, 300.0f);
     m_h.renderFrames("root", 3);
     const ImVec2 row = lastSize("root");
-    EXPECT_FLOAT_EQ(row.x, 250.0f);           // the text's share is 150
-    EXPECT_GE(row.y, 3.0f * line.y - 1.0f);  // so it runs over three lines
+    EXPECT_FLOAT_EQ(row.x, 250.0f);         // the text's share is 150
+    EXPECT_GE(row.y, 3.0f * line.y - 1.0f); // so it runs over three lines
     EXPECT_TRUE(luaui::errors().empty());
 }
 
@@ -714,4 +738,73 @@ TEST_F(LayoutTest, FillHeights) {
     run("root = Last { Spacer { height = -50 } }");
     m_h.renderFrame("root");
     EXPECT_FLOAT_EQ(m_h.instance<test::LastItemProbe>("root")->size().y, full - 50.0f);
+}
+
+// ------------------------------------------------------------ Layout cache and convergence
+
+// Rendering is on demand: a Timer (or a posted change) renders one frame, in which `align` still places a changed
+// label by its old width. The cache sees the mismatch and asks for another frame, so the label ends up centered once
+// the frames stop, and a settled layout asks for nothing more.
+TEST_F(LayoutTest, ACenteredLabelSettlesAfterATimerChangesIt) {
+    run(R"(
+        root = Column { align = "center",
+                        Last { id = "boxed", Text { id = "caption", text = "Hi" } },
+                        Timer { interval = 50, ["repeat"] = false,
+                                onTriggered = function() caption.text = "A much longer label than before" end } })");
+    const auto centered = [&] {
+        const ImVec2 min = lastMin("boxed"), size = lastSize("boxed");
+        return std::fabs(min.x + size.x * 0.5f - (ImGui::GetStyle().WindowPadding.x + contentWidth() * 0.5f)) <= 1.0f;
+    };
+    m_h.renderFrame("root");
+    renderWhileRequested("root");
+    EXPECT_TRUE(centered());
+    // Settled: nothing asks for a frame now (the Timer's own wake-up is later).
+    EXPECT_GT(secondsUntilFrame(), 0.0);
+
+    // The frames the Timer's wake-ups render, until it fires.
+    const float before = lastSize("boxed").x;
+    for (int i = 0; i < 20 && lastSize("boxed").x == before; ++i)
+        m_h.renderFrame("root");
+    ASSERT_GT(lastSize("boxed").x, before);
+    EXPECT_FALSE(centered());            // placed by the old width on the frame it changed
+    EXPECT_EQ(secondsUntilFrame(), 0.0); // so the cache asked for another frame
+    EXPECT_GE(renderWhileRequested("root"), 1);
+    EXPECT_TRUE(centered());
+    EXPECT_GT(secondsUntilFrame(), 0.0);
+
+    // A posted change (a script setting a prop between frames) settles the same way.
+    run("caption.text = 'Hi'");
+    m_h.renderFrame("root");
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+    renderWhileRequested("root");
+    EXPECT_TRUE(centered());
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A layout that can never settle (a child that grows every frame) asks for a few frames, then stops.
+TEST_F(LayoutTest, AnUnsettledLayoutStopsAskingForFrames) {
+    run(R"(root = Column { align = "center", Grower {} })");
+    m_h.renderFrame("root");
+    const int frames = renderWhileRequested("root", 100);
+    EXPECT_LE(frames, layout::maxSettleFrames + 1);
+    EXPECT_GT(secondsUntilFrame(), 0.0);
+}
+
+// Sizes of elements that went away are dropped: a list whose items change every frame doesn't grow the cache.
+TEST_F(LayoutTest, TheLayoutCacheDropsElementsThatAreGone) {
+    run(R"(
+        items = {}
+        root = Column { align = "center",
+                        Repeater { model = function() return items end,
+                                   delegate = function(item) return Text { text = item } end } }
+        function refill(n) items = {} for i = 1, 20 do items[i] = n .. "-" .. i end end)");
+    std::size_t first = 0;
+    for (int n = 0; n < 50; ++n) {
+        run("refill(" + std::to_string(n) + ")");
+        m_h.renderFrame("root");
+        if (n == 2) first = layout::cacheEntries();
+    }
+    EXPECT_GE(first, 20u);
+    EXPECT_LE(layout::cacheEntries(), first + 25u); // at most this frame's and the last frame's items
+    EXPECT_TRUE(luaui::errors().empty());
 }

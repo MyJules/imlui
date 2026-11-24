@@ -7,6 +7,7 @@ import imgui;
 import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
+import imlui.ui.layout_cache;
 import imlui.widgets.common;
 import imlui.widgets.surface;
 
@@ -31,7 +32,7 @@ namespace imlui::md {
 namespace {
 
 struct CardFrame {
-    ImGuiID sizeKey;  ///< where the card's height is stored for next frame's shadow
+    ImGuiID sizeKey; ///< the card's size in the layout cache, for the next frame's shadow
 };
 
 std::vector<CardFrame> cards;
@@ -54,7 +55,10 @@ void beginCard(const char* id, CardVariant v, float width, float padding, float 
                               : v == CardVariant::Outlined ? s.surface
                                                            : s.surfaceContainerLow);
     if (v == CardVariant::Elevated) {
-        float lastH = ImGui::GetStateStorage()->GetFloat(key, 0.0f);
+        // The shadow is drawn before the card's content, so it takes the card's height from the last frame; another
+        // frame follows when the height changed (or on the first, which has no shadow yet).
+        const float lastH = layout::lastSize(key).value_or(ImVec2{}).y;
+        layout::assumeHeight(key, lastH);
         if (lastH > 0) {
             ImVec2 p = ImGui::GetCursorScreenPos();
             drawShadow(ImGui::GetWindowDrawList(), p, {p.x + w, p.y + lastH}, rnd, 1.0f);
@@ -77,10 +81,10 @@ void beginCard(const char* id, CardVariant v, float width, float padding, float 
 
 void endCard() {
     popSurface();
-    float h = ImGui::GetWindowSize().y;
+    const ImVec2 size = ImGui::GetWindowSize();
     ImGui::EndChild();
     if (!cards.empty()) {
-        ImGui::GetStateStorage()->SetFloat(cards.back().sizeKey, h);
+        layout::recordSize(cards.back().sizeKey, size);
         cards.pop_back();
     }
 }

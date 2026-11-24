@@ -79,10 +79,8 @@ void NavigationRail::render(Frame& frame) {
 
     // The destinations scroll in a child region below the header, from there to the rail's bottom edge. While
     // they fit, the region shows no scrollbar and the layout is the plain stack: `align` places them in the
-    // height left above the 12dp bottom margin, using their total height on the last frame. When they don't, a
-    // thin themed scrollbar appears in the rail's right gutter; the destinations keep their place and width.
-    ImGuiStorage* st = ImGui::GetStateStorage();
-    const ImGuiID totalKey = ImGui::GetID("##railItemsH");
+    // height left above the 12dp bottom margin, by their heights on the last frame. When they don't, a thin themed
+    // scrollbar appears in the rail's right gutter; the destinations keep their place and width.
     const float regionH = std::max(1.0f, p.y + h - y);
     const float bottomMargin = frame.dp(12);
     ImGui::SetCursorScreenPos({p.x, y});
@@ -93,11 +91,20 @@ void NavigationRail::render(Frame& frame) {
     {
         const ImVec2 q = ImGui::GetCursorScreenPos();
         const float spacing = frame.dp(m_spacing);
-        float iy = q.y + std::max(0.0f, std::floor((regionH - bottomMargin - st->GetFloat(totalKey, 0.0f)) *
-                                                   Frame::alignFactor(m_align)));
-        const float top = iy;
-        const NavigationScope scope{{NavigationScope::Style::Rail, w}};
+        // The children's IDs are in the region's ID scope: read their sizes in it too.
+        const float align = Frame::alignFactor(m_align);
+        float total = 0.0f;
         bool first = true;
+        if (align > 0.0f) {
+            frame.forEachChild([&](Frame::Child& child) {
+                if (!child.isVisual()) return;
+                total += child.lastHeight() + (first ? 0.0f : spacing);
+                first = false;
+            });
+        }
+        float iy = q.y + std::max(0.0f, std::floor((regionH - bottomMargin - total) * align));
+        const NavigationScope scope{{NavigationScope::Style::Rail, w}};
+        first = true;
         frame.forEachChild([&](Frame::Child& child) {
             if (!child.isVisual()) {
                 child.render();
@@ -107,7 +114,6 @@ void NavigationRail::render(Frame& frame) {
             iy += renderCentered(child, q.x, w, iy);
             first = false;
         });
-        st->SetFloat(totalKey, iy - top);
         // The bottom margin is part of the scrolled content, so the last destination scrolls clear of the edge.
         ImGui::SetCursorScreenPos({q.x, iy});
         ImGui::Dummy({1.0f, bottomMargin});
