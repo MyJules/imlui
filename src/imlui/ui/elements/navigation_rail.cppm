@@ -66,7 +66,7 @@ void NavigationRail::declare(TypeBuilder<NavigationRail>& type) {
 void NavigationRail::render(Frame& frame) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float w = frame.dp(80);
-    const float h = std::max(frame.resolvedHeight(ImGui::GetContentRegionAvail().y), frame.dp(80));
+    const float h = std::max(frame.resolvedHeight(frame.available().y), frame.dp(80));
     const Color bg = m_color.value_or(frame.scheme().surface);
     md::fillRoundRect(frame.drawList(), p, {p.x + w, p.y + h}, 0.0f, bg);
     md::pushSurface(bg);

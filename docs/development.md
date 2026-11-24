@@ -202,7 +202,9 @@ conventions they share, and new built-ins follow them:
 9. **Sizes** go through one rule: pass `frame.size("width")` to an `md::` widget (it resolves it with
    `md::itemWidth`), or resolve it yourself with `frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`
    when the element sizes itself. Both use `resolveSize` (`imlui.ui.item_size`), so `-1` is exactly the available
-   space and `< -1` exactly that minus `|v|` dp everywhere. Don't compute `avail + w` by hand.
+   space and `< -1` exactly that minus `|v|` dp everywhere. Don't compute `avail + w` by hand, and don't read
+   `ImGui::GetContentRegionAvail()` for a width: `frame.available()` (the layout box, `imlui.ui.layout_box`) knows
+   what the parent gave, the window region doesn't.
 
 ## Adding a native function
 

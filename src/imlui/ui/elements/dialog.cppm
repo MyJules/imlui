@@ -9,6 +9,7 @@ import imlui.ui.frame_request;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.layout_box;
 
 export namespace imlui {
 
@@ -94,7 +95,10 @@ void Dialog::render(Frame& frame) {
         }
     }
     if (md::beginDialog(title.c_str(), &open, frame.size("width"), m_icon)) {
-        frame.renderStack();
+        {
+            const layout::BoxScope box{layout::regionBox(), layout::BoxScope::Mirror::None};
+            frame.renderStack();
+        }
         md::endDialog();
     }
     if (open != m_open) {

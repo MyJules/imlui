@@ -42,12 +42,13 @@ module :private;
 namespace imlui {
 
 void Canvas::declare(TypeBuilder<Canvas>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("animated", &Canvas::animated, &Canvas::setAnimated).signal("onClicked").signal("onPaint");
 }
 
 void Canvas::render(Frame& frame) {
     // Unset: the available width, 200dp high.
-    const float w = frame.resolvedWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x));
+    const float w = frame.resolvedWidth(std::max(1.0f, frame.available().x));
     const float h = frame.resolvedHeight(frame.dp(200));
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const bool clicked = ImGui::InvisibleButton("##canvas", {w, h});

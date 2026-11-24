@@ -10,6 +10,7 @@ import imlui.theme.font_scope;
 import imlui.ui.elements.divider;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.layout_box;
 
 export namespace imlui {
 
@@ -47,7 +48,11 @@ void Separator::render(Frame& frame) {
     }
     const FontScope font{TextStyle::TitleSmall};
     ImGui::PushStyleColor(ImGuiCol_Text, theme().scheme.onSurfaceVariant.vec4());
+    // ImGui draws the rule to the window's edge: clip it to the layout box's.
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::PushClipRect({p.x, p.y}, {layout::boxRight(), p.y + ImGui::GetFrameHeight() * 2.0f}, true);
     ImGui::SeparatorText(m_text.c_str());
+    ImGui::PopClipRect();
     ImGui::PopStyleColor();
 }
 

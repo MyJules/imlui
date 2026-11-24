@@ -54,6 +54,7 @@ module :private;
 namespace imlui {
 
 void Slider::declare(TypeBuilder<Slider>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("value", &Slider::value, &Slider::setValue)
         .property("from", &Slider::from, &Slider::setFrom)
         .property("to", &Slider::to, &Slider::setTo)

@@ -119,7 +119,8 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `withElementProp(key, f)`, `renderElementProp(key)` | A prop whose value is an element (`menuBar = MenuBar { ... }`, `header = ...`): `f(Frame::Child&)` is called when it's set and visible; `renderElementProp` just renders it at the cursor. |
 | `attachMenu(clicked)` | The `menu` prop (a `Menu` element) as a popup anchored to the last item: opened when `clicked`, rendered while open. Call it right after the widget that opens it. |
 | `size(key)`, `size(key, ifAuto)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values). The second form returns `ifAuto` for an unset (0) size: `size("width", -1)` fills by default. Pass it to the `md::` widgets, which resolve it. |
-| `resolvedWidth(natural)`, `resolvedHeight(natural)` | `width` / `height` resolved to pixels against the available space with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset. Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
+| `available()` | The space available at the cursor (`ImVec2`, pixels): the width to the right edge of the layout box the parent gave (a fixed `Column`, a `Row` share, a `Grid` cell, else the window's content region), and the height left in the window. Use it instead of `ImGui::GetContentRegionAvail()`, which only knows the window. |
+| `resolvedWidth(natural)`, `resolvedHeight(natural)` | `width` / `height` resolved to pixels against `available()` with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset (`resolvedWidth(frame.available().x)` fills by default). Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
 | `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; `"start"`/`"center"`/`"end"` as 0/0.5/1. |
 | `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
 | `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes. |
@@ -137,6 +138,8 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `Frame::Child` member | What |
 |---|---|
 | `render()` | Renders the child at the cursor through the renderer, with the same per-element wrapper as everywhere (see below). False if it's hidden or unknown. Afterwards a visual child is the last ImGui item (`ImGui::GetItemRectSize()`), and its size is stored for the next frame. |
+| `render(right)` | The same inside a layout box ending at screen x `right`: the child's available width (fills, `align`, text wrapping, raw ImGui item widths) is `right - cursor x`. How a layout gives a child less than its own width (a `Row` share, a column of a custom grid). |
+| `fillsWidth()` | Whether the child fills the available width: a fill or fill-minus `width` (`fillWidth`), or no `width` on a type that fills by default (`fillsWidth()` / `fillsWidthWhen()` in its `declare`). Read it before rendering to share space, like `Row`. May sync the child's properties. |
 | `isVisual()` | False for non-visual types (`Timer`, `Dialog`, ...). Layouts render those where they are and don't place, count or space them. |
 | `node()`, `type()` | The child's element table and its type name (`"Spacer"`). |
 | `id()` | A stable ImGui ID for the child in the parent's ID scope, for your own per-child state in `ImGui::GetStateStorage()`. |
@@ -144,18 +147,31 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `as<T>()` | The C++ instance of a typed child as a `T*`, with its declared properties **synced first**, so the parent reads this frame's values (`child.as<Tab>()->title()`). `nullptr` when the child isn't a typed element or not a `T`. `syncProperties()` does the sync and returns the `ScriptObject*`. |
 
 ```cpp
-void Row::render(imlui::Frame& frame) {
+// A simplified Row: each child gets an equal column of the available width, vertically centered.
+void Columns::render(imlui::Frame& frame) {
     const ImVec2 start = ImGui::GetCursorScreenPos();
+    int n = 0;
+    frame.forEachChild([&](imlui::Frame::Child& child) { n += child.isVisual() ? 1 : 0; });
+    const float colW = n > 0 ? frame.available().x / static_cast<float>(n) : 0.0f;
     float x = start.x;
     frame.forEachChild([&](imlui::Frame::Child& child) {
         if (!child.isVisual()) { child.render(); return; }   // a Timer, a Dialog, ...
         const float h = child.lastHeight();                  // measured last frame
         ImGui::SetCursorScreenPos({x, start.y + std::max(0.0f, (m_height - h) * 0.5f)});
-        child.render();
-        x += ImGui::GetItemRectSize().x + frame.dp(8);
+        child.render(x + colW);                              // fills in the child stop at its column
+        x += colW;
     });
 }
 ```
+
+Layout boxes (module `imlui.ui.layout_box`, namespace `imlui::layout`) are what `available()` reads. To give all
+your children a narrower width, push one around them: `const layout::BoxScope box{layout::boxTo(right)};` (for one
+child, `child.render(right)` does it). An element that opens its own region (`ImGui::BeginChild`, a popup) can push
+`layout::BoxScope{layout::regionBox(), layout::BoxScope::Mirror::None}` after it; without one, its children measure
+that window's content region anyway. A box also sets ImGui's item width and text wrap position, so **raw ImGui
+widgets follow it**: `ImGui::SliderFloat` takes the box's width and `ImGui::TextWrapped` wraps at its edge, inside a
+fixed `Column` too. (Plain `ImGui::Text` wraps there as well while a box is pushed; `md::text` without `wrap` stays on
+one line.)
 
 For a child that is still a handler-function element, read its props through `child.node()`
 (`child.node().string("title")`).
@@ -238,11 +254,17 @@ type.method("grow", imlui::overload<double>(&Shape::grow))              // doubl
     .property("size", imlui::constOverload<>(&Shape::size), imlui::overload<double>(&Shape::setSize));
 ```
 
-### `nonVisual()` and `defaultProperty(name)`
+### `nonVisual()`, `defaultProperty(name)` and `fillsWidth()`
 
 - `type.nonVisual()` makes the element take no layout space or spacing, like `Timer` or `Dialog`.
 - `type.defaultProperty("value")` lets a positional first value set the property, `Gauge { 0.5 }`, like `text`
   for `Button { "OK" }`. A table in that position is a child, not a value.
+- `type.fillsWidth()` says that an unset `width` fills the available width (the element's own default, like
+  `width = -1`), as for `Card`, `TextField` or `Slider`. A `Row` reads it **before** rendering the child and gives it
+  a share of the free width instead of letting it run to the row's edge. `type.fillsWidthWhen(pred)` decides it per
+  element from the synced instance, `pred(const T&)`: `Text` declares `.fillsWidthWhen(&Text::wrap)`, `Spacer`
+  `.fillsWidthWhen(&Spacer::fill)`. Declare it when your `render()` fills by default (`frame.resolvedWidth(
+  frame.available().x)`, `frame.size("width", -1)`); a `width` prop always wins (`Frame::Child::fillsWidth()`).
 
 ### Aliases
 

@@ -7,13 +7,15 @@ import imgui;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.layout_box;
 
 export namespace imlui {
 
 /// A vertical stack (also registered as Item).
 ///
 /// Props:   padding = 0, spacing = unset (ImGui item spacing), align = "start" ("center", "end")
-/// Raw:     width (a fixed width is the children's available width: `align`, fills and wrapping use it)
+/// Raw:     width (the children's layout box: `align`, fills and wrapping use it; unset: the parent's box, less the
+///          padding on the right)
 class Column final : public Element {
 public:
     static void declare(TypeBuilder<Column>& type);
@@ -41,37 +43,6 @@ module :private;
 
 namespace imlui {
 
-namespace {
-
-/// Moves the right edge of the current window's content region (its WorkRect, and its ContentRegionRect, which
-/// GetContentRegionAvail() reads outside tables) to `right` for its lifetime. ImGui has no public API for it;
-/// tables narrow the same rects for their cells. The window recomputes both at its next Begin(), so a Lua error
-/// that unwinds past the guard can't leak the narrowing into the next frame.
-class ContentRegionGuard {
-public:
-    explicit ContentRegionGuard(float right)
-        : m_window{ImGui::GetCurrentWindow()}, m_work{m_window->WorkRect.Max.x},
-          m_content{m_window->ContentRegionRect.Max.x} {
-        m_window->WorkRect.Max.x = right;
-        m_window->ContentRegionRect.Max.x = right;
-    }
-    ~ContentRegionGuard() {
-        m_window->WorkRect.Max.x = m_work;
-        m_window->ContentRegionRect.Max.x = m_content;
-    }
-    ContentRegionGuard(const ContentRegionGuard&) = delete;
-    ContentRegionGuard& operator=(const ContentRegionGuard&) = delete;
-    ContentRegionGuard(ContentRegionGuard&&) = delete;
-    ContentRegionGuard& operator=(ContentRegionGuard&&) = delete;
-
-private:
-    ImGuiWindow* m_window;
-    float m_work;
-    float m_content;
-};
-
-} // namespace
-
 void Column::declare(TypeBuilder<Column>& type) {
     type.property("padding", &Column::padding, &Column::setPadding)
         .property("spacing", &Column::spacing, &Column::setSpacing)
@@ -79,30 +50,30 @@ void Column::declare(TypeBuilder<Column>& type) {
 }
 
 void Column::render(Frame& frame) {
-    const float pad = m_padding;
+    const float pad = frame.dp(m_padding);
     if (pad > 0) {
-        ImGui::Dummy({0, frame.dp(pad) - ImGui::GetStyle().ItemSpacing.y});
-        ImGui::Indent(frame.dp(pad));
+        ImGui::Dummy({0, pad - ImGui::GetStyle().ItemSpacing.y});
+        ImGui::Indent(pad);
     }
-    const float w = frame.size("width");
-    if (w != 0) {
-        // A fixed-width column: reserve the width, and narrow the window's content region to it while the
-        // children render, so everything that measures the available width (GetContentRegionAvail: `align`,
-        // fills, md::itemWidth, text wrapping) measures the column instead of the window.
+    const bool sized = frame.size("width") != 0;
+    if (sized || pad > 0) {
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        const float ww = frame.resolvedWidth(0.0f);
-        ImGui::Dummy({ww, 0});
-        ImGui::SetCursorScreenPos(p);
-        const ContentRegionGuard region{p.x + ww};
-        ImGui::PushItemWidth(ww);
+        float right = layout::boxRight() - pad; // the padding on the right
+        if (sized) {
+            // A fixed or fill width: reserve it (the column is at least that wide), and make it the children's box.
+            const float w = frame.resolvedWidth(0.0f);
+            ImGui::Dummy({w, 0});
+            ImGui::SetCursorScreenPos(p);
+            right = p.x + w;
+        }
+        const layout::BoxScope box{layout::boxTo(right)};
         frame.renderStack();
-        ImGui::PopItemWidth();
     } else {
-        frame.renderStack();
+        frame.renderStack(); // the parent's box
     }
     if (pad > 0) {
-        ImGui::Unindent(frame.dp(pad));
-        ImGui::Dummy({0, frame.dp(pad) - ImGui::GetStyle().ItemSpacing.y});
+        ImGui::Unindent(pad);
+        ImGui::Dummy({0, pad - ImGui::GetStyle().ItemSpacing.y});
     }
 }
 

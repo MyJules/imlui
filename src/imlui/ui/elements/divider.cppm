@@ -36,6 +36,7 @@ module :private;
 namespace imlui {
 
 void Divider::declare(TypeBuilder<Divider>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("inset", &Divider::inset, &Divider::setInset)
         .property("insetEnd", &Divider::insetEnd, &Divider::setInsetEnd);
 }

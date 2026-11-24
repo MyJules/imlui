@@ -84,7 +84,9 @@ available width (or height) everywhere:
 | `0` (or unset) | Automatic: the element's own default, given in its table. |
 | `fillWidth = true` | Counts as `width = -1`. |
 
-A fill is at least 1px. Heights fill the space left below the element in its window or scroll region.
+The available width is the space the parent gives: the width of a `Column` with `width` (less its `padding`), a
+`Grid` cell, the content of a `Card` or `ScrollView`, else the window's. A fill is at least 1px. Heights fill the
+space left below the element in its window or scroll region.
 
 Only the elements whose table lists `width` / `height` read them. `Window`'s `width`/`height` and
 `ModalNavigationDrawer`'s `width` are plain dp numbers instead (no fill values, no `fillWidth`).
@@ -256,22 +258,28 @@ A vertical stack. `Item` is an alias.
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child. |
-| `padding` | number | `0` | Inset at the top, bottom and start. |
-| `width` | size | `0` (auto) | *Raw.* A fixed or fill width. It is the children's available width: they fill it (`fillWidth`, fill-minus widths), `align` within it and wrap text at it, also inside a `Row`. |
+| `padding` | number | `0` | Inset on every side: the children start `padding` in and, without a `width`, fill up to `padding` from the right edge. |
+| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the children's available width. They fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. |
 
 ### Row
 
-Children side by side. Sizes are measured on the previous frame, so a layout settles within one frame.
+Children side by side, as a flex row. Children that **fill** share the width the others leave, in equal parts:
+a fill or fill-minus `width` (`fillWidth = true`, `width = -16`), an element that fills by default (`0 (fill)` in
+its table: `TextField`, `Card`, `Slider`, `Grid`, `ScrollView`, ...), wrapping text (`Text { wrap = true }`) and
+`Spacer { fill = true }`. Each fill is laid out in its share: it fills it, a fill-minus width is its share minus
+`|v|`, wrapping text wraps at it. The other children keep their own width, measured on the previous frame (a layout
+settles within one frame), and are bounded by the children after them, so a fill nested inside one stops there.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Horizontal gap (dp). |
 | `align` | `"center"` \| `"top"` \| `"bottom"` | `"center"` | Vertical alignment of the children. |
-| `justify` | `"start"` \| `"center"` \| `"end"` \| `"spaceBetween"` | `"start"` | Horizontal distribution. Ignored while the row has fill spacers. |
-| `width` | size | `0` (available width) | *Raw.* The width used for `justify` and fills. |
+| `justify` | `"start"` \| `"center"` \| `"end"` \| `"spaceBetween"` | `"start"` | Horizontal distribution. Ignored while the row has fills. |
+| `width` | size | `0` (available width) | *Raw.* The row's width: the children share it, and `justify` distributes in it. |
 
-`Spacer { fill = true }` children share the remaining width: `Row { Spacer { fill = true }, Button { "OK" } }`
-right-aligns the button. Non-visual children take no place in the row.
+`Row { Spacer { fill = true }, Button { "OK" } }` right-aligns the button; `Row { TextField {}, Button { "Send" } }`
+gives the field what the button leaves; `Row { Button { "A", fillWidth = true }, Button { "B", fillWidth = true } }`
+gives each button half. Non-visual children take no place in the row.
 
 ### Grid
 
@@ -593,7 +601,7 @@ ApplicationWindow { menuBar = MenuBar {
 | `text` | string | `""` | Positional. Content. |
 | `style` | style | `"bodyLarge"` | Type-scale role. Unknown names draw as `bodyLarge`. |
 | `color` | color | — | Text color. Unset: the theme's text color (`onSurface`). |
-| `wrap` | bool | `false` | Wraps at the available width. |
+| `wrap` | bool | `false` | Wraps at the available width (a fixed `Column`'s, a `Grid` cell's, ...). In a `Row`, wrapping text takes a share of the free width and wraps at it. |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. |
 | `font` | string | `""` | A [font the theme declares](theming.md#fonts) (`"mono"`, or `"regular"` / `"medium"`), drawn at the style's size. `""` or an undeclared name: the style's own face. |
 
@@ -664,7 +672,7 @@ Empty space.
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `width`, `height` | size | `0` (1px) | *Raw.* Fixed space, or fill / fill minus like every size. |
-| `fill` | bool | `false` | In a `Row`, takes a share of the remaining width (the `Row` reads it). |
+| `fill` | bool | `false` | Fills the available width when `width` is unset: in a `Row`, a share of the remaining width. |
 
 ---
 

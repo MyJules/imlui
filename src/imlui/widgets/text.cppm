@@ -9,11 +9,13 @@ import imlui.theme.dpi;
 import imlui.theme.typography;
 import imlui.theme.font_scope;
 import imlui.ui.frame_request;
+import imlui.ui.layout_box;
 import imlui.widgets.common;
 
 export namespace imlui::md {
 
-/// Text in a Material type style. `align` (0..1) positions unwrapped text in the available width.
+/// Text in a Material type style. `wrap` wraps it at the layout box's right edge; `align` (0..1) positions unwrapped
+/// text in the available width.
 void text(std::string_view s, TextStyle style, std::optional<Color> color = std::nullopt, bool wrap = false,
           float align = 0.0f);
 
@@ -23,7 +25,7 @@ void icon(std::string_view name, float size = 24.0f, std::optional<Color> color 
 /// Plain tooltip (inverseSurface) for the last item.
 void tooltip(std::string_view s);
 
-/// Full-width 1dp outlineVariant line.
+/// 1dp outlineVariant line across the available width.
 void divider(float insetStart = 0.0f, float insetEnd = 0.0f);
 
 } // namespace imlui::md
@@ -35,14 +37,15 @@ namespace imlui::md {
 void text(std::string_view s, TextStyle style, std::optional<Color> color, bool wrap, float align) {
     FontScope fs{style};
     if (color) ImGui::PushStyleColor(ImGuiCol_Text, color->vec4());
-    if (wrap) ImGui::PushTextWrapPos(0.0f);
+    // Unwrapped text stays on one line even in a box that mirrors its edge as ImGui's wrap position.
+    ImGui::PushTextWrapPos(wrap ? layout::textWrapPos() : -1.0f);
     if (align > 0.0f && !wrap) {
         float w = ImGui::CalcTextSize(s.data(), s.data() + s.size()).x;
-        float avail = ImGui::GetContentRegionAvail().x;
+        float avail = layout::availableWidth();
         if (avail > w) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - w) * align);
     }
     ImGui::TextUnformatted(s.data(), s.data() + s.size());
-    if (wrap) ImGui::PopTextWrapPos();
+    ImGui::PopTextWrapPos();
     if (color) ImGui::PopStyleColor();
 }
 
@@ -76,7 +79,7 @@ void tooltip(std::string_view s) {
 
 void divider(float insetStart, float insetEnd) {
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float w = ImGui::GetContentRegionAvail().x;
+    float w = layout::availableWidth();
     ImGui::Dummy({w, dp(1)});
     hLine(ImGui::GetWindowDrawList(), p.x + dp(insetStart), p.x + w - dp(insetEnd), p.y, scheme().outlineVariant,
           dp(1));

@@ -67,7 +67,8 @@ void Text::declare(TypeBuilder<Text>& type) {
         .property("wrap", &Text::wrap, &Text::setWrap)
         .property("align", &Text::align, &Text::setAlign)
         .property("font", &Text::font, &Text::setFont)
-        .defaultProperty("text");
+        .defaultProperty("text")
+        .fillsWidthWhen(&Text::wrap); // wrapping text takes a share of a Row and wraps at it
 }
 
 void Text::render(Frame&) {

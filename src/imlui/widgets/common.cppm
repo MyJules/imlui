@@ -18,6 +18,7 @@ import imlui.theme.icons;
 import imlui.theme.theme;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
+import imlui.ui.layout_box;
 
 export namespace imlui::md {
 
@@ -55,7 +56,7 @@ float animate(ImGuiID id, float target, float speed = 14.0f);
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
 float stateLayer(ImGuiID id, bool hovered, bool active);
 
-/// Resolves a requested width against the available width (resolveSize): > 0 fixed, -1 fill, < -1 fill minus
+/// Resolves a requested width against the available width of the layout box (resolveSize): > 0 fixed, -1 fill, < -1 fill minus
 /// |requested|, 0 natural.
 [[nodiscard]] float itemWidth(float requested, float natural);
 
@@ -142,7 +143,7 @@ float stateLayer(ImGuiID id, bool hovered, bool active) {
 }
 
 float itemWidth(float requested, float natural) {
-    return resolveSize(requested, ImGui::GetContentRegionAvail().x, natural);
+    return resolveSize(requested, layout::availableWidth(), natural);
 }
 
 ImVec2 measure(TextStyle style, std::string_view s) {

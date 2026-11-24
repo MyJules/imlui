@@ -52,6 +52,7 @@ module :private;
 namespace imlui {
 
 void TopAppBar::declare(TypeBuilder<TopAppBar>& type) {
+    type.fillsWidth(); // an unset width fills
     type.property("title", &TopAppBar::title, &TopAppBar::setTitle)
         .property("navigationIcon", &TopAppBar::navigationIcon, &TopAppBar::setNavigationIcon)
         .property("variant", &TopAppBar::variant, &TopAppBar::setVariant)
@@ -65,7 +66,7 @@ void TopAppBar::render(Frame& frame) {
     const float barH = frame.dp(64);
     const float h = medium ? frame.dp(112) : large ? frame.dp(152) : barH;
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = frame.resolvedWidth(ImGui::GetContentRegionAvail().x);
+    const float w = frame.resolvedWidth(frame.available().x);
     ImDrawList* dl = frame.drawList();
     const Color bg = m_color.value_or(md::surfaceColor());
     dl->AddRectFilled(p, {p.x + w, p.y + h}, ImGui::ColorConvertFloat4ToU32(bg.vec4()));
