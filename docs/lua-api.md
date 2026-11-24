@@ -21,9 +21,15 @@ TextField { id = "nameField", label = "Name", text = "" },
 Text { text = function() return "Hello, " .. nameField.text end },
 ```
 
-Ids are global to the loaded UI. Because they are looked up after `ui.*` and globals, an id such as `"table"`,
-`"io"` or `"state"` would be shadowed. The lookup is lazy, so a binding can refer to an id that is declared later in the
+Ids are global to the loaded UI. The lookup is lazy, so a binding can refer to an id that is declared later in the
 file.
+
+**Id collisions.** Because ids are looked up after `ui.*` and the globals, an id such as `"table"`, `"io"` or
+`"state"` can't be referenced by name: the name finds the global or the `ui` member instead. The element
+constructor reports such an id in the error overlay when the element is created, for example
+`element id 'io' collides with Lua global 'io'; it can't be referenced by name — rename it` (or
+`... collides with ui member 'ui.state' ...`). The element is still created, and `ui.ids.io` still holds it; only
+the free name doesn't. Rename the id. (`ui.checkId(id)` runs the same check and returns `false` for such an id.)
 
 Indices (`currentIndex`, `currentRow`, delegate `index`) are **1-based**.
 
@@ -419,3 +425,5 @@ it. The ones not wrapped are marked **native only**.
 | `native.imguiVersion() -> string` | Backs `imguiVersion()`. |
 | `native.log(level, message)` | Backs `log.*`. `level` is `"trace"`, `"debug"`, `"info"`, `"warn"` or `"error"` (anything else logs at info). |
 | `native.injectMouse(x, y, down?, wheel?)` | **Native only.** Feeds ImGui a mouse event for scripted UI tests: position in window coordinates, an optional left-button state, and an optional vertical wheel delta. See [Development](development.md#scripted-ui-tests). |
+| `native.injectKey(key, down, ctrl?, shift?, alt?)` | **Native only.** Feeds ImGui a key event for scripted UI tests, with the modifier states (sent first, so the key sees them). `key` is an ImGui key name, case-insensitive: `"Escape"`, `"Enter"`, `"Tab"`, `"Space"`, `"A"`..`"Z"`, `"0"`..`"9"`, `"F1"`..`"F12"`, `"Equal"`, `"Minus"`, `"LeftArrow"`, `"Keypad1"`, ..., or an alias (`"Esc"`, `"Return"`, `"Left"`/`"Right"`/`"Up"`/`"Down"`, `"Ctrl"`, `"Shift"`, `"Alt"`, `"="`, `"-"`). An unknown name raises an error. Starts the same settle period as real input. A press and a release sent together are seen in consecutive frames. |
+| `native.reportError(message)` | **Native only.** Shows `message` in the error overlay (and logs it once). `ui.reportError(message)` wraps it. |

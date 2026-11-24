@@ -16,8 +16,11 @@
 // created for.
 //
 // Every registered element type is also a Renderer element whose handler syncs the declared
-// properties from the element table into the instance (setters run only on a changed value), calls
-// componentComplete() once, and then Element::render(). Main thread only.
+// properties from the element table into the instance (setters run only on a changed value; nil resets a
+// property to its default), and then calls Element::render(). Elements that aren't rendered are synced
+// lazily: before a method called from Lua runs on them, and when a parent or another element asks for them
+// (sync(), Frame::Child::as<T>()). componentComplete() runs once, right after the first sync.
+// Main thread only.
 module;
 
 #include <algorithm>
@@ -27,6 +30,7 @@ module;
 #include <iterator>
 #include <memory>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -65,14 +69,27 @@ public:
         return addType(std::move(info));
     }
 
-    /// Exposes `object` to Lua as the global `name`. The object isn't owned and must outlive every Lua
-    /// state the registry installs into (in practice: the Engine's run()).
+    /// Exposes `object` to Lua as the global `name`. The object isn't owned: it must outlive every Lua
+    /// state the registry installs into (in practice: it must outlive the Engine's run()). Prefer the
+    /// shared_ptr overload when the object has no natural owner that outlives the engine.
     template <class T>
         requires std::derived_from<T, ScriptObject>
     TypeInfo& registerSingleton(std::string name, T& object) {
         auto info = std::make_unique<TypeInfo>(name);
         declareType<T>(*info);
-        return addSingleton(std::move(name), object, std::move(info));
+        return addSingleton(std::move(name), object, std::move(info), nullptr);
+    }
+
+    /// Exposes `object` to Lua as the global `name` and keeps it alive as long as the registry (the Engine)
+    /// exists, so it outlives every Lua state. Throws std::invalid_argument for a null pointer.
+    template <class T>
+        requires std::derived_from<T, ScriptObject>
+    TypeInfo& registerSingleton(std::string name, std::shared_ptr<T> object) {
+        if (!object) throw std::invalid_argument{"registerSingleton(\"" + name + "\"): null object"};
+        auto info = std::make_unique<TypeInfo>(name);
+        declareType<T>(*info);
+        ScriptObject& ref = *object;
+        return addSingleton(std::move(name), ref, std::move(info), std::shared_ptr<ScriptObject>{std::move(object)});
     }
 
     /// Installs the types and singletons into a new Lua state (before lua/imlui.lua is loaded).
@@ -87,7 +104,8 @@ public:
     [[nodiscard]] std::vector<std::string> typeNames() const;
 
     /// The instance of the element table `node`, created now if the table has none yet. Then syncs
-    /// the declared properties into it. nullptr if `node` isn't a registered type.
+    /// the declared properties into it (and calls componentComplete() after the first sync). nullptr if
+    /// `node` isn't a registered type.
     Element* sync(const luaui::Node& node) const;
 
 private:
@@ -111,10 +129,13 @@ private:
         std::string name;
         ScriptObject* object;
         const TypeInfo* type;
+        std::shared_ptr<ScriptObject> owner; ///< set by the shared_ptr overload
+        TypeInfo::Defaults defaults;         ///< captured at registration
     };
 
     TypeInfo& addType(std::unique_ptr<TypeInfo> info);
-    TypeInfo& addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info);
+    TypeInfo& addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info,
+                           std::shared_ptr<ScriptObject> owner);
 
     Renderer& m_renderer;
     /// What Frames use to resolve typed children (Frame::Child::as): sync(node).
@@ -143,14 +164,24 @@ constexpr const char* singletonsKey = "imlui.singletons";
 constexpr const char* sentinelKey = "imlui.types.sentinel";
 constexpr const char* markerKey = "__imlui";
 
-/// The userdata behind `__native` and behind a singleton global.
+/// The userdata behind `__native` and behind a singleton global. Its __gc destroys it (and, for an owned
+/// element, the instance).
 struct Box {
     ScriptObject* object = nullptr;
     Element* element = nullptr; ///< set for owned element instances
     const TypeInfo* type = nullptr;
+    TypeInfo::Defaults defaults; ///< what nil resets each property to
     bool owned = false;
     bool complete = false; ///< componentComplete() was called
+    bool syncing = false;  ///< a sync is running (a binding that calls a method of its own element)
 };
+
+/// Runs the Box destructor and leaves an empty Box in the userdata memory, so a finalized userdata that
+/// is still reachable (resurrected by another finalizer) reads as "no object" instead of freed memory.
+void clearBox(Box* b) {
+    std::destroy_at(b);
+    std::construct_at(b);
+}
 
 void* asVoid(const void* p) { return const_cast<void*>(p); }
 
@@ -195,14 +226,62 @@ void pushPerType(lua::State* state, const char* key, const TypeInfo* info) {
 
 int instanceGc(lua::State* state) {
     Box* b = boxAt(state, 1);
-    if (!b || !b->owned || !b->element) return 0;
-    Element* e = b->element;
-    b->element = nullptr;
-    b->object = nullptr;
+    if (!b) return 0;
+    Element* e = b->owned ? b->element : nullptr;
+    clearBox(b);
+    if (!e) return 0;
     e->detach();
     e->destroyed();
     delete e;
     return 0;
+}
+
+int singletonGc(lua::State* state) {
+    if (Box* b = boxAt(state, 1)) clearBox(b); // the object itself belongs to the host
+    return 0;
+}
+
+/// Resets property `index` of the object in `b` to its default. Unchanged when it has none.
+void resetProperty(const Box& b, std::size_t index) {
+    const TypeInfo::Property& p = b.type->properties()[index];
+    if (p.reset && index < b.defaults.size() && b.defaults[index]) p.reset(b.defaults[index].get(), *b.object);
+}
+
+/// Syncs the declared properties of the element table at `tbl` into its instance, then calls
+/// componentComplete() if this was the first sync. Skipped while a sync of the same element runs.
+void syncInstance(lua::State* state, int tbl, Box& b) {
+    if (b.syncing || !b.element) return;
+    b.syncing = true;
+    const Node node{state, tbl};
+    const TypeInfo& info = *b.type;
+    const auto& properties = info.properties();
+    for (std::size_t i = 0; i < properties.size(); ++i) {
+        const TypeInfo::Property& p = properties[i];
+        if (!p.assign) continue;
+        node.push(p.name.c_str());
+        if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
+            lua::pop(state);
+            lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child
+            if (lua::istable(state, -1)) {
+                lua::pop(state);
+                lua::pushnil(state);
+            }
+        }
+        if (lua::isnil(state, -1) && !p.nullable) {
+            lua::pop(state); // unset (or a binding that returned nil): back to the default
+            resetProperty(b, i);
+            continue;
+        }
+        if (p.assign(state, -1, *b.object) == TypeInfo::Assign::TypeMismatch)
+            luaui::reportError(info.name() + "." + p.name + ": " + std::string{p.typeName} + " expected, got " +
+                               lua::typeName(state, -1));
+        lua::pop(state);
+    }
+    b.syncing = false;
+    if (!b.complete) {
+        b.complete = true;
+        b.element->componentComplete();
+    }
 }
 
 /// Pushes an error message for a missing property, or the property's value. True on error.
@@ -230,6 +309,9 @@ int methodTrampoline(lua::State* state) {
     const auto index = static_cast<std::size_t>(lua::tointeger(state, lua::upvalueindex(2)));
     Box* b = selfBox(state, 1);
     if (!b || b->type != info || !b->object) lua::error(state, "method called without its object (use obj:method())");
+    // An element that hasn't rendered yet (or not since its props changed) gets its current values first.
+    if (b->element && lua::istable(state, 1)) syncInstance(state, 1, *b);
+    if (!b->object) lua::error(state, "method called on a destroyed object");
     const int n = info->methods()[index].call(state, *b->object, 2);
     if (n < 0) lua::raise(state);
     return n;
@@ -263,6 +345,10 @@ bool assignSingleton(lua::State* state, Box& b) {
         if (!p->assign) {
             lua::pushstring(state, b.type->name() + "." + key + " is read-only");
             return true;
+        }
+        if (lua::isnil(state, 3) && !p->nullable) {
+            resetProperty(b, static_cast<std::size_t>(p - b.type->properties().data()));
+            return false;
         }
         if (p->assign(state, 3, *b.object) == TypeInfo::Assign::TypeMismatch) {
             lua::pushstring(state, b.type->name() + "." + key + ": " + std::string{p->typeName} + " expected, got " +
@@ -320,8 +406,12 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     lua::setmetatable(state, ud);
     try {
         b->element = info.factory()().release();
+        // Right after construction: what nil resets each property to.
+        if (b->element) b->defaults = info.captureDefaults(*b->element);
     } catch (const std::exception& e) {
         luaui::reportError(info.name() + ": constructor failed: " + e.what());
+        delete b->element;
+        b->element = nullptr;
     }
     if (!b->element) {
         lua::pop(state);
@@ -397,39 +487,15 @@ Box* syncBox(const Node& node, const TypeInfo& info) {
         luaui::reportError("element of type '" + info.name() + "' carries an instance of '" + b->type->name() + "'");
         return nullptr;
     }
-    for (const auto& p : info.properties()) {
-        if (!p.assign) continue;
-        node.push(p.name.c_str());
-        if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
-            lua::pop(state);
-            lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child
-            if (lua::istable(state, -1)) {
-                lua::pop(state);
-                lua::pushnil(state);
-            }
-        }
-        if (lua::isnil(state, -1) && !p.nullable) {
-            lua::pop(state); // unset: keep the C++ value
-            continue;
-        }
-        if (p.assign(state, -1, *b->object) == TypeInfo::Assign::TypeMismatch)
-            luaui::reportError(info.name() + "." + p.name + ": " + std::string{p.typeName} + " expected, got " +
-                               lua::typeName(state, -1));
-        lua::pop(state);
-    }
-    return b;
+    syncInstance(state, node.index(), *b);
+    return b->element ? b : nullptr;
 }
 
 void renderTyped(const TypeInfo& info, Renderer& renderer, const Node& node, const Frame::InstanceLookup& instances) {
     Box* b = syncBox(node, info);
     if (!b) return;
-    Element* e = b->element;
-    if (!b->complete) {
-        b->complete = true;
-        e->componentComplete();
-    }
     Frame frame{renderer, node, &instances};
-    e->render(frame);
+    b->element->render(frame);
 }
 
 } // namespace
@@ -449,11 +515,13 @@ TypeInfo& TypeRegistry::addType(std::unique_ptr<TypeInfo> info) {
     return ref;
 }
 
-TypeInfo& TypeRegistry::addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info) {
+TypeInfo& TypeRegistry::addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info,
+                                     std::shared_ptr<ScriptObject> owner) {
     TypeInfo& ref = *info;
     m_infos.push_back(std::move(info));
     std::erase_if(m_singletons, [&](const Singleton& s) { return s.name == name; });
-    m_singletons.push_back({std::move(name), &object, &ref});
+    TypeInfo::Defaults defaults = ref.captureDefaults(object);
+    m_singletons.push_back({std::move(name), &object, &ref, std::move(owner), std::move(defaults)});
     return ref;
 }
 
@@ -494,7 +562,9 @@ void TypeRegistry::install(lua::State* state) {
     lua::setfield(state, -2, "__name");
     lua::setfield(state, lua::registryIndex, instanceMetaKey);
 
-    lua::createtable(state, 0, 6);
+    lua::createtable(state, 0, 7);
+    lua::pushcfunction(state, &singletonGc);
+    lua::setfield(state, -2, "__gc");
     lua::pushcfunction(state, &singletonIndex);
     lua::setfield(state, -2, "__index");
     lua::pushcfunction(state, &singletonNewIndex);
@@ -546,6 +616,7 @@ void TypeRegistry::install(lua::State* state) {
         Box* b = new (lua::newuserdata(state, sizeof(Box), 1)) Box{};
         b->object = s.object;
         b->type = s.type;
+        b->defaults = s.defaults;
         lua::getfield(state, lua::registryIndex, singletonMetaKey);
         lua::setmetatable(state, -2);
         lua::newtable(state); // signal handlers

@@ -10,6 +10,7 @@ module;
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <utility>
@@ -80,6 +81,10 @@ public:
     void show();
     /// Centers the window on the primary monitor.
     void center();
+    /// Keeps the window (with its decorations) inside the work area (the monitor minus task bars and docks)
+    /// of the monitor it overlaps most: shrinks it if it's larger, then moves it left/up if it extends past
+    /// the right or bottom edge (and right/down if it starts before the left or top edge).
+    void keepInWorkArea();
 
     /// Current monitor content scale (DPI factor) of the window.
     [[nodiscard]] float contentScale() const;
@@ -293,6 +298,48 @@ void Window::center() {
     glfwGetMonitorPos(mon, &mx, &my);
     glfwGetWindowSize(m_window, &w, &h);
     if (mode) glfwSetWindowPos(m_window, mx + (mode->width - w) / 2, my + (mode->height - h) / 2);
+}
+
+void Window::keepInWorkArea() {
+    if (!m_window) return;
+    int x = 0, y = 0, w = 0, h = 0;
+    glfwGetWindowPos(m_window, &x, &y);
+    glfwGetWindowSize(m_window, &w, &h);
+    // Decorations (title bar, borders) count: the whole frame must fit.
+    int left = 0, top = 0, right = 0, bottom = 0;
+    glfwGetWindowFrameSize(m_window, &left, &top, &right, &bottom);
+
+    // The monitor with the largest overlap with the frame (the primary one when none overlaps).
+    int count = 0;
+    GLFWmonitor** monitors = glfwGetMonitors(&count);
+    GLFWmonitor* best = glfwGetPrimaryMonitor();
+    long long bestArea = 0;
+    for (int i = 0; i < count; ++i) {
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        glfwGetMonitorWorkarea(monitors[i], &mx, &my, &mw, &mh);
+        const long long ow = std::max(0, std::min(x + w + right, mx + mw) - std::max(x - left, mx));
+        const long long oh = std::max(0, std::min(y + h + bottom, my + mh) - std::max(y - top, my));
+        if (ow * oh > bestArea) {
+            bestArea = ow * oh;
+            best = monitors[i];
+        }
+    }
+    if (!best) return;
+    int ax = 0, ay = 0, aw = 0, ah = 0;
+    glfwGetMonitorWorkarea(best, &ax, &ay, &aw, &ah);
+    if (aw <= 0 || ah <= 0) return;
+
+    const int maxW = std::max(1, aw - left - right), maxH = std::max(1, ah - top - bottom);
+    const int nw = std::min(w, maxW), nh = std::min(h, maxH);
+    // Past the right/bottom edge: move back in; then make sure the top-left (title bar) is on screen.
+    int nx = std::min(x, ax + aw - right - nw), ny = std::min(y, ay + ah - bottom - nh);
+    nx = std::max(nx, ax + left);
+    ny = std::max(ny, ay + top);
+    if (nw != w || nh != h) {
+        log::info("window {}x{} doesn't fit the work area: {}x{}", w, h, nw, nh);
+        glfwSetWindowSize(m_window, nw, nh);
+    }
+    if (nx != x || ny != y) glfwSetWindowPos(m_window, nx, ny);
 }
 
 float Window::contentScale() const { return m_scale; }

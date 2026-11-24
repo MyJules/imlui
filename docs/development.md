@@ -307,13 +307,37 @@ suppressions. Run `clang-asan` before merging larger changes.
   (role lookup, generation), `imlui.theme.theme` (`resolveColor`), and `imlui.lua.*` against a bare `lua::State`
   (prop resolution, `bind` write-back, `themeFromTable`).
 - `types_test.cpp` covers the C++ type system without a window. It installs a `TypeRegistry` into a Lua state
-  that runs `lua/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `notify`/`emit`, `__gc`
-  lifetime, singletons and reinstalling into a new state.
+  that runs `lua/imlui.lua` with a stub `imlui.native`, then checks conversion, sync, `nil` defaults,
+  `notify`/`emit`, `__gc` lifetime, singletons (also `shared_ptr` ones), `overload` and reinstalling into a new
+  state.
+
+### The headless frame harness
+
+Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests/support/headless_frame.cppm`
+(`import imlui.test.headless_frame;`). `tests/CMakeLists.txt` adds every `tests/support/*.cppm` to
+`imlui_tests` as a `CXX_MODULES` file set, so test files import it like any module (they still include only
+`<gtest/gtest.h>`).
+
+| Member | What |
+|---|---|
+| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `Renderer` and a `TypeRegistry`. `builtins` registers the built-in elements and types first, like the engine. |
+| `registerType<T>(name)`, `renderer()`, `types()` | Register element types and handlers before the Lua state starts. |
+| `run(code) -> std::string` | Runs Lua in the UI script environment (`ui.env`: constructors, `state`, `bind`, ids, `ui`), starting the state on first use: the registered types, the real `imlui.native` with empty host hooks, the painter library and `lua/imlui.lua`. Returns the error message, `""` on success: `ASSERT_EQ(h.run("..."), "")`. Assignments to free names stay in the environment. |
+| `renderFrame(name)`, `renderFrames(name, n)` | One ImGui frame each (time advances by `deltaTime`): runs `ui.__tick` (timers, `onFrame`), then renders the element held by `name` in a full-display window. Events queued before (`native.injectKey`, `native.injectMouse`, `ImGui::GetIO()`) are seen. |
+| `instance<T>(name)` | The C++ instance of the element held by `name`, synced like a parent's `Frame::Child::as<T>()`. |
+| `state()`, `frames()` | The Lua state and the number of frames rendered. |
+
+Script errors go to `luaui::errors()`, which the harness clears when it's created and destroyed. One harness at a
+time (ImGui's context and the error list are global). `frame_test.cpp` (Frame, child handles) and
+`element_test.cpp` (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a
+`Dialog` and a `ModalNavigationDrawer` through `native.injectKey`) use it.
 
 ## Scripted UI tests
 
 `native.injectMouse(x, y, down?, wheel?)` feeds ImGui a mouse event: a position in window coordinates, an optional
-left-button state, and an optional vertical wheel delta. Combine it with timers to drive the real UI from a script.
+left-button state, and an optional vertical wheel delta. `native.injectKey(key, down, ctrl?, shift?, alt?)` feeds
+a key event by name (`"Escape"`, `"Enter"`, `"Tab"`, `"A"`, `"Equal"`, ...), with the modifier states;
+`native.injectKey("Escape", true); native.injectKey("Escape", false)` presses and releases Escape over two frames. Combine it with timers to drive the real UI from a script.
 Use the `GALLERY_PAGE` environment variable to start the gallery on a given page.
 
 ```lua

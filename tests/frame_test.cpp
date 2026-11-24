@@ -1,7 +1,7 @@
 // Tests for Frame (imlui.types.frame) as typed elements use it: child handles (visibility, non-visual
 // children, last-frame sizes, as<T>() with synced properties), element-valued props, type aliases, subclass
 // declarations (TypeBuilder::extends) and typed types replacing handlers of the same name. Renders headless
-// ImGui frames (no window, no backend) over lua/imlui.lua with a stub `imlui.native`.
+// ImGui frames (no window, no backend) through the test harness (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
 import lua;
@@ -15,6 +15,7 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.types.registry;
+import imlui.test.headless_frame;
 
 using namespace imlui;
 using luaui::Node;
@@ -135,69 +136,27 @@ private:
 class FrameTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        luaui::clearErrors();
-        m_context = ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
-        io.IniFilename = nullptr;
-        io.DisplaySize = {800, 600};
-        io.DeltaTime = 1.0f / 60.0f;
-        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // no backend: fonts needn't be prebuilt
-
         // A built-in-style handler of the same name, registered first, like the Engine does: the type replaces it.
-        m_renderer.registerElement("Leaf", [this](Renderer&, const Node&) { ++m_lambdaRenders; });
-        m_types.registerType<Leaf>("Leaf");
-        m_types.registerType<Leaf>("Block"); // alias
-        m_types.registerType<Tick>("Tick");
-        m_types.registerType<Row>("Row");
-        m_types.registerType<Field>("Field");
-        m_types.registerType<Area>("Area");
-
-        m_state = lua::newstate();
-        lua::openlibs(m_state);
-        m_types.install(m_state);
-        run(std::string{"package.path = '"} + IMLUI_LUA_DIR + "/?.lua;' .. package.path\n" +
-            R"(package.preload["imlui.native"] = function()
-                   return { time = function() return 0 end, log = function() end }
-               end
-               ui = require("imlui")
-               for _, n in ipairs({ "Leaf", "Block", "Tick", "Row", "Field", "Area" }) do _G[n] = ui.env[n] end)");
+        m_h.renderer().registerElement("Leaf", [this](Renderer&, const Node&) { ++m_lambdaRenders; });
+        m_h.registerType<Leaf>("Leaf");
+        m_h.registerType<Leaf>("Block"); // alias
+        m_h.registerType<Tick>("Tick");
+        m_h.registerType<Row>("Row");
+        m_h.registerType<Field>("Field");
+        m_h.registerType<Area>("Area");
     }
 
-    void TearDown() override {
-        if (m_state) lua::close(m_state);
-        ImGui::DestroyContext(m_context);
-        luaui::clearErrors();
-        clearFrameRequests();
-    }
+    void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
 
-    void run(const std::string& code) {
-        ASSERT_EQ(lua::loadbuffer(m_state, code, "=test"), lua::ok) << lua::tostring(m_state, -1);
-        ASSERT_EQ(lua::pcall(m_state, 0, 0, 0), lua::ok) << lua::tostring(m_state, -1);
-    }
-
-    /// Renders the element in global `name` in one ImGui frame.
-    void renderFrame(const char* name) {
-        ImGui::NewFrame();
-        ImGui::Begin("test");
-        lua::getglobal(m_state, name);
-        m_renderer.render(m_state, lua::gettop(m_state));
-        lua::pop(m_state);
-        ImGui::End();
-        ImGui::Render();
-    }
+    /// Renders the element held by `name` in one ImGui frame.
+    void renderFrame(const char* name) { m_h.renderFrame(name); }
 
     template <class T>
     T* instance(const char* name) {
-        lua::getglobal(m_state, name);
-        Element* e = m_types.sync(Node{m_state, -1});
-        lua::pop(m_state);
-        return dynamic_cast<T*>(e);
+        return m_h.instance<T>(name);
     }
 
-    ImGuiContext* m_context = nullptr;
-    Renderer m_renderer;
-    TypeRegistry m_types{m_renderer};
-    lua::State* m_state = nullptr;
+    test::HeadlessFrame m_h;
     int m_lambdaRenders = 0;
 };
 
@@ -271,7 +230,8 @@ TEST_F(FrameTest, AliasesAreSeparateNamesForOneClass) {
     run(R"(
         a = Leaf { w = 3 }
         b = Block { w = 4 }
-        names = table.concat(ui.types(), ","))");
+        names = table.concat(ui.types(), ",")
+        assert(names == "Area,Block,Field,Leaf,Row,Tick", names))");
     Leaf* a = instance<Leaf>("a");
     Leaf* b = instance<Leaf>("b");
     ASSERT_NE(a, nullptr);
@@ -279,12 +239,9 @@ TEST_F(FrameTest, AliasesAreSeparateNamesForOneClass) {
     EXPECT_NE(a, b);
     EXPECT_EQ(a->w(), 3.0f);
     EXPECT_EQ(b->w(), 4.0f);
-    lua::getglobal(m_state, "names");
-    EXPECT_EQ(std::string{lua::tostring(m_state, -1)}, "Area,Block,Field,Leaf,Row,Tick");
-    lua::pop(m_state);
-    ASSERT_NE(m_types.find("Block"), nullptr);
-    EXPECT_EQ(m_types.find("Block")->name(), "Block");
-    EXPECT_NE(m_types.find("Block"), m_types.find("Leaf"));
+    ASSERT_NE(m_h.types().find("Block"), nullptr);
+    EXPECT_EQ(m_h.types().find("Block")->name(), "Block");
+    EXPECT_NE(m_h.types().find("Block"), m_h.types().find("Leaf"));
 }
 
 TEST_F(FrameTest, SubclassExtendsItsBaseDeclaration) {
@@ -300,11 +257,8 @@ TEST_F(FrameTest, SubclassExtendsItsBaseDeclaration) {
     EXPECT_EQ(a->text(), "two"); // the base's property
     EXPECT_EQ(a->rows(), 5);     // the subclass's own
     EXPECT_TRUE(a->multiline());
-    EXPECT_EQ(m_types.find("Field")->findProperty("rows"), nullptr);
+    EXPECT_EQ(m_h.types().find("Field")->findProperty("rows"), nullptr);
     run("a:clear()"); // the base's method, called on the subclass
     EXPECT_EQ(a->text(), "");
-    lua::getglobal(m_state, "a");
-    lua::getfield(m_state, -1, "text");
-    EXPECT_EQ(std::string{lua::tostring(m_state, -1)}, ""); // notify wrote it back
-    lua::pop(m_state, 2);
+    run(R"(assert(a.text == "", "notify didn't write the value back"))");
 }

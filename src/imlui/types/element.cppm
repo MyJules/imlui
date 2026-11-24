@@ -2,7 +2,8 @@
 //
 // One instance exists per element table (created by the Lua constructor, destroyed when Lua collects
 // the table or the state closes). Before each render() the declared properties are synced from the
-// element table into the instance through its setters.
+// element table into the instance through its setters; an element that isn't rendered is synced before a
+// method called from Lua runs on it and when a parent asks for it (Frame::Child::as<T>()).
 export module imlui.types.element;
 
 import imlui.types.frame;
@@ -16,7 +17,8 @@ public:
     /// Called on every rendered frame the element is visible, after the property sync.
     virtual void render(Frame& frame) = 0;
 
-    /// Called once, after the first property sync and before the first render().
+    /// Called once, right after the first property sync (the first render, method call from Lua or parent
+    /// access, whichever comes first), so before the first render().
     virtual void componentComplete();
 
     /// Called right before the instance is deleted: its element table was collected, or the Lua state
