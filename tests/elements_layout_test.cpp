@@ -1642,3 +1642,47 @@ TEST_F(LayoutTest, ARowShowsAChildWithAnUnknownHeightOnItsFirstFrame) {
     EXPECT_FLOAT_EQ(probe("short").pos().x, probe("tall").pos().x + 20.0f);
     EXPECT_GT(secondsUntilFrame(), 0.0);
 }
+
+// ------------------------------------------------------------------ cycles
+
+namespace {
+
+/// Whether a script error says the tree nested deeper than Renderer::maxDepth.
+bool reportedTooDeep() {
+    for (const std::string& e : luaui::errors())
+        if (e.find("element tree nested deeper than") != std::string::npos) return true;
+    return false;
+}
+
+} // namespace
+
+// A tree that contains itself used to recurse until the native stack overflowed. The renderer stops at
+// Renderer::maxDepth levels and reports it, for a cycle through containers, through Rows (which ask their children's
+// fills and intrinsic sizes first), through Cards (child windows) and through inline containers (a Loader that shows
+// its own ancestor, or itself).
+TEST(RendererDepth, ACycleIsCutAndReported) {
+    for (const char* code : {
+             "a = Column {}; b = Column { a }; a[1] = b; root = Column { a }",
+             "a = Row {}; b = Row { Text { 'x' }, a }; a[1] = b; root = a",
+             "a = Card {}; b = Card { a }; a[1] = b; root = a",
+             "root = Column { Text { 'x' }, Loader { item = function() return root end } }",
+             "l = Loader { item = function() return l end }; root = Column { l }",
+         }) {
+        test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+        ASSERT_EQ(h.run(code), "") << code;
+        h.renderFrames("root", 2);
+        EXPECT_TRUE(reportedTooDeep()) << code;
+    }
+}
+
+// A deep tree that isn't a cycle renders whole, with no error.
+TEST(RendererDepth, ADeepTreeBelowTheLimitRenders) {
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    ASSERT_EQ(h.run(R"(
+        root = Text { id = "leaf", "leaf" }
+        for i = 1, 200 do root = (i % 2 == 0 and Column or Row) { root } end)"),
+              "");
+    h.renderFrames("root", 2);
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+    EXPECT_TRUE(h.syncElement("leaf") != nullptr);
+}

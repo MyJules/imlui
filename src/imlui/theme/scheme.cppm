@@ -36,7 +36,11 @@ struct RoleEntry {
 Color* findRole(Scheme& s, std::string_view name);
 const Color* findRole(const Scheme& s, std::string_view name);
 
-/// Generates a full Material 3 scheme from a seed color.
+/// Below this OKLCH chroma a seed is a grey (its hue is rounding noise).
+inline constexpr float achromaticChroma = 1e-4f;
+
+/// Generates a full Material 3 scheme from a seed color. A grey seed (chroma below achromaticChroma) gives a grey
+/// scheme: every role but the error ones is neutral.
 Scheme generateScheme(Color seed, bool dark);
 
 } // namespace imlui
@@ -100,12 +104,16 @@ const Color* findRole(const Scheme& s, std::string_view name) {
 
 Scheme generateScheme(Color seed, bool dark) {
     Oklch o = toOklch(seed);
+    // A grey has no hue: its chroma is rounding noise (about 1e-7; an 8-bit color one step off grey has 1e-3), and so
+    // is the angle atan2 makes of it. A grey seed gives a grey scheme (only the error roles keep their color).
+    const float tint = o.c < achromaticChroma ? 0.0f : 1.0f;
+    if (tint == 0.0f) o.h = 0.0f;
     float c = o.c < 0.12f ? 0.12f : (o.c > 0.22f ? 0.22f : o.c);
-    TonalPalette primary{o.h, c};
-    TonalPalette secondary{o.h, 0.045f};
-    TonalPalette tertiary{o.h + 60.0f >= 360.0f ? o.h - 300.0f : o.h + 60.0f, 0.07f};
-    TonalPalette neutral{o.h, 0.008f};
-    TonalPalette neutralVariant{o.h, 0.018f};
+    TonalPalette primary{o.h, c * tint};
+    TonalPalette secondary{o.h, 0.045f * tint};
+    TonalPalette tertiary{o.h + 60.0f >= 360.0f ? o.h - 300.0f : o.h + 60.0f, 0.07f * tint};
+    TonalPalette neutral{o.h, 0.008f * tint};
+    TonalPalette neutralVariant{o.h, 0.018f * tint};
     TonalPalette error{25.0f, 0.19f};
 
     Scheme s{};

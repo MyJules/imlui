@@ -12,6 +12,7 @@ import imlui.theme.scheme;
 import imlui.theme.theme;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.lua.value;
 import imlui.resources.name;
 
 export namespace imlui::luaui {
@@ -34,6 +35,15 @@ void pushScheme(lua::State* state, const Scheme& s);
 module :private;
 
 namespace imlui::luaui {
+
+namespace {
+
+/// A style value as a float for styleValueProblem(): narrowed by toFloat (a double beyond the float range would be
+/// undefined behavior to cast; it clamps, so 1e300 is reported as too large rather than not finite), but NaN stays
+/// NaN, to be reported (toFloat reads it as 0).
+float styleFloat(double v) { return std::isnan(v) ? std::numeric_limits<float>::quiet_NaN() : toFloat(v); }
+
+} // namespace
 
 Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
     idx = lua::absindex(state, idx);
@@ -157,14 +167,13 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
             // A number sets both components; a table needs both, {x, y} (a missing y used to become 0).
             std::optional<ImVec2> value;
             if (lua::type(state, -1) == lua::Type::Number) {
-                const auto v = static_cast<float>(lua::tonumber(state, -1));
+                const float v = styleFloat(lua::tonumber(state, -1));
                 value = ImVec2{v, v};
             } else if (lua::istable(state, -1)) {
                 const bool x = lua::rawgeti(state, -1, 1) == lua::Type::Number;
                 const bool y = lua::rawgeti(state, -2, 2) == lua::Type::Number;
                 if (x && y)
-                    value = ImVec2{static_cast<float>(lua::tonumber(state, -2)),
-                                   static_cast<float>(lua::tonumber(state, -1))};
+                    value = ImVec2{styleFloat(lua::tonumber(state, -2)), styleFloat(lua::tonumber(state, -1))};
                 lua::pop(state, 2);
             }
             if (!isStyleField(name)) {

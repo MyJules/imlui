@@ -214,6 +214,11 @@ own children are laid out as direct children of the parent. That's why a `Repeat
 horizontally. `visible = false` on an inline container hides all of its children. `ListView` isn't inline. It's
 a scrolling `ScrollView` whose children come from `model`/`delegate`.
 
+A tree is walked at most `Renderer::maxDepth` (256) levels deep: each element rendered or asked for its intrinsic
+size or fill, and each inline container spliced in, is a level. Deeper is almost surely a cycle (`a[1] = b; b[1] = a`,
+a `Loader` that shows its own ancestor), which would overflow the native stack; the levels past it are skipped and
+"element tree nested deeper than 256 levels" is reported as a script error.
+
 Layout notes. ImGui lays items out as they are submitted, so a container must decide where a child goes, and how
 much width it gets, before the child draws. imlui's layout is built on that: **constraints go down** (layout boxes),
 **sizes come up** (intrinsic sizes, else the layout cache), and a stale size **converges** within a frame.
