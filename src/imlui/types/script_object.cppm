@@ -41,8 +41,9 @@ public:
         /// An empty handle: never alive, posts are dropped.
         Handle() = default;
 
-        /// Thread-safe. True until the object's destructor runs (ScriptObject's, so after a derived destructor);
-        /// false for an empty handle. A worker polls it as its "cancelled" flag.
+        /// Thread-safe. True until the object is destroyed: until cancelHandles(), which an element gets before its
+        /// destroyed() hook, or else ScriptObject's destructor (after a derived destructor). False for an empty
+        /// handle. A worker polls it as its "cancelled" flag.
         [[nodiscard]] bool alive() const;
 
         /// Thread-safe: queues `fn` on the main thread (imlui::post, which wakes the loop). There, `fn` runs only if
@@ -85,6 +86,12 @@ public:
 
     /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
     [[nodiscard]] Handle handle();
+
+    /// Main thread: makes every handle of this object dead now (alive() false, posts dropped), before the destructor
+    /// gets to it. The registry calls it before an element's destroyed(); a derived class's destructor that waits
+    /// for its workers, or a host destroying a singleton, calls it first, so the workers see the cancellation while
+    /// the derived members still live. Handles taken afterwards are dead too.
+    void cancelHandles();
 
     /// This object's id: unique for the process's lifetime, never 0 and never reused (a monotonic 64-bit count), so
     /// a stale id can't name a newer object that happens to live at a dead one's address.
@@ -144,8 +151,9 @@ private:
     std::uint64_t m_objectId;
     lua::State* m_state = nullptr;
     bool m_singleton = false;
-    /// Shared with every Handle, created by the first handle(). Set to false by the destructor.
+    /// Shared with every Handle, created by the first handle(). Set to false by cancelHandles() or the destructor.
     std::shared_ptr<std::atomic<bool>> m_alive;
+    bool m_cancelled = false; ///< cancelHandles() ran: a handle taken later starts dead
 };
 
 } // namespace imlui
@@ -219,8 +227,13 @@ bool ScriptObject::Handle::post(std::function<void()> fn) const {
 }
 
 ScriptObject::Handle ScriptObject::handle() {
-    if (!m_alive) m_alive = std::make_shared<std::atomic<bool>>(true);
+    if (!m_alive) m_alive = std::make_shared<std::atomic<bool>>(!m_cancelled);
     return Handle{m_alive};
+}
+
+void ScriptObject::cancelHandles() {
+    m_cancelled = true;
+    if (m_alive) m_alive->store(false, std::memory_order_release);
 }
 
 lua::State* ScriptObject::luaState() const { return m_state; }

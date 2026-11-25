@@ -276,3 +276,40 @@ TEST_F(ScriptObjectHandleTest, LuaErrorInAPostedNotifyIsReported) {
     EXPECT_TRUE(hasError("no writes here"));
     EXPECT_EQ(lua::gettop(m_h->state()), 0); // the stack is left as it was
 }
+
+namespace {
+/// Records what its handle says while it is being destroyed.
+class Watched final : public Element {
+public:
+    static void declare(TypeBuilder<Watched>& type) { type.nonVisual(); }
+    Watched() : m_handle{handle()} {}
+    ~Watched() override { aliveInDestructor = m_handle.alive(); }
+    void render(Frame&) override {}
+    void destroyed() override { aliveInDestroyed = m_handle.alive(); }
+
+    static inline bool aliveInDestroyed = true;
+    static inline bool aliveInDestructor = true;
+
+private:
+    Handle m_handle;
+};
+} // namespace
+
+// An element's handles are dead before its destroyed() hook and its destructor run, so a worker sees the
+// cancellation while the element's members still live.
+TEST_F(MainThreadTest, ElementHandlesAreCancelledBeforeDestroyedAndTheDestructor) {
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    h.registerType<Watched>("Watched");
+    ASSERT_EQ(h.run("w = Watched {}"), "");
+    ASSERT_NE(h.instance<Watched>("w"), nullptr);
+    ASSERT_EQ(h.run("w = nil; collectgarbage(); collectgarbage()"), "");
+    EXPECT_FALSE(Watched::aliveInDestroyed);
+    EXPECT_FALSE(Watched::aliveInDestructor);
+
+    // cancelHandles() on a live object: its handles, and those taken afterwards, are dead.
+    Watched direct;
+    const ScriptObject::Handle before = direct.handle();
+    direct.cancelHandles();
+    EXPECT_FALSE(before.alive());
+    EXPECT_FALSE(direct.handle().alive());
+}

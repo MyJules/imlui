@@ -377,6 +377,7 @@ int instanceGc(lua::State* state) {
     luaui::reportCxx(
         [e] {
             e->detach();
+            e->cancelHandles(); // workers see the cancellation during destroyed() and the destructors
             e->destroyed();
         },
         type ? std::string_view{type->name()} : std::string_view{"element"}, ".destroyed()");

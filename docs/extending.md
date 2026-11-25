@@ -776,22 +776,24 @@ private:
 
 | `Handle` member | What |
 |---|---|
-| `alive()` | True until the object is destroyed. Thread-safe; a worker polls it as its "cancelled" flag. |
+| `alive()` | True until the object is destroyed (or `cancelHandles()` ran). Thread-safe; a worker polls it as its "cancelled" flag. |
 | `post(fn)` | Queues `fn` like `imlui::post`. On the main thread, `fn` runs **only if the object is still alive** (otherwise it is destroyed without running), so it may use the object's `this`. Returns false, dropping `fn`, when the object is already gone. |
 
-Elements and singletons both have it (it lives on `ScriptObject`). `ScriptObject`'s destructor clears the token
-on the main thread, where posted functions run too, so the object can't die between the check and `fn`. Every way
-an element dies goes through that destructor: garbage collection, a rebuilt page, and a hot reload or shutdown
-closing the Lua state (a reload closes the old state before the loop runs posted functions again).
+Elements and singletons both have it (it lives on `ScriptObject`). `ScriptObject::cancelHandles()` or, at the
+latest, `ScriptObject`'s destructor clears the token on the main thread, where posted functions run too, so the
+object can't die between the check and `fn`. Every way an element dies goes through the registry's finalizer, which
+calls `cancelHandles()` before `destroyed()` and the destructors: garbage collection, a rebuilt page, and a hot
+reload or shutdown closing the Lua state (a reload closes the old state before the loop runs posted functions
+again).
 
 Rules for the worker thread:
 
 - **Don't join slow work in the destructor** (or in `destroyed()`): that freezes the UI, a reload or the app's exit
   until the work finishes. Detach the thread (or let a shared object own it) and let it notice the cancellation:
-  through `handle.alive()`, which turns false once `ScriptObject`'s destructor ran (after your own destructor), or
+  through `handle.alive()`, which an element's handles turn false before its `destroyed()` and destructors run, or
   a flag of your own that your destructor sets (a `std::stop_source`, or an `atomic<bool>` shared through a
-  `shared_ptr`). If you do join (`std::jthread`), stop the worker first with your own flag: `alive()` is still
-  true while your destructor runs.
+  `shared_ptr`). A singleton the host destroys keeps `alive()` true until `ScriptObject`'s destructor, after your
+  own: call `cancelHandles()` first in your destructor (before a `std::jthread` member joins, for example).
 - The worker never touches the element or its members itself, only the copies it was given. Everything that reads
   or writes the element goes into `handle.post`.
 - A detached worker may outlive the element, the `Engine`, even `main()`'s return: what it uses must stay alive
