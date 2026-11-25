@@ -902,7 +902,7 @@ See [Registering C++ types](extending.md).
 | `imlui.resources.data` | `ResourceData`: the bytes `read` returns and the handle that keeps them alive (`bytes`, `data`, `size`, `text`, `owner`) |
 | `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `listFiles`, `modified`, `origin`); `ResourceTime` |
 | `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache holding each file's latest buffer, and an optional `ResourceSelection` |
-| `imlui.resources.glob` | `globMatch(pattern, path)`, `globRoot`, `globProblem`: manifest patterns. Its own library, `imlui_glob`, shared by the tools and the library |
+| `imlui.resources.glob` | `globMatch(pattern, path)` (dynamic programming, time proportional to pattern × path), `globRoot`, `globProblem`: manifest patterns. Its own library, `imlui_glob`, shared by the tools and the library |
 | `imlui.resources.selection` | `ResourceSelection`: a manifest group's `files`, `include`, `exclude` and `unmatched` paths; `contains(path)`, `mayContainUnder(folder)` |
 | `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
 | `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |

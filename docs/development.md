@@ -402,7 +402,8 @@ On this target:
   on the library's packages (`Options::embedded`: embedded data, or the source folders in a build that doesn't embed). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
 - `log_test.cpp` covers `log::addFileSink`: a log file whose name is outside the ANSI code page, and a file that
   can't be opened reported as `false` without an exception.
-- `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns, one group
+- `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns (their corners, and pathological ones
+  matched quickly), one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
   base folder, a listed file spelled differently on disk, the sandbox and its instruction and memory limits, strings

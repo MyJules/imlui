@@ -80,6 +80,39 @@ TEST(Glob, MatchesStarQuestionMarkAndDoubleStar) {
     EXPECT_FALSE(globMatch("main.lua", "x/main.lua"));
 }
 
+// Corners of the wildcards: `*` and `?` never cross a `/`, `**` does anywhere in a segment, only a whole `**/` segment
+// may match no folder, and runs of `*` after `**` are one `**`.
+TEST(Glob, WildcardCorners) {
+    EXPECT_TRUE(globMatch("a**b", "a/x/b"));
+    EXPECT_TRUE(globMatch("a**b", "ab"));
+    EXPECT_FALSE(globMatch("a**/b", "a/b/c")); // not a whole segment: `**` matches "", the `/` must be there
+    EXPECT_TRUE(globMatch("a**/b", "a/b"));
+    EXPECT_FALSE(globMatch("x**/b", "b"));
+    EXPECT_TRUE(globMatch("***/b", "x/b"));
+    EXPECT_FALSE(globMatch("***/b", "b")); // `***` isn't the segment `**`
+    EXPECT_TRUE(globMatch("**/**/b", "b"));
+    EXPECT_TRUE(globMatch("*/", "a/"));
+    EXPECT_FALSE(globMatch("*", "a/"));
+    EXPECT_TRUE(globMatch("*", ""));
+    EXPECT_FALSE(globMatch("?", ""));
+    EXPECT_TRUE(globMatch("", ""));
+    EXPECT_FALSE(globMatch("", "a"));
+    EXPECT_TRUE(globMatch("a/*/c/**", "a/b/c/d/e"));
+    EXPECT_FALSE(globMatch("a/*/c/**", "a/b/x/c/d"));
+}
+
+// Matching takes time proportional to pattern x path: backtracking over the wildcards was exponential in their number
+// (seconds for `*a*a*a*a*a*a*a*b` on 40 characters, far longer for these).
+TEST(Glob, PathologicalPatternsMatchQuickly) {
+    const std::string path(2000, 'a');
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_FALSE(globMatch("**a**a**a**a**a**a**a**a**a**a**b", path));
+    EXPECT_FALSE(globMatch("*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b", path));
+    EXPECT_FALSE(globMatch("**/**/**/**/**/**/**/**/**/**/b", std::string(200, '/') + "x"));
+    EXPECT_TRUE(globMatch("**a**a**a**a**a**a**a**a**a**a**a", path));
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds{5});
+}
+
 TEST(Glob, RootsAndProblems) {
     EXPECT_EQ(globRoot("ui/icons/*.png"), "ui/icons");
     EXPECT_EQ(globRoot("ui/main.lua"), "ui");
