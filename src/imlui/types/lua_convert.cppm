@@ -157,7 +157,7 @@ struct LuaConvert<Color> {
     }
 };
 
-/// nil <-> std::nullopt.
+/// nil <-> std::nullopt. An omitted argument (an index past the top) reads as nil too.
 template <class T>
 struct LuaConvert<std::optional<T>> {
     static constexpr std::string_view name = LuaConvert<T>::name;
@@ -165,9 +165,9 @@ struct LuaConvert<std::optional<T>> {
         if (v) LuaConvert<T>::push(s, *v);
         else lua::pushnil(s);
     }
-    static bool check(lua::State* s, int idx) { return lua::isnil(s, idx) || LuaConvert<T>::check(s, idx); }
+    static bool check(lua::State* s, int idx) { return lua::isnoneornil(s, idx) || LuaConvert<T>::check(s, idx); }
     static std::optional<T> get(lua::State* s, int idx) {
-        if (lua::isnil(s, idx)) return std::nullopt;
+        if (lua::isnoneornil(s, idx)) return std::nullopt;
         return LuaConvert<T>::get(s, idx);
     }
 };

@@ -103,7 +103,8 @@ Card { title = "Totals",
 
 - The constructor of a container sets it for its children: positional children, and the element props it renders
   (`menu`, `menuBar`, `header`, `otherwise`, a `Responsive`'s classes). Children are built first, so `parent` is
-  set once the container's constructor runs, not while the child's own does.
+  set once the container's constructor runs, not while the child's own does. Positional children are taken up to
+  `rawlen`, as the renderer takes them, so a child after a `nil` (an unset variable) gets its parent too.
 - **Inline containers are skipped**, as in QML: a child of a `Repeater`, `If`, `Loader` or `Responsive` gets the
   element that lays the container out (the `Column` around the `Repeater`), at any nesting depth. An inline
   container that is the root is its children's parent. `Repeater` delegates and a `Loader`'s or `Responsive`'s
@@ -299,6 +300,7 @@ one of them hides all of its children.
 
 Delegate instances are **cached per index**. They are rebuilt only when the item at that index changes
 (`~=` comparison), so per-delegate state survives frames. Extra cached entries are dropped when the model shrinks.
+A delegate that returns `nil` shows nothing for its item (the item's entry in the child list is `false`).
 Each instance's ids go to its own `ids` (a new table per instance), so every row can declare `id = "name"`. The
 delegates' [`parent`](#selfparent) is the element the `Repeater` is in.
 

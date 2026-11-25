@@ -558,7 +558,7 @@ results, and signal arguments. Built in:
 | `std::string` | string | Numbers convert (`7` reads as `"7"`). |
 | `std::string_view`, `const char*` | string | Push only (results, signal arguments, read-only properties). |
 | `imlui::Color` | color spec | Reads a role name, `"role/alpha"`, hex or `{r, g, b, a}`, like every color prop. Pushes `"#RRGGBB[AA]"`. |
-| `std::optional<T>` | `nil` or `T` | |
+| `std::optional<T>` | `nil` or `T` | A method argument that is left out reads as `nil` too, so trailing optional parameters may be omitted. |
 | `std::vector<T>` | sequence | Every element must convert. |
 
 Add your own by specializing it (in your module, in namespace `imlui`):
