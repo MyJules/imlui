@@ -399,8 +399,8 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
    old state and applies the window title and size (size only if it changed since the last load). Closing a
    state destroys the C++ instances of its elements and detaches the singletons from it.
 
-The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`)
-and for every resource a Lua state read or loaded. Only directory mounts report times; files in immutable mounts
+The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`,
+which walks each mount once through `Mount::listFiles`) and for every resource a Lua state read or loaded. Only directory mounts report times; files in immutable mounts
 (embedded data, `.pak` archives) never change while the app runs. With the same check, `ImageCache::refresh` drops
 the images whose file changed; they're decoded again at their next use, without a reload.
 
@@ -429,7 +429,7 @@ read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer, and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged). |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer, and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach. |
 | `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
 | `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
@@ -896,7 +896,7 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.resources.name` | `ResourceName`, `parseName`, `normalizeName`, `normalizePath`, `hasPrefix`, `resolveName(base, name)`, `folderOf` |
 | `imlui.resources.data` | `ResourceData`: the bytes `read` returns and the handle that keeps them alive (`bytes`, `data`, `size`, `text`, `owner`) |
-| `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `modified`, `origin`); `ResourceTime` |
+| `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `listFiles`, `modified`, `origin`); `ResourceTime` |
 | `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache holding each file's latest buffer, and an optional `ResourceSelection` |
 | `imlui.resources.glob` | `globMatch(pattern, path)`, `globRoot`, `globProblem`: manifest patterns. Its own library, `imlui_glob`, shared by the tools and the library |
 | `imlui.resources.selection` | `ResourceSelection`: a manifest group's `files`, `include`, `exclude` and `unmatched` paths; `contains(path)`, `mayContainUnder(folder)` |

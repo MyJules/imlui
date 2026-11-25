@@ -359,6 +359,56 @@ TEST(DirectoryMount, ListsPastAnEntryThatCantBeQueried) {
     EXPECT_EQ(mount.list(""), strings({"b.txt", "c/"}));
 }
 
+// A link to a folder (a symbolic link, or on Windows a junction) isn't listed or walked, as the manifest scan doesn't
+// descend into one either: a link to the folder itself or a parent made listRecursive, which the hot-reload watcher
+// polls, walk loop/loop/... until the path got too long (with two links, exponentially). A file is still read through
+// a link by its name.
+TEST(DirectoryMount, DoesntWalkIntoLinkedFolders) {
+    test::TempDir dir;
+    dir.write("a.lua", "a");
+    dir.write("sub/b.lua", "b");
+    if (!dir.linkFolder("sub/up", "") || !dir.linkFolder("sub/self", "sub"))
+        GTEST_SKIP() << "can't create a link to a folder here";
+    for (const bool withSelection : {false, true}) {
+        SCOPED_TRACE(withSelection ? "with a selection" : "without a selection");
+        auto mount = withSelection
+                         ? std::make_shared<DirectoryMount>(dir.path(), ResourceSelection{.include = {"**/*.lua"}})
+                         : std::make_shared<DirectoryMount>(dir.path());
+        EXPECT_EQ(mount->list("sub"), strings({"b.lua"}));
+        EXPECT_EQ(mount->listFiles(""), strings({"a.lua", "sub/b.lua"}));
+        Resources res;
+        ASSERT_TRUE(res.mount("app:/", mount));
+        EXPECT_EQ(res.listRecursive("app:/"), strings({"app:/a.lua", "app:/sub/b.lua"}));
+        EXPECT_EQ(text(mount->read("sub/up/a.lua")), "a");
+        EXPECT_EQ(text(mount->read("sub/self/self/b.lua")), "b");
+    }
+}
+
+// With a selection, listRecursive walks the folder once (it used to walk every subfolder again for each level above it,
+// on every hot-reload poll), and still prunes folders no pattern can reach.
+TEST(DirectoryMount, ListsASelectionRecursively) {
+    test::TempDir dir;
+    // A tree five levels deep, three folders wide: 364 folders with a file each.
+    std::vector<std::string> expected;
+    const auto fill = [&](const auto& self, const std::string& folder, int depth) -> void {
+        const std::string file = folder + (folder.empty() ? "" : "/") + "f.lua";
+        dir.write(file, "");
+        expected.push_back("app:/" + file);
+        dir.write(folder + (folder.empty() ? "" : "/") + "skip.txt", "");
+        if (depth == 0) return;
+        for (const char* sub : {"a", "b", "c"})
+            self(self, folder + (folder.empty() ? "" : "/") + sub, depth - 1);
+    };
+    fill(fill, "", 5);
+    dir.write("docs/x/readme.lua", "");
+    std::ranges::sort(expected);
+    Resources res;
+    ASSERT_TRUE(res.mount(
+        "app:/", std::make_shared<DirectoryMount>(
+                     dir.path(), ResourceSelection{.include = {"a/**/*.lua", "b/**/*.lua", "c/**/*.lua", "f.lua"}})));
+    EXPECT_EQ(res.listRecursive("app:/"), expected);
+}
+
 // ------------------------------------------------------------------ Resources
 
 TEST(Resources, LaterMountsOverrideEarlierOnes) {

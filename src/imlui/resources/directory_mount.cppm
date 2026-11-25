@@ -25,13 +25,17 @@ export namespace imlui {
 /// spelling on disk), so a misspelled name fails in development, not only once shipped. Each folder's entry names
 /// are cached while its modification time is unchanged.
 ///
+/// A link to a folder (a symbolic link, a Windows junction or another reparse point) isn't listed or walked, as the
+/// manifest scan doesn't descend into one: a link to the folder itself or to a parent would make a walk endless. A
+/// file under one is still found by its name.
+///
 /// Like the other mounts, it never throws: a path that isn't valid UTF-8, a file too large to allocate or a folder
 /// that can't be listed reads as missing.
 class DirectoryMount final : public Mount {
 public:
     /// The files under `root`; with a `selection`, only the files it selects (a dev build's source folder serves
     /// exactly what its manifest group embeds): read(), exists() and modified() don't find the others, and list()
-    /// shows only selected files and the folders that hold one.
+    /// and listFiles() show only selected files and the folders that hold one.
     explicit DirectoryMount(std::filesystem::path root, std::optional<ResourceSelection> selection = std::nullopt);
 
     [[nodiscard]] const std::filesystem::path& root() const;
@@ -39,6 +43,8 @@ public:
     [[nodiscard]] std::optional<ResourceData> read(std::string_view path) const override;
     [[nodiscard]] bool exists(std::string_view path) const override;
     [[nodiscard]] std::vector<std::string> list(std::string_view path) const override;
+    /// One walk of the folder, pruned where the selection can't match.
+    [[nodiscard]] std::vector<std::string> listFiles(std::string_view path) const override;
     [[nodiscard]] std::optional<ResourceTime> modified(std::string_view path) const override;
     [[nodiscard]] std::string origin() const override;
 
@@ -60,6 +66,7 @@ private:
     [[nodiscard]] std::optional<ResourceData> readFile(std::string_view path) const;
     [[nodiscard]] bool existsIn(std::string_view path) const;
     [[nodiscard]] std::vector<std::string> listIn(std::string_view path) const;
+    [[nodiscard]] std::vector<std::string> listFilesIn(std::string_view path) const;
     [[nodiscard]] std::optional<ResourceTime> modifiedTime(std::string_view path) const;
 
     /// The file system path of `path`, or nullopt when `path` isn't normalized, isn't valid UTF-8 or is spelled in
@@ -121,6 +128,13 @@ std::string joined(std::string_view folder, std::string_view name) {
     return out;
 }
 
+/// True when `entry` is a link to a folder: a symbolic link, a junction or another reparse point (or an entry that
+/// can't be queried, so that it isn't walked either).
+bool linkedFolder(const fs::directory_entry& entry) {
+    std::error_code ec;
+    return entry.symlink_status(ec).type() != fs::file_type::directory;
+}
+
 /// Runs `f`; on an exception (out of memory, a file name the file system can't convert), logs it and returns
 /// `fallback`. A mount reports a failure as "not found" (Lua's resource functions return nil and a message).
 template <class R, class F>
@@ -161,6 +175,10 @@ bool DirectoryMount::holdsSelected(std::string_view path, const fs::path& folder
     for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator();
          it.increment(ec)) {
         std::error_code entryEc; // one entry that can't be queried mustn't end the search
+        if (it->is_directory(entryEc)) {
+            if (linkedFolder(*it)) it.disable_recursion_pending();
+            continue;
+        }
         if (it->is_regular_file(entryEc) &&
             m_selection->contains(joined(path, utf8(it->path().lexically_relative(folder)))))
             return true;
@@ -288,12 +306,37 @@ std::vector<std::string> DirectoryMount::listIn(std::string_view path) const {
         std::string name = utf8(it->path().filename());
         const std::string child = joined(path, name);
         if (it->is_directory(entryEc)) {
-            if (!holdsSelected(child, it->path())) continue;
+            if (linkedFolder(*it) || !holdsSelected(child, it->path())) continue;
             name += '/';
         } else if (!it->is_regular_file(entryEc) || !selected(child)) {
             continue;
         }
         out.push_back(std::move(name));
+    }
+    std::ranges::sort(out);
+    return out;
+}
+
+std::vector<std::string> DirectoryMount::listFiles(std::string_view path) const {
+    return guarded(*this, "listFiles", path, std::vector<std::string>{}, [&] { return listFilesIn(path); });
+}
+
+std::vector<std::string> DirectoryMount::listFilesIn(std::string_view path) const {
+    std::vector<std::string> out;
+    const auto folder = file(path);
+    std::error_code ec;
+    if (!folder || !fs::is_directory(*folder, ec)) return out;
+    for (auto it = fs::recursive_directory_iterator(*folder, ec); !ec && it != fs::recursive_directory_iterator();
+         it.increment(ec)) {
+        std::error_code entryEc; // one entry that can't be queried mustn't end the walk
+        const std::string relative = utf8(it->path().lexically_relative(*folder));
+        const std::string inMount = joined(path, relative);
+        if (it->is_directory(entryEc)) {
+            if (linkedFolder(*it) || (m_selection && !m_selection->mayContainUnder(inMount)))
+                it.disable_recursion_pending();
+        } else if (it->is_regular_file(entryEc) && selected(inMount)) {
+            out.push_back(relative);
+        }
     }
     std::ranges::sort(out);
     return out;
