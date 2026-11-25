@@ -221,12 +221,31 @@ so the handler already sees the new state.
   a frame per element while `luaui::changes()` stands still: the renderer keeps the list it returned (a weak-keyed
   table in the registry, stamped with the frame and the count), so a layout's passes over its children (a `Row`'s
   three, the fill and size questions of its parent) share one call. Lua that may change tables (a handler) running
-  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them.
+  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them; a
+  `Repeater` whose count didn't change (and that has no `key`) returns the list it built last time without a loop.
 
 Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
 own children are laid out as direct children of the parent. That's why a `Repeater` inside a `Row` flows
 horizontally. `visible = false` on an inline container hides all of its children. `ListView` isn't inline. It's
-a scrolling `ScrollView` whose children come from `model`/`delegate`.
+a scrolling `ScrollView` whose children come from `model`/`delegate`, and it doesn't go through `__children`: it's
+virtualized (below).
+
+**ListView virtualization.** `imlui.ui.elements.list_view` extends `ScrollView` (its `renderContent` hook) and asks
+the Lua side for the delegates it shows, never for all of them. Each render it calls `__count(self)`, which resolves
+the model and drops cached delegates the model no longer has, then `__range(self, first, last)` (a read, like
+`__children`) for the delegates of indices `first..last`, built on demand into a cache (`self.__view`: by index,
+or by key with a `key` function, at most max(256, 4 x shown) entries, the ones shown longest ago dropped first).
+The element keeps a height per index: `itemHeight` when set, else measured when the item renders (a change under
+half a pixel is ignored, so whole-pixel rounding doesn't move the estimate), with the measured ones' average for the
+rest. From the scroll position it finds the first item in view (the anchor) and renders a margin of half the view's
+height above it, placed by the heights known so far, then the items from the anchor down one after the other at the
+heights they render at, asking for delegates in chunks until it passes the view and the margin. A dummy item at the
+content's total height gives ImGui the scroll range. When the measurements move where the anchor starts, it scrolls
+by the same amount (`SetScrollY`, applied on the next frame), so the items in view don't jump; new heights request
+a frame (at most `layout::maxSettleFrames` in a row). It reuses the [culling](#culling) rules: the margins also
+extend to what `cull::outOfView` counts as in view (a view's height more while a nav move scores items), and an
+item that `cull::held` (the active item, the nav focus, an open popup, a non-visual element) renders on the next
+frames at its place even out of range, up to 16 per list.
 
 A tree is walked at most `Renderer::maxDepth` (256) levels deep: each element rendered or asked for its intrinsic
 size or fill, and each inline container spliced in, is a level. Deeper is almost surely a cycle (`a[1] = b; b[1] = a`,
@@ -350,9 +369,9 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
 
 ### Culling
 
-Only what is in view renders. The stacks (`Renderer::renderStack`: `Column`, `ScrollView`/`ListView`, `Card`,
-`Section`, `Tab`, `Window`, `Dialog`, `ApplicationWindow`, ...) **cull** a visible visual child before rendering it
-(`Renderer::skipOutOfView`, `imlui.ui.culling`): when the layout cache has a settled size for it
+Only what is in view renders. The stacks (`Renderer::renderStack`: `Column`, `ScrollView` and a `ListView` without
+`delegate`, `Card`, `Section`, `Tab`, `Window`, `Dialog`, `ApplicationWindow`, ...) **cull** a visible visual child
+before rendering it (`Renderer::skipOutOfView`, `imlui.ui.culling`): when the layout cache has a settled size for it
 (`layout::settledSize`: the last two sizes it rendered at were the same) and the rect that size takes at the cursor
 (with the stack's `align` offset) is entirely outside the current window's clip rect, widened by `cull::margin`
 (32 dp), the stack lays out an ImGui `Dummy` of that size there and moves on. `EndGroup` (a rendered child's group)
@@ -991,7 +1010,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `stackSize`, `renderUnseen`, culling (`cullsChildren`, `skipOutOfView`, `Culling`: the children memo), `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
-| `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view` (also `ListView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer` |
+| `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view`, `list_view` (extends `ScrollView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer` |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: registers every built-in class under its Lua name and aliases |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
 

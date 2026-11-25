@@ -16,6 +16,7 @@ import imlui.types.type_builder;
 import imlui.ui.elements.card;
 import imlui.ui.elements.column;
 import imlui.ui.elements.grid;
+import imlui.ui.elements.list_view;
 import imlui.ui.elements.row;
 import imlui.ui.elements.scroll_view;
 import imlui.ui.elements.section;
@@ -718,7 +719,7 @@ TEST_F(LayoutTest, ScrollViewDefaultsPaddingAndListView) {
     EXPECT_TRUE(padded->border());
     EXPECT_FLOAT_EQ(probe("b").pos().x - probe("a").pos().x, 20.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().y - probe("a").pos().y, 20.0f);
-    ScrollView* list = m_h.instance<ScrollView>("list"); // ListView is the same class
+    ScrollView* list = m_h.instance<ScrollView>("list"); // ListView extends it
     ASSERT_NE(list, nullptr);
     EXPECT_EQ(list->spacing(), 3.0);
     m_h.renderFrames("list", 2);
@@ -739,6 +740,230 @@ TEST_F(LayoutTest, ListViewRendersItsDelegates) {
     EXPECT_LT(probe("px").pos().y, probe("pz").pos().y);
 }
 
+// A ListView is virtualized: of a thousand items only the ones in view and a margin of half the view above and below
+// are built and rendered, and the content is as tall as all of them, by `itemHeight` or by the measured heights.
+TEST_F(LayoutTest, ListViewBuildsOnlyTheDelegatesInView) {
+    run(R"(
+        built = 0
+        made = {}
+        list = ListView { height = 200, spacing = 0, model = 1000,
+                          delegate = function(i) built = built + 1; made[i] = Probe { h = 20 }; return made[i] end }
+        fixed = ListView { height = 200, spacing = 4, itemHeight = 20, model = 1000,
+                           delegate = function(i) return Probe { h = 20 } end })");
+    m_h.renderFrames("list", 3);
+    ListView* list = m_h.instance<ListView>("list");
+    ASSERT_NE(list, nullptr);
+    check("built >= 10 and built <= 30"); // 200 px of 20 px items, and 100 px below
+    run("p1, p2 = made[1], made[2]");
+    EXPECT_FLOAT_EQ(probe("p2").pos().y - probe("p1").pos().y, 20.0f);
+    EXPECT_FLOAT_EQ(list->contentHeight(), 1000.0f * 20.0f); // measured: every item is 20 px
+    EXPECT_EQ(list->renderedRange().first, 1);
+    EXPECT_LE(list->renderedRange().second, 16);
+
+    m_h.renderFrames("fixed", 2);
+    ListView* fixed = m_h.instance<ListView>("fixed");
+    ASSERT_NE(fixed, nullptr);
+    EXPECT_EQ(fixed->itemHeight(), 20.0f);
+    EXPECT_FLOAT_EQ(fixed->contentHeight(), 1000.0f * 24.0f - 4.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Scrolling builds the delegates that come into view on the frame they do, at the place the scroll puts them.
+TEST_F(LayoutTest, ListViewBuildsWhatScrollsIntoViewInPlace) {
+    run(R"(
+        made = {}
+        list = ListView { height = 200, spacing = 0, model = 1000,
+                          delegate = function(i) made[i] = Probe { h = 20 }; return made[i] end })");
+    m_h.renderFrames("list", 3);
+    run("p1 = made[1]");
+    const float top = probe("p1").pos().y;
+    ListView* list = m_h.instance<ListView>("list");
+    ASSERT_NE(list, nullptr);
+
+    run("native.injectMouse(100, 100, nil, -30)"); // far down
+    for (int i = 0; i < 3 && list->scroll().y == 0.0f; ++i) m_h.renderFrame("list"); // the frame it scrolls on
+    const float scroll = list->scroll().y;
+    ASSERT_GT(scroll, 1000.0f);
+    const auto index = static_cast<int>(scroll / 20.0f) + 1; // the item at the top of the view
+    run("p = made[" + std::to_string(index) + "]");
+    ASSERT_GT(probe("p").renders(), 0);
+    EXPECT_FLOAT_EQ(probe("p").pos().y, top + static_cast<float>(index - 1) * 20.0f - scroll);
+    check("made[" + std::to_string(index - 30) + "] == nil"); // not built: never in view or near it
+    EXPECT_GE(list->renderedRange().first, index - 6);
+    EXPECT_LE(list->renderedRange().second, index + 16);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Built delegates are cached: one that scrolls out and back is the same element (its state kept), with a key too.
+// The model may grow and shrink: the content follows, and delegates past the end are dropped.
+TEST_F(LayoutTest, ListViewKeepsDelegatesAcrossScrollingAndModelChanges) {
+    run(R"(
+        built = 0
+        items = {}
+        for i = 1, 200 do items[i] = { id = i } end
+        local function fresh()
+            local out = {}
+            for i, it in ipairs(items) do out[i] = { id = it.id } end
+            return out
+        end
+        made = {}
+        list = ListView { height = 200, spacing = 0, model = fresh, key = function(item) return item.id end,
+                          delegate = function(item) built = built + 1; made[item.id] = Probe { h = 20 }
+                                                    return made[item.id] end })");
+    m_h.renderFrames("list", 3);
+    run("first, builtBefore = made[1], built");
+    run("native.injectMouse(100, 100, nil, -20)");
+    m_h.renderFrames("list", 3);
+    check("built > builtBefore");
+    run("native.injectMouse(100, 100, nil, 40)"); // back to the top
+    m_h.renderFrames("list", 3);
+    check("made[1] == first");
+    ListView* list = m_h.instance<ListView>("list");
+    ASSERT_NE(list, nullptr);
+    EXPECT_FLOAT_EQ(list->contentHeight(), 200.0f * 20.0f);
+
+    // Shrinking: what is past the end goes; growing: the content follows.
+    run("for i = 200, 6, -1 do items[i] = nil end");
+    m_h.renderFrames("list", 2);
+    check("list.__view.built == 5 and made[1] == first");
+    EXPECT_FLOAT_EQ(list->contentHeight(), 5.0f * 20.0f);
+    run("for i = 6, 50 do items[i] = { id = 1000 + i } end");
+    m_h.renderFrames("list", 2);
+    EXPECT_FLOAT_EQ(list->contentHeight(), 50.0f * 20.0f);
+    check("made[1] == first");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Items of different heights: the content height converges to their sum as they are measured, and when items above
+// the view turn out taller than estimated, the scroll moves with them so that the items in view don't jump.
+TEST_F(LayoutTest, ListViewVariableHeightsConvergeAndKeepTheViewStill) {
+    run(R"(
+        made = {}
+        local function h(i) return 10 + (i % 4) * 10 end
+        small = ListView { height = 500, spacing = 0, model = 20,
+                           delegate = function(i) return Probe { h = h(i) } end }
+        list = ListView { height = 200, spacing = 2, model = 600,
+                          delegate = function(i) made[i] = Probe { h = h(i) * (i > 300 and 3 or 1) }
+                                                 return made[i] end })");
+    renderWhileRequested("small");
+    m_h.renderFrame("small");
+    ListView* small = m_h.instance<ListView>("small");
+    ASSERT_NE(small, nullptr);
+    float sum = 0.0f;
+    for (int i = 1; i <= 20; ++i) sum += 10.0f + static_cast<float>(i % 4) * 10.0f;
+    EXPECT_FLOAT_EQ(small->contentHeight(), sum);
+
+    m_h.renderFrames("list", 3);
+    ListView* list = m_h.instance<ListView>("list");
+    ASSERT_NE(list, nullptr);
+    run("native.injectMouse(100, 100, nil, -1000)"); // to the end: items there are three times as tall
+    for (int i = 0; i < 5; ++i) {
+        m_h.renderFrame("list");
+        renderWhileRequested("list");
+    }
+    // Scrolling up a little: the items that enter the margin above are measured, taller than the estimate.
+    run("native.injectMouse(100, 100, nil, 1)");
+    m_h.renderFrame("list");
+    const auto range = list->renderedRange();
+    const std::int64_t anchor = range.second - 3;
+    run("p = made[" + std::to_string(anchor) + "]");
+    const float y = probe("p").pos().y;
+    renderWhileRequested("list");
+    m_h.renderFrames("list", 2);
+    EXPECT_NEAR(probe("p").pos().y, y, 1.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A delegate that holds what must keep rendering out of view (here a non-visual element; the active item, the nav
+// focus and an open popup alike, the culling rules) renders after it scrolled out of the range, at its place.
+TEST_F(LayoutTest, ListViewKeepsRenderingAHeldDelegate) {
+    run(R"(
+        made = {}
+        list = ListView { height = 200, spacing = 0, model = 1000,
+                          delegate = function(i)
+                              made[i] = Probe { h = 20 }
+                              if i == 2 then return If { condition = true, made[i], Timer { interval = 1000 } } end
+                              return made[i]
+                          end })");
+    m_h.renderFrames("list", 3);
+    run("p2, p3 = made[2], made[3]");
+    const float y2 = probe("p2").pos().y;
+    run("native.injectMouse(100, 100, nil, -30)");
+    m_h.renderFrames("list", 3);
+    ListView* list = m_h.instance<ListView>("list");
+    ASSERT_NE(list, nullptr);
+    ASSERT_GT(list->renderedRange().first, 3);
+    const int renders2 = probe("p2").renders();
+    const int renders3 = probe("p3").renders();
+    m_h.renderFrames("list", 2);
+    EXPECT_EQ(probe("p2").renders(), renders2 + 2);
+    EXPECT_EQ(probe("p3").renders(), renders3);
+    EXPECT_FLOAT_EQ(probe("p2").pos().y, y2 - list->scroll().y);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A ListView keeps its scroll when it moves to another place in the tree, like a ScrollView.
+TEST_F(LayoutTest, ListViewKeepsScrollWhenItMovesToAnotherParent) {
+    run(R"(
+        s = state { wide = false }
+        lv = ListView { width = 300, height = 200, spacing = 0, model = 500,
+                        delegate = function(i) return Probe { h = 30 } end }
+        narrow = Column { lv }
+        wide = Row { Probe { w = 40 }, lv }
+        root = Column { Loader { item = function() return s.wide and wide or narrow end } })");
+    m_h.renderFrames("root", 3);
+    ListView* lv = m_h.instance<ListView>("lv");
+    ASSERT_NE(lv, nullptr);
+    run("native.injectMouse(100, 100, nil, -10)");
+    m_h.renderFrames("root", 3);
+    const float scrolled = lv->scroll().y;
+    ASSERT_GT(scrolled, 0.0f);
+    const auto range = lv->renderedRange();
+    run("s.wide = true");
+    m_h.renderFrames("root", 6);
+    EXPECT_FLOAT_EQ(lv->scroll().y, scrolled);
+    EXPECT_EQ(lv->renderedRange(), range);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Delegates that return nil take no space; an inline delegate (an If) is spliced in; built delegates' parent is the
+// ListView; a ListView without a delegate shows its own children; ListViews nest.
+TEST_F(LayoutTest, ListViewDelegateKinds) {
+    run(R"(
+        made = {}
+        list = ListView { id = "lv", height = 150, spacing = 0, model = { "a", "b", "c", "d" },
+                          delegate = function(item, i)
+                              if item == "b" then return nil end
+                              if item == "c" then return If { condition = true, Probe { h = 7 }, Probe { h = 3 } } end
+                              made[item] = Probe { h = 20 }
+                              return made[item]
+                          end }
+        inner = {}
+        outer = ListView { height = 150, spacing = 0, model = 3,
+                           delegate = function(i)
+                               inner[i] = ListView { height = 50, spacing = 0, model = 100,
+                                                     delegate = function() return Probe { h = 10 } end }
+                               return inner[i]
+                           end }
+        plain = ListView { height = 100, Probe { h = 10 } }
+        root = Column { list, outer, plain })");
+    m_h.renderFrames("root", 3);
+    check("made.a.parent == list and made.d.parent == list");
+    run("pa, pd = made.a, made.d");
+    // a (20) + c (7, a gap, 3) + d; b takes no space
+    EXPECT_FLOAT_EQ(probe("pd").pos().y - probe("pa").pos().y, 20.0f + 7.0f + 0.0f + 3.0f);
+    ListView* inner = nullptr;
+    run("i1 = inner[1]");
+    inner = m_h.instance<ListView>("i1");
+    ASSERT_NE(inner, nullptr);
+    EXPECT_FLOAT_EQ(inner->contentHeight(), 1000.0f);
+    EXPECT_LE(inner->renderedRange().second, 12);
+    check("inner[1].parent == outer");
+    run("p = plain[1]");
+    EXPECT_GT(probe("p").renders(), 0);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // A model function that returns fresh item tables on every call rebuilt every delegate on every call (identity by
 // item), losing their state. With `key`, a delegate is kept while an item with its key is in the model, also when it
 // moves to another index; repeated keys keep one delegate each, and a delegate whose key went away is dropped.
@@ -753,26 +978,28 @@ TEST_F(LayoutTest, KeyedDelegatesSurviveFreshModelItems) {
         end
         rep = Repeater { model = fresh, key = function(item) return item.id end,
                          delegate = function(item) built = built + 1; return Probe { h = 5 } end }
+        lvMade = {}
         lv = ListView { height = 100, model = fresh, key = function(item, i) return item.id end,
-                        delegate = function(item) return Probe { h = 5 } end }
+                        delegate = function(item) local p = Probe { h = 5 }; lvMade[#lvMade + 1] = p; return p end }
         plain = Repeater { model = fresh, delegate = function() plainBuilt = plainBuilt + 1; return Probe {} end }
         root = Column { rep, lv, plain })");
     m_h.renderFrames("root", 3);
     check("built == 3");
     check("plainBuilt > 3"); // without a key every call rebuilds them
-    run("first, third, lvFirst = rep.__list[1], rep.__list[3], lv.__list[1]");
+    run("first, third, lvFirst = rep.__list[1], rep.__list[3], lvMade[1]");
     run("ui.__dropped = false; items = { 4, 1, 3 }");
     m_h.renderFrame("root");
     check("built == 4");
     check("#rep.__list == 3 and rep.__list[2] == first and rep.__list[3] == third");
-    check("rep.__list[1] ~= first and lv.__list[2] == lvFirst");
+    check("rep.__list[1] ~= first");
+    check("#lvMade == 4 and lv.__view.keyed[1].node == lvFirst and lv.__view.keyed[2] == nil");
     check("ui.__dropped"); // 2 went away
     run("items = { 3, 3, 1 }");
     m_h.renderFrames("root", 2);
     check("built == 5 and rep.__list[1] == third and rep.__list[3] == first");
     run("items = {}");
     m_h.renderFrame("root");
-    check("#rep.__list == 0 and #lv.__list == 0");
+    check("#rep.__list == 0 and lv.__view.built == 0");
     EXPECT_TRUE(luaui::errors().empty());
 }
 
@@ -1305,6 +1532,17 @@ TEST_F(LayoutTest, ANumericModelIsItsIndices) {
         check(std::string{"count == "} + (count[0] == '2' ? "2" : "0"));
         check("#seen == 0"); // nothing new built
     }
+    // Growing builds the new indices only; the same count again returns the cached list, the same delegates.
+    run("seen = {}; n = 4");
+    m_h.renderFrame("root");
+    run("list = root[1].__list; first = list[1]");
+    check("#seen == 4 and #list == 4");
+    run("seen = {}; n = 4");
+    m_h.renderFrames("root", 2);
+    check("#seen == 0 and root[1].__list == list and list[1] == first and #list == 4");
+    run("n = 5");
+    m_h.renderFrame("root");
+    check("#seen == 1 and seen[1] == 55 and list[1] == first and #list == 5");
     EXPECT_TRUE(luaui::errors().empty());
 }
 

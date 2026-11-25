@@ -1,5 +1,5 @@
-// ScrollView (alias ListView): a scrolling child window, as a typed element. ListView's children
-// come from its model/delegate through the Lua-side `__children` function, which every child iteration uses.
+// ScrollView: a scrolling child window, as a typed element. ListView (imlui.ui.elements.list_view) extends it and
+// renders only the delegates in view (renderContent).
 //
 // The scroll position belongs to the element, not to the ImGui window: ImGui keys a child window by its ID
 // path, and moving the element elsewhere in the tree (Responsive picking another layout for a size class)
@@ -19,17 +19,17 @@ import imlui.ui.layout_box;
 
 export namespace imlui {
 
-/// A scrolling child region that stacks its children (also registered as ListView, whose children come from
-/// model / delegate on the Lua side). It keeps its scroll position when it is rendered somewhere else.
+/// A scrolling child region that stacks its children. It keeps its scroll position when it is rendered somewhere
+/// else. ListView extends it.
 ///
 /// Props:   padding = 0, color = unset (transparent), rounding = unset (theme shape.medium), border = false,
 ///          spacing = unset, align = "start"
 /// Raw:     width, height, cull (default true: children out of view are skipped, Renderer::skipOutOfView)
-class ScrollView final : public Element {
+class ScrollView : public Element {
 public:
     static void declare(TypeBuilder<ScrollView>& type);
 
-    void render(Frame& frame) override;
+    void render(Frame& frame) final;
 
     [[nodiscard]] float padding() const; ///< dp inside the window
     void setPadding(float padding);
@@ -48,6 +48,14 @@ public:
 
     /// The scroll offset in pixels when the element was last rendered.
     [[nodiscard]] ImVec2 scroll() const;
+
+protected:
+    /// The content, inside the child window (whose ID scope and layout box are current): the children stacked with
+    /// `spacing` and `align` (Frame::renderStack). Not called while the window is clipped away.
+    virtual void renderContent(Frame& frame);
+    /// Whether the scroll position is being put back into a new window (see render()): a subclass that moves the
+    /// scroll itself leaves it alone meanwhile.
+    [[nodiscard]] bool restoringScroll() const;
 
 private:
     float m_padding = 0.0f;
@@ -140,12 +148,15 @@ void ScrollView::render(Frame& frame) {
         if (m_color) md::pushSurface(*m_color);
         {
             const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
-            frame.renderStack();
+            renderContent(frame);
         }
         if (m_color) md::popSurface();
     }
     ImGui::EndChild();
 }
+
+void ScrollView::renderContent(Frame& frame) { frame.renderStack(); }
+bool ScrollView::restoringScroll() const { return m_restoreFrames > 0; }
 
 float ScrollView::padding() const { return m_padding; }
 void ScrollView::setPadding(float padding) { m_padding = padding; }

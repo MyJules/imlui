@@ -22,6 +22,7 @@ export import imlui.ui.elements.imgui_demo;
 export import imlui.ui.elements.inline_container;
 export import imlui.ui.elements.link;
 export import imlui.ui.elements.list_item;
+export import imlui.ui.elements.list_view;
 export import imlui.ui.elements.menu;
 export import imlui.ui.elements.menu_bar;
 export import imlui.ui.elements.menu_item;
