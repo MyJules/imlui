@@ -438,6 +438,38 @@ TEST_F(LayoutTest, APaddedColumnsSizeIncludesThePaddingOnBothSides) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A padding below ImGui's item spacing pads as much above and below as on the sides: it padded by the item spacing
+// vertically (the padding's dummies came out with a negative height).
+TEST_F(LayoutTest, AColumnPaddingBelowTheItemSpacingPadsEverySideAlike) {
+    ASSERT_GT(ImGui::GetStyle().ItemSpacing.y, 3.0f);
+    run(R"(
+        a = Probe { w = 40, h = 20, intrinsic = true } b = Probe { w = 40, h = 20, intrinsic = true }
+        top = Probe { w = 10, h = 10 } below = Probe { w = 10, h = 10 }
+        root = Column { spacing = 0, top, Column { padding = 3, a }, below }
+        measure = Measure { Column { padding = 3, b }, Column { padding = 3, width = 100, Probe { w = 10, h = 10,
+                            intrinsic = true }, Probe { w = 10, h = 10, intrinsic = true } } })");
+    m_h.renderFrames("root", 2);
+    const ImVec2 top = probe("top").pos(), a = probe("a").pos(), below = probe("below").pos();
+    EXPECT_FLOAT_EQ(a.x - top.x, 3.0f);
+    EXPECT_FLOAT_EQ(a.y - (top.y + 10.0f), 3.0f);
+    EXPECT_FLOAT_EQ(below.y - (a.y + 20.0f), 3.0f);
+
+    m_h.renderFrames("measure", 2);
+    Measure* m = m_h.instance<Measure>("measure");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 2u);
+    const ImVec2 sizes[] = {{40.0f + 6.0f, 20.0f + 6.0f},
+                            {100.0f, 10.0f + ImGui::GetStyle().ItemSpacing.y + 10.0f + 6.0f}};
+    for (std::size_t i = 0; i < 2; ++i) {
+        ASSERT_TRUE(m->results[i].intrinsic.has_value()) << i;
+        EXPECT_FLOAT_EQ(m->results[i].rendered.x, sizes[i].x) << i;
+        EXPECT_FLOAT_EQ(m->results[i].rendered.y, sizes[i].y) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->x, sizes[i].x) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->y, sizes[i].y) << i;
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // The containers that size from the available width take a fixed Column's: Grid (a table), ScrollView (a child
 // window), Card, Table, TopAppBar, NavigationBar, Divider, TabBar and Section.
 TEST_F(LayoutTest, ContainersInAFixedWidthColumnTakeItsWidth) {

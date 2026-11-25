@@ -66,9 +66,15 @@ void Column::render(Frame& frame) {
     // The width is the column's own, padding included: resolved from its left edge, before the padding indents.
     const float left = ImGui::GetCursorScreenPos().x;
     const float width = sized ? frame.resolvedWidth(0.0f) : 0.0f;
+    const float lineGap = ImGui::GetStyle().ItemSpacing.y;
     if (pad > 0) {
-        ImGui::Dummy({0, pad - ImGui::GetStyle().ItemSpacing.y});
+        // The top padding: the children start `pad` below. Not a Dummy `pad - lineGap` high, which can't be negative
+        // (a padding below the item spacing would pad by the spacing): an empty one starts a line (and ends a
+        // SameLine), then the cursor moves to a whole pixel `pad` below the column's top.
+        const float y = ImGui::GetCursorScreenPos().y;
+        ImGui::Dummy({0, 0});
         ImGui::Indent(pad);
+        ImGui::SetCursorScreenPos({ImGui::GetCursorScreenPos().x, std::trunc(y + pad)});
     }
     const ImVec2 p = ImGui::GetCursorScreenPos();
     float right = p.x; // the content's right edge
@@ -88,15 +94,18 @@ void Column::render(Frame& frame) {
     }
     if (pad > 0) {
         ImGui::Unindent(pad);
-        // The bottom padding, as wide as the content and the padding on its right: the column's group (its size)
-        // covers the padding on every side.
-        ImGui::Dummy({right + pad - left, pad - ImGui::GetStyle().ItemSpacing.y});
+        // The bottom padding, `pad` below the last child (the cursor is the item spacing below it) or below the top
+        // padding without one, and as wide as the content and the padding on its right: the column's group (its
+        // size) covers the padding on every side.
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos({c.x, std::max(p.y, c.y - lineGap)});
+        ImGui::Dummy({right + pad - left, pad});
     }
 }
 
 std::optional<ImVec2> Column::intrinsicSize(const Frame& frame, float maxWidth) {
-    // render() in numbers: the children's box, the stack in it, and the padding's dummies (ImGui starts each line on
-    // a whole pixel).
+    // render() in numbers: the children's box, the stack in it, and the padding (ImGui starts each line on a whole
+    // pixel).
     const float pad = std::max(0.0f, frame.dp(m_padding));
     const float width = frame.size("width");
     float reserved = 0.0f, inner = std::max(0.0f, maxWidth - 2.0f * pad);
@@ -108,13 +117,12 @@ std::optional<ImVec2> Column::intrinsicSize(const Frame& frame, float maxWidth) 
     const float w = std::max(stack->x, reserved) + 2.0f * pad;
     if (pad <= 0) return ImVec2{w, stack->y};
     const float lineGap = ImGui::GetStyle().ItemSpacing.y;
-    const float dummy = pad - lineGap; // the padding dummies' height
-    const float top = std::trunc(std::max(0.0f, dummy) + lineGap);
+    const float top = std::trunc(pad);
     const float stackBottom = top + stack->y;
-    const float below = std::trunc(stackBottom + lineGap);
-    const float bottom =
-        std::max({stackBottom, below + dummy, std::trunc(below + std::max(0.0f, dummy) + lineGap) - lineGap});
-    return ImVec2{w, bottom};
+    // Where the bottom padding starts: the line after the stack, less the item spacing, or the top padding's end.
+    // The group ends at its dummy's bottom.
+    const float contentBottom = std::max(top, std::trunc(stackBottom + lineGap) - lineGap);
+    return ImVec2{w, std::max(stackBottom, contentBottom + pad)};
 }
 
 bool Column::contentFillsWidth(const Frame& frame) {

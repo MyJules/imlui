@@ -240,6 +240,20 @@ TEST_F(DataTest, PlotOfLargeOrConstantValuesDraws) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// The hover readout keeps inside the chart; a chart narrower than the readout put it at the left edge (it called
+// std::clamp with the upper bound below the lower one).
+TEST_F(DataTest, PlotNarrowerThanItsHoverReadoutDraws) {
+    for (const char* kind : {"line", "bars"}) {
+        run(std::string{"root = Probe { Plot { width = 12, height = 80, kind = '"} + kind +
+            "', values = { 123456789, -0.000123 } } }");
+        frames();
+        run("ui.native.injectMouse(" + std::to_string(probe().center().x) + ", " +
+            std::to_string(probe().center().y) + ")");
+        frames(2);
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ------------------------------------------------------------------ Canvas
 
 TEST_F(DataTest, CanvasPaintsWithThePainterAndEmitsClickedInDp) {

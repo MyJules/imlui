@@ -54,10 +54,12 @@ bool beginDialog(const char* title, bool* open, float width, std::string_view he
         *open = false;
         return false;
     }
-    // Escape closes the top-most popup only: not this dialog while a nested dialog or a menu opened from it is open.
-    if (!*open || (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId))) {
+    // Escape closes the top-most popup only: not this dialog while a nested dialog or a menu opened from it is open,
+    // nor when the press closed such a menu (ImGui's nav did, in NewFrame).
+    if (!*open || (ImGui::IsKeyPressed(ImGuiKey_Escape) && !popupOver(ImGuiPopupFlags_AnyPopupId))) {
         *open = false;
         ImGui::CloseCurrentPopup();
+        notePopupOver(ImGuiPopupFlags_AnyPopupId); // nothing is over it now: no stale record when it opens again
         ImGui::EndPopup();
         return false;
     }
@@ -84,6 +86,7 @@ bool beginDialog(const char* title, bool* open, float width, std::string_view he
 void endDialog() {
     layout::popBox();
     popSurface();
+    notePopupOver(ImGuiPopupFlags_AnyPopupId);
     ImGui::EndPopup();
 }
 

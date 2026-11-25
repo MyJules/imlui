@@ -117,6 +117,41 @@ TEST_F(InputsTest, SliderReleasedOnlyAfterAChange) {
     run(R"(assert(moved == 1 and released == 1 and last == 7 and s.v == 7, moved .. " " .. released))");
 }
 
+// A stepped value stays on its steps at the end of the range: range 1, step 0.4 ends at 0.8 (it clamped 1.2 to 1).
+TEST_F(InputsTest, SliderStepsStopAtTheLastWholeStep) {
+    run(R"(
+        s = state { v = 0 }
+        root = Probe { Slider { value = bind(s, "v"), from = 0, to = 1, stepSize = 0.4, width = 300 } })");
+    frames(2);
+    const ImVec2 a = probe().min(), b = probe().max();
+    click(b.x - 1.0f, (a.y + b.y) * 0.5f);
+    run(R"(assert(s.v == 0.8, string.format("%.17g", s.v)))");
+}
+
+// A range that isn't finite can't place the thumb: it is empty, and a click leaves the value alone (it wrote NaN or
+// an infinity). A step that isn't finite is continuous (it wrote NaN).
+TEST_F(InputsTest, SliderWithANonFiniteRangeOrStepWritesNoNaN) {
+    for (const char* range : {"from = -math.huge, to = 1", "from = 0, to = math.huge", "from = 0 / 0, to = 1",
+                              "from = 0, to = 0 / 0", "from = -1e308, to = 1e308"}) {
+        run(std::string{"s = state { v = 0.5 }; root = Probe { Slider { value = bind(s, 'v'), width = 300, "} +
+            range + " } }");
+        frames(2);
+        const ImVec2 a = probe().min(), b = probe().max();
+        click(a.x + 0.7f * (b.x - a.x), (a.y + b.y) * 0.5f);
+        EXPECT_EQ(m_h.run("assert(s.v == 0.5, tostring(s.v))"), "") << range;
+    }
+    for (const char* step : {"math.huge", "0 / 0", "-math.huge"}) {
+        run(std::string{"s = state { v = 0 }; root = Probe { Slider { value = bind(s, 'v'), width = 300, "} +
+            "from = 0, to = 10, stepSize = " + step + " } }");
+        frames(2);
+        const ImVec2 a = probe().min(), b = probe().max();
+        const float x0 = a.x + 10.0f, x1 = b.x - 10.0f; // the track runs between the handle radii (10 dp)
+        click(x0 + 0.7f * (x1 - x0), (a.y + b.y) * 0.5f);
+        EXPECT_EQ(m_h.run("assert(math.abs(s.v - 7) < 0.1, tostring(s.v))"), "") << step;
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(InputsTest, SliderRecoversFromANaNValue) {
     // A NaN value made animate() store a value that never converged: a frame was requested every frame.
     run(R"(
