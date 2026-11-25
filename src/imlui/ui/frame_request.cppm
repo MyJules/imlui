@@ -2,12 +2,14 @@
 //
 // The engine only renders when something asks for a frame: input (a short
 // settle period), animations that are still moving, timers that come due,
-// or code that calls requestFrame(). All times are on a monotonic clock
-// private to this module; callers pass relative delays in seconds.
+// or code that calls requestFrame(). All times are on the app clock
+// (imlui.ui.clock); callers pass relative delays in seconds.
 // Main thread only.
 export module imlui.ui.frame_request;
 
 import std;
+
+import imlui.ui.clock;
 
 export namespace imlui {
 
@@ -21,14 +23,20 @@ void requestFrameAfter(double seconds);
 /// ignored.
 void requestFramesFor(double seconds);
 
-/// Seconds until a frame is due: 0 when one is due now, +infinity when nothing is pending.
+/// Seconds until a frame is due: 0 when one is due now, +infinity when nothing is pending. Never sooner than the
+/// minimum frame interval after the last frame began (setMinFrameInterval).
 [[nodiscard]] double secondsUntilFrame();
+
+/// The shortest time between the starts of two frames (0, the default: no limit). With vsync on, presenting a frame
+/// waits for the display, which paces an animation that asks for a frame every frame; with vsync off nothing does, so
+/// the engine sets this instead. NaN, infinite and negative values are 0.
+void setMinFrameInterval(double seconds);
 
 /// Called by the engine at the start of a frame: drops the requests that this frame serves.
 /// Requests made while the frame renders stay pending for the next one.
 void beginFrameRequests();
 
-/// Drops all pending requests (tests, shutdown).
+/// Drops all pending requests and forgets the last frame's start (tests, shutdown). The minimum interval stays.
 void clearFrameRequests();
 
 /// Called when a frame is requested while the engine's loop is asleep (waiting for
@@ -53,16 +61,14 @@ constexpr double mergeWindow = 0.004;
 constexpr std::size_t maxPending = 64;
 
 bool frameNow = false;
+double minFrameInterval = 0.0;
+double lastFrameStart = -infinity; ///< when beginFrameRequests() last ran
 double continuousUntil = -infinity;
 std::vector<double> pending; // absolute due times, sorted ascending
 std::function<void()> wakeHandler;
 bool loopAwake = true;
 
-double clockNow() {
-    using namespace std::chrono;
-    static const steady_clock::time_point start = steady_clock::now();
-    return duration<double>(steady_clock::now() - start).count();
-}
+double clockNow() { return clockTime(); }
 
 void wake() {
     if (!loopAwake && wakeHandler) wakeHandler();
@@ -106,21 +112,28 @@ void requestFramesFor(double seconds) {
 }
 
 double secondsUntilFrame() {
-    if (frameNow) return 0.0;
     const double now = clockNow();
-    if (now < continuousUntil) return 0.0;
-    if (pending.empty()) return infinity;
-    return std::max(0.0, pending.front() - now);
+    double due = infinity;
+    if (frameNow || now < continuousUntil)
+        due = 0.0;
+    else if (!pending.empty())
+        due = std::max(0.0, pending.front() - now);
+    if (due == infinity) return due;
+    return std::max(due, lastFrameStart + minFrameInterval - now);
 }
+
+void setMinFrameInterval(double seconds) { minFrameInterval = std::isfinite(seconds) && seconds > 0.0 ? seconds : 0.0; }
 
 void beginFrameRequests() {
     frameNow = false;
     const double now = clockNow();
+    lastFrameStart = now;
     pending.erase(pending.begin(), std::upper_bound(pending.begin(), pending.end(), now));
 }
 
 void clearFrameRequests() {
     frameNow = false;
+    lastFrameStart = -infinity;
     continuousUntil = -infinity;
     pending.clear();
 }

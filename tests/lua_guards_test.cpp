@@ -111,6 +111,18 @@ private:
     int m_ticks = 0;
 };
 
+/// A visual element whose constructor throws. Counts the attempts.
+class Bomb final : public Element {
+public:
+    static void declare(TypeBuilder<Bomb>&) {}
+    Bomb() {
+        ++constructions;
+        throw std::runtime_error("bomb constructor exploded");
+    }
+    void render(Frame&) override {}
+    inline static int constructions = 0;
+};
+
 /// A ticking element that never renders: start() turns ticking on.
 class TickOnly final : public Element {
 public:
@@ -130,7 +142,9 @@ protected:
         calls = {};
         m_h.registerType<Exploder>("Exploder");
         m_h.registerType<Recycled>("Recycled");
+        m_h.registerType<Bomb>("Bomb");
         Recycled::addresses.clear();
+        Bomb::constructions = 0;
     }
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
 
@@ -138,6 +152,23 @@ protected:
 };
 
 } // namespace
+
+// A constructor that throws is reported once and not tried again: the table remembers the failure, so rendering it
+// (and a Row asking for its size) doesn't construct it, and report the error, on every query and frame.
+TEST_F(LuaGuardsTest, AThrowingConstructorIsTriedOnce) {
+    run(R"(
+        bomb = Bomb { }
+        root = Row { Column { }, bomb })");
+    m_h.renderFrames("root", 4);
+    EXPECT_EQ(Bomb::constructions, 1);
+    EXPECT_EQ(secondsUntilFrame(), std::numeric_limits<double>::infinity()); // settled: the Row stops asking
+    int reported = 0;
+    for (const auto& e : luaui::errors())
+        if (e.find("Bomb: constructor failed: bomb constructor exploded") != std::string::npos) ++reported;
+    EXPECT_EQ(reported, 1);
+    EXPECT_EQ(m_h.syncElement("bomb"), nullptr);
+    EXPECT_EQ(Bomb::constructions, 1);
+}
 
 // componentComplete() that throws is reported (from a render and from a method call's lazy sync); the element
 // keeps working.

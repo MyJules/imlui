@@ -16,6 +16,7 @@ import std;
 import imgui;
 import imlui.types.frame;
 import imlui.types.script_object;
+import imlui.ui.frame_request;
 
 export namespace imlui {
 
@@ -56,7 +57,7 @@ public:
 
     /// While ticking is on (setTicking(true)): called at the start of every rendered frame, before the tree
     /// renders, whether or not the element is rendered, with its properties synced first. `now` is the
-    /// ImGui time in seconds. Frames are rendered on demand: request the frame you need (requestFrameAfter).
+    /// app clock's time in seconds (clockTime(), module imlui.ui.clock, what ui.time() returns). Frames are rendered on demand: request the frame you need (requestFrameAfter).
     virtual void tick(double now);
 
     /// Whether tick() is called every frame.
@@ -69,7 +70,8 @@ public:
     [[nodiscard]] static Element* findTicking(std::uint64_t id);
 
 protected:
-    /// Turns tick() on or off. The destructor turns it off.
+    /// Turns tick() on or off. The destructor turns it off. Turning it on requests a frame, so the first tick()
+    /// comes on the next frame also when the element was created while the app sleeps or during a render.
     void setTicking(bool on);
 };
 
@@ -117,7 +119,10 @@ Element* Element::findTicking(std::uint64_t id) {
 
 void Element::setTicking(bool on) {
     const auto it = findId(objectId());
-    if (on && it == ticking.end()) ticking.push_back({objectId(), this});
+    if (on && it == ticking.end()) {
+        ticking.push_back({objectId(), this});
+        requestFrame(); // frames are on demand: nothing else would run the first tick()
+    }
     if (!on && it != ticking.end()) ticking.erase(it);
 }
 

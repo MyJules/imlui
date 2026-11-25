@@ -256,6 +256,136 @@ TEST_F(SystemTest, TimerRequestsAFrameAtItsDueTime) {
     EXPECT_LE(wait, 0.5);
 }
 
+// Frames are on demand: a Timer created while the app sleeps, or during a frame (after the frame's requests were
+// taken), asks for the frame that runs its first tick.
+TEST_F(SystemTest, ANewTimerRequestsAFrame) {
+    run(R"(
+        n = 0
+        root = Column { })");
+    m_h.renderFrame("root");
+    clearFrameRequests();
+    run("t = Timer { interval = 250, triggeredOnStart = true, onTriggered = function() n = n + 1 end }");
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+    m_h.renderFrame("root");
+    EXPECT_EQ(number("n"), 1);
+
+    clearFrameRequests();
+    run(R"(
+        local remove
+        remove = ui.onFrame(function()
+            remove()
+            t2 = Timer { interval = 250 }
+        end))");
+    m_h.renderFrame("root");
+    EXPECT_EQ(secondsUntilFrame(), 0.0); // made after the frame took its requests: the next one ticks it
+}
+
+// ------------------------------------------------------------------ Lua timers
+
+// setTimeout / setInterval ask for the frame they're due in, also when set outside a frame or during one.
+TEST_F(SystemTest, LuaTimersRequestTheirFrame) {
+    run("root = Column { }");
+    m_h.renderFrame("root");
+    clearFrameRequests();
+    run("ui.setTimeout(function() end, 500)");
+    double wait = secondsUntilFrame();
+    EXPECT_GT(wait, 0.4);
+    EXPECT_LE(wait, 0.5);
+
+    clearFrameRequests();
+    run("ui.setInterval(function() end, 250)");
+    wait = secondsUntilFrame();
+    EXPECT_GT(wait, 0.15);
+    EXPECT_LE(wait, 0.25);
+
+    clearFrameRequests();
+    run("ui.setTimeout(function() end)");
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+}
+
+// Timers due in the same frame fire in the order they came due, then in the order they were set, whatever order
+// the timers table iterates in.
+TEST_F(SystemTest, TimersDueInOneFrameFireInDueOrder) {
+    run(R"(
+        order = {}
+        -- Many, so the table's hash part is in play; set in an order that isn't their due order.
+        for i = 1, 40 do
+            local ms = ((i * 17) % 40) -- 0..39 ms, all distinct
+            ui.setTimeout(function() order[#order + 1] = ms end, ms)
+        end
+        ui.setTimeout(function() order[#order + 1] = "a" end, 50)
+        ui.setTimeout(function() order[#order + 1] = "b" end, 50)
+        ui.setTimeout(function() order[#order + 1] = "c" end, 50)
+        root = Column { })");
+    m_h.renderFrame("root"); // 62.5 ms: all due
+    ASSERT_EQ(number("#order"), 43);
+    EXPECT_EQ(m_h.run(R"(
+        for i = 1, 40 do assert(order[i] == i - 1, "position " .. i .. ": " .. tostring(order[i])) end
+        assert(order[41] == "a" and order[42] == "b" and order[43] == "c"))"),
+              "");
+}
+
+// A period starts where the last one ended, not at the (late) frame that fired it: at 62.5 ms per frame, a 100 ms
+// Timer or setInterval fires 10 times a second, not every 2 frames (8 times). A frame more than a period late fires
+// once, and the grid goes on from there.
+TEST_F(SystemTest, TimerAndSetIntervalDontDrift) {
+    run(R"(
+        timerHits, intervalHits = 0, 0
+        ui.setInterval(function() intervalHits = intervalHits + 1 end, 100)
+        t = Timer { interval = 100, onTriggered = function() timerHits = timerHits + 1 end }
+        root = Column { })");
+    m_h.renderFrame("root"); // the Timer starts (the interval started when it was set, at 0)
+    m_h.renderFrames("root", 16); // 1 s later
+    EXPECT_EQ(number("timerHits"), 10);
+    EXPECT_EQ(number("intervalHits"), 10);
+
+    m_h.advanceTime(1.0); // asleep for 10 periods
+    m_h.renderFrame("root");
+    EXPECT_EQ(number("timerHits"), 11);
+    EXPECT_EQ(number("intervalHits"), 11);
+    m_h.renderFrames("root", 16); // and on the grid again: 10 more in a second
+    EXPECT_EQ(number("timerHits"), 21);
+    EXPECT_EQ(number("intervalHits"), 21);
+}
+
+// clearTimer with no timer (an optional handle that was never set) does nothing.
+TEST_F(SystemTest, ClearTimerIgnoresNil) {
+    run(R"(
+        n = 0
+        local id = ui.setTimeout(function() n = n + 1 end, 0)
+        ui.clearTimer(nil)
+        ui.clearTimer()
+        ui.clearTimer(0 / 0)
+        root = Column { })");
+    m_h.renderFrame("root");
+    EXPECT_EQ(number("n"), 1);
+}
+
+// A timeout set between frames after an idle period counts from now (the app clock), not from the last frame's
+// time: it doesn't fire on the next frame.
+TEST_F(SystemTest, ATimeoutSetAfterAnIdlePeriodCountsFromNow) {
+    run("n = 0; root = Column { }");
+    m_h.renderFrame("root");
+    m_h.advanceTime(10.0);
+    run("ui.setTimeout(function() n = n + 1 end, 100)");
+    m_h.renderFrame("root"); // 62.5 ms later
+    EXPECT_EQ(number("n"), 0);
+    m_h.renderFrame("root"); // 125 ms
+    EXPECT_EQ(number("n"), 1);
+}
+
+// A Timer started between frames after an idle period: its period starts at the frame that ticks it first.
+TEST_F(SystemTest, ATimerCreatedAfterAnIdlePeriodWaitsItsInterval) {
+    run("n = 0; root = Column { }");
+    m_h.renderFrame("root");
+    m_h.advanceTime(10.0);
+    run("t = Timer { interval = 125, onTriggered = function() n = n + 1 end }");
+    m_h.renderFrames("root", 2); // starts, 62.5 ms
+    EXPECT_EQ(number("n"), 0);
+    m_h.renderFrame("root"); // 125 ms after its start
+    EXPECT_EQ(number("n"), 1);
+}
+
 TEST_F(SystemTest, ACollectedTimerStopsTicking) {
     run(R"(
         n = 0
@@ -396,6 +526,17 @@ TEST_F(SystemTest, SnackbarPropsComeFromUiSnackbarAndExpiryWritesShownAtBack) {
     m_h.renderFrames("snack", 2); // hidden: nothing more happens
     EXPECT_EQ(number("changes"), 1);
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ui.time() is the app clock, current between frames too: a snackbar shown after an idle period (from a posted
+// function) starts now, not at the last frame's time, which would expire it before it's drawn.
+TEST_F(SystemTest, SnackbarShownBetweenFramesStartsNow) {
+    run("snack = ui.__overlays[1]; root = Column { }");
+    m_h.renderFrame("root");
+    m_h.advanceTime(10.0);
+    run("ui.snackbar('Saved')");
+    EXPECT_DOUBLE_EQ(number("snack.shownAt"), m_h.time());
+    EXPECT_DOUBLE_EQ(number("ui.time()"), m_h.time());
 }
 
 TEST_F(SystemTest, SnackbarDefaults) {

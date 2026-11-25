@@ -20,6 +20,7 @@ import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.theme_table;
 import imlui.lua.value;
+import imlui.ui.clock;
 import imlui.ui.frame_request;
 import imlui.ui.size_class;
 
@@ -169,7 +170,7 @@ constexpr NativeFn nativeFns[] = {
      }},
     {"time",
      [](lua::State* state) -> int {
-         lua::pushnumber(state, ImGui::GetTime());
+         lua::pushnumber(state, clockTime());
          return 1;
      }},
     {"deltaTime",

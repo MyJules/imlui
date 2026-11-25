@@ -716,11 +716,14 @@ ui.color = {
 
 local timers, nextTimer = {}, 0
 
--- A timer set inside a component instance or delegate runs in its id scope.
+-- A timer set inside a component instance or delegate runs in its id scope. Frames are on demand: it asks for the
+-- frame it's due in (ui.__tick asks for the following ones), also when it was set while the app sleeps (a posted
+-- function) or during a frame, whose own request for the next due time was already made.
 local function addTimer(fn, ms, rep)
     fn = inCurrentScope(fn)
     nextTimer = nextTimer + 1
     timers[nextTimer] = { fn = fn, interval = ms / 1000, due = native.time() + ms / 1000, rep = rep }
+    native.requestFrame(ms / 1000)
     return nextTimer
 end
 local function describe(ms) return type(ms) == "number" and tostring(ms) or type(ms) end
@@ -741,7 +744,10 @@ function ui.setInterval(fn, ms)
     end
     return addTimer(fn, ms, true)
 end
-function ui.clearTimer(id) timers[id] = nil end
+--- Stops a timer. An id that isn't one (nil, from a timer that was never set) is ignored.
+function ui.clearTimer(id)
+    if id ~= nil and id == id then timers[id] = nil end -- nil or NaN can't index a table
+end
 
 local frameCallbacks = {}
 --- Calls fn(time) at the start of every rendered frame. Frames are rendered on
@@ -775,10 +781,25 @@ function ui.__tick(now)
     for id, t in pairs(timers) do
         if now >= t.due then due[#due + 1] = id end
     end
+    -- In the order they came due (then the order they were set), not pairs' order: a timeout of 10 ms and one of 20 ms
+    -- that both come due in one frame fire in that order.
+    if #due > 1 then
+        table.sort(due, function(a, b)
+            local da, db = timers[a].due, timers[b].due
+            if da ~= db then return da < db end
+            return a < b
+        end)
+    end
     for _, id in ipairs(due) do
         local t = timers[id]
         if t then
-            if t.rep then t.due = now + t.interval else timers[id] = nil end
+            if t.rep then
+                -- The next period starts where this one ended, not at the frame time (frames come late: the period
+                -- would drift). A frame later than a whole period skips the missed ones: one call per frame.
+                t.due = t.due + (math.floor((now - t.due) / t.interval) + 1) * t.interval
+            else
+                timers[id] = nil
+            end
             protectedCall(t.fn)
         end
     end

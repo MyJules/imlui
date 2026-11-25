@@ -13,6 +13,7 @@ class FrameRequestTest : public ::testing::Test {
 protected:
     void SetUp() override { clearFrameRequests(); }
     void TearDown() override {
+        setMinFrameInterval(0.0);
         setFrameWakeHandler({});
         setLoopAwake(true);
         clearFrameRequests();
@@ -50,6 +51,40 @@ TEST_F(FrameRequestTest, EarliestRequestWins) {
     requestFrameAfter(30.0);
     EXPECT_LE(secondsUntilFrame(), 5.0);
     EXPECT_GT(secondsUntilFrame(), 4.0);
+}
+
+// With vsync off the engine sets a minimum frame interval: a frame asked for right after one began (an animation
+// that asks every frame) waits for the rest of the interval, a later one isn't delayed, and nothing pending stays
+// nothing.
+TEST_F(FrameRequestTest, MinFrameIntervalCapsTheFrameRate) {
+    setMinFrameInterval(10.0);
+    EXPECT_EQ(secondsUntilFrame(), inf);
+    requestFrame();
+    EXPECT_EQ(secondsUntilFrame(), 0.0); // no frame began yet
+    beginFrameRequests();
+    EXPECT_EQ(secondsUntilFrame(), inf);
+    requestFrame();
+    double s = secondsUntilFrame();
+    EXPECT_GT(s, 9.0);
+    EXPECT_LE(s, 10.0);
+    beginFrameRequests();
+    requestFrameAfter(20.0); // due after the interval: unchanged
+    s = secondsUntilFrame();
+    EXPECT_GT(s, 19.0);
+    EXPECT_LE(s, 20.0);
+
+    clearFrameRequests();
+    beginFrameRequests();
+    requestFramesFor(5.0); // the settle period is capped too
+    EXPECT_GT(secondsUntilFrame(), 9.0);
+
+    setMinFrameInterval(0.0); // off again
+    requestFrame();
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+    for (const double bad : {-1.0, inf, -inf, __builtin_nan("")}) {
+        setMinFrameInterval(bad);
+        EXPECT_EQ(secondsUntilFrame(), 0.0);
+    }
 }
 
 TEST_F(FrameRequestTest, NonPositiveDelayIsImmediate) {

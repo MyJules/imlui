@@ -113,7 +113,7 @@ void ScrollView::render(Frame& frame) {
     }
 
     // Unset: the available width (the layout box), and ImGui's default height (0: the remaining space).
-    ImGui::BeginChild("##scroll", {frame.resolvedWidth(), frame.resolvedHeight(0.0f)}, cf);
+    const bool visible = ImGui::BeginChild("##scroll", {frame.resolvedWidth(), frame.resolvedHeight(0.0f)}, cf);
     ImGui::PopStyleVar();
     if (m_color) ImGui::PopStyleColor();
     if (pad > 0) ImGui::PopStyleVar();
@@ -134,12 +134,16 @@ void ScrollView::render(Frame& frame) {
         }
     }
 
-    if (m_color) md::pushSurface(*m_color);
-    {
-        const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
-        frame.renderStack();
+    // Clipped away (scrolled out of view): the content isn't rendered, so its sizes in the layout cache stay what they
+    // were, instead of the near-zero sizes items get under SkipItems.
+    if (visible) {
+        if (m_color) md::pushSurface(*m_color);
+        {
+            const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
+            frame.renderStack();
+        }
+        if (m_color) md::popSurface();
     }
-    if (m_color) md::popSurface();
     ImGui::EndChild();
 }
 

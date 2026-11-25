@@ -814,6 +814,44 @@ TEST_F(LayoutTest, ScrollViewKeepsScrollWhenItMovesToAnotherParent) {
     EXPECT_FLOAT_EQ(sv->scroll().y, back);
 }
 
+// A Card or ScrollView clipped away (below the window here, like scrolled out of view) doesn't render its content:
+// under SkipItems it would record near-zero sizes, ask for settle frames, and place a Row inside it wrong on the
+// frame it comes back.
+TEST_F(LayoutTest, ClippedCardAndScrollViewSkipTheirContent) {
+    run(R"(
+        big = Probe { h = 10 }
+        a = Probe { w = 50 } b = Probe {}
+        c = Probe { w = 50 } d = Probe {}
+        root = Column { big, Card { Row { a, b } }, ScrollView { height = 100, Row { c, d } } })");
+    m_h.renderFrames("root", 6);
+    Probe* a = m_h.instance<Probe>("a");
+    Probe* b = m_h.instance<Probe>("b");
+    Probe* c = m_h.instance<Probe>("c");
+    Probe* d = m_h.instance<Probe>("d");
+    ASSERT_TRUE(a && b && c && d);
+    const float bx = b->pos().x - a->pos().x;
+    const float dx = d->pos().x - c->pos().x;
+    EXPECT_GE(bx, 50.0f);
+    EXPECT_GE(dx, 50.0f);
+
+    run("big.h = 2000"); // both go below the 600 px window
+    m_h.renderFrames("root", 3);
+    const int aRenders = a->renders();
+    const int cRenders = c->renders();
+    m_h.renderFrames("root", 4);
+    EXPECT_EQ(a->renders(), aRenders);
+    EXPECT_EQ(c->renders(), cRenders);
+    EXPECT_EQ(secondsUntilFrame(), std::numeric_limits<double>::infinity()); // settled, nothing to redo
+
+    run("big.h = 10"); // back in view: the first frame places the Rows right
+    m_h.renderFrame("root");
+    EXPECT_GT(a->renders(), aRenders);
+    EXPECT_GT(c->renders(), cRenders);
+    EXPECT_FLOAT_EQ(b->pos().x - a->pos().x, bx);
+    EXPECT_FLOAT_EQ(d->pos().x - c->pos().x, dx);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ------------------------------------------------------------ Card
 
 TEST_F(LayoutTest, CardDefaultsAndPadding) {

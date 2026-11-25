@@ -36,6 +36,7 @@ import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.name;
 import imlui.image.image_cache;
+import imlui.ui.clock;
 import imlui.ui.frame_request;
 import imlui.ui.layout_box;
 import imlui.ui.main_thread;
@@ -169,6 +170,9 @@ constexpr double fileCheckSeconds = 0.4;
 constexpr double caretBlinkSeconds = 0.1;
 /// While minimized, the loop wakes at most this often.
 constexpr double minimizedSeconds = 0.1;
+/// With vsync off, the most frames per second the loop renders (vsync paces it otherwise): an animation asks for a
+/// frame every frame, and nothing else would stop it from rendering as fast as the CPU and GPU go.
+constexpr double maxUnsyncedFrameRate = 240.0;
 
 /// The largest root window width or height, in dp: ui.setWindowSize's limit, bigger than any screen and far from
 /// overflowing an int once scaled to pixels.
@@ -255,6 +259,7 @@ int Engine::run() {
     // On-demand rendering: sleep in waitEvents() until input arrives or the next
     // requested frame, Lua timer or file check is due, and render only then.
     setFrameWakeHandler([] { platform::Window::postEmptyEvent(); });
+    setMinFrameInterval(wc.vsync ? 0.0 : 1.0 / maxUnsyncedFrameRate);
     requestFramesFor(settleSeconds);
     // From here on a post() from any thread wakes the loop. Functions posted before run() are run below, first.
     setPostWakeHandler([] { platform::Window::postEmptyEvent(); });
@@ -282,6 +287,7 @@ int Engine::run() {
     clearPosted();          // still queued: dropped (they may refer to the Lua state closed below)
     setFrameWakeHandler({});
     clearFrameRequests();
+    setMinFrameInterval(0.0);
     log::info("shutting down");
     closeState(m_state);
     m_state = nullptr;
@@ -404,7 +410,7 @@ void Engine::renderTree() {
     if (m_tickRef != lua::noRef) {
         // ui.__tick runs due timers and returns the seconds until the next one.
         lua::rawgeti(m_state, lua::registryIndex, m_tickRef);
-        lua::pushnumber(m_state, ImGui::GetTime());
+        lua::pushnumber(m_state, clockTime());
         if (luaui::safeCall(m_state, 1, 1) && lua::isnumber(m_state, -1)) requestFrameAfter(lua::tonumber(m_state, -1));
         lua::settop(m_state, 0);
     }

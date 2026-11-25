@@ -60,7 +60,18 @@ flowchart TD
 `requestFrameAfter(seconds)` and `requestFramesFor(seconds)` (continuously, the settle period).
 `secondsUntilFrame()` tells the loop when the next frame is due. At the start of a frame,
 `beginFrameRequests()` drops the requests that frame serves, so anything that still needs frames asks again while
-it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`.
+it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`. With vsync on,
+presenting a frame waits for the display, which paces an animation that asks for a frame every frame; with
+`vsync = false` (`platform::Window::Config`) the engine sets a minimum frame interval instead
+(`setMinFrameInterval`, at most 240 frames per second), so `secondsUntilFrame()` never reports a frame due sooner
+than that after the last one began.
+
+All of it runs on one monotonic **app clock**, `clockTime()` in `imlui.ui.clock` (a steady clock): the frame
+requests, `ui.time()` (`native.time`), the `now` that `ui.__tick` passes to the Lua timers and to ticking elements
+(`Timer`), the snackbar's `shownAt` and the `Canvas` painter's `p.time`. Unlike `ImGui::GetTime()`, which advances
+only when a frame starts, it is current between frames, so a time taken in a posted function after an idle period
+(a `setTimeout`, `ui.snackbar`) isn't already in the past when the next frame comes. Tests replace its source
+(`setClockSource`) with a simulated time.
 
 Who requests frames:
 
@@ -157,7 +168,10 @@ functions return nil and a message. A C++ exception that reaches a protected cal
 doesn't corrupt anything: the build maps a `std::bad_alloc` to a Lua memory error (`"not enough memory"`), and any
 other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour), which `safeCall`
 reports as `unknown C++ exception`. A registered type's constructor that throws is reported too
-(`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The property sync
+(`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The table remembers
+the failure (`__native = false`), so the constructor isn't tried again (and the error reported again) every time
+the element is rendered or measured, and its intrinsic size is zero (it renders nothing), so a `Row` around it
+settles instead of asking for frames while it waits for the size. The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
 
@@ -884,7 +898,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, wake handler |
+| `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
+| `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, wake handler |
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs) |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |

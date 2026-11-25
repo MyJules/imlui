@@ -724,13 +724,13 @@ TEST(SingletonLifetimeTest, DestroyedByReferenceSingletonRaises) {
 }
 
 // A constructor that throws a non-std exception is reported with a message (it escaped the catch before), and the
-// element gets no instance.
+// element gets no instance (`__native = false`: the failure is remembered, the constructor not tried again).
 TEST(ConstructorExceptionTest, NonStdExceptionIsReported) {
     luaui::clearErrors();
     TypeRegistry types;
     types.registerType<IntThrower>("IntThrower");
     lua::State* state = newUiState(types);
-    EXPECT_EQ(luaError(state, "t = ui.env.IntThrower {}; assert(rawget(t, '__native') == nil)"), "");
+    EXPECT_EQ(luaError(state, "t = ui.env.IntThrower {}; assert(rawget(t, '__native') == false)"), "");
     ASSERT_FALSE(luaui::errors().empty());
     EXPECT_NE(luaui::errors().back().find("IntThrower: constructor failed: unknown C++ exception"), std::string::npos);
     lua::close(state);
