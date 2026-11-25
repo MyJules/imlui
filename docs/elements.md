@@ -347,15 +347,39 @@ frame, only the first place is tracked.
 
 ### ListView
 
-A `ScrollView` whose children come from `model` / `delegate` (built on the Lua side, cached per index like a
-`Repeater`). Without `delegate`, its own array children are used. It takes every `ScrollView` prop. See
-[ListView](lua-api.md#listview).
+A `ScrollView` whose children come from `model` / `delegate` (built on the Lua side and cached like a
+`Repeater`'s), **virtualized**: only the items in view, and a margin of half the view's height above and below,
+are built and rendered; the rest of the content is empty space of the right height. Without `delegate`, its own
+array children are used, like a `ScrollView`. It takes every `ScrollView` prop. See [ListView](lua-api.md#listview).
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `model` | list, number, function or `bind` | — | Items; a number `n` means `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
-| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by item: see [Repeater](lua-api.md#repeater--model-delegate-). |
+| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by index: see [Repeater](lua-api.md#repeater--model-delegate-). |
+| `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. |
+
+Item heights. With `itemHeight`, finding the items in view costs the same for any length. Without it, the items
+are measured as they render, and the content height (the scroll range) is the measured heights plus the average for
+the items not rendered yet, so it settles as you scroll. When items above the view turn out taller or shorter than
+assumed, the scroll moves by the same amount on the next frame, so what is in view stays where it is. A delegate
+that returns `nil`, or a hidden or non-visual element, takes no space and no `spacing`; an inline delegate (an `If`,
+a `Repeater`) is one item made of its children, stacked.
+
+What virtualization changes:
+
+- **A delegate exists only once it has been in or near view.** Its element, its `id`, its `Timer`s and anything else
+  its delegate function does happen when it first scrolls near the view, not when the model gets the item.
+- **Built delegates are cached**, so one that scrolls out and back is the same element with its state. Without a
+  `key`, the delegate of an index is dropped when the item at that index changes or the model gets shorter; with a
+  `key`, when its key leaves a model of at most 256 items. Past that, the cache keeps at most
+  max(256, 4 x the items shown) delegates and drops the ones shown longest ago: keep state that must outlive
+  scrolling far away in the model, not in the delegate.
+- **Keyboard and gamepad navigation** reach the items that are built: moving to the next item works (the margin
+  holds it, and ImGui scrolls it into view), but a jump past the margin (`Home`, `End`, Tab cycling through the
+  whole list) stops at the last built item.
+- With a `key`, items that share a key get one delegate each in the order they're shown, which can pair them up
+  differently after scrolling.
 
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,

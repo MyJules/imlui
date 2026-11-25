@@ -335,7 +335,12 @@ Row { spacing = 8,
 A scrolling `Repeater`: a `ScrollView` whose children come from `model`/`delegate`. It isn't inline. Without
 `delegate`, its array children are used. Its delegates get `ids` like a `Repeater`'s, and the `ListView` is
 their `parent`. It takes all `ScrollView` props (`height`, `width`, `padding`, `color`,
-`rounding`, `border`, `spacing`, `align`).
+`rounding`, `border`, `spacing`, `align`), and `itemHeight` (dp) for items that are all the same height.
+
+A `ListView` is **virtualized**: it builds and renders only the delegates of the items in view and a margin around
+it, so a model of a hundred thousand items costs about what the dozen on screen do. A delegate is built when its
+item first comes near the view (its ids, timers and other side effects start then), and kept while the cache holds
+it; see [ListView](elements.md#listview) for the cache, the item heights and what navigation reaches.
 
 ```lua
 ListView { height = 240, model = function() return todo.items end,
