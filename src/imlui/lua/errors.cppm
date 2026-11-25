@@ -90,7 +90,8 @@ template <class F>
 bool protectedCall(lua::State* state, std::string_view where, const F& fn);
 
 /// The value at `idx` as text, like Lua's tostring(): a `__tostring` metamethod runs in protected mode, so one that
-/// raises (or returns a non-string) is reported as a script error and yields "" instead of raising.
+/// raises (or returns a non-string) is reported as a script error and yields "" instead of raising. It runs as a read
+/// (safeRead): showing a value doesn't move changes().
 [[nodiscard]] std::string toDisplayString(lua::State* state, int idx);
 
 /// protectedCall's untyped core: calls invoke(state, context) in protected mode (see protectedCall).
@@ -274,7 +275,7 @@ std::string toDisplayString(lua::State* state, int idx) {
     lua::checkstack(state, 3);
     lua::pushcfunction(state, &toStringFn);
     lua::pushvalue(state, idx);
-    if (!safeCall(state, 1, 1)) return {};
+    if (!safeRead(state, 1, 1)) return {}; // showing a value is a read, not a possible change
     std::string out{lua::tostring(state, -1)};
     lua::pop(state);
     return out;
