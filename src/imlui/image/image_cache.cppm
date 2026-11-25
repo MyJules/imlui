@@ -116,7 +116,7 @@ const ImageCache::Image& ImageCache::get(std::string_view name) {
     image.m_modified = m_resources.modified(name);
     ++m_decodes;
     const auto bytes = m_resources.read(name);
-    const DecodedImage decoded = bytes ? decodeImage(bytes->bytes()) : DecodedImage{}; // copies the pixels
+    const DecodedImage decoded = bytes ? decodeImage(bytes->bytes()) : DecodedImage{};
     if (!bytes) {
         image.m_error = "image '" + image.m_name + "' not found";
     } else if (!decoded.ok()) {

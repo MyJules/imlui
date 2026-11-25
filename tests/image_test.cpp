@@ -69,6 +69,14 @@ TEST(ImageDecode, DecodesPngPixelsExactly) {
     EXPECT_EQ(pixel(image, 2, 0), (std::vector{0, 0, 255, 255}));
     EXPECT_EQ(pixel(image, 1, 1), (std::vector{255, 0, 0, 128})) << "straight (not premultiplied) alpha";
     EXPECT_EQ(pixel(image, 2, 1)[3], 0);
+
+    // The pixels are the decoder's buffer, not a copy of it, and moving the image keeps them in place.
+    EXPECT_EQ(image.rgba.data(), image.pixels.get());
+    DecodedImage moved = decodeImage(testFile("rgba_4x2.png"));
+    const std::uint8_t* first = moved.rgba.data();
+    const DecodedImage taken = std::move(moved);
+    EXPECT_EQ(taken.rgba.data(), first);
+    EXPECT_EQ(pixel(taken, 0, 0), (std::vector{255, 0, 0, 255}));
 }
 
 TEST(ImageDecode, DecodesJpegToOpaqueRgba) {
