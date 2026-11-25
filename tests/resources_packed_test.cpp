@@ -248,6 +248,87 @@ TEST(PakMount, WriterRejectsWhatTheReaderCouldntRead) {
     const PakFile wrongSize[] = {{"a.txt", bytesOf(payload), 4, false}};
     EXPECT_FALSE(writePak("app:/", wrongSize, &error));
     EXPECT_NE(error.find("invalid size"), std::string::npos) << error;
+    const PakFile fileAndFolder[] = {{"a", bytesOf(payload), 3, false}, {"a/b.txt", bytesOf(payload), 3, false}};
+    EXPECT_FALSE(writePak("app:/", fileAndFolder, &error));
+    EXPECT_NE(error.find("'a' is both a file and a folder"), std::string::npos) << error;
+    const PakFile tooMuch[] = {{"a.bin", bytesOf(payload), pakMaxFileSize, true},
+                               {"b.bin", bytesOf(payload), pakMaxFileSize, true},
+                               {"c.bin", bytesOf(payload), 1, true}};
+    EXPECT_FALSE(writePak("app:/", tooMuch, &error));
+    EXPECT_NE(error.find("too large together"), std::string::npos) << error;
+    EXPECT_TRUE(writePak("app:/", std::span{tooMuch}.first(2), &error)) << error;
+}
+
+namespace {
+
+/// The offset of field `field` (0: offset, 1: stored size, 2: size) of index entry `entry` in an archive mounted at
+/// `mountPoint` whose paths are `paths`.
+std::size_t indexField(std::string_view mountPoint, const std::vector<std::string>& paths, std::size_t entry,
+                       int field) {
+    std::size_t at = pakMagic.size() + 4 + 4 + 4 + mountPoint.size();
+    for (std::size_t i = 0; i < entry; ++i)
+        at += 4 + paths[i].size() + 8 + 8 + 8 + 4;
+    return at + 4 + paths[entry].size() + 8 * static_cast<std::size_t>(field);
+}
+
+void putU64(std::vector<std::byte>& bytes, std::size_t at, std::uint64_t v) {
+    for (std::size_t i = 0; i < 8; ++i)
+        bytes[at + i] = static_cast<std::byte>((v >> (8 * i)) & 0xffU);
+}
+
+std::uint64_t getU64(const std::vector<std::byte>& bytes, std::size_t at) {
+    std::uint64_t v = 0;
+    for (std::size_t i = 0; i < 8; ++i)
+        v |= std::to_integer<std::uint64_t>(bytes[at + i]) << (8 * i);
+    return v;
+}
+
+} // namespace
+
+// What the writer never writes, patched into an archive: the reader rejects files sharing bytes (a small archive
+// declaring many large files, each decompressed on its own), a file over the index, a path that is a file and a
+// folder, and files adding up to more than pakMaxTotalSize.
+TEST(PakMount, RejectsOverlappingAndOversizedIndexes) {
+    const std::string payload = "xyz";
+    const std::vector<std::string> paths{"a.txt", "b.txt"};
+    const PakFile files[] = {{"a.txt", bytesOf(payload), 3, false}, {"b.txt", bytesOf(payload), 3, false}};
+    const auto good = *writePak("app:/", files);
+    std::string error;
+    ASSERT_TRUE(PakMount::fromBytes(good, "good", &error)) << error;
+
+    auto bad = good;
+    putU64(bad, indexField("app:/", paths, 1, 0), getU64(good, indexField("app:/", paths, 0, 0)));
+    EXPECT_FALSE(PakMount::fromBytes(bad, "same", &error));
+    EXPECT_NE(error.find("'b.txt' overlaps 'a.txt'"), std::string::npos) << error;
+    bad = good;
+    putU64(bad, indexField("app:/", paths, 1, 0), getU64(good, indexField("app:/", paths, 0, 0)) + 2);
+    EXPECT_FALSE(PakMount::fromBytes(bad, "partly", &error));
+    EXPECT_NE(error.find("overlaps"), std::string::npos) << error;
+    bad = good;
+    putU64(bad, indexField("app:/", paths, 0, 0), 0);
+    EXPECT_FALSE(PakMount::fromBytes(bad, "header", &error));
+    EXPECT_NE(error.find("'a.txt' overlaps the index"), std::string::npos) << error;
+
+    // A path patched into a folder of the other: `b.txt` -> `a.txt/x` needs the same length, so use `a/x` and `a`.
+    const std::vector<std::string> nested{"a", "b/x"};
+    const PakFile nestedFiles[] = {{"a", bytesOf(payload), 3, false}, {"b/x", bytesOf(payload), 3, false}};
+    bad = *writePak("app:/", nestedFiles);
+    const auto b = std::ranges::search(bad, bytesOf("b/x"));
+    ASSERT_FALSE(b.empty());
+    b.front() = std::byte{'a'};
+    EXPECT_FALSE(PakMount::fromBytes(bad, "both", &error));
+    EXPECT_NE(error.find("'a' is both a file and a folder"), std::string::npos) << error;
+
+    // Compressed files declaring 2 GiB each over the same few bytes: three of them are more than 4 GiB in all.
+    const std::vector<std::string> big{"a.bin", "b.bin", "c.bin"};
+    const PakFile bigFiles[] = {{"a.bin", bytesOf(payload), 1, true},
+                                {"b.bin", bytesOf(payload), 1, true},
+                                {"c.bin", bytesOf(payload), 1, true}};
+    bad = *writePak("app:/", bigFiles);
+    for (std::size_t i = 0; i < 3; ++i)
+        putU64(bad, indexField("app:/", big, i, 2), pakMaxFileSize);
+    EXPECT_FALSE(PakMount::fromBytes(bad, "total", &error));
+    EXPECT_NE(error.find("too large together"), std::string::npos) << error;
 }
 
 // imlui_pack writes a temporary file and renames it over the output: no partial archive, no file left behind.

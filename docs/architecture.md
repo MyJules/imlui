@@ -709,15 +709,17 @@ gets the libraries in a working order.
 
 `parsePak` checks the magic and the version, that the mount point is a full folder name in canonical form (`app:/`,
 `imlui:/fonts/`; not `app:/main.lua`, which would be mounted as a folder of that name), that every path is normalized and appears once and
-every blob lies inside the archive, and caps the sizes, so a truncated or corrupt archive is rejected with a reason instead of being
-read out of bounds.
+none is both a file and a folder (`a` and `a/b`), that every blob lies inside the archive, past the index, and shares no byte with
+another (so a small archive can't declare many large files over the same compressed bytes), and caps the sizes: each file at
+`pakMaxFileSize` (2 GiB) and all of them together at `pakMaxTotalSize` (4 GiB), decompressed. A truncated or corrupt
+archive is rejected with a reason instead of being read out of bounds.
 
 `imlui_pack [--depfile <file>] <out.pak> <manifest>` builds an archive from a manifest, and
 `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` does it from CMake (by default `bin/<name>.pak`, next to the
 executables, `bin/<config>/<name>.pak` with a multi-config generator; tracked like `imlui_add_resources`: a
 dependency file and the list target `<name>_list`). `writePak` refuses what the reader would reject or a field would
-truncate (a file over the size cap, an archive over `pakMaxArchiveSize`, a duplicate path, a string longer than its
-u32 length), and `imlui_pack` writes
+truncate (a file over the size cap, files over `pakMaxTotalSize` together, an archive over `pakMaxArchiveSize`, a
+duplicate path, a path that is also another's folder, a string longer than its u32 length), and `imlui_pack` writes
 `<out.pak>.tmp` and renames it over the output, so a failed run never leaves a partial archive.
 `imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand (a folder under the base that
 can't be listed fails the run rather than packing an incomplete archive; an entry that can't be queried, such as a
@@ -921,7 +923,7 @@ See [Registering C++ types](extending.md).
 | `imlui.resources.selection` | `ResourceSelection`: a manifest group's `files`, `include`, `exclude` and `unmatched` paths; `contains(path)`, `mayContainUnder(folder)` |
 | `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
 | `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |
-| `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry`, `pakMaxFileSize`, `pakMaxArchiveSize` |
+| `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry`, `pakMaxFileSize`, `pakMaxTotalSize`, `pakMaxArchiveSize` |
 | `imlui.resources.package` | `ResourcePackage`: an embedded group's mount point, files, dev source folder and its `ResourceSelection`; `imlui::embedded::<name>::packages()` returns one per manifest group |
 | `imlui.resources.pak_mount` | `PakMount`: a `.pak` archive in memory; `open(file, error)`, `fromBytes(bytes, name, error)`, `mountPoint()` |
 | `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive` (a folder name with or without its trailing `/`, like `list`), `modified`, `origin`, `prefixes`, `describe` |
