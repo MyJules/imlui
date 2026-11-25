@@ -87,6 +87,20 @@ constexpr const char* mixedTree = R"(
             Repeater { model = N, delegate = function(i) return item(i) end } },
     })";
 
+/// A Grid of `N` boxes of mixed heights, 4 columns, one hidden (its cell stays empty), and a Timer among them, in a
+/// ScrollView 400 dp tall.
+constexpr const char* gridTree = R"(
+    reads = 0
+    scroll = state { y = -1 }
+    function named(name, e) _ENV[name] = e; return e end
+    local function h(i) return function() reads = reads + 1; return 12 + (i * 13 % 9) * 5 end end
+    root = ScrollView { id = "sv", height = 400,
+        Scroller { id = "scroller", y = function() return scroll.y end },
+        Grid { columns = 4, spacing = 6,
+            Timer { interval = 1000 },
+            Repeater { model = N, delegate = function(i)
+                return named("b" .. i, Box { h = h(i), visible = i ~= 7 }) end } } })";
+
 struct Snapshot {
     std::vector<ImVec2> positions; ///< of the boxes b1..bN that rendered on the last frame (-1, -1: not rendered)
     float maxScroll = 0.0f;
@@ -162,42 +176,44 @@ TEST_F(CullingTest, CulledChildrenDontRunTheirBindings) {
 // Positions and the content height are the same with culling on and off, at the top, after scrolling (on the very
 // first frame the culled children come back) and after scrolling back.
 TEST_F(CullingTest, PositionsAndContentHeightAreTheSameOnAndOff) {
-    const auto sequence = [&](bool culling) {
-        start();
-        run(std::string{"N = "} + std::to_string(count) + "\n" + mixedTree);
-        if (!culling) run("ui.setCulling(false)");
-        m_h->renderFrame("root"); // builds the delegates
-        std::vector<Snapshot> shots;
-        shots.push_back(snapshot(count, -1.0f, 4));
-        shots.push_back(snapshot(count, 1500.0f, 2)); // the scroll applies on the 2nd frame: its first in view
-        shots.push_back(snapshot(count, 1e6f, 2));    // the bottom
-        shots.push_back(snapshot(count, 700.0f, 2));
-        shots.push_back(snapshot(count, 0.0f, 2));
-        return shots;
-    };
-    const std::vector<Snapshot> on = sequence(true);
-    const std::vector<Snapshot> off = sequence(false);
-    ASSERT_EQ(on.size(), off.size());
-    for (std::size_t s = 0; s < on.size(); ++s) {
-        EXPECT_FLOAT_EQ(on[s].maxScroll, off[s].maxScroll) << s;
-        int seen = 0;
-        for (std::size_t i = 0; i < on[s].positions.size(); ++i) {
-            const ImVec2 a = on[s].positions[i];
-            // Culled. (Without culling, a box in a Card out of view doesn't render either: ImGui clips the card's
-            // window.)
-            if (a.y < 0.0f || off[s].positions[i].y < 0.0f) continue;
-            ++seen;
-            EXPECT_FLOAT_EQ(a.x, off[s].positions[i].x) << "shot " << s << " b" << i + 1;
-            EXPECT_FLOAT_EQ(a.y, off[s].positions[i].y) << "shot " << s << " b" << i + 1;
+    for (const char* tree : {mixedTree, gridTree}) {
+        const auto sequence = [&](bool culling) {
+            start();
+            run(std::string{"N = "} + std::to_string(count) + "\n" + tree);
+            if (!culling) run("ui.setCulling(false)");
+            m_h->renderFrame("root"); // builds the delegates
+            std::vector<Snapshot> shots;
+            shots.push_back(snapshot(count, -1.0f, 4));
+            shots.push_back(snapshot(count, 1500.0f, 2)); // the scroll applies on the 2nd frame: its first in view
+            shots.push_back(snapshot(count, 1e6f, 2));    // the bottom
+            shots.push_back(snapshot(count, 700.0f, 2));
+            shots.push_back(snapshot(count, 0.0f, 2));
+            return shots;
+        };
+        const std::vector<Snapshot> on = sequence(true);
+        const std::vector<Snapshot> off = sequence(false);
+        ASSERT_EQ(on.size(), off.size());
+        for (std::size_t s = 0; s < on.size(); ++s) {
+            EXPECT_FLOAT_EQ(on[s].maxScroll, off[s].maxScroll) << s;
+            int seen = 0;
+            for (std::size_t i = 0; i < on[s].positions.size(); ++i) {
+                const ImVec2 a = on[s].positions[i];
+                // Culled. (Without culling, a box in a Card out of view doesn't render either: ImGui clips the card's
+                // window.)
+                if (a.y < 0.0f || off[s].positions[i].y < 0.0f) continue;
+                ++seen;
+                EXPECT_FLOAT_EQ(a.x, off[s].positions[i].x) << "shot " << s << " b" << i + 1;
+                EXPECT_FLOAT_EQ(a.y, off[s].positions[i].y) << "shot " << s << " b" << i + 1;
+            }
+            EXPECT_GT(seen, 5) << s;
+            int culled = 0;
+            for (const ImVec2 a : on[s].positions)
+                culled += a.y < 0.0f ? 1 : 0;
+            EXPECT_GT(culled, count / 2) << s;
         }
-        EXPECT_GT(seen, 5) << s;
-        int culled = 0;
-        for (const ImVec2 a : on[s].positions)
-            culled += a.y < 0.0f ? 1 : 0;
-        EXPECT_GT(culled, count / 2) << s;
+        EXPECT_GT(on[2].maxScroll, 1000.0f);
+        EXPECT_TRUE(luaui::errors().empty());
     }
-    EXPECT_GT(on[2].maxScroll, 2000.0f);
-    EXPECT_TRUE(luaui::errors().empty());
 }
 
 TEST_F(CullingTest, ATimerOutOfViewStillFires) {

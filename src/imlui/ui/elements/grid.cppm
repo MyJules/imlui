@@ -11,13 +11,15 @@ import imlui.ui.renderer;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.culling;
 import imlui.ui.layout_box;
+import imlui.ui.layout_cache;
 
 export namespace imlui {
 
 /// A table-based grid: the children fill `columns` equal-width cells per row. A hidden child keeps its empty
 /// cell; non-visual children take none. At most 511 columns (ImGui's limit); more are reported. Cells out of view
-/// are culled (Renderer::skipOutOfView) unless `cull = false`.
+/// are culled by whole rows unless `cull = false`.
 ///
 /// Props:   columns = 2, spacing = 8, border = false
 /// Raw:     width, cull (default true)
@@ -69,32 +71,61 @@ void Grid::render(Frame& frame) {
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {pad, pad});
     const float width = frame.resolvedWidth();
     Renderer& r = frame.renderer();
-    // Culled cells keep the sizes they had at the width they last rendered in (Renderer::sameWidthAsLastFrame).
-    const bool pins = r.cullsChildren(frame.node()); // pins are recorded also on a frame it doesn't cull
-    const bool cull = pins && r.sameWidthAsLastFrame(width);
     if (ImGui::BeginTable("##grid", cols, f, {width, 0.0f})) {
         // Not frame.forEachChild(): that skips hidden children, and a hidden child keeps its (empty) cell here,
         // so the other cells don't move when it toggles. Non-visual children (timers, dialogs) take no cell.
-        // A cell out of view (its child's cached size at the cell's cursor) takes that size and isn't rendered
-        // (Renderer::skipOutOfView): the row's height and the cells' positions stay the same. A hidden child is never
-        // culled, its cell stays empty.
+        //
+        // Culling, by whole rows: a row whose height on the last frames (kept in the layout cache under a key made
+        // from its first cell's child) puts it out of view is made that tall (cull::reserveTableRow) and its cells
+        // aren't entered, so the rows after it start where they would. A row is measured as the distance to the
+        // next row's top, so the last row is never culled. A row whose cells held the active item, the nav focus,
+        // an open popup or a non-visual element is pinned (cull::pin) and renders on the next frame too.
         lua::State* state = frame.node().state();
+        Renderer::Culling culling{r, frame.node(), width};
+        int cell = cols;        // cells taken in the current row; `cols`: the next visual child starts a row
+        bool rowCulled = false; // the current row is culled: its cells are skipped
+        ImGuiID rowKey = 0;     // the current row's key in the layout cache
+        float rowTop = 0.0f;    // its top (screen y)
+        cull::Watch rowWatch;   // ImGui's state when it started (pins)
+        const auto endRow = [&] {
+            if (rowKey != 0 && !rowCulled && cull::held(rowWatch)) cull::pin(rowKey);
+        };
         r.forEachChild(frame.node(), [&](int idx) {
-            if (!r.isVisual(state, idx)) {
+            if (!culling.next(idx)) {
                 r.render(state, idx);
                 return;
             }
+            if (cell == cols) {
+                cell = 0;
+                if (!culling.pins()) {
+                    ImGui::TableNextRow();
+                } else {
+                    endRow();
+                    const ImGuiID last = rowKey;
+                    const float lastTop = rowTop;
+                    rowTop = cull::nextTableRow();
+                    if (last != 0) layout::recordSize(last, {0.0f, rowTop - lastTop});
+                    const luaui::Node c{state, idx};
+                    rowKey = ImGui::GetID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
+                        culling.key(c, false)))); // not the child's own ID: GetID hashes it again
+                    rowCulled = false;
+                    if (culling.culls() && !cull::pinned(rowKey)) {
+                        if (const auto size = layout::settledSize(rowKey);
+                            size && cull::outOfView(rowTop, rowTop + size->y)) {
+                            cull::reserveTableRow(size->y);
+                            rowCulled = true;
+                        }
+                    }
+                    if (!rowCulled) rowWatch = cull::watch();
+                }
+            }
+            ++cell;
+            if (rowCulled) return;
             ImGui::TableNextColumn();
-            const layout::BoxScope cell{layout::regionBox()}; // the cell is the child's box
-            if (!pins) {
-                r.render(state, idx);
-                return;
-            }
-            const luaui::Node c{state, idx};
-            if (!c.boolean("visible", true)) return;
-            const ImGuiID key = r.elementImGuiId(c);
-            if (!cull || !r.skipOutOfView(key, ImGui::GetCursorScreenPos())) r.renderPinning(state, idx, key);
+            const layout::BoxScope box{layout::regionBox()}; // the cell is the child's box
+            r.render(state, idx);
         });
+        if (culling.pins()) endRow();
         ImGui::EndTable();
     }
     ImGui::PopStyleVar();

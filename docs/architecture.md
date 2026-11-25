@@ -351,23 +351,40 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
 ### Culling
 
 Only what is in view renders. The stacks (`Renderer::renderStack`: `Column`, `ScrollView`/`ListView`, `Card`,
-`Section`, `Tab`, `Window`, `Dialog`, `ApplicationWindow`, ...) and `Grid` (cell by cell) **cull** a visible visual
-child before rendering it (`Renderer::skipOutOfView`, `imlui.ui.culling`): when the layout cache has a settled size
-for it (`layout::settledSize`: the last two sizes it rendered at were the same) and the rect that size takes at the
-cursor (with the stack's `align` offset) is entirely outside the current window's clip rect, widened by
-`cull::margin` (32 dp), the stack lays out an ImGui `Dummy` of that size there and moves on. `EndGroup` and `Dummy`
-lay out an item of a size the same way, so the cursor, the spacing, the window's content size (the scrollbar) and the
-positions of the children in view are what they would be with every child rendered. A culled child isn't synced or
-rendered: its bindings don't run, its widget doesn't draw or measure text. A `Row` is culled as a whole by the stack
-it is in; its children aren't culled one by one (they sit side by side). A `Table` clips its own rows
-(`ImGuiListClipper`).
+`Section`, `Tab`, `Window`, `Dialog`, `ApplicationWindow`, ...) **cull** a visible visual child before rendering it
+(`Renderer::skipOutOfView`, `imlui.ui.culling`): when the layout cache has a settled size for it
+(`layout::settledSize`: the last two sizes it rendered at were the same) and the rect that size takes at the cursor
+(with the stack's `align` offset) is entirely outside the current window's clip rect, widened by `cull::margin`
+(32 dp), the stack lays out an ImGui `Dummy` of that size there and moves on. `EndGroup` (a rendered child's group)
+and `Dummy` lay out and add an item of a size the same way (`ItemSize`, `ItemAdd`), so the cursor, the spacing,
+the window's content size (the scrollbar) and the positions of the children in view are exactly what they would be
+with every child rendered. A culled child isn't synced or rendered: its bindings don't run, its widget doesn't draw
+or measure text. A `Row` is culled as a whole by the stack it is in; its children aren't culled one by one (they sit
+side by side). A `Table` clips its own rows (`ImGuiListClipper`).
 
-The culled child's cache entry is only read (`settledSize` marks it used, so it isn't dropped by age), never recorded
-or compared, so it keeps its size and asks for no settle frames. Its size is the one it had at the width it last
-rendered in: on a frame the stack's (or grid's) width differs from the last frame's (`Renderer::sameWidthAsLastFrame`,
-a resize), nothing is culled, and a child whose size changes with the width renders until it settles again. Turn it
-off with `ui.setCulling(false)` (every container; on again in a new Lua state) or `cull = false` on one container
-(its own children), for debugging and comparison.
+`Grid` culls **whole rows**. At each row's start (`cull::nextTableRow`, `ImGui::TableNextRow`) it knows the row's
+top; a row's height, the distance from its top to the next row's, is kept in the layout cache under a key made from
+its first cell's child. A row whose settled height puts it out of view is made that tall (`cull::reserveTableRow`,
+what `TableNextRow`'s minimum row height does) and its cells aren't entered: the visual children that would fill them
+are skipped (a hidden child still takes its cell), non-visual children still render. The rows after it start where
+they would. The last row has no next row to measure it by and always renders.
+
+A container walks its children through `Renderer::Culling`, which keeps a memo of them by position from the last
+frame (the table's address, its ImGui ID, whether it is visual). A child whose table is the one at its position last
+frame needs no type lookup or id for the cull test, so a long list's culled children cost a few table reads and a
+cache lookup each. (A memo entry is wrong only for a table Lua collected and reallocated at the same address and
+position between frames: that child is laid out at the dead one's size until it comes into view, where it renders
+and is looked up afresh.)
+
+The culled child's cache entry is only read (`settledSize` marks it used, so it isn't dropped by age, and it counts as
+live for the `maxEntries` cap, which a list with more children than that grows past), never recorded or compared, so
+it keeps its size and asks for no settle frames. The entries of what is *inside* a culled child (a `Row`'s controls)
+aren't used while it is culled, so they age out like a hidden page's (after `keepFrames` and `keepSeconds`, or under
+the cap); a child that comes back then places its content by intrinsic sizes, or renders it unseen for a frame. Its
+size is the one it had at the width it last rendered in: on a frame the stack's (or grid's) width differs from the
+last frame's (kept in the memo; a resize), nothing is culled, and a child whose size changes with the width renders
+until it settles again. Turn it off with `ui.setCulling(false)` (every container; on again in a new Lua state) or
+`cull = false` on one container (its own children), for debugging and comparison.
 
 Not culled:
 
@@ -969,11 +986,11 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
-| `imlui.ui.culling` | Culling (namespace `imlui::cull`): `enabled`/`setEnabled` (`ui.setCulling`), `outOfView` (the clip rect, `margin`, widened during nav moves), `watch`/`held`/`noteNonVisual` and `pin`/`pinned` (children that must render: the active item, nav focus, open popups, non-visual elements). See [Culling](#culling) |
+| `imlui.ui.culling` | Culling (namespace `imlui::cull`): `enabled`/`setEnabled` (`ui.setCulling`), `outOfView` (the clip rect, `margin`, widened during nav moves), `watch`/`held`/`noteNonVisual` and `pin`/`pinned` (children that must render: the active item, nav focus, open popups, non-visual elements), `nextTableRow`/`reserveTableRow` (`Grid` rows). See [Culling](#culling) |
 | `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `settledSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `keepFrames`/`keepSeconds`/`maxEntries`, `cacheEntries`: the last measured sizes by ImGui ID (kept while hidden, bounded by age and an LRU cap), and another frame when a layout placed something by a stale size (convergence) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
-| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `stackSize`, `renderUnseen`, culling (`cullsChildren`, `skipOutOfView`, `renderPinning`, `sameWidthAsLastFrame`), `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
+| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `stackSize`, `renderUnseen`, culling (`cullsChildren`, `skipOutOfView`, `Culling`: the children memo), `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
 | `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view` (also `ListView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer` |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: registers every built-in class under its Lua name and aliases |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |

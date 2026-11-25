@@ -327,7 +327,7 @@ non-visual children take no cell.
 | `spacing` | number | `8` | Gap between cells (dp). |
 | `border` | bool | `false` | Cell borders. |
 | `width` | size | `0` (fill) | *Raw.* |
-| `cull` | bool | `true` | *Raw.* `false` renders every cell; by default a cell out of view is skipped like a [stack's](#stacking-containers) child. |
+| `cull` | bool | `true` | *Raw.* `false` renders every cell; by default a row of cells out of view is skipped like a [stack's](#stacking-containers) child (its height is kept; the last row always renders). |
 
 ### ScrollView
 

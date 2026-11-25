@@ -1,6 +1,6 @@
-// Culling: the stacks (Renderer::renderStack: Column, ScrollView, Card, ...) and Grid skip a child whose rect is out
-// of view, and only advance the cursor by its size from the layout cache (a Dummy), so positions, the content size
-// and the scrollbar stay what they would be. A culled child isn't synced or rendered: its bindings don't run.
+// Culling: the stacks (Renderer::renderStack: Column, ScrollView, Card, ...) and Grid (whole rows) skip a child whose
+// rect is out of view, and only lay out its size from the layout cache (a Dummy), so positions, the content
+// size and the scrollbar stay what they would be. A culled child isn't synced or rendered: its bindings don't run.
 //
 // What must still render even out of view is "pinned": a child whose render on this frame or the last held the item
 // ImGui has active (a TextField being edited, a Slider being dragged), the nav focus, an open popup (a menu, a combo
@@ -29,6 +29,15 @@ inline constexpr float margin = 32.0f;
 /// Whether the rect `min`..`max` (screen coordinates) is entirely outside the current window's clip rect, widened by
 /// `margin` (and by the clip rect's own height while a nav move request scores items).
 [[nodiscard]] bool outOfView(ImVec2 min, ImVec2 max);
+
+/// The same for the rows `top`..`bottom` (screen y) at any x: a whole table row.
+[[nodiscard]] bool outOfView(float top, float bottom);
+
+/// Starts the next row of the current table (ImGui::TableNextRow) and returns its top (screen y).
+float nextTableRow();
+/// Makes the current table row `height` tall (from its top) when it would be shorter: a culled row, whose cells
+/// aren't entered, ends where it ended when they rendered.
+void reserveTableRow(float height);
 
 /// ImGui state taken before a child renders, for held().
 struct Watch {
@@ -99,6 +108,25 @@ bool outOfView(ImVec2 min, ImVec2 max) {
     // the one it picked: the items up to a page away must be there.
     if (g.NavMoveScoringItems) m += std::max(0.0f, clipMax.y - clipMin.y);
     return max.y < clipMin.y - m || min.y > clipMax.y + m || max.x < clipMin.x - m || min.x > clipMax.x + m;
+}
+
+bool outOfView(float top, float bottom) {
+    const ImGuiWindow* window = ImGui::GetCurrentContext()->CurrentWindow;
+    if (!window) return false;
+    const float x = window->ClipRect.Min.x;
+    return outOfView({x, top}, {x, bottom});
+}
+
+float nextTableRow() {
+    ImGui::TableNextRow();
+    const ImGuiTable* table = ImGui::GetCurrentContext()->CurrentTable;
+    return table ? table->RowPosY1 : ImGui::GetCursorScreenPos().y;
+}
+
+void reserveTableRow(float height) {
+    // What TableNextRow's row_min_height does, after the fact.
+    if (ImGuiTable* table = ImGui::GetCurrentContext()->CurrentTable)
+        table->RowPosY2 = std::max(table->RowPosY2, table->RowPosY1 + height);
 }
 
 Watch watch() {
