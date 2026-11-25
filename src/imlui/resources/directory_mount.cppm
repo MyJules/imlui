@@ -30,7 +30,8 @@ export namespace imlui {
 /// file under one is still found by its name.
 ///
 /// Like the other mounts, it never throws: a path that isn't valid UTF-8, a file too large to allocate or a folder
-/// that can't be listed reads as missing.
+/// that can't be listed reads as missing. An entry whose name has no UTF-8 form (on Windows, an unpaired surrogate)
+/// has no resource name and is left out; the rest of its folder is served.
 class DirectoryMount final : public Mount {
 public:
     /// The files under `root`; with a `selection`, only the files it selects (a dev build's source folder serves
@@ -73,8 +74,8 @@ private:
     /// a different case on disk.
     [[nodiscard]] std::optional<std::filesystem::path> file(std::string_view path) const;
     /// False when a segment of `path` (normalized, not empty) isn't an entry of its folder in exactly this spelling;
-    /// warns once per path when it is one in a different case. True when a folder can't be read (the file system
-    /// decides).
+    /// warns once per path when it is one in a different case. Also false when a folder can't be timed or listed: a
+    /// spelling that can't be checked isn't accepted.
     [[nodiscard]] bool spelledAsOnDisk(std::string_view path) const;
     /// True when file `path` is one the mount serves (every file without a selection).
     [[nodiscard]] bool selected(std::string_view path) const;
@@ -114,6 +115,16 @@ std::optional<fs::path> pathFromUtf8(std::string_view s) {
 std::string utf8(const fs::path& p) {
     const std::u8string s = p.generic_u8string();
     return std::string{s.begin(), s.end()};
+}
+
+/// utf8(), or nullopt when `p` has no UTF-8 form (on Windows, a name with an unpaired surrogate): such an entry has
+/// no resource name, so listings skip it rather than fail as a whole.
+std::optional<std::string> utf8Name(const fs::path& p) {
+    try {
+        return utf8(p);
+    } catch (const std::system_error&) {
+        return std::nullopt;
+    }
 }
 
 bool equalIgnoringAsciiCase(std::string_view a, std::string_view b) {
@@ -179,8 +190,9 @@ bool DirectoryMount::holdsSelected(std::string_view path, const fs::path& folder
             if (linkedFolder(*it)) it.disable_recursion_pending();
             continue;
         }
-        if (it->is_regular_file(entryEc) &&
-            m_selection->contains(joined(path, utf8(it->path().lexically_relative(folder)))))
+        if (!it->is_regular_file(entryEc)) continue;
+        if (const auto name = utf8Name(it->path().lexically_relative(folder));
+            name && m_selection->contains(joined(path, *name)))
             return true;
     }
     return false;
@@ -199,14 +211,14 @@ bool DirectoryMount::spelledAsOnDisk(std::string_view path) const {
         std::error_code ec;
         const fs::path folderPath = folder.empty() ? m_root : m_root / pathFromUtf8(folder).value_or(fs::path{});
         const ResourceTime time = fs::last_write_time(folderPath, ec);
-        if (ec) return true; // missing: the lookup fails by itself
+        if (ec) return false; // missing, or can't be checked: not found (a check that can't run doesn't pass)
         auto it = m_folders.find(folder);
         if (it == m_folders.end() || it->second.time != time) {
             Folder listed{time, {}};
             for (auto entry = fs::directory_iterator(folderPath, ec); !ec && entry != fs::directory_iterator();
                  entry.increment(ec))
-                listed.names.insert(utf8(entry->path().filename()));
-            if (ec) return true;
+                if (auto name = utf8Name(entry->path().filename())) listed.names.insert(std::move(*name));
+            if (ec) return false;
             it = m_folders.insert_or_assign(std::string{folder}, std::move(listed)).first;
         }
         const auto& names = it->second.names;
@@ -303,7 +315,9 @@ std::vector<std::string> DirectoryMount::listIn(std::string_view path) const {
     for (auto it = fs::directory_iterator(*filePath, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
         // Its own error code: one entry that can't be queried mustn't end the listing.
         std::error_code entryEc;
-        std::string name = utf8(it->path().filename());
+        auto converted = utf8Name(it->path().filename());
+        if (!converted) continue;
+        std::string name = std::move(*converted);
         const std::string child = joined(path, name);
         if (it->is_directory(entryEc)) {
             if (linkedFolder(*it) || !holdsSelected(child, it->path())) continue;
@@ -329,13 +343,17 @@ std::vector<std::string> DirectoryMount::listFilesIn(std::string_view path) cons
     for (auto it = fs::recursive_directory_iterator(*folder, ec); !ec && it != fs::recursive_directory_iterator();
          it.increment(ec)) {
         std::error_code entryEc; // one entry that can't be queried mustn't end the walk
-        const std::string relative = utf8(it->path().lexically_relative(*folder));
-        const std::string inMount = joined(path, relative);
+        const auto relative = utf8Name(it->path().lexically_relative(*folder));
+        if (!relative) {
+            it.disable_recursion_pending(); // no resource name, so none for anything under it either
+            continue;
+        }
+        const std::string inMount = joined(path, *relative);
         if (it->is_directory(entryEc)) {
             if (linkedFolder(*it) || (m_selection && !m_selection->mayContainUnder(inMount)))
                 it.disable_recursion_pending();
         } else if (it->is_regular_file(entryEc) && selected(inMount)) {
-            out.push_back(relative);
+            out.push_back(*relative);
         }
     }
     std::ranges::sort(out);

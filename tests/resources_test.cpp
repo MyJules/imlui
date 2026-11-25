@@ -314,6 +314,35 @@ TEST(DirectoryMount, NeverThrows) {
     EXPECT_EQ(text(mount.read("main.lua")), "return 1");
 }
 
+// A file whose name has no UTF-8 form (on Windows, an unpaired surrogate) has no resource name: it's left out, and the
+// other files of its folder are still served (the conversion used to throw while the folder was listed for the
+// spelling check, failing every read there).
+TEST(DirectoryMount, SkipsNamesWithoutAUtf8Form) {
+    test::TempDir dir;
+    dir.write("sub/good.lua", "good");
+    dir.write("sub/deeper/x.lua", "x");
+    try {
+        std::wstring name = L"bad";
+        name += static_cast<wchar_t>(0xD800);
+        std::filesystem::create_directories(dir.path() / "sub" / (name + L"dir"));
+        std::ofstream{dir.path() / "sub" / (name + L".lua")} << "bad";
+        std::ofstream{dir.path() / "sub" / (name + L"dir") / L"y.lua"} << "y";
+        if (!std::filesystem::exists(dir.path() / "sub" / (name + L".lua"))) GTEST_SKIP() << "no such names here";
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "can't make a file with an unpaired surrogate in its name: " << e.what();
+    }
+    for (const bool withSelection : {false, true}) {
+        SCOPED_TRACE(withSelection ? "with a selection" : "without a selection");
+        auto mount = withSelection ? std::make_shared<DirectoryMount>(dir.path(), ResourceSelection{.include = {"**"}})
+                                   : std::make_shared<DirectoryMount>(dir.path());
+        EXPECT_EQ(text(mount->read("sub/good.lua")), "good");
+        EXPECT_TRUE(mount->exists("sub/good.lua"));
+        EXPECT_EQ(mount->list("sub"), strings({"deeper/", "good.lua"}));
+        EXPECT_EQ(mount->listFiles(""), strings({"sub/deeper/x.lua", "sub/good.lua"}));
+        EXPECT_EQ(mount->list(""), strings({"sub/"}));
+    }
+}
+
 // Names are case-sensitive, as in the embedded and .pak mounts, also where the file system isn't (Windows): a wrong
 // case in any segment isn't found, so it fails in development too, and can't get around the selection.
 TEST(DirectoryMount, NamesAreCaseSensitive) {

@@ -380,7 +380,7 @@ On this target:
   paths are rejected), `DirectoryMount` (read, exists, list, modified, the read cache, a `ResourceSelection`
   serving only the manifest's files and new files matching a pattern, a listed manifest served, the previous bytes
   served while a changed file is locked (`test::FileLock`, `imlui.test.file_lock`: a handle without sharing on
-  Windows, no permissions elsewhere), no exceptions for names that aren't UTF-8, links to folders neither listed nor
+  Windows, no permissions elsewhere), no exceptions for names that aren't UTF-8, files whose names have no UTF-8 form left out, links to folders neither listed nor
   walked, a selection listed recursively in one walk), mount stacking and mount points in
   `Resources` (`listRecursive` of a folder with or without its trailing slash), and the Lua side through the harness: `require "imlui"` and components through the
   searchers, chunk names in errors, and `ui.resource.*` resolving against the calling script. It uses two support
