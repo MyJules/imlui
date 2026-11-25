@@ -169,6 +169,17 @@ TEST_F(ThemeTableTest, BadStyleValuesAreReported) {
     EXPECT_EQ(luaui::errors().size(), 10u);
 }
 
+// A number beyond the float range is narrowed like every other Lua number (toFloat), not by a cast (undefined
+// behavior): it is reported as too large, and a NaN still as not finite.
+TEST_F(ThemeTableTest, StyleValuesBeyondTheFloatRangeAreTooLarge) {
+    Theme t = parse("return { style = { IndentSpacing = 1e300, ItemSpacing = { 4, -1e300 }, FrameRounding = -(0/0) } }");
+    EXPECT_TRUE(t.style.empty());
+    for (const char* error : {"theme.style.IndentSpacing: larger than 10000", "theme.style.ItemSpacing: larger than 10000",
+                              "theme.style.FrameRounding: not a finite number"})
+        EXPECT_TRUE(hasError(error)) << error;
+    EXPECT_EQ(luaui::errors().size(), 3u);
+}
+
 TEST_F(ThemeTableTest, BadScalesAndSizesAreReported) {
     Theme t = parse(R"(return { fontScale = 100, spacing = -1, shape = { small = 0/0, large = "x", medium = 20 } })");
     const Theme defaults;
