@@ -139,8 +139,11 @@ defence the render pass (step 4, and the overlays in step 5) runs inside `luaui:
 (`imlui.lua.protected_render`): a C function called with `safeCall`, so an unforeseen error in it is reported like
 the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows, tables and Push/Pop stacks the pass
 left open, so the frame still ends. The rest of that pass is skipped, so this is not error handling: code that calls
-into Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error
-that escapes even that before Lua aborts.
+into Lua while rendering still uses `safeCall`. Code that touches Lua outside a frame and outside any Lua call runs
+inside `luaui::protectedCall` (`imlui.lua.errors`) for the same reason: `ScriptObject::notify()` and `emit()` (which
+posted functions and ticks call), the engine's setup of a new state (`openlibs`, `install`, the boot script) and its
+read of the root window's size and title. The engine also installs `luaui::panicHandler`, which logs an error that
+escapes even that before Lua aborts.
 
 C++ exceptions become Lua errors with a message at the library's C functions: methods (`TypeBuilder`, a Lua error
 `Gauge:reset: ...`), the `imlui.native` functions (the host's `NativeHooks`, theme and font loading: a Lua error
@@ -822,7 +825,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `raiseException`, `toDisplayString` (protected `tostring`) |
+| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `protectedCall` (C++ code that uses the Lua API outside any Lua call, run protected), `raiseException`, `toDisplayString` (protected `tostring`) |
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |

@@ -5,6 +5,7 @@
 
 import std;
 
+import lua;
 import imlui.lua.errors;
 import imlui.ui.main_thread;
 import imlui.types.element;
@@ -258,4 +259,20 @@ TEST_F(ScriptObjectHandleTest, PostToAnElementOfAClosedStateIsDropped) {
     EXPECT_FALSE(handle.alive());
     EXPECT_EQ(runPosted(), 1u);
     EXPECT_EQ(workerRuns, 0);
+}
+
+// A posted function runs outside every Lua call. A Lua error that notify() raises there (here a script's __newindex
+// on the element table, when the value is written back) is reported, instead of reaching Lua's panic handler (abort).
+TEST_F(ScriptObjectHandleTest, LuaErrorInAPostedNotifyIsReported) {
+    run("w = Worker {}; setmetatable(w, { __newindex = function() error('no writes here') end })");
+    Worker* w = m_h->instance<Worker>("w");
+    ASSERT_NE(w, nullptr);
+    w->postTouch(5);
+    int after = 0;
+    post([&] { ++after; });
+    EXPECT_EQ(runPosted(), 2u);
+    EXPECT_EQ(workerRuns, 1);
+    EXPECT_EQ(after, 1);
+    EXPECT_TRUE(hasError("no writes here"));
+    EXPECT_EQ(lua::gettop(m_h->state()), 0); // the stack is left as it was
 }

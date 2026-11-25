@@ -75,32 +75,12 @@ public:
     template <class... Args>
     bool emit(std::string_view signal, const Args&... args) {
         if (!m_state) return false;
-        lua::State* state = m_state;
-        lua::checkstack(state, static_cast<int>(sizeof...(Args)) + 8);
-        const int top = lua::gettop(state);
-        if (!pushSelf()) return false;
-        const std::string key{signal};
-        // A singleton's handlers are behind its userdata's __index; an element's are fields of its table.
-        if (m_singleton)
-            lua::getfield(state, top + 1, key.c_str());
-        else
-            luaui::Node{state, top + 1}.pushRaw(key.c_str());
-        if (!lua::isfunction(state, -1)) {
-            lua::settop(state, top);
-            return false;
-        }
-        int nargs = 0;
-        if (!m_singleton) {
-            lua::pushvalue(state, top + 1);
-            nargs = 1;
-        }
-        (LuaConvert<LuaArgType<Args>>::push(state, args), ...);
-        nargs += static_cast<int>(sizeof...(Args));
-        if (!m_singleton) nargs = luaui::scopedArgs(state, top + 1, nargs);
-        const bool ok = luaui::safeCall(state, nargs, 0);
-        lua::settop(state, top);
+        bool called = false;
+        // Protected: emit() may run outside every Lua call (a posted function, a tick), where a Lua error raised by
+        // an API call below (a script's __index, out of memory) would abort instead of being reported.
+        luaui::protectedCall(m_state, "emit", [&] { called = callHandler(signal, args...); });
         requestFrame();
-        return ok;
+        return called;
     }
 
     /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
@@ -128,6 +108,39 @@ public:
     void detach();
 
 private:
+    /// emit()'s body, inside its protected call. Returns whether the handler ran without an error.
+    template <class... Args>
+    bool callHandler(std::string_view signal, const Args&... args) {
+        lua::State* state = m_state;
+        lua::checkstack(state, static_cast<int>(sizeof...(Args)) + 8);
+        const int top = lua::gettop(state);
+        if (!pushSelf()) return false;
+        const std::string key{signal};
+        // A singleton's handlers are behind its userdata's __index; an element's are fields of its table.
+        if (m_singleton)
+            lua::getfield(state, top + 1, key.c_str());
+        else
+            luaui::Node{state, top + 1}.pushRaw(key.c_str());
+        if (!lua::isfunction(state, -1)) {
+            lua::settop(state, top);
+            return false;
+        }
+        int nargs = 0;
+        if (!m_singleton) {
+            lua::pushvalue(state, top + 1);
+            nargs = 1;
+        }
+        (LuaConvert<LuaArgType<Args>>::push(state, args), ...);
+        nargs += static_cast<int>(sizeof...(Args));
+        if (!m_singleton) nargs = luaui::scopedArgs(state, top + 1, nargs);
+        const bool ok = luaui::safeCall(state, nargs, 0);
+        lua::settop(state, top);
+        return ok;
+    }
+
+    /// notify()'s Lua part, inside its protected call.
+    void writeBack(std::string_view property);
+
     std::uint64_t m_objectId;
     lua::State* m_state = nullptr;
     bool m_singleton = false;
@@ -242,6 +255,13 @@ void ScriptObject::detach() { m_state = nullptr; }
 void ScriptObject::notify(std::string_view property) {
     requestFrame();
     if (!m_state) return;
+    // Protected: notify() may run outside every Lua call (a posted function, a tick), where a Lua error raised by an
+    // API call (a script's __index/__newindex on the element table, out of memory) would abort instead of being
+    // reported.
+    luaui::protectedCall(m_state, "notify", [&] { writeBack(property); });
+}
+
+void ScriptObject::writeBack(std::string_view property) {
     lua::State* state = m_state;
     lua::checkstack(state, 16);
     const int top = lua::gettop(state);
