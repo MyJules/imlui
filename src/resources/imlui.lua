@@ -421,8 +421,82 @@ end
 -- referenced, e.g. a page kept in a table or by an id, is not collected and keeps ticking.)
 local function dropped() ui.__dropped = true end
 
---- Builds (and caches) delegate instances for a model. Delegates are only
---- re-created when the item at an index changes, so per-delegate state survives.
+-- Builds the delegate for `item` at index `i` in its own id scope, parented to the container's holder.
+local function buildDelegate(self, item, i, key)
+    local scope = newScope(rawget(self, "__type") .. " delegate", self.delegate)
+    local c = { item = item, key = key, node = inScope(scope, self.delegate, item, i, scope.ids) }
+    setParent(c.node, holder(self))
+    return c
+end
+
+-- The key of `item` at index `i` (the container's `key` function, in the scope the container was built in). A nil
+-- or NaN key can't index a table: the item itself is the key then.
+local function keyOf(self, keyFn, item, i)
+    local scope = scopeOf[self]
+    local k
+    if scope ~= nil then k = inScope(scope, keyFn, item, i) else k = keyFn(item, i) end
+    if k == nil or k ~= k then return item end
+    return k
+end
+
+-- Delegates by key: one is reused (also at another index) while an item with its key is in the model, so a model
+-- that returns fresh item tables every call doesn't rebuild them. In model order, `cache[i]` is the entry shown at
+-- index i; entries whose key went away are dropped.
+local function keyedChildren(self, model, n, keyFn, cache, list)
+    local oldN = #list
+    local i = 1
+    -- The common case first: the same keys at the same indices, no table to build.
+    while i <= n do
+        local c = cache[i]
+        local item = model[i]
+        if c == nil or c.key ~= keyOf(self, keyFn, item, i) then break end
+        c.item = item
+        i = i + 1
+    end
+    if i <= n then
+        -- Index the entries not reused yet by key (a repeated key chains its entries in order), then take them.
+        -- New delegates are built after the matching: `cache` still holds the entries being moved until then.
+        local byKey = {}
+        for j = oldN, i, -1 do
+            local c = cache[j]
+            if c.key ~= nil then
+                c.nextSame = byKey[c.key]
+                byKey[c.key] = c
+            end
+        end
+        local reused = i - 1
+        local taken = {}
+        for j = i, n do
+            local item = model[j]
+            local k = keyOf(self, keyFn, item, j)
+            local c = byKey[k]
+            if c ~= nil then
+                byKey[k] = c.nextSame
+                c.item = item
+                reused = reused + 1
+            else
+                c = { item = item, key = k } -- no node yet
+            end
+            taken[j - i + 1] = c
+        end
+        for j = i, n do
+            local c = taken[j - i + 1]
+            if c.node == nil then c = buildDelegate(self, c.item, j, c.key) end
+            c.nextSame = nil
+            cache[j] = c
+            list[j] = c.node
+        end
+        if reused < oldN then dropped() end
+    elseif n < oldN then
+        dropped()
+    end
+    for j = n + 1, oldN do list[j] = nil; cache[j] = nil end
+    return list
+end
+
+--- Builds (and caches) delegate instances for a model. Without a `key`, delegates are re-created only when the
+--- item at an index changes (`~=`), so per-delegate state survives; with one, a delegate is kept while an item with
+--- its key is in the model (see keyedChildren).
 local function repeaterChildren(self)
     local model = resolve(self, self.model)
     if type(model) == "number" then
@@ -436,15 +510,15 @@ local function repeaterChildren(self)
     local list = self.__list
     if not list then list = {}; self.__list = list end
     local n = #model
+    local keyFn = rawget(self, "key")
+    if type(keyFn) == "function" then return keyedChildren(self, model, n, keyFn, cache, list) end
     for i = 1, n do
         local item = model[i]
         local c = cache[i]
-        if not c or c.item ~= item then
+        if not c or c.item ~= item or c.key ~= nil then
             if c then dropped() end
-            local scope = newScope(rawget(self, "__type") .. " delegate", self.delegate)
-            c = { item = item, node = inScope(scope, self.delegate, item, i, scope.ids) }
+            c = buildDelegate(self, item, i, nil)
             cache[i] = c
-            setParent(c.node, holder(self))
         end
         list[i] = c.node
     end
@@ -453,7 +527,8 @@ local function repeaterChildren(self)
     return list
 end
 
---- Repeater { model = list | count | function, delegate = function(item, index, ids) ... end }
+--- Repeater { model = list | count | function, delegate = function(item, index, ids) ... end,
+---            key = function(item, index) ... end }   -- optional: delegates are kept by key (see keyedChildren)
 --- Its delegates are laid out by the parent (inside a Row they flow horizontally), which is also their `parent`.
 --- Each delegate instance has an id scope of its own, `ids` (see ui.component).
 function ui.Repeater(p)

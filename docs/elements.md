@@ -354,6 +354,7 @@ A `ScrollView` whose children come from `model` / `delegate` (built on the Lua s
 |---|---|---|---|
 | `model` | list, number, function or `bind` | — | Items; a number `n` means `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
+| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by item: see [Repeater](lua-api.md#repeater--model-delegate-). |
 
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,
@@ -442,7 +443,7 @@ root. `visible = false` hides all of their children.
 
 | Element | Props (Lua side) |
 |---|---|
-| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index, ids)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
+| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index, ids)`, optional `key = function(item, index)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
 | `If` | `condition`, array children, `otherwise` (one element). See [If](lua-api.md#if--condition-children-otherwise--element-). |
 | `Loader` | `item` (an element, or a function returning one). See [Loader](lua-api.md#loader--item-). |
 | `Responsive` | `compact`, `medium`, `expanded`, `large`, `extraLarge`: the element (or a function returning one, or `false`) for each window size class. See [Responsive](lua-api.md#responsive--compact-medium-expanded-large-extralarge-). |

@@ -707,6 +707,43 @@ TEST_F(LayoutTest, ListViewRendersItsDelegates) {
     EXPECT_LT(probe("px").pos().y, probe("pz").pos().y);
 }
 
+// A model function that returns fresh item tables on every call rebuilt every delegate on every call (identity by
+// item), losing their state. With `key`, a delegate is kept while an item with its key is in the model, also when it
+// moves to another index; repeated keys keep one delegate each, and a delegate whose key went away is dropped.
+TEST_F(LayoutTest, KeyedDelegatesSurviveFreshModelItems) {
+    run(R"(
+        built, plainBuilt = 0, 0
+        items = { 1, 2, 3 }
+        local function fresh()
+            local out = {}
+            for i, id in ipairs(items) do out[i] = { id = id } end
+            return out
+        end
+        rep = Repeater { model = fresh, key = function(item) return item.id end,
+                         delegate = function(item) built = built + 1; return Probe { h = 5 } end }
+        lv = ListView { height = 100, model = fresh, key = function(item, i) return item.id end,
+                        delegate = function(item) return Probe { h = 5 } end }
+        plain = Repeater { model = fresh, delegate = function() plainBuilt = plainBuilt + 1; return Probe {} end }
+        root = Column { rep, lv, plain })");
+    m_h.renderFrames("root", 3);
+    check("built == 3");
+    check("plainBuilt > 3"); // without a key every call rebuilds them
+    run("first, third, lvFirst = rep.__list[1], rep.__list[3], lv.__list[1]");
+    run("ui.__dropped = false; items = { 4, 1, 3 }");
+    m_h.renderFrame("root");
+    check("built == 4");
+    check("#rep.__list == 3 and rep.__list[2] == first and rep.__list[3] == third");
+    check("rep.__list[1] ~= first and lv.__list[2] == lvFirst");
+    check("ui.__dropped"); // 2 went away
+    run("items = { 3, 3, 1 }");
+    m_h.renderFrames("root", 2);
+    check("built == 5 and rep.__list[1] == third and rep.__list[3] == first");
+    run("items = {}");
+    m_h.renderFrame("root");
+    check("#rep.__list == 0 and #lv.__list == 0");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(LayoutTest, ScrollViewKeepsScrollWhenItMovesToAnotherParent) {
     // The same ScrollView, first inside a Column, then inside a Row (like Responsive switching layouts): a
     // different ImGui ID path, so a different child window.

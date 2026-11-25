@@ -267,7 +267,7 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
   the element's ImGui ID in the parent's ID scope, made from its identity (see [Element identity](#element-identity)),
   stable for as long as the element lives: `TabBar` pages are the same elements every time, and `Repeater`/`ListView`
-  keep a delegate while the item at its index doesn't change. A new element never finds a dead one's entry, even
+  keep a delegate while the item at its index doesn't change (with a `key`, while an item with its key is in the model). A new element never finds a dead one's entry, even
   when Lua allocated its table at the dead one's address. A new ImGui context starts empty.
 - **First appearance.** A child with neither an intrinsic size nor a cached one, which a layout must place
   horizontally by its width (under a non-start stack `align`; in a `Row` that has fills or justifies; a `TopAppBar`
