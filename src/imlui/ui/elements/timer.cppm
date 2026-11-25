@@ -65,7 +65,7 @@ private:
     bool m_repeat = true;
     bool m_triggeredOnStart = false;
     bool m_started = false; ///< m_last is valid: the timer has been running since then
-    double m_last = 0.0;    ///< app clock time (clockTime()) of the start or the last trigger
+    double m_last = 0.0;    ///< app clock time (clockTime()) the current period started at
     /// A one-shot fired while `running` is a function binding that returned true: stopped until it returns false.
     bool m_stoppedUnderBinding = false;
 };
@@ -115,7 +115,9 @@ void Timer::tick(double now) {
         return;
     }
     if (now - m_last >= interval) {
-        m_last = now;
+        // The next period starts where this one ended, not at the frame time (frames come late: the period would
+        // drift). A frame later than a whole period skips the missed ones: one trigger per frame.
+        m_last += std::floor((now - m_last) / interval) * interval;
         if (!m_repeat) {
             m_started = false;
             if (runningIsFunction()) {
@@ -127,7 +129,7 @@ void Timer::tick(double now) {
                 notify("running"); // two-way: a one-shot writes running = false back
             }
         } else {
-            requestFrameAfter(interval);
+            requestFrameAfter(interval - (now - m_last)); // the rest of the new period
         }
         emit("onTriggered");
         return;

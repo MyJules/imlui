@@ -1091,7 +1091,8 @@ until it's collected (or the script reloads). Use `running = false` to stop it. 
 replaced) stops on the next frame when nothing else references it: the next `ui.__tick` collects garbage first. One
 still referenced (a page kept in a table, an `id`) keeps ticking. See
 [ticking elements](extending.md#ticking-elements). The engine wakes up for the next
-trigger, so it keeps its rate without input.
+trigger, so it keeps its rate without input. Each period starts where the last one ended, not at the frame that
+fired it, so it doesn't drift; a frame that comes more than a period late fires once and skips the missed ones.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|

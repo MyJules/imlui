@@ -325,6 +325,29 @@ TEST_F(SystemTest, TimersDueInOneFrameFireInDueOrder) {
               "");
 }
 
+// A period starts where the last one ended, not at the (late) frame that fired it: at 62.5 ms per frame, a 100 ms
+// Timer or setInterval fires 10 times a second, not every 2 frames (8 times). A frame more than a period late fires
+// once, and the grid goes on from there.
+TEST_F(SystemTest, TimerAndSetIntervalDontDrift) {
+    run(R"(
+        timerHits, intervalHits = 0, 0
+        ui.setInterval(function() intervalHits = intervalHits + 1 end, 100)
+        t = Timer { interval = 100, onTriggered = function() timerHits = timerHits + 1 end }
+        root = Column { })");
+    m_h.renderFrame("root"); // the Timer starts (the interval started when it was set, at 0)
+    m_h.renderFrames("root", 16); // 1 s later
+    EXPECT_EQ(number("timerHits"), 10);
+    EXPECT_EQ(number("intervalHits"), 10);
+
+    m_h.advanceTime(1.0); // asleep for 10 periods
+    m_h.renderFrame("root");
+    EXPECT_EQ(number("timerHits"), 11);
+    EXPECT_EQ(number("intervalHits"), 11);
+    m_h.renderFrames("root", 16); // and on the grid again: 10 more in a second
+    EXPECT_EQ(number("timerHits"), 21);
+    EXPECT_EQ(number("intervalHits"), 21);
+}
+
 // clearTimer with no timer (an optional handle that was never set) does nothing.
 TEST_F(SystemTest, ClearTimerIgnoresNil) {
     run(R"(

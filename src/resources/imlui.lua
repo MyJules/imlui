@@ -787,7 +787,13 @@ function ui.__tick(now)
     for _, id in ipairs(due) do
         local t = timers[id]
         if t then
-            if t.rep then t.due = now + t.interval else timers[id] = nil end
+            if t.rep then
+                -- The next period starts where this one ended, not at the frame time (frames come late: the period
+                -- would drift). A frame later than a whole period skips the missed ones: one call per frame.
+                t.due = t.due + (math.floor((now - t.due) / t.interval) + 1) * t.interval
+            else
+                timers[id] = nil
+            end
             protectedCall(t.fn)
         end
     end
