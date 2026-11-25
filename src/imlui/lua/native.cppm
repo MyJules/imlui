@@ -21,6 +21,7 @@ import imlui.lua.node;
 import imlui.lua.theme_table;
 import imlui.lua.value;
 import imlui.ui.clock;
+import imlui.ui.culling;
 import imlui.ui.frame_request;
 import imlui.ui.size_class;
 
@@ -214,6 +215,19 @@ constexpr NativeFn nativeFns[] = {
          if (auto& fn = hostHooks(state).setZoomShortcuts) fn(lua::toboolean(state, 1));
          return 0;
      }},
+    // setCulling(on): whether containers skip the children out of view (imlui.ui.culling). On by default and again
+    // in every new Lua state (a reload).
+    {"setCulling",
+     [](lua::State* state) -> int {
+         cull::setEnabled(lua::toboolean(state, 1));
+         requestFrame();
+         return 0;
+     }},
+    {"culling",
+     [](lua::State* state) -> int {
+         lua::pushboolean(state, cull::enabled());
+         return 1;
+     }},
     // windowSize() -> w, h: the main viewport in dp.
     {"windowSize",
      [](lua::State* state) -> int {
@@ -364,6 +378,7 @@ int openNative(lua::State* state) {
 } // namespace
 
 void registerNative(lua::State* state, NativeHooks* hooks) {
+    cull::setEnabled(true); // a new state (a reload) starts with the default
     lua::pushlightuserdata(state, hooks);
     lua::setfield(state, lua::registryIndex, hooksKey);
     lua::getglobal(state, "package");

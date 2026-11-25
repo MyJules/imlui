@@ -42,6 +42,7 @@ export using ::ImGuiListClipper;
 // internals: a Dialog reads the popup stacks (another modal open at its level)
 export using ::ImGuiWindow;
 export using ::ImGuiPopupData;
+export using ::ImGuiTable; // culling: a Grid row's top and height (imlui.ui.culling)
 export using ::ImGuiWindowFlags_Modal;
 export using ::ImGuiInputTextCallback;
 export using ::ImGuiInputTextCallbackData;

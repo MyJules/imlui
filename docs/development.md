@@ -95,6 +95,12 @@ using `imlui.widgets.common`:
   arc length, snap to whole pixels, and keep strokes whole-pixel wide and inside the shape.
 - `drawTextV(style, x, cy, ...)`, or `textTop(style, cy)` for the y of `drawText`, to center a label vertically.
   It centers the cap height on a whole pixel, so labels line up the same way in every widget.
+- **Off-screen drawing is culled for you.** The shape, text, icon and shadow helpers check the draw list's clip rect
+  (`rectVisible(dl, a, b)`) and build nothing outside it, so a widget scrolled out of view adds no vertices. Submit
+  the item and update every animation (`animate`, `stateLayer`) as usual, out of view too, so a widget scrolling back
+  in isn't mid-transition; only the drawing is skipped. Drawing that bypasses the helpers (`ImDrawList::AddPolyline`,
+  `PrimReserve`, expensive label formatting) checks `rectVisible` over the item's rect first, as `md::chart` does.
+  Never skip side effects (tooltips, popups, an active item's value label in the foreground draw list) by it.
 
 Return what happened (`bool` changed/clicked, or a result struct).
 
@@ -508,7 +514,7 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 
 | Member | What |
 |---|---|
-| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_RESOURCES_DIR` (`src/resources/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), or the library's embedded files with `.embedded = true`, and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. Frames don't apply a pending theme: call `applyPendingTheme()` between frames to apply one (it also switches the theme's fonts; see `fonts_test.cpp`), and set the default theme back at the end. |
+| `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt; `RendererHasVtxOffset`, so a window may hold more than 64k vertices, like the OpenGL 3 backend), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_RESOURCES_DIR` (`src/resources/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), or the library's embedded files with `.embedded = true`, and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. Frames don't apply a pending theme: call `applyPendingTheme()` between frames to apply one (it also switches the theme's fonts; see `fonts_test.cpp`), and set the default theme back at the end. |
 | `registerType<T>(name)`, `renderer()`, `types()` | Register element types before the Lua state starts; the renderer (window title) and the registry. |
 | `resources()`, `loadedResources()` | The harness's `Resources`: mount more (`app:/` on a `test::TempDir`) before the state starts. The names the Lua state read or loaded. |
 | `images()` | The harness's `ImageCache`, which `Image` elements draw from (decoding from `resources()`). Its textures stay `WantCreate`: there is no backend. `renderFrame` ends with its `collect()`, like the Engine, so the byte budget applies. Test images live in `tests/data/` (`IMLUI_TEST_DATA_DIR`): mount `app:/` on it, or copy one into a `TempDir` with `write`. |
@@ -533,7 +539,35 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 `frame_test.cpp` (Frame, child handles, re-registration, unknown types), `element_test.cpp`
 (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a `Dialog` and a
 `ModalNavigationDrawer` through `native.injectKey`) and one `elements_<family>_test.cpp` per element family
-(windows, layout, navigation, controls, inputs, data, system) use it.
+(windows, layout, navigation, controls, inputs, data, system) use it. So does `culling_test.cpp`
+([culling](architecture.md#culling): bindings of culled children don't run, positions and the scroll range are the
+same with culling on and off, also on the first frame after a scroll, a `Timer`, a `Dialog`, a focused `TextField`
+and nested `ScrollView`s out of view, no settle frames while scrolling, `cull = false` and `ui.setCulling`).
+
+## Benchmark
+
+`imlui_bench` (`tests/bench/`) measures big UIs headlessly. It renders the stress scenarios of
+`tests/bench/stress.lua` (the gallery app's stress page: `tiles`, a `Grid` of `Card`s; `controls`, a `Column` of
+`Row`s of eight bound controls; `listview`, ten `ListItem`s per count unit; `table`, a hundred `Table` rows per count
+unit; `nested`, cards with stacks eight deep; `plots`) through the [headless frame harness](#the-headless-frame-harness)
+in a 1180 x 820 display, each inside a page-like `ScrollView`. Per scenario and count it prints the time to build the
+tree (`build`: the constructors; a `Repeater` builds its delegates on its first frame, so they count in `first`), the
+first frame, and the median and mean time per frame over 100 frames (after 10 to settle) twice: `anim`, with a `Timer`
+that changes a value every item reads through a binding on every frame, and `idle`, with nothing changing (a forced
+frame: what any redraw costs). `vertices` is ImGui's vertex count of the last frame. It is built with the tests when
+imlui is the top-level project and never run by ctest. Take numbers from a Release build:
+
+```sh
+cmake --preset clang-release
+cmake --build --preset clang-release --target imlui_bench
+build/clang-release/bin/imlui_bench                                  # every scenario at counts 1000 and 5000
+build/clang-release/bin/imlui_bench controls listview --count 1000   # some scenarios, one count
+build/clang-release/bin/imlui_bench nested --count 100,1000 --frames 300 --warmup 20 --size 1920x1080
+```
+
+A frame here is ImGui's `NewFrame`, `ui.__tick`, the render pass and `ImGui::Render` (the draw lists), without a
+backend or a swap. It exits with 1 when a scenario failed or reported a script error. Add a scenario as a builder in
+`stress.lua` and its name to `stress.scenarios` and to the default list in `main.cpp`.
 
 ## Fuzzing
 

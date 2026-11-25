@@ -19,6 +19,7 @@ export namespace imlui {
 /// Raw:     width (the column's width, padding included, like a Card's; the children's layout box (`align`, fills,
 ///          wrapping) is that less the padding on each side; unset: the parent's box less the padding on each side,
 ///          and a column holding a fill fills itself: contentFillsWidth)
+///          cull (default true: children out of view are skipped, Renderer::skipOutOfView)
 class Column final : public Element {
 public:
     static void declare(TypeBuilder<Column>& type);

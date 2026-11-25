@@ -107,7 +107,10 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 | `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView` and `Card`; *raw* on the others. |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it; a fill-minus child (`width = -40`) is the stack's width less 40dp, and `align` places it in the stack (centered: 20dp on each side). |
 
-Non-visual children are rendered in place and don't count for the spacing.
+| `cull` | bool | `true` | *Raw.* `false` renders every child, also those out of view. By default a child out of view whose size is known is skipped and only its size is laid out (its bindings don't run); positions and the scroll range are the same either way. See [Culling](architecture.md#culling); `ui.setCulling(false)` turns it off everywhere. |
+
+Non-visual children are rendered in place and don't count for the spacing. Children that hold the item being edited
+or dragged, the keyboard focus, an open popup or a non-visual element (a `Dialog`, a `Timer`) are never culled.
 
 How `align` knows a child's width before drawing it: every built-in element whose size follows from its props, the
 font and the theme knows it up front (its *intrinsic size*: `Text`, `Icon`, `Button`, `Checkbox`, `Chip`,
@@ -324,6 +327,7 @@ non-visual children take no cell.
 | `spacing` | number | `8` | Gap between cells (dp). |
 | `border` | bool | `false` | Cell borders. |
 | `width` | size | `0` (fill) | *Raw.* |
+| `cull` | bool | `true` | *Raw.* `false` renders every cell; by default a row of cells out of view is skipped like a [stack's](#stacking-containers) child (its height is kept; the last row always renders). |
 
 ### ScrollView
 
@@ -347,15 +351,45 @@ frame, only the first place is tracked.
 
 ### ListView
 
-A `ScrollView` whose children come from `model` / `delegate` (built on the Lua side, cached per index like a
-`Repeater`). Without `delegate`, its own array children are used. It takes every `ScrollView` prop. See
-[ListView](lua-api.md#listview).
+A `ScrollView` whose children come from `model` / `delegate` (built on the Lua side and cached like a
+`Repeater`'s), **virtualized**: only the items in view, and a margin of half the view's height above and below,
+are built and rendered; the rest of the content is empty space of the right height. Without `delegate`, its own
+array children are used, like a `ScrollView`. It takes every `ScrollView` prop. See [ListView](lua-api.md#listview).
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `model` | list, number, function or `bind` | — | Items; a number `n` means `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
-| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by item: see [Repeater](lua-api.md#repeater--model-delegate-). |
+| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by index: see [Repeater](lua-api.md#repeater--model-delegate-). |
+| `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. |
+
+Item heights. With `itemHeight`, finding the items in view costs the same for any length. Without it, the items
+are measured as they render, and the content height (the scroll range) is the measured heights plus the average for
+the items not rendered yet, so it settles as you scroll. When items above the view turn out taller or shorter than
+assumed, the scroll moves by the same amount on the next frame, so what is in view stays where it is. A delegate
+that returns `nil`, or a hidden or non-visual element, takes no space and no `spacing`; an inline delegate (an `If`,
+a `Repeater`) is one item made of its children, stacked.
+
+What virtualization changes:
+
+- **A delegate exists only once it has been in or near view.** Its element, its `id`, its `Timer`s and anything else
+  its delegate function does happen when it first scrolls near the view, not when the model gets the item.
+- **Built delegates are cached**, so one that scrolls out and back is the same element with its state. Without a
+  `key`, the delegate of an index is dropped when the item at that index changes or the model gets shorter; with a
+  `key`, when its key leaves a model of at most 256 items. Past that, the cache keeps at most
+  max(256, 4 x the items shown) delegates and drops the ones shown longest ago: keep state that must outlive
+  scrolling far away in the model, not in the delegate.
+- **Keyboard and gamepad navigation** reach the items that are built: while a nav move picks its target, the
+  margin grows by a view's height (as for [culling](architecture.md#culling)), so the arrow keys, Page Up / Down and
+  Tab reach the next items and ImGui scrolls to them; a jump further than that (`Home`, `End`, Ctrl+Tab cycling
+  through the whole list) stops at the last built item.
+- **An item that holds the active item** (a `TextField` being edited, a `Slider` being dragged), the nav focus, an
+  open popup or a non-visual element (a `Dialog`, a `Timer`) keeps rendering, at its place, after it scrolled out of
+  range, like a culled child would ([culling](#stacking-containers)'s rules); at most 16 such items per list.
+- `cull` and `ui.setCulling` don't change which delegates a `ListView` builds; they apply to its own children when it
+  has no `delegate`, and inside each delegate as in any stack.
+- With a `key`, items that share a key get one delegate each in the order they're shown, which can pair them up
+  differently after scrolling.
 
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,

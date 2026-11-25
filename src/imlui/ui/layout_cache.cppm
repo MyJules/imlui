@@ -31,6 +31,10 @@ export namespace imlui::layout {
 
 /// The size last recorded for `id` (on this frame, the last, or whenever it was last rendered), if it is still kept.
 [[nodiscard]] std::optional<ImVec2> lastSize(ImGuiID id);
+/// lastSize(), but only when it is settled: the last two sizes recorded for `id` were the same (within half a pixel).
+/// Culling (imlui.ui.culling) lays out a child out of view by it, so a size still converging (a first frame, a Card
+/// whose window fits its content a frame later) is rendered until it stops changing instead of being kept stale.
+[[nodiscard]] std::optional<ImVec2> settledSize(ImGuiID id);
 /// Notes that a layout placed `id` this frame by a width / height of `size` (its last size, an intrinsic size or a
 /// fallback): recordSize() later this frame compares it with the size `id` really had.
 void assumeWidth(ImGuiID id, float size);
@@ -72,6 +76,7 @@ struct Entry {
     int mismatchFrame = -1; ///< last frame a recorded size differed from an assumed one
     int streak = 0;         ///< mismatches on consecutive frames
     bool logged = false;
+    bool settled = false; ///< the last record repeated the size before it
 };
 
 struct Cache {
@@ -142,6 +147,15 @@ std::optional<ImVec2> lastSize(ImGuiID id) {
     return it->second.size;
 }
 
+std::optional<ImVec2> settledSize(ImGuiID id) {
+    auto& map = entries();
+    const auto it = map.find(id);
+    if (it == map.end()) return std::nullopt;
+    markUsed(it->second);
+    if (!it->second.settled) return std::nullopt;
+    return it->second.size;
+}
+
 void assumeWidth(ImGuiID id, float size) { assume(id, 0, size); }
 void assumeHeight(ImGuiID id, float size) { assume(id, 1, size); }
 
@@ -155,6 +169,7 @@ void recordSize(ImGuiID id, ImVec2 size) {
         e.assumedFrame[axis] = -1; // compared once: a second record this frame (an aggregate) needs a new assumption
         if (std::fabs(got[axis] - e.assumed[axis]) > tolerance) mismatch = true;
     }
+    e.settled = e.size && std::fabs(e.size->x - size.x) <= tolerance && std::fabs(e.size->y - size.y) <= tolerance;
     e.size = size;
     if (!mismatch) return;
     if (e.mismatchFrame == frame) return; // already counted (and requested) this frame

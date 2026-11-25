@@ -127,7 +127,7 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `resolvedWidth(natural = 0)`, `resolvedHeight(natural = 0)` | `width` / `height` (`size()`) resolved to pixels against `available()` with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset; a type that fills by default fills. Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
 | `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; `"start"`/`"center"`/`"end"` as 0/0.5/1. |
 | `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
-| `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes. |
+| `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes; they build nothing outside the clip rect, and `md::rectVisible(dl, a, b)` lets your own drawing skip an off-screen element the same way. |
 | `requestFrame()`, `requestFrameAfter(s)` | Frames are [rendered on demand](architecture.md#on-demand-rendering): anything that changes on its own asks for the next one. |
 | `theme()`, `scheme()` | The current theme and Material color scheme. The md surface stack (`md::pushSurface`/`popSurface`/`surfaceColor`, `imlui.widgets`) works as in the widgets. |
 | `images()` | The `ImageCache` (module `imlui.image.image_cache`) that `Image` draws from: `images()->get("app:/x.png")` gives a decoded image (`ready()`, `width()`, `texture()` for `drawList()->AddImage`), or its `error()`. The reference is valid until the end of the frame: an image not drawn for two frames may be evicted (the cache's byte budget) and is decoded again on the next `get`. Null when the host set none. |
@@ -432,6 +432,16 @@ instance:
 Bindings that read singletons (`function() return backend.load end`) are re-evaluated on every rendered frame,
 like any binding.
 
+**Static properties are converted once.** A property whose raw value in the element table is a plain value (a
+string, number, boolean, or nil) converts to the same thing until that field is written, so a sync converts it only
+when something changed: the element table's declared fields (a fingerprint of their raw values: an assignment from
+Lua, a `notify` write-back, a raw write), its metatable, or the theme (a color role). Otherwise only the **dynamic**
+properties are read again: functions, `bind()`s and any other table (it may have changed in place), userdata, and,
+on an element table with a metatable of its own, the fields its `__index` answers. A full sync also follows one that
+an error cut short. The setter rule is unchanged, so this only saves work: a static property's setter wasn't called
+on those frames anyway. A `LuaConvert<V>::get` must therefore depend only on the Lua value (and the theme), not on
+other state that changes between frames.
+
 **Lazy sync.** An element that isn't rendered (on a hidden page, `visible = false`, a model item that isn't shown)
 is synced when something needs it:
 
@@ -461,7 +471,9 @@ that calls a method of its own element
 element's property through the instance (it reads the element table), so that needs no sync.
 
 Because the sync compares with the getter, the element table is the source of truth: a C++ change that isn't
-`notify`'d is overwritten by the Lua value at the next sync. Always `notify` after changing a property in C++.
+`notify`'d is overwritten by the Lua value at the next sync that converts the property, which for a plain value is
+only after its field (or the theme) changes, for a binding or `bind()` at the next sync. Always `notify` after
+changing a property in C++: it writes the value to the table, so Lua sees it and every sync after it agrees.
 
 ## Telling Lua about changes
 

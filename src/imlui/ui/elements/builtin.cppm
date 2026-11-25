@@ -24,6 +24,7 @@ import imlui.ui.elements.imgui_demo;
 import imlui.ui.elements.inline_container;
 import imlui.ui.elements.link;
 import imlui.ui.elements.list_item;
+import imlui.ui.elements.list_view;
 import imlui.ui.elements.menu;
 import imlui.ui.elements.menu_bar;
 import imlui.ui.elements.menu_item;
@@ -82,7 +83,7 @@ void registerBuiltinTypes(TypeRegistry& types) {
     types.registerType<Row>("Row");
     types.registerType<Grid>("Grid");
     types.registerType<ScrollView>("ScrollView");
-    types.registerType<ScrollView>("ListView"); // children come from model/delegate (Lua side, `__children`)
+    types.registerType<ListView>("ListView"); // virtualized: builds only the delegates in view (Lua `__range`)
     types.registerType<Card>("Card");
     types.registerType<TabBar>("TabBar");
     types.registerType<Tab>("Tab"); // rendered by TabBar; a stray Tab renders its content inline

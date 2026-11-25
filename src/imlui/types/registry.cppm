@@ -28,6 +28,9 @@
 // changed tables ran in between (luaui::changes(): a handler, a write-back), or the element's own declared fields
 // changed since (a fingerprint of their raw values, which catches a write that bypassed the count: a raw
 // lua_setfield from C++, a binding that writes), which syncs it again. A debug build reports such a bypass.
+// Across frames, a sync reads only the dynamic properties (bindings, binds, tables) again while the fingerprint and
+// the theme are what they were at the last full sync: the static ones (plain values) would convert to what the
+// instance holds already.
 //
 // An element's identity is its instance's ScriptObject::objectId() (elementId()): the renderer's ImGui ID scope and
 // layout cache key, never reused, unlike the table's address.
@@ -40,6 +43,7 @@ import lua;
 import imgui;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.theme.theme;
 import imlui.ui.layout_box;
 import imlui.ui.renderer;
 import imlui.types.script_object;
@@ -197,6 +201,13 @@ struct Box {
     int syncedFrame = -1;
     std::uint64_t syncedChanges = 0;
     std::uint64_t syncedFields = 0;
+    // What a sync may skip (see syncInstance): the instance holds every static property of the table as it was at
+    // syncedFields (`staticSynced`: the last full sync ran to its end), resolved under theme generation
+    // `syncedTheme`. Only the properties in `dynamicFields` (their raw value may resolve to something else with no
+    // write to the table: a binding, a bind, a table) are read again while that holds.
+    bool staticSynced = false;
+    std::uint64_t syncedTheme = 0;
+    std::vector<std::uint32_t> dynamicFields; ///< indices into TypeInfo::properties()
     /// What layouts asked this frame (fillsWidth, intrinsicSize): a container composes its children's sizes, and its
     /// parent asks it too, so each element answers once a frame per question. See LayoutMemo.
     struct LayoutMemo {
@@ -281,10 +292,21 @@ std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
     }
 }
 
+/// Whether the element table at `tbl` has a metatable of its own (a script's), not the one its type's elements share
+/// (luaui::sharedMetaMarker): property reads then go through its __index for a field the table doesn't hold.
+bool hasOwnMeta(lua::State* state, int tbl) {
+    if (lua::getmetatable(state, tbl) == 0) return false;
+    lua::pushcstring(state, luaui::sharedMetaMarker);
+    const bool own = lua::rawget(state, -2) == lua::Type::Nil;
+    lua::pop(state, 2);
+    return own;
+}
+
 /// A hash of what the property sync reads from the element table at `tbl` before resolving anything: the raw value
-/// of every declared, writable property (and the positional [1] the default property may take). Raw reads (no
-/// metamethods), so it never runs Lua and can't raise. What a binding or a nested table holds isn't in it: a change
-/// there is seen through luaui::changes().
+/// of every declared, writable property (and the positional [1] the default property may take), and the table's
+/// metatable. Raw reads (no metamethods), so it never runs Lua and can't raise. What a binding or a nested table
+/// holds isn't in it: a change there is seen through luaui::changes(), and every sync re-reads those properties
+/// (dynamicFields).
 std::uint64_t fingerprint(lua::State* state, int tbl, const TypeInfo& info) {
     lua::checkstack(state, 2);
     std::uint64_t h = 0;
@@ -300,7 +322,42 @@ std::uint64_t fingerprint(lua::State* state, int tbl, const TypeInfo& info) {
         h = mixValue(state, h);
         lua::pop(state);
     }
+    // setmetatable() is no write to a field, but an __index of the table's own answers for the fields it doesn't hold.
+    if (lua::getmetatable(state, tbl) != 0) {
+        h = mixValue(state, h);
+        lua::pop(state);
+    }
     return h;
+}
+
+/// Collects into `out` the declared, writable properties of the element table at `tbl` whose raw value may resolve to
+/// something else while the table itself doesn't change, so that a sync must read them again although the fingerprint
+/// matches: a binding (a function, called every sync), a bind or any other table (a nested table changed in place: a
+/// bind's source, a color, a model), a userdata (its contents), and, when the table has a metatable of its own, any
+/// field the table doesn't hold (its __index answers). A nil, boolean, number or string is static: its property
+/// converts the same way until the table's field is written, which the fingerprint sees.
+void collectDynamicFields(lua::State* state, int tbl, const TypeInfo& info, std::vector<std::uint32_t>& out) {
+    out.clear();
+    lua::checkstack(state, 2);
+    const bool ownMeta = hasOwnMeta(state, tbl);
+    const auto& properties = info.properties();
+    for (std::size_t i = 0; i < properties.size(); ++i) {
+        const TypeInfo::Property& p = properties[i];
+        if (!p.assign) continue;
+        lua::pushstring(state, p.name);
+        const lua::Type t = lua::rawget(state, tbl);
+        lua::pop(state);
+        bool dynamic = false;
+        switch (t) {
+        case lua::Type::Boolean:
+        case lua::Type::Number:
+        case lua::Type::String: break;
+        // (The default property's positional [1] is passed on unresolved, by identity: in the fingerprint.)
+        case lua::Type::Nil: dynamic = ownMeta; break;
+        default: dynamic = true; break; // functions, tables (binds), userdata, threads
+        }
+        if (dynamic) out.push_back(static_cast<std::uint32_t>(i));
+    }
 }
 
 /// The current ImGui frame, -1 without a context.
@@ -396,40 +453,50 @@ void resetProperty(const Box& b, std::size_t index) {
     if (p.reset && index < b.defaults.size() && b.defaults[index]) p.reset(b.defaults[index].get(), *b.object);
 }
 
-/// The property loop of syncInstance: writes the declared properties of the element table at `tbl` into b's object.
-void syncProperties(lua::State* state, int tbl, Box& b) {
-    const Node node{state, tbl};
+/// Writes declared property `index` of the element table `node` into b's object.
+void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index) {
     const TypeInfo& info = *b.type;
-    const auto& properties = info.properties();
-    for (std::size_t i = 0; i < properties.size(); ++i) {
-        const TypeInfo::Property& p = properties[i];
-        if (!p.assign) continue;
-        node.push(p.name.c_str());
-        if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
-            lua::pop(state);
-            lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child
-            if (lua::istable(state, -1)) {
-                lua::pop(state);
-                lua::pushnil(state);
-            }
-        }
-        if (lua::isnil(state, -1) && !p.nullable) {
-            lua::pop(state); // unset (or a binding that returned nil): back to the default
-            resetProperty(b, i);
-            continue;
-        }
-        if (p.assign(state, -1, *b.object) == TypeInfo::Assign::TypeMismatch)
-            luaui::reportError(info.name() + "." + p.name + ": " + std::string{p.typeName} + " expected, got " +
-                               lua::typeName(state, -1));
+    const TypeInfo::Property& p = info.properties()[index];
+    node.push(p.name.c_str());
+    if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
         lua::pop(state);
+        lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child
+        if (lua::istable(state, -1)) {
+            lua::pop(state);
+            lua::pushnil(state);
+        }
     }
+    if (lua::isnil(state, -1) && !p.nullable) {
+        lua::pop(state); // unset (or a binding that returned nil): back to the default
+        resetProperty(b, index);
+        return;
+    }
+    if (p.assign(state, -1, *b.object) == TypeInfo::Assign::TypeMismatch)
+        luaui::reportError(info.name() + "." + p.name + ": " + std::string{p.typeName} + " expected, got " +
+                           lua::typeName(state, -1));
+    lua::pop(state);
 }
 
-/// Arg 1: the Box (light userdata), arg 2: the element table. syncProperties in a Lua function, so that it runs
-/// protected; a C++ exception it throws becomes a Lua error.
+/// The property loop of syncInstance: writes the declared properties of the element table at `tbl` into b's object,
+/// all of them (`dynamicOnly` false), or only b.dynamicFields.
+void syncProperties(lua::State* state, int tbl, Box& b, bool dynamicOnly) {
+    const Node node{state, tbl};
+    if (dynamicOnly) {
+        for (const std::uint32_t i : b.dynamicFields)
+            syncProperty(state, node, b, i);
+        return;
+    }
+    const auto& properties = b.type->properties();
+    for (std::size_t i = 0; i < properties.size(); ++i)
+        if (properties[i].assign) syncProperty(state, node, b, i);
+}
+
+/// Arg 1: the Box (light userdata), arg 2: the element table, arg 3: dynamicOnly (a boolean). syncProperties in a Lua
+/// function, so that it runs protected; a C++ exception it throws becomes a Lua error.
 int syncPropertiesFn(lua::State* state) {
     Box& b = *static_cast<Box*>(lua::touserdata(state, 1));
-    luaui::catchCxx(state, [&] { syncProperties(state, 2, b); }, b.type->name(), " property sync");
+    const bool dynamicOnly = lua::toboolean(state, 3);
+    luaui::catchCxx(state, [&] { syncProperties(state, 2, b, dynamicOnly); }, b.type->name(), " property sync");
     return 0;
 }
 
@@ -465,16 +532,29 @@ void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) 
                                                 "to it is dropped");
     }
     lua::pop(state);
+    // A static property (a plain value) converts to the same value until its field is written, which changes the
+    // fingerprint, or the theme changes (a color role). While neither happened since a full sync that ran to its end,
+    // the instance holds them all already, and only the dynamic ones (bindings, binds, tables) are read again. (A
+    // property the C++ side changed itself without notify() isn't reset to the table's value then: notify() writes
+    // the table, so the next sync is full.)
+    const std::uint64_t theme = themeGeneration();
+    const bool dynamicOnly = b.complete && b.staticSynced && fields == b.syncedFields && theme == b.syncedTheme;
+    if (!dynamicOnly) collectDynamicFields(state, tbl, *b.type, b.dynamicFields);
+    b.staticSynced = false; // until this sync gets to its end
     b.syncing = true;
     // Protected: an error in the loop is reported, not raised, and can't skip the reset below (`syncing` left set
     // would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.) It only reads
     // the table (and the bindings), so it doesn't count as a change itself.
-    lua::checkstack(state, 4);
+    lua::checkstack(state, 5);
     lua::pushcfunction(state, &syncPropertiesFn);
     lua::pushlightuserdata(state, &b);
     lua::pushvalue(state, tbl);
-    luaui::safeRead(state, 2, 0);
+    lua::pushboolean(state, dynamicOnly);
+    // An error cut the loop short: some static properties may not be applied, so the next sync is a full one.
+    const bool ok = luaui::safeRead(state, 3, 0);
     b.syncing = false;
+    b.staticSynced = ok;
+    b.syncedTheme = theme;
     b.memo = {}; // its answers may have changed with its properties
     b.syncedFrame = frame;
     b.syncedChanges = luaui::changes(); // before componentComplete(), whose handlers may change the table

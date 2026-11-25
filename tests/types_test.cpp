@@ -6,9 +6,11 @@
 import std;
 
 import lua;
+import imgui;
 import imlui.color;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.theme.theme;
 import imlui.ui.frame_request;
 import imlui.types.lua_convert;
 import imlui.types.script_object;
@@ -29,6 +31,7 @@ struct Counters {
     int destructed = 0;
     int destroyedHook = 0;
     int setValueCalls = 0;
+    int nameReads = 0; ///< Probe::name() calls: a sync that converts `name` compares with it
 };
 Counters counters;
 
@@ -66,7 +69,10 @@ public:
         m_value = v;
         ++counters.setValueCalls;
     }
-    [[nodiscard]] const std::string& name() const { return m_name; }
+    [[nodiscard]] const std::string& name() const {
+        ++counters.nameReads;
+        return m_name;
+    }
     void setName(std::string n) { m_name = std::move(n); }
     [[nodiscard]] Color tint() const { return m_tint; }
     void setTint(Color c) { m_tint = c; }
@@ -85,6 +91,8 @@ public:
         m_value += 1;
         notify("value");
     }
+    /// Changes `value` in C++ without notify(): the table isn't written.
+    void setQuietly(double v) { m_value = v; }
     /// `limit`, or `fallback` for nil: an optional argument that may also be left out.
     [[nodiscard]] int limitOr(int fallback, std::optional<int> limit) const { return limit.value_or(fallback); }
 
@@ -472,6 +480,131 @@ TEST_F(TypesTest, SyncReportsTypeMismatches) {
     EXPECT_EQ(p->name(), "ok");
     ASSERT_EQ(luaui::errors().size(), 1u);
     EXPECT_NE(luaui::errors()[0].find("Probe.value: number expected, got string"), std::string::npos);
+}
+
+// A sync converts a static property (a nil, boolean, number or string in the element table) only while its field
+// changed since the last sync: the instance holds the rest already. Bindings are still read at every sync.
+TEST_F(TypesTest, StaticPropertiesArentConvertedAgain) {
+    run(R"(
+        s = ui.state { v = 1 }
+        p = Probe { name = "static", value = function() return s.v end }
+    )");
+    Probe* p = sync("p");
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(p->name(), "static");
+    const int reads = counters.nameReads;
+    const int sets = counters.setValueCalls;
+    for (int i = 2; i <= 4; ++i) {
+        run("s.v = " + std::to_string(i));
+        sync("p");
+        EXPECT_DOUBLE_EQ(p->value(), i); // the binding: read every sync
+    }
+    EXPECT_EQ(counters.nameReads, reads); // `name` wasn't converted (its getter compares) again
+    EXPECT_EQ(counters.setValueCalls, sets + 3);
+    sync("p");
+    EXPECT_EQ(counters.setValueCalls, sets + 3); // the binding's value didn't change: no setter
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A write to the element table (a plain Lua assignment, a raw write) changes its fingerprint, so the next sync reads
+// every property: a new value, nil (back to the default), a value that becomes a binding and back.
+TEST_F(TypesTest, WritesNilResetsAndTypeChangesArePickedUp) {
+    run(R"(
+        s = ui.state { v = 1 }
+        p = Probe { name = "a", scale = 4 }
+    )");
+    Probe* p = sync("p");
+    run("p.name = 'b'");
+    EXPECT_EQ(sync("p")->name(), "b");
+    run("rawset(p, 'name', 'raw')");
+    EXPECT_EQ(sync("p")->name(), "raw");
+    run("p.name = nil; p.scale = nil");
+    sync("p");
+    EXPECT_EQ(p->name(), "probe");
+    EXPECT_DOUBLE_EQ(p->scale(), 2);
+    run("p.name = function() return 'fn' .. s.v end"); // static -> binding
+    EXPECT_EQ(sync("p")->name(), "fn1");
+    run("s.v = 2");
+    EXPECT_EQ(sync("p")->name(), "fn2");
+    run("p.name = 'plain'"); // binding -> static
+    EXPECT_EQ(sync("p")->name(), "plain");
+    run("s.v = 3");
+    EXPECT_EQ(sync("p")->name(), "plain");
+    run("p.value = ui.bind(s, 'v')"); // a bind: read every sync
+    EXPECT_DOUBLE_EQ(sync("p")->value(), 3);
+    run("s.v = 7");
+    EXPECT_DOUBLE_EQ(sync("p")->value(), 7);
+    run("p[1] = 0.25; p.value = nil"); // the default property's positional value
+    EXPECT_DOUBLE_EQ(sync("p")->value(), 0.25);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A table value can change in place, which no fingerprint sees: it is converted again at every sync.
+TEST_F(TypesTest, TablesChangedInPlaceAreSynced) {
+    run(R"(p = Probe { items = { "a" }, tint = { 1, 0, 0 } })");
+    Probe* p = sync("p");
+    EXPECT_EQ(p->items(), (std::vector<std::string>{"a"}));
+    run("table.insert(p.items, 'b'); p.tint[2] = 1");
+    sync("p");
+    EXPECT_EQ(p->items(), (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(p->tint(), (Color{1, 1, 0, 1}));
+}
+
+// Two-way: notify() writes the table (or a bind's source), so the next sync sees it. A property the C++ side changed
+// without notify() keeps its value until the table's field changes.
+TEST_F(TypesTest, WriteBacksAndQuietChangesFromCxx) {
+    run(R"(
+        s = ui.state { v = 1 }
+        plain = Probe { value = 5 }
+        bound = Probe { value = ui.bind(s, "v") }
+    )");
+    Probe* plain = sync("plain");
+    Probe* bound = sync("bound");
+    run("plain:bump(); bound:bump()");
+    EXPECT_DOUBLE_EQ(sync("plain")->value(), 6);
+    EXPECT_DOUBLE_EQ(sync("bound")->value(), 2);
+    run("assert(plain.value == 6 and s.v == 2)");
+    run("s.v = 10");
+    EXPECT_DOUBLE_EQ(sync("bound")->value(), 10);
+
+    plain->setQuietly(42);
+    EXPECT_DOUBLE_EQ(sync("plain")->value(), 42); // the table's value didn't change: not converted again
+    run("plain.value = 7");
+    EXPECT_DOUBLE_EQ(sync("plain")->value(), 7);
+    bound->setQuietly(42);
+    EXPECT_DOUBLE_EQ(sync("bound")->value(), 10); // a bind is read every sync
+}
+
+// An element table with a metatable of its own reads the fields it doesn't hold through its __index (inherited
+// properties): those are read every sync, and setting the metatable after a sync is seen too.
+TEST_F(TypesTest, InheritedPropertiesAreSynced) {
+    run(R"(
+        base = { name = "base" }
+        p = Probe { value = 1 }
+    )");
+    Probe* p = sync("p");
+    EXPECT_EQ(p->name(), "probe");
+    run("setmetatable(p, { __index = base })");
+    EXPECT_EQ(sync("p")->name(), "base");
+    run("base.name = 'changed'");
+    EXPECT_EQ(sync("p")->name(), "changed");
+    EXPECT_DOUBLE_EQ(sync("p")->value(), 1);
+}
+
+// A color role resolves through the theme: a theme change converts static colors again.
+TEST_F(TypesTest, AThemeChangeResolvesColorRolesAgain) {
+    ImGuiContext* context = ImGui::CreateContext();
+    run(R"(p = Probe { tint = "primary" })");
+    Probe* p = sync("p");
+    EXPECT_EQ(p->tint(), theme().scheme.primary);
+    Theme t = theme();
+    t.scheme.primary = Color{0.25f, 0.5f, 0.75f, 1.0f};
+    setTheme(t);
+    ASSERT_TRUE(applyPendingTheme());
+    EXPECT_EQ(sync("p")->tint(), (Color{0.25f, 0.5f, 0.75f, 1.0f}));
+    setTheme(Theme{});
+    applyPendingTheme();
+    ImGui::DestroyContext(context);
 }
 
 // A Lua error during the sync (here the element table's own __index) is reported, and doesn't leave the

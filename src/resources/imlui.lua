@@ -524,7 +524,13 @@ local function repeaterChildren(self)
     local list = self.__list
     if not list then list = {}; self.__list = list end
     local keyFn = rawget(self, "key")
-    if type(keyFn) == "function" then return keyedChildren(self, model, n, keyFn, cache, list) end
+    if type(keyFn) == "function" then
+        self.__counted = nil
+        return keyedChildren(self, model, n, keyFn, cache, list)
+    end
+    -- A count that didn't change: the items are 1..n again, and every cached delegate was built for its index.
+    if model == nil and self.__counted == n then return list end
+    self.__counted = nil
     for i = 1, n do
         local item
         if model then item = model[i] else item = i end
@@ -538,6 +544,7 @@ local function repeaterChildren(self)
     end
     if #list > n then dropped() end
     for i = n + 1, #list do list[i] = nil; cache[i] = nil end
+    if model == nil then self.__counted = n end
     return list
 end
 
@@ -552,10 +559,178 @@ function ui.Repeater(p)
     return finishElement(p)
 end
 
---- ListView { model = ..., delegate = ..., height = 300, spacing = 4 } — a scrolling Repeater.
+-- A ListView with a delegate is virtualized: its C++ element (imlui.ui.elements.list_view) asks for the delegates of
+-- the indices it shows, and only those are built. Each render calls __count(self), which resolves the model, and then
+-- __range(self, first, last) for the delegates of indices first..last. Built delegates are cached in self.__view:
+--   model, n      the model the last __count resolved (nil for a numeric model: the items are the indices), its length
+--   pass          counts the __count calls; an entry's `pass` is the last one that showed it
+--   cache         [index] = entry, without a `key` function
+--   keyed         [key] = entry, with one; more entries with the same key are chained through `nextSame`
+--   built, shown  how many entries there are; how many indices the current pass showed
+-- An entry is { item, key, node, pass } (see buildDelegate). An entry the model no longer has is dropped as soon as
+-- that is known cheaply: an index past the end or whose item changed, and with a key, a key gone from a model of at
+-- most LIST_KEEP items. Beyond that the cache keeps at most max(LIST_KEEP, 4 x shown) entries, dropping the ones
+-- shown longest ago.
+local LIST_KEEP = 256
+
+-- The key a ListView caches an item's delegate under: keyOf, with one stand-in for an item that can't index a table
+-- (nil, NaN).
+local NO_KEY = {}
+local function viewKey(self, keyFn, item, i)
+    local k = keyOf(self, keyFn, item, i)
+    if k == nil or k ~= k then return NO_KEY end
+    return k
+end
+
+-- One entry of a ListView's cache is gone (the caller unlinked it).
+local function dropEntry(st)
+    st.built = st.built - 1
+    dropped()
+end
+
+-- Drops the keyed entries that `keep(entry)` rejects, keeping the order of each key's chain.
+local function filterKeyed(st, keep)
+    for k, head in pairs(st.keyed) do
+        local newHead, tail = nil, nil
+        local c = head
+        while c ~= nil do
+            local nextC = c.nextSame
+            c.nextSame = nil
+            if keep(c) then
+                if tail then tail.nextSame = c else newHead = c end
+                tail = c
+            else
+                dropEntry(st)
+            end
+            c = nextC
+        end
+        st.keyed[k] = newHead -- a key being traversed: assigning it (nil included) is allowed
+    end
+end
+
+-- Keeps about the `keep` entries shown most recently.
+local function trimView(st, keep)
+    local all = {}
+    for _, c in pairs(st.cache) do all[#all + 1] = c end
+    for _, head in pairs(st.keyed) do
+        local c = head
+        while c ~= nil do all[#all + 1] = c; c = c.nextSame end
+    end
+    if #all <= keep then return end
+    table.sort(all, function(a, b) return a.pass > b.pass end)
+    local cut = all[keep + 1].pass -- what was shown no later than this goes (ties too)
+    for i, c in pairs(st.cache) do
+        if c.pass <= cut then st.cache[i] = nil; dropEntry(st) end
+    end
+    filterKeyed(st, function(c) return c.pass > cut end)
+end
+
+-- __count(self): resolves the model for this render's __range calls, drops the entries it no longer has, and returns
+-- its length.
+local function listCount(self)
+    local model = resolve(self, self.model)
+    local n
+    if type(model) == "number" then
+        n = model == model and math.max(0, math.floor(math.min(model, math.maxinteger))) or 0
+        model = nil
+    else
+        model = model or EMPTY
+        n = #model
+    end
+    local st = rawget(self, "__view")
+    if not st then
+        st = { cache = {}, keyed = {}, built = 0, pass = 0, shown = 0, n = 0 }
+        rawset(self, "__view", st)
+    end
+    local keyFn = rawget(self, "key")
+    if type(keyFn) == "function" then
+        for i in pairs(st.cache) do st.cache[i] = nil; dropEntry(st) end -- `key` was set since
+        if n <= LIST_KEEP and st.built > 0 then
+            -- A small model: count its keys, and drop the entries past each key's count.
+            local counts = {}
+            for i = 1, n do
+                local item
+                if model then item = model[i] else item = i end
+                local k = viewKey(self, keyFn, item, i)
+                counts[k] = (counts[k] or 0) + 1
+            end
+            filterKeyed(st, function(c)
+                local left = counts[c.key]
+                if not left or left == 0 then return false end
+                counts[c.key] = left - 1
+                return true
+            end)
+        end
+    else
+        if next(st.keyed) ~= nil then filterKeyed(st, function() return false end) end -- `key` was removed
+        if model ~= nil then
+            for i, c in pairs(st.cache) do
+                if i > n or c.item ~= model[i] then st.cache[i] = nil; dropEntry(st) end
+            end
+        elseif n < st.n then
+            for i in pairs(st.cache) do
+                if i > n then st.cache[i] = nil; dropEntry(st) end
+            end
+        end
+    end
+    local limit = math.max(LIST_KEEP, 4 * st.shown)
+    if st.built > limit then trimView(st, limit * 3 // 4) end
+    st.model, st.n = model, n
+    st.pass = st.pass + 1
+    st.shown = 0
+    return n
+end
+
+-- __range(self, first, last): the delegates for model indices first..last (1-based), built when they aren't cached;
+-- false for a delegate that returned nil. Called after __count, in the same render.
+local function listRange(self, first, last)
+    local st = rawget(self, "__view")
+    local out = {}
+    if not st then return out end
+    local model, pass = st.model, st.pass
+    if last > st.n then last = st.n end
+    local keyFn = rawget(self, "key")
+    local keyed = type(keyFn) == "function"
+    for i = first, last do
+        local item
+        if model then item = model[i] else item = i end
+        local c
+        if keyed then
+            -- The first entry with the item's key that this pass hasn't shown yet (repeated keys get one each).
+            local k = viewKey(self, keyFn, item, i)
+            local tail
+            c = st.keyed[k]
+            while c ~= nil and c.pass == pass do tail = c; c = c.nextSame end
+            if c == nil then
+                c = buildDelegate(self, item, i, k)
+                st.built = st.built + 1
+                if tail then tail.nextSame = c else st.keyed[k] = c end
+            else
+                c.item = item
+            end
+        else
+            c = st.cache[i]
+            if c == nil then
+                c = buildDelegate(self, item, i, nil)
+                st.built = st.built + 1
+                st.cache[i] = c
+            end
+        end
+        c.pass = pass
+        out[i - first + 1] = c.node
+    end
+    if last >= first then st.shown = st.shown + (last - first + 1) end
+    return out
+end
+
+--- ListView { model = ..., delegate = ..., height = 300, spacing = 4 } — a scrolling Repeater that builds only the
+--- delegates in view (see listCount). Without a delegate it shows its own children.
 function ui.ListView(p)
     p.__type = "ListView"
-    if p.delegate then p.__children = repeaterChildren end
+    if p.delegate then
+        p.__count = listCount
+        p.__range = listRange
+    end
     return finishElement(p)
 end
 
@@ -872,6 +1047,10 @@ ui.setZoom = native.setZoom                 -- setZoom(z), clamped to 0.5..3, ap
 ui.dpiScale = native.dpiScale               -- dpiScale() -> effective dp -> pixel factor
 ui.contentScale = native.contentScale       -- contentScale() -> monitor content scale
 ui.setZoomShortcuts = native.setZoomShortcuts -- setZoomShortcuts(false) turns off Ctrl +/-/0/wheel
+
+-- Culling: containers skip the children out of view (only their cached size is laid out). On by default.
+ui.setCulling = native.setCulling           -- setCulling(false) renders every child, for debugging and comparison
+ui.culling = native.culling                 -- culling() -> whether it's on
 
 -- Window size (dp) and Material 3 window size classes.
 ui.windowSize = native.windowSize           -- windowSize() -> w, h of the window in dp (pixels / dpiScale())

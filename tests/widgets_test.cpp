@@ -345,3 +345,145 @@ TEST_F(WidgetsTest, DisabledSelectedNavigationItemLooksDisabled) {
         EXPECT_FALSE(hasColor(drawn, s.secondaryContainer));
     }
 }
+
+// ------------------------------------------------------------------ Culling
+
+namespace {
+
+/// A widget for the culling tests, drawn at the cursor.
+struct CulledWidget {
+    const char* name;
+    std::function<void()> draw;
+};
+
+std::vector<CulledWidget> culledWidgets() {
+    static bool on = true;
+    static double value = 40.0;
+    static int segment = 1;
+    static const std::vector<std::string> segments{"One", "Two"};
+    static const std::vector<float> series{1.0f, 3.0f, 2.0f, 4.0f};
+    return {
+        {"checkbox", [] { md::checkbox("Check##checkbox", &on); }},
+        {"radio", [] { md::radio("Radio##radio", true); }},
+        {"switch", [] { md::switchToggle("Switch##switch", &on); }},
+        {"chip", [] { md::chip("Chip##chip", true); }},
+        {"segmented", [] { md::segmented("##segmented", segments, &segment); }},
+        {"slider", [] { md::slider("##slider", &value, 0.0, 100.0, 10.0); }},
+        {"iconButton", [] { md::iconButton("##iconButton", "star", md::IconButtonVariant::Outlined); }},
+        {"button", [] { md::button("Button##button", md::ButtonVariant::Elevated, {0, 0}, "add"); }},
+        {"circularProgress", [] { md::circularProgress(0.4f, dp(24)); }},
+        {"progress", [] { md::progress(0.4f, dp(200)); }},
+        {"icon", [] { md::icon("star"); }},
+        {"divider", [] { md::divider(0.0f, 0.0f, dp(200)); }},
+        {"lineChart", [] { md::chart("##lines", series, {}); }},
+        {"barChart",
+         [] {
+             md::ChartOptions o;
+             o.bars = true;
+             md::chart("##bars", series, o);
+         }},
+    };
+}
+
+/// What drawing a widget added to its window's draw list.
+struct Drawn {
+    int vertices = 0;
+    int commands = 0;
+    ImVec2 size{}; ///< of the last item
+};
+
+} // namespace
+
+class WidgetCullingTest : public WidgetsTest {
+protected:
+    /// One frame with `draw` at (20, 20) in a 400 x 300 scrolling child window scrolled to `scroll`.
+    template <class F>
+    Drawn viewFrame(ImVec2 scroll, F&& draw) {
+        Drawn d;
+        frame([&] {
+            ImGui::SetNextWindowScroll(scroll);
+            ImGui::BeginChild("##view", {400.0f, 300.0f}, ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+            ImGui::SetCursorPos({20.0f, 20.0f});
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const int vertices = dl->VtxBuffer.Size, commands = dl->CmdBuffer.Size;
+            std::forward<F>(draw)();
+            d = {dl->VtxBuffer.Size - vertices, dl->CmdBuffer.Size - commands, ImGui::GetItemRectSize()};
+            ImGui::SetCursorPos({2000.0f, 2000.0f}); // room to scroll both ways
+            ImGui::Dummy({1.0f, 1.0f});
+            ImGui::EndChild();
+        });
+        return d;
+    }
+
+    /// Runs `frames` frames and returns the last one's.
+    template <class F>
+    Drawn viewFrames(ImVec2 scroll, int frames, F&& draw) {
+        Drawn d;
+        for (int i = 0; i < frames; ++i)
+            d = viewFrame(scroll, draw);
+        return d;
+    }
+};
+
+// A widget scrolled out of view, down or sideways, builds no geometry; scrolled back, it draws exactly as before.
+TEST_F(WidgetCullingTest, OutOfViewWidgetsBuildNoGeometry) {
+    for (const CulledWidget& w : culledWidgets()) {
+        const Drawn inView = viewFrames({0.0f, 0.0f}, 30, w.draw);
+        ASSERT_GT(inView.vertices, 0) << w.name;
+        for (const ImVec2 away : {ImVec2{0.0f, 1000.0f}, ImVec2{1000.0f, 0.0f}}) {
+            const Drawn out = viewFrames(away, 3, w.draw);
+            EXPECT_EQ(out.vertices, 0) << w.name << " scrolled by " << away.x << ", " << away.y;
+            EXPECT_EQ(out.commands, 0) << w.name << " scrolled by " << away.x << ", " << away.y;
+            const Drawn back = viewFrame({0.0f, 0.0f}, w.draw);
+            EXPECT_EQ(back.vertices, inView.vertices) << w.name << " back from " << away.x << ", " << away.y;
+        }
+    }
+}
+
+// A widget partly in view still draws: culling goes by the whole shape, not the item's corner.
+TEST_F(WidgetCullingTest, PartlyVisibleWidgetsDraw) {
+    for (const CulledWidget& w : culledWidgets()) {
+        const ImVec2 size = viewFrames({0.0f, 0.0f}, 30, w.draw).size;
+        // Scrolled so the view's edge cuts the widget in half.
+        const float cutY = 20.0f + std::floor(size.y * 0.5f), cutX = 20.0f + std::floor(size.x * 0.5f);
+        EXPECT_GT(viewFrames({0.0f, cutY}, 3, w.draw).vertices, 0) << w.name << " cut at the top";
+        EXPECT_GT(viewFrames({cutX, 0.0f}, 3, w.draw).vertices, 0) << w.name << " cut at the left";
+    }
+}
+
+// Animations run on out of view: a checkbox toggled while scrolled away comes back fully checked, drawn like one
+// that was checked in view all along.
+TEST_F(WidgetCullingTest, AnimationsContinueOutOfView) {
+    bool reference = true;
+    const Drawn checked = viewFrames({0.0f, 0.0f}, 60, [&] { md::checkbox("##reference", &reference); });
+    bool v = false;
+    const auto draw = [&] { md::checkbox("##check", &v); };
+    viewFrames({0.0f, 0.0f}, 30, draw);
+    v = true;
+    viewFrames({0.0f, 1000.0f}, 60, draw);
+    EXPECT_EQ(viewFrame({0.0f, 0.0f}, draw).vertices, checked.vertices);
+}
+
+// A widget takes a press on the very frame it scrolls back into view.
+TEST_F(WidgetCullingTest, InteractionWorksOnTheFrameAWidgetScrollsIn) {
+    bool v = false;
+    ImVec2 center{};
+    bool active = false;
+    const auto draw = [&] {
+        md::checkbox("##check", &v);
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        center = {(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f};
+        active = ImGui::IsItemActive();
+    };
+    viewFrames({0.0f, 0.0f}, 3, draw);
+    const ImVec2 target = center;
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(target.x, target.y);
+    viewFrames({0.0f, 1000.0f}, 3, draw);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    EXPECT_GT(viewFrame({0.0f, 0.0f}, draw).vertices, 0);
+    EXPECT_TRUE(active) << "pressed on the frame it scrolled in";
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    viewFrame({0.0f, 0.0f}, draw);
+    EXPECT_TRUE(v) << "clicked";
+}

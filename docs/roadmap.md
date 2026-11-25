@@ -10,10 +10,15 @@ Follow-ups not scheduled yet:
 - **Run `tidy` (and the sanitizer preset) in CI**, and extend the naming check to `tests/`.
 - The default test presets skip the slow `package` tests; label the GL smoke tests so CI can skip them.
 - Lua language-server definitions (`---@meta`) generated from the type registry.
-- `ListView` virtualization (skip off-screen delegates).
-- Per-child cost in big containers: `Frame::Child` rebuilds each child and looks up its type string on every pass,
-  and `Frame::forEachChild` reads `visible` twice (the children cache made `Row { Repeater { model = 2000 } }`
-  only ~10 % faster).
+- Per-child cost in big containers: `Frame::Child` is built up to three times per child in a `Row`, and
+  `Node::type()` (a `std::string`) plus a map lookup runs 2–3 times per element per frame; answer the kind from the
+  `__native` box (`renderer.cppm`, `frame.cppm`, `registry.cppm`).
+- The Lua call path: read `bind(t, k)` without a pcall when `t` has no metatable or a plain `__index` table; push a
+  delegate's scope from C++ instead of Lua `inScope`; reuse the `__children` cache entry instead of a new table.
+- First frame of a big stack: every child renders once to learn its size before culling applies (controls at 5000:
+  ~430 ms). Estimate unknown sizes from settled siblings, as `ListView` does.
+- `ListView`: a `positionViewAtIndex` method (a script can't scroll to an item that isn't built), and a prop for the
+  delegate cache size.
 - `font_check` assumes glyphs up to ~128 px; `fontScale` is capped at 4, but zoom × DPI can still exceed it: cap the
   final pixel size.
 - A file reached through a linked folder is readable but not listed, so hot reload sees it only once loaded.

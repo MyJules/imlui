@@ -335,7 +335,12 @@ Row { spacing = 8,
 A scrolling `Repeater`: a `ScrollView` whose children come from `model`/`delegate`. It isn't inline. Without
 `delegate`, its array children are used. Its delegates get `ids` like a `Repeater`'s, and the `ListView` is
 their `parent`. It takes all `ScrollView` props (`height`, `width`, `padding`, `color`,
-`rounding`, `border`, `spacing`, `align`).
+`rounding`, `border`, `spacing`, `align`), and `itemHeight` (dp) for items that are all the same height.
+
+A `ListView` is **virtualized**: it builds and renders only the delegates of the items in view and a margin around
+it, so a model of a hundred thousand items costs about what the dozen on screen do. A delegate is built when its
+item first comes near the view (its ids, timers and other side effects start then), and kept while the cache holds
+it; see [ListView](elements.md#listview) for the cache, the item heights and what navigation reaches.
 
 ```lua
 ListView { height = 240, model = function() return todo.items end,
@@ -566,6 +571,8 @@ Script errors are logged at error level automatically.
 | `quit()` | Ends the frame loop and exits. |
 | `reload()` | Reloads the script before the next frame (like saving a file). |
 | `setTitle(title)` | Sets the native window title, unless the `ApplicationWindow` has a `title` prop. See the note below. |
+| `setCulling(on)` | Turns [culling](architecture.md#culling) on or off for every container (on by default, and again after a reload). Off, every child renders every frame, also those scrolled out of view: for debugging and comparison. A single container takes `cull = false`. |
+| `culling() -> bool` | Whether culling is on. |
 | `textSize(text, style?, font?) -> w, h` | Size of `text` (a string or number; anything else raises an error) in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`), in a [named font](theming.md#fonts) when `font` is given. Uses the fonts in effect: right after `theme{}` the old ones until the next frame. |
 
 > **Note.** The native title comes from, in order: the root `ApplicationWindow`'s `title` prop (re-read every
@@ -595,6 +602,8 @@ it. The ones not wrapped are marked **native only**.
 | `native.zoom() -> number` | Backs `zoom()`. |
 | `native.setZoom(z)` | Backs `setZoom()`. |
 | `native.setZoomShortcuts(on)` | Backs `setZoomShortcuts()`. |
+| `native.setCulling(on)` | Backs `setCulling()`. |
+| `native.culling() -> bool` | Backs `culling()`. |
 | `native.windowSize() -> w, h` | Backs `windowSize()`. |
 | `native.sizeClass() -> name` | Backs `sizeClass()`. |
 | `native.sizeClassFor(w) -> name` | Backs `sizeClassFor()`. |
