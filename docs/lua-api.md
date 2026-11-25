@@ -461,7 +461,8 @@ These take [color specs](theming.md#color-specs) (role, `role/alpha`, hex, `{r,g
 Frames are **rendered on demand** (see [Architecture](architecture.md#frame-loop)): after input, while an animation
 or indeterminate indicator is moving, when a timer comes due, and when a script asks for one. When nothing changes,
 the app sleeps. Timers run at the start of a frame, and the engine wakes up for the next one, so an interval keeps
-its rate even with no input. Callbacks may add or clear timers. A callback that raises an error is reported
+its rate even with no input. Timers due in the same frame run in the order they came due (then the order they
+were set). Callbacks may add or clear timers. A callback that raises an error is reported
 (with a traceback) in the error overlay; the other timers and callbacks of that frame still run.
 
 | Function | Description |

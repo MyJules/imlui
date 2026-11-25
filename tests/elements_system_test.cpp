@@ -303,6 +303,28 @@ TEST_F(SystemTest, LuaTimersRequestTheirFrame) {
     EXPECT_EQ(secondsUntilFrame(), 0.0);
 }
 
+// Timers due in the same frame fire in the order they came due, then in the order they were set, whatever order
+// the timers table iterates in.
+TEST_F(SystemTest, TimersDueInOneFrameFireInDueOrder) {
+    run(R"(
+        order = {}
+        -- Many, so the table's hash part is in play; set in an order that isn't their due order.
+        for i = 1, 40 do
+            local ms = ((i * 17) % 40) -- 0..39 ms, all distinct
+            ui.setTimeout(function() order[#order + 1] = ms end, ms)
+        end
+        ui.setTimeout(function() order[#order + 1] = "a" end, 50)
+        ui.setTimeout(function() order[#order + 1] = "b" end, 50)
+        ui.setTimeout(function() order[#order + 1] = "c" end, 50)
+        root = Column { })");
+    m_h.renderFrame("root"); // 62.5 ms: all due
+    ASSERT_EQ(number("#order"), 43);
+    EXPECT_EQ(m_h.run(R"(
+        for i = 1, 40 do assert(order[i] == i - 1, "position " .. i .. ": " .. tostring(order[i])) end
+        assert(order[41] == "a" and order[42] == "b" and order[43] == "c"))"),
+              "");
+}
+
 // clearTimer with no timer (an optional handle that was never set) does nothing.
 TEST_F(SystemTest, ClearTimerIgnoresNil) {
     run(R"(

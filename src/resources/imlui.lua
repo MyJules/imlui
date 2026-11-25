@@ -775,6 +775,15 @@ function ui.__tick(now)
     for id, t in pairs(timers) do
         if now >= t.due then due[#due + 1] = id end
     end
+    -- In the order they came due (then the order they were set), not pairs' order: a timeout of 10 ms and one of 20 ms
+    -- that both come due in one frame fire in that order.
+    if #due > 1 then
+        table.sort(due, function(a, b)
+            local da, db = timers[a].due, timers[b].due
+            if da ~= db then return da < db end
+            return a < b
+        end)
+    end
     for _, id in ipairs(due) do
         local t = timers[id]
         if t then
