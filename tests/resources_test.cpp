@@ -376,6 +376,25 @@ TEST(DirectoryMount, NamesAreCaseSensitive) {
     EXPECT_FALSE(mount.read("Sub/new.txt"));
 }
 
+// A file added within the same tick of its folder's time leaves that time unchanged: a miss in the cached listing
+// lists the folder again (the file used to stay missing until something else changed the folder).
+TEST(DirectoryMount, FindsAFileAddedWithoutChangingTheFolderTime) {
+    test::TempDir dir;
+    dir.write("ui/a.lua", "a");
+    DirectoryMount mount{dir.path()};
+    const std::filesystem::path folder = dir.path() / "ui";
+    const auto time = std::filesystem::last_write_time(folder);
+    EXPECT_FALSE(mount.exists("ui/b.lua")); // lists the folder
+    dir.write("ui/b.lua", "b");
+    std::error_code ec;
+    std::filesystem::last_write_time(folder, time, ec); // as if in the same tick
+    if (ec || std::filesystem::last_write_time(folder) != time)
+        GTEST_SKIP() << "can't set a folder's time here: " << ec.message();
+    EXPECT_TRUE(mount.exists("ui/b.lua"));
+    EXPECT_EQ(text(mount.read("ui/b.lua")), "b");
+    EXPECT_FALSE(mount.exists("ui/c.lua"));
+}
+
 // One entry that can't be queried (a link to nothing) doesn't end the listing of a folder.
 TEST(DirectoryMount, ListsPastAnEntryThatCantBeQueried) {
     test::TempDir dir;
