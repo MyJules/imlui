@@ -71,7 +71,6 @@ private:
 constexpr const char* mixedTree = R"(
     reads = 0
     scroll = state { y = -1 }
-    function named(name, e) _ENV[name] = e; return e end
     local function h(i) return function() reads = reads + 1; return 12 + (i % 5) * 7 end end
     local function item(i)
         local k = i % 4
@@ -92,7 +91,6 @@ constexpr const char* mixedTree = R"(
 constexpr const char* gridTree = R"(
     reads = 0
     scroll = state { y = -1 }
-    function named(name, e) _ENV[name] = e; return e end
     local function h(i) return function() reads = reads + 1; return 12 + (i * 13 % 9) * 5 end end
     root = ScrollView { id = "sv", height = 400,
         Scroller { id = "scroller", y = function() return scroll.y end },
