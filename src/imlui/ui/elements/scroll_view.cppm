@@ -24,7 +24,7 @@ export namespace imlui {
 ///
 /// Props:   padding = 0, color = unset (transparent), rounding = unset (theme shape.medium), border = false,
 ///          spacing = unset, align = "start"
-/// Raw:     width, height
+/// Raw:     width, height, cull (default true: children out of view are skipped, Renderer::skipOutOfView)
 class ScrollView final : public Element {
 public:
     static void declare(TypeBuilder<ScrollView>& type);

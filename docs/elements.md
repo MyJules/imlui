@@ -107,7 +107,10 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 | `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView` and `Card`; *raw* on the others. |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it; a fill-minus child (`width = -40`) is the stack's width less 40dp, and `align` places it in the stack (centered: 20dp on each side). |
 
-Non-visual children are rendered in place and don't count for the spacing.
+| `cull` | bool | `true` | *Raw.* `false` renders every child, also those out of view. By default a child out of view whose size is known is skipped and only its size is laid out (its bindings don't run); positions and the scroll range are the same either way. See [Culling](architecture.md#culling); `ui.setCulling(false)` turns it off everywhere. |
+
+Non-visual children are rendered in place and don't count for the spacing. Children that hold the item being edited
+or dragged, the keyboard focus, an open popup or a non-visual element (a `Dialog`, a `Timer`) are never culled.
 
 How `align` knows a child's width before drawing it: every built-in element whose size follows from its props, the
 font and the theme knows it up front (its *intrinsic size*: `Text`, `Icon`, `Button`, `Checkbox`, `Chip`,
@@ -324,6 +327,7 @@ non-visual children take no cell.
 | `spacing` | number | `8` | Gap between cells (dp). |
 | `border` | bool | `false` | Cell borders. |
 | `width` | size | `0` (fill) | *Raw.* |
+| `cull` | bool | `true` | *Raw.* `false` renders every cell; by default a cell out of view is skipped like a [stack's](#stacking-containers) child. |
 
 ### ScrollView
 

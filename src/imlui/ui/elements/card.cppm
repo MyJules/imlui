@@ -17,7 +17,7 @@ export namespace imlui {
 ///
 /// Props:   variant = "elevated" ("filled", "outlined"), padding = 16, color = unset (the variant's),
 ///          rounding = unset (shape.medium), spacing = unset, align = "start"
-/// Raw:     width, height
+/// Raw:     width, height, cull (default true: children out of view are skipped, Renderer::skipOutOfView)
 class Card final : public Element {
 public:
     static void declare(TypeBuilder<Card>& type);

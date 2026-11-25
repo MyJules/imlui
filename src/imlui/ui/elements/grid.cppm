@@ -16,10 +16,11 @@ import imlui.ui.layout_box;
 export namespace imlui {
 
 /// A table-based grid: the children fill `columns` equal-width cells per row. A hidden child keeps its empty
-/// cell; non-visual children take none. At most 511 columns (ImGui's limit); more are reported.
+/// cell; non-visual children take none. At most 511 columns (ImGui's limit); more are reported. Cells out of view
+/// are culled (Renderer::skipOutOfView) unless `cull = false`.
 ///
 /// Props:   columns = 2, spacing = 8, border = false
-/// Raw:     width
+/// Raw:     width, cull (default true)
 class Grid final : public Element {
 public:
     static void declare(TypeBuilder<Grid>& type);
@@ -66,10 +67,17 @@ void Grid::render(Frame& frame) {
     if (m_border) f |= ImGuiTableFlags_Borders;
     const float pad = frame.dp(m_spacing) * 0.5f;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {pad, pad});
-    if (ImGui::BeginTable("##grid", cols, f, {frame.resolvedWidth(), 0.0f})) {
+    const float width = frame.resolvedWidth();
+    Renderer& r = frame.renderer();
+    // Culled cells keep the sizes they had at the width they last rendered in (Renderer::sameWidthAsLastFrame).
+    const bool pins = r.cullsChildren(frame.node()); // pins are recorded also on a frame it doesn't cull
+    const bool cull = pins && r.sameWidthAsLastFrame(width);
+    if (ImGui::BeginTable("##grid", cols, f, {width, 0.0f})) {
         // Not frame.forEachChild(): that skips hidden children, and a hidden child keeps its (empty) cell here,
         // so the other cells don't move when it toggles. Non-visual children (timers, dialogs) take no cell.
-        Renderer& r = frame.renderer();
+        // A cell out of view (its child's cached size at the cell's cursor) takes that size and isn't rendered
+        // (Renderer::skipOutOfView): the row's height and the cells' positions stay the same. A hidden child is never
+        // culled, its cell stays empty.
         lua::State* state = frame.node().state();
         r.forEachChild(frame.node(), [&](int idx) {
             if (!r.isVisual(state, idx)) {
@@ -78,7 +86,14 @@ void Grid::render(Frame& frame) {
             }
             ImGui::TableNextColumn();
             const layout::BoxScope cell{layout::regionBox()}; // the cell is the child's box
-            r.render(state, idx);
+            if (!pins) {
+                r.render(state, idx);
+                return;
+            }
+            const luaui::Node c{state, idx};
+            if (!c.boolean("visible", true)) return;
+            const ImGuiID key = r.elementImGuiId(c);
+            if (!cull || !r.skipOutOfView(key, ImGui::GetCursorScreenPos())) r.renderPinning(state, idx, key);
         });
         ImGui::EndTable();
     }

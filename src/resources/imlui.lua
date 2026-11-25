@@ -873,6 +873,10 @@ ui.dpiScale = native.dpiScale               -- dpiScale() -> effective dp -> pix
 ui.contentScale = native.contentScale       -- contentScale() -> monitor content scale
 ui.setZoomShortcuts = native.setZoomShortcuts -- setZoomShortcuts(false) turns off Ctrl +/-/0/wheel
 
+-- Culling: containers skip the children out of view (only their cached size is laid out). On by default.
+ui.setCulling = native.setCulling           -- setCulling(false) renders every child, for debugging and comparison
+ui.culling = native.culling                 -- culling() -> whether it's on
+
 -- Window size (dp) and Material 3 window size classes.
 ui.windowSize = native.windowSize           -- windowSize() -> w, h of the window in dp (pixels / dpiScale())
 ui.sizeClass = native.sizeClass             -- sizeClass() -> "compact" | "medium" | "expanded" | "large" | "extraLarge"

@@ -21,6 +21,7 @@ import imlui.widgets;
 import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.ui.culling;
 import imlui.ui.layout_box;
 import imlui.ui.layout_cache;
 import imlui.ui.frame_request;
@@ -150,6 +151,22 @@ public:
     /// sizes (and ImGui's whole-pixel line advance); {0, 0} without visual children. nullopt when a child has none,
     /// or when an aligned stack is in an auto-sized window (it aligns in the widest child of the last frame).
     [[nodiscard]] std::optional<ImVec2> stackSize(const luaui::Node& node, float maxWidth);
+
+    /// Whether the children of `node` that are out of view are skipped (imlui.ui.culling): culling is on
+    /// (ui.setCulling) and `node`'s `cull` prop isn't false. renderStack() and Grid cull.
+    [[nodiscard]] bool cullsChildren(const luaui::Node& node) const;
+    /// Culls a visible visual child, `key` its elementImGuiId(): when it isn't pinned (cull::pinned) and its size in
+    /// the layout cache puts it out of view at `at` (its x moved right by `(alignIn - width) * align` for a stack's
+    /// `align`), advances the cursor past it with a Dummy of that size there, as its group would, and returns that
+    /// size. Else (no cached size yet, pinned, in view) returns nullopt and changes nothing. The cached size is only
+    /// read (kept from decaying), never re-recorded or compared, so a culled child asks for no settle frames.
+    std::optional<ImVec2> skipOutOfView(ImGuiID key, ImVec2 at, float alignIn = 0.0f, float align = 0.0f);
+    /// render() of the child at `idx` (`key` its elementImGuiId()), pinning it for the next frame (cull::pin) when its
+    /// render held the active item, the nav focus, an open popup or a non-visual element.
+    bool renderPinning(lua::State* state, int idx, ImGuiID key);
+    /// Whether `width`, a container's width for its children, is the one it had on the last frame (kept in the
+    /// layout cache under "##imlui.cullWidth" in the current ID scope): culled children's sizes hold only at it.
+    bool sameWidthAsLastFrame(float width);
 
     /// Pops up `node.menu` (a Menu element) anchored to the last item when
     /// `clicked`; renders it while open.
@@ -290,7 +307,10 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
     // Every visual element is exactly one layout item (a group), so
     // composite elements (label + field, ...) behave inside Rows.
     const bool visual = kind == Types::Kind::Visual;
-    if (visual) ImGui::BeginGroup();
+    if (visual)
+        ImGui::BeginGroup();
+    else
+        cull::noteNonVisual(); // it has no rect in the flow: its ancestors must not be culled
     m_types.renderElement(*this, n);
     if (visual) {
         ImGui::EndGroup();
@@ -413,6 +433,11 @@ float Renderer::renderStack(const Node& node) {
         layout::assumeWidth(widestKey, last);
         avail = std::max(avail, last);
     }
+    // Culled children keep the sizes they had at the width they last rendered in: on a frame the stack's width
+    // changed (a window resize), every child renders, and those whose size changed with it until they settle.
+    // Pins are recorded whenever the stack may cull (`pins`), also on such a frame, for the next.
+    const bool pins = cullsChildren(node);
+    const bool cull = pins && sameWidthAsLastFrame(boxAvail);
     bool first = true;
     forEachChild(node, [&](int idx) {
         if (!isVisual(state, idx)) {
@@ -430,6 +455,16 @@ float Renderer::renderStack(const Node& node) {
         // whole-pixel indent, which would put the children after the first a fraction of a pixel left of it in a
         // stack that starts at a fractional x (after a Text in a Row), and their sizes would no longer compose.
         ImGui::SetCursorScreenPos({x0, ImGui::GetCursorScreenPos().y});
+        const ImGuiID key = pins || align > 0.0f ? elementImGuiId(c) : 0;
+        if (cull) {
+            // Out of view: only its size from the layout cache, placed where `align` would place it.
+            if (const auto size = skipOutOfView(key, ImGui::GetCursorScreenPos(), avail, align)) {
+                if (align > 0.0f) widest = std::max(widest, size->x);
+                right = std::max(right, ImGui::GetItemRectMax().x);
+                first = false;
+                return;
+            }
+        }
         if (align > 0.0f) {
             const float width = sizeProp(c, "width");
             if (width != 0.0f ? width < 0.0f : fillsWidth(state, idx)) {
@@ -443,7 +478,6 @@ float Renderer::renderStack(const Node& node) {
             } else {
                 // Placed by its intrinsic width, else by its width on the last frame; render() records the one it
                 // takes (another frame if it differs). On its first frame without either, it renders unseen.
-                const ImGuiID key = elementImGuiId(c);
                 std::optional<float> w;
                 if (const auto intrinsic = intrinsicSize(c, avail))
                     w = intrinsic->x;
@@ -456,6 +490,7 @@ float Renderer::renderStack(const Node& node) {
             }
         }
         bool rendered = false;
+        const cull::Watch watch = pins ? cull::watch() : cull::Watch{};
         if (unseen) {
             rendered = renderUnseen(state, idx);
         } else if (fillOffset > 0.0f) {
@@ -464,6 +499,7 @@ float Renderer::renderStack(const Node& node) {
         } else {
             rendered = renderShown(state, idx);
         }
+        if (pins && rendered && cull::held(watch)) cull::pin(key);
         if (rendered) {
             if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
             right = std::max(right, ImGui::GetItemRectMax().x);
@@ -476,6 +512,34 @@ float Renderer::renderStack(const Node& node) {
     });
     if (fit) layout::recordSize(widestKey, {widest, 0.0f});
     return right;
+}
+
+bool Renderer::cullsChildren(const Node& node) const { return cull::enabled() && node.boolean("cull", true); }
+
+bool Renderer::sameWidthAsLastFrame(float width) {
+    const ImGuiID key = ImGui::GetID("##imlui.cullWidth");
+    const std::optional<ImVec2> last = layout::lastSize(key);
+    layout::recordSize(key, {width, 0.0f});
+    return last && std::fabs(last->x - width) <= 0.5f;
+}
+
+std::optional<ImVec2> Renderer::skipOutOfView(ImGuiID key, ImVec2 at, float alignIn, float align) {
+    if (cull::pinned(key)) return std::nullopt;
+    const std::optional<ImVec2> size = layout::settledSize(key); // also keeps the entry from being dropped
+    if (!size) return std::nullopt;
+    if (align > 0.0f) at.x += std::max(0.0f, (alignIn - size->x) * align);
+    if (!cull::outOfView(at, {at.x + size->x, at.y + size->y})) return std::nullopt;
+    // What its group would take: ImGui's EndGroup and Dummy both lay out an item of this size from here.
+    ImGui::SetCursorScreenPos(at);
+    ImGui::Dummy(*size);
+    return size;
+}
+
+bool Renderer::renderPinning(lua::State* state, int idx, ImGuiID key) {
+    const cull::Watch watch = cull::watch();
+    const bool rendered = render(state, idx);
+    if (rendered && cull::held(watch)) cull::pin(key);
+    return rendered;
 }
 
 std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
