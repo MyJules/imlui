@@ -552,7 +552,7 @@ results, and signal arguments. Built in:
 |---|---|---|
 | `bool` | any | Lua truthiness: only `nil` and `false` are false. |
 | integral types | number | Numeric strings convert. Floats truncate toward zero; out-of-range values clamp. |
-| `float`, `double` | number | Numeric strings convert. |
+| `float`, `double` | number | Numeric strings convert. A `float` reads NaN as 0 and clamps finite values beyond its range; infinities stay. |
 | `std::string` | string | Numbers convert (`7` reads as `"7"`). |
 | `std::string_view`, `const char*` | string | Push only (results, signal arguments, read-only properties). |
 | `imlui::Color` | color spec | Reads a role name, `"role/alpha"`, hex or `{r, g, b, a}`, like every color prop. Pushes `"#RRGGBB[AA]"`. |

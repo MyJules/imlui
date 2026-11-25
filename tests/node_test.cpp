@@ -1,6 +1,8 @@
 // Tests for imlui.lua.node: reading and writing element properties from C++.
 #include <gtest/gtest.h>
 
+import std;
+
 import lua;
 import imlui.color;
 import imlui.lua.errors;
@@ -189,6 +191,21 @@ TEST_F(NodeTest, StringsAndFloats) {
     EXPECT_EQ(n.strings("bound"), (std::vector<std::string>{"x", "y"}));
     EXPECT_TRUE(n.strings("notTable").empty());
     EXPECT_TRUE(n.floats("missing").empty());
+    expectBalanced();
+}
+
+// Numbers are narrowed to float safely: out-of-range values clamp, NaN reads as 0, infinities stay.
+TEST_F(NodeTest, FloatsAreNarrowedSafely) {
+    Node n = element(R"(
+        return { big = 1e300, small = -1e300, nan = 0/0, inf = math.huge, data = { 1e300, 0/0, -math.huge } })");
+    constexpr float max = std::numeric_limits<float>::max();
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    EXPECT_EQ(n.numf("big", 1), max);
+    EXPECT_EQ(n.numf("small", 1), -max);
+    EXPECT_EQ(n.numf("nan", 1), 0.0f);
+    EXPECT_EQ(n.numf("inf", 1), inf);
+    EXPECT_EQ(n.floats("data"), (std::vector<float>{max, 0.0f, -inf}));
+    EXPECT_EQ(luaui::toFloat(1e39), max);
     expectBalanced();
 }
 

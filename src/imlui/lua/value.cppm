@@ -15,6 +15,10 @@ void pushValue(lua::State* state, const Value& v);
 /// Is the value at `idx` a binding object created by ui.bind()? Read raw: a table's __index doesn't run.
 [[nodiscard]] bool isBind(lua::State* state, int idx);
 
+/// A Lua number narrowed to float, safely: NaN reads as 0 (like an integer property), a finite value beyond float's
+/// range clamps to its largest finite value (casting it is undefined behaviour), and an infinity stays one.
+[[nodiscard]] float toFloat(double v);
+
 } // namespace imlui::luaui
 
 module :private;
@@ -37,6 +41,13 @@ void pushValue(lua::State* state, const Value& v) {
     } else {
         lua::pushnil(state);
     }
+}
+
+float toFloat(double v) {
+    if (std::isnan(v)) return 0.0f;
+    if (std::isinf(v)) return v > 0 ? std::numeric_limits<float>::infinity() : -std::numeric_limits<float>::infinity();
+    constexpr auto max = static_cast<double>(std::numeric_limits<float>::max());
+    return static_cast<float>(std::clamp(v, -max, max));
 }
 
 bool isBind(lua::State* state, int idx) {

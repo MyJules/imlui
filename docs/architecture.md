@@ -827,7 +827,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `protectedCall` (C++ code that uses the Lua API outside any Lua call, run protected), `raiseException`, `toDisplayString` (protected `tostring`) |
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
-| `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
+| `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind`, `toFloat` (a Lua number narrowed safely) |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |

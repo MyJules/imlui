@@ -299,6 +299,28 @@ TEST(LuaConvertTest, ChecksAndCoerces) {
     lua::close(s);
 }
 
+// Narrowing to float is checked: out-of-range numbers clamp (the cast is undefined behaviour), NaN reads as 0 like an
+// integer's, infinities stay.
+TEST(LuaConvertTest, FloatsAreNarrowedSafely) {
+    lua::State* s = lua::newstate();
+    constexpr float max = std::numeric_limits<float>::max();
+    const auto get = [&](double v) {
+        lua::pushnumber(s, v);
+        const float f = LuaConvert<float>::get(s, -1);
+        lua::pop(s);
+        return f;
+    };
+    EXPECT_EQ(get(1e300), max);
+    EXPECT_EQ(get(-1e300), -max);
+    EXPECT_EQ(get(std::numeric_limits<double>::quiet_NaN()), 0.0f);
+    EXPECT_EQ(get(std::numeric_limits<double>::infinity()), std::numeric_limits<float>::infinity());
+    EXPECT_EQ(get(-std::numeric_limits<double>::infinity()), -std::numeric_limits<float>::infinity());
+    EXPECT_EQ(get(0.5), 0.5f);
+    lua::pushnumber(s, std::numeric_limits<double>::quiet_NaN());
+    EXPECT_EQ(LuaConvert<int>::get(s, -1), 0); // the integral conversion's NaN, for comparison
+    lua::close(s);
+}
+
 // ------------------------------------------------------------------ construction & methods
 
 TEST_F(TypesTest, ConstructorCreatesTheInstanceImmediately) {

@@ -173,7 +173,7 @@ std::optional<double> Node::number(const char* key) const {
 }
 
 double Node::number(const char* key, double def) const { return number(key).value_or(def); }
-float Node::numf(const char* key, float def) const { return static_cast<float>(number(key, static_cast<double>(def))); }
+float Node::numf(const char* key, float def) const { return toFloat(number(key, static_cast<double>(def))); }
 
 bool Node::boolean(const char* key, bool def) const {
     lua::Type t = push(key);
@@ -234,7 +234,7 @@ std::vector<float> Node::floats(const char* key) const {
         out.reserve(static_cast<std::size_t>(n));
         for (lua::Integer i = 1; i <= n; ++i) {
             lua::rawgeti(m_state, -1, i);
-            out.push_back(static_cast<float>(lua::tonumber(m_state, -1)));
+            out.push_back(toFloat(lua::tonumber(m_state, -1)));
             lua::pop(m_state);
         }
     }
@@ -298,7 +298,7 @@ std::optional<Color> Node::colorFromTable(lua::State* state, int idx) {
     for (int i = 0; i < 4; ++i) {
         lua::rawgeti(state, idx, i + 1);
         const bool number = lua::isnumber(state, -1);
-        if (number) c[i] = static_cast<float>(lua::tonumber(state, -1));
+        if (number) c[i] = toFloat(lua::tonumber(state, -1));
         lua::pop(state);
         if (!number && i < 3) return std::nullopt; // r, g and b are required; alpha defaults to 1
     }

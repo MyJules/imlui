@@ -170,6 +170,17 @@ constexpr double caretBlinkSeconds = 0.1;
 /// While minimized, the loop wakes at most this often.
 constexpr double minimizedSeconds = 0.1;
 
+/// The largest root window width or height, in dp: ui.setWindowSize's limit, bigger than any screen and far from
+/// overflowing an int once scaled to pixels.
+constexpr double maxWindowExtent = 100000.0;
+
+/// A root window width/height from the script as a whole number of dp: 0 (no size) unless finite and positive,
+/// at most maxWindowExtent.
+int windowExtent(double v) {
+    if (!std::isfinite(v) || v <= 0.0) return 0;
+    return static_cast<int>(std::min(v, maxWindowExtent));
+}
+
 void closeState(lua::State* state) {
     if (state) lua::close(state);
 }
@@ -556,8 +567,9 @@ void Engine::applyRootWindowProps(lua::State* state, int rootRef) {
         height = n.number("height", 0);
         title = n.string("title", "");
     });
-    // Size is re-applied on hot reload only when the script changed it.
-    const int w = static_cast<int>(width), h = static_cast<int>(height);
+    // Size is re-applied on hot reload only when the script changed it. A script's size may be anything (math.huge,
+    // NaN, 1e12): checked before the cast to int, which is undefined behaviour out of int's range.
+    const int w = windowExtent(width), h = windowExtent(height);
     if (w > 0 && h > 0 && (w != m_appliedWidth || h != m_appliedHeight)) {
         m_appliedWidth = w;
         m_appliedHeight = h;
