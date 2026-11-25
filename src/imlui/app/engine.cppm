@@ -170,6 +170,9 @@ constexpr double fileCheckSeconds = 0.4;
 constexpr double caretBlinkSeconds = 0.1;
 /// While minimized, the loop wakes at most this often.
 constexpr double minimizedSeconds = 0.1;
+/// With vsync off, the most frames per second the loop renders (vsync paces it otherwise): an animation asks for a
+/// frame every frame, and nothing else would stop it from rendering as fast as the CPU and GPU go.
+constexpr double maxUnsyncedFrameRate = 240.0;
 
 /// The largest root window width or height, in dp: ui.setWindowSize's limit, bigger than any screen and far from
 /// overflowing an int once scaled to pixels.
@@ -256,6 +259,7 @@ int Engine::run() {
     // On-demand rendering: sleep in waitEvents() until input arrives or the next
     // requested frame, Lua timer or file check is due, and render only then.
     setFrameWakeHandler([] { platform::Window::postEmptyEvent(); });
+    setMinFrameInterval(wc.vsync ? 0.0 : 1.0 / maxUnsyncedFrameRate);
     requestFramesFor(settleSeconds);
     // From here on a post() from any thread wakes the loop. Functions posted before run() are run below, first.
     setPostWakeHandler([] { platform::Window::postEmptyEvent(); });
@@ -283,6 +287,7 @@ int Engine::run() {
     clearPosted();          // still queued: dropped (they may refer to the Lua state closed below)
     setFrameWakeHandler({});
     clearFrameRequests();
+    setMinFrameInterval(0.0);
     log::info("shutting down");
     closeState(m_state);
     m_state = nullptr;

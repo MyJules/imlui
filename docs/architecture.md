@@ -60,7 +60,11 @@ flowchart TD
 `requestFrameAfter(seconds)` and `requestFramesFor(seconds)` (continuously, the settle period).
 `secondsUntilFrame()` tells the loop when the next frame is due. At the start of a frame,
 `beginFrameRequests()` drops the requests that frame serves, so anything that still needs frames asks again while
-it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`.
+it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`. With vsync on,
+presenting a frame waits for the display, which paces an animation that asks for a frame every frame; with
+`vsync = false` (`platform::Window::Config`) the engine sets a minimum frame interval instead
+(`setMinFrameInterval`, at most 240 frames per second), so `secondsUntilFrame()` never reports a frame due sooner
+than that after the last one began.
 
 All of it runs on one monotonic **app clock**, `clockTime()` in `imlui.ui.clock` (a steady clock): the frame
 requests, `ui.time()` (`native.time`), the `now` that `ui.__tick` passes to the Lua timers and to ticking elements
@@ -889,7 +893,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | Module | Purpose |
 |---|---|
 | `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
-| `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, wake handler |
+| `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, wake handler |
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs) |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
