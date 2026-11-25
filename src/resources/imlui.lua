@@ -738,7 +738,10 @@ function ui.setInterval(fn, ms)
     end
     return addTimer(fn, ms, true)
 end
-function ui.clearTimer(id) timers[id] = nil end
+--- Stops a timer. An id that isn't one (nil, from a timer that was never set) is ignored.
+function ui.clearTimer(id)
+    if id ~= nil and id == id then timers[id] = nil end -- nil or NaN can't index a table
+end
 
 local frameCallbacks = {}
 --- Calls fn(time) at the start of every rendered frame. Frames are rendered on

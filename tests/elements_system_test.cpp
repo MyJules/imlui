@@ -303,6 +303,19 @@ TEST_F(SystemTest, LuaTimersRequestTheirFrame) {
     EXPECT_EQ(secondsUntilFrame(), 0.0);
 }
 
+// clearTimer with no timer (an optional handle that was never set) does nothing.
+TEST_F(SystemTest, ClearTimerIgnoresNil) {
+    run(R"(
+        n = 0
+        local id = ui.setTimeout(function() n = n + 1 end, 0)
+        ui.clearTimer(nil)
+        ui.clearTimer()
+        ui.clearTimer(0 / 0)
+        root = Column { })");
+    m_h.renderFrame("root");
+    EXPECT_EQ(number("n"), 1);
+}
+
 // A timeout set between frames after an idle period counts from now (the app clock), not from the last frame's
 // time: it doesn't fire on the next frame.
 TEST_F(SystemTest, ATimeoutSetAfterAnIdlePeriodCountsFromNow) {
