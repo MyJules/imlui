@@ -56,6 +56,10 @@ inline constexpr float maxStyleValue = 10000.0f;
 /// The theme currently in effect.
 [[nodiscard]] const Theme& theme();
 
+/// A count that moves every time the theme in effect changes (applyPendingTheme()). What depends on the theme beyond
+/// the frame it was computed on (a color role resolved by a property sync) compares it.
+[[nodiscard]] std::uint64_t themeGeneration();
+
 /// Schedules `t` to become the theme at the start of the next frame
 /// (safe to call from inside a frame, e.g. from a Lua click handler). Values out of range are brought into it:
 /// `fontScale` is clamped (not finite: 1), `spacing` and `shape` radii too (not finite: the default), and style
@@ -95,6 +99,7 @@ namespace {
 
 Theme currentTheme{};
 std::optional<Theme> pendingTheme{};
+std::uint64_t generation = 0; ///< themeGeneration()
 
 using FloatField = float ImGuiStyle::*;
 using VecField = ImVec2 ImGuiStyle::*;
@@ -276,6 +281,7 @@ void applyNow(const Theme& t) {
 } // namespace
 
 const Theme& theme() { return currentTheme; }
+std::uint64_t themeGeneration() { return generation; }
 
 void setTheme(Theme t) {
     const Theme defaults;
@@ -311,6 +317,7 @@ bool applyPendingTheme() {
     if (!pendingTheme) return false;
     currentTheme = std::move(*pendingTheme);
     pendingTheme.reset();
+    ++generation;
     applyNow(currentTheme);
     useFontSet(currentTheme.fonts);
     return true;
