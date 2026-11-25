@@ -61,6 +61,12 @@ public:
     /// `types` must outlive the renderer.
     explicit Renderer(Types& types);
 
+    /// The deepest an element tree nests: render(), intrinsicSize(), fillsWidth() and the inline containers
+    /// forEachChild() splices each count a level. A deeper tree is almost surely a cycle (`a[1] = b; b[1] = a`, a
+    /// Loader that shows its own ancestor), which would overflow the native stack: the levels past it are skipped
+    /// and reported as a script error.
+    static constexpr int maxDepth = 256;
+
     /// Native window title: the root ApplicationWindow's `title` prop, else the
     /// last ui.setTitle(), else "imlui".
     [[nodiscard]] const std::string& windowTitle() const;
@@ -93,7 +99,8 @@ public:
     template <class F>
     void forEachChild(const luaui::Node& node, F&& f) {
         lua::State* state = node.state();
-        if (!pushChildren(node)) return;
+        // Room for pushChildren() and a child: each inline container spliced in nests a level on the Lua stack.
+        if (!lua::checkstack(state, 16) || !pushChildren(node)) return;
         const int src = lua::gettop(state);
         const lua::Integer len = lua::rawlen(state, src);
         for (lua::Integer i = 1; i <= len; ++i) {
@@ -108,7 +115,8 @@ public:
                 lua::pop(state);
                 if (element && inl) {
                     luaui::Node c{state, lua::gettop(state)};
-                    if (c.boolean("visible", true)) forEachChild(c, f);
+                    const Nesting level{*this};
+                    if (level && c.boolean("visible", true)) forEachChild(c, f);
                 } else if (element) {
                     f(lua::gettop(state));
                 }
@@ -148,6 +156,26 @@ public:
     void attachMenu(const luaui::Node& node, bool clicked);
 
 private:
+    /// Counts a level of nesting while it lives; false past maxDepth (reportTooDeep()).
+    class Nesting {
+    public:
+        explicit Nesting(Renderer& renderer) : m_depth{renderer.m_depth}, m_ok{++m_depth <= maxDepth} {
+            if (!m_ok) reportTooDeep();
+        }
+        ~Nesting() { --m_depth; }
+        Nesting(const Nesting&) = delete;
+        Nesting& operator=(const Nesting&) = delete;
+        Nesting(Nesting&&) = delete;
+        Nesting& operator=(Nesting&&) = delete;
+        explicit operator bool() const { return m_ok; }
+
+    private:
+        int& m_depth;
+        bool m_ok;
+    };
+    /// Reports a tree nested deeper than maxDepth (luaui::reportError, which reports a message once).
+    static void reportTooDeep();
+
     /// Pushes the table that holds the children of `node`: the node itself, or what its `__children(self)` returned.
     /// That call (a read: the model function, the delegates it builds) runs once a frame per element while
     /// luaui::changes() stands still, so the passes of a layout (a Row's: which children fill, their sizes, the
@@ -163,6 +191,7 @@ private:
     Types& m_types;
     std::string m_title{"imlui"};
     ImageCache* m_images = nullptr;
+    int m_depth = 0; ///< levels of nesting entered (Nesting)
 };
 
 } // namespace imlui
@@ -243,7 +272,14 @@ bool Renderer::renderShown(lua::State* state, int idx) {
     return renderElement(n, kind);
 }
 
+void Renderer::reportTooDeep() {
+    luaui::reportError("element tree nested deeper than " + std::to_string(maxDepth) +
+                       " levels (does an element contain itself?); the deeper levels are skipped");
+}
+
 bool Renderer::renderElement(const Node& n, Types::Kind kind) {
+    const Nesting level{*this};
+    if (!level) return false;
     const std::uint64_t key = elementId(n);
     if (key == 0) return false; // no instance: its constructor threw, which was reported
     const ImGuiID id = ImGui::GetID(idKey(key));
@@ -336,9 +372,14 @@ bool Renderer::isVisual(lua::State* state, int idx) const {
     return m_types.kind(Node{state, idx}.type()) == Types::Kind::Visual;
 }
 
-bool Renderer::fillsWidth(lua::State* state, int idx) { return m_types.fillsWidth(*this, Node{state, idx}); }
+bool Renderer::fillsWidth(lua::State* state, int idx) {
+    const Nesting level{*this};
+    return level && m_types.fillsWidth(*this, Node{state, idx});
+}
 
 std::optional<ImVec2> Renderer::intrinsicSize(const Node& node, float maxWidth) {
+    const Nesting level{*this};
+    if (!level) return std::nullopt;
     return m_types.intrinsicSize(*this, node, maxWidth);
 }
 
@@ -426,6 +467,10 @@ float Renderer::renderStack(const Node& node) {
         if (rendered) {
             if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
             right = std::max(right, ImGui::GetItemRectMax().x);
+        } else {
+            // Not rendered after all (no instance, or past maxDepth): ImGui asserts when the cursor was moved past the
+            // content and no item follows, so end the move with an empty one.
+            ImGui::Dummy({0.0f, 0.0f});
         }
         first = false;
     });
