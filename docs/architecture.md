@@ -198,7 +198,11 @@ so the handler already sees the new state.
 
 - the array part of the table, or
 - the result of `self.__children(self)` if that function exists. The prelude sets it for `Repeater`, `ListView`,
-  `If`, `Loader` and `Responsive`.
+  `If`, `Loader` and `Responsive`. It runs (as a read, `safeRead`: the model function, the delegates it builds) once
+  a frame per element while `luaui::changes()` stands still: the renderer keeps the list it returned (a weak-keyed
+  table in the registry, stamped with the frame and the count), so a layout's passes over its children (a `Row`'s
+  three, the fill and size questions of its parent) share one call. Lua that may change tables (a handler) running
+  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them.
 
 Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
 own children are laid out as direct children of the parent. That's why a `Repeater` inside a `Row` flows

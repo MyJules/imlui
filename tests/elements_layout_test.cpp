@@ -1191,6 +1191,53 @@ TEST_F(LayoutTest, ARowSyncsEachChildOncePerFrame) {
     check("calls == 4");
 }
 
+// A container's children are resolved once a frame: a Repeater's model function ran for every pass (a Row's three,
+// its parent's fill and size questions). A handler that runs in between makes the next pass resolve them again, so it
+// sees the change on the same frame.
+TEST_F(LayoutTest, ChildrenAreResolvedOncePerFrame) {
+    run(R"(
+        calls, built = 0, 0
+        items = { "a", "b", "c" }
+        root = Column { align = "center",
+                        Row { Repeater { model = function() calls = calls + 1 return items end,
+                                         delegate = function() built = built + 1 return Probe { w = 5 } end } } })");
+    m_h.renderFrames("root", 3);
+    run("calls = 0");
+    m_h.renderFrame("root");
+    check("calls == 1");
+    run("calls = 0");
+    m_h.renderFrames("root", 4);
+    check("calls == 4 and built == 3");
+    run(R"(
+        calls = 0
+        added = false
+        mid = Row { Writer { onRender = function() if not added then added = true; items[#items + 1] = "d" end end },
+                    Repeater { model = function() calls = calls + 1 return items end,
+                               delegate = function() built = built + 1 return Probe { w = 5 } end } })");
+    m_h.renderFrame("mid");
+    check("calls == 2"); // the layout passes, then the render after the handler
+    check("built == 3 + 4");
+}
+
+// A numeric model is items 1..n, without a table of them: fractions round down, and NaN or less than 0 is none.
+TEST_F(LayoutTest, ANumericModelIsItsIndices) {
+    run(R"(
+        seen = {}
+        n = 3
+        root = Column { Repeater { model = function() return n end,
+                                   delegate = function(item, i) seen[#seen + 1] = item * 10 + i return Probe {} end } })");
+    m_h.renderFrame("root");
+    check("#seen == 3 and seen[1] == 11 and seen[3] == 33");
+    for (const char* count : {"2.7", "-1", "0 / 0", "0"}) {
+        run(std::string{"seen = {}; n = "} + count);
+        m_h.renderFrame("root");
+        run("count = #root[1].__list");
+        check(std::string{"count == "} + (count[0] == '2' ? "2" : "0"));
+        check("#seen == 0"); // nothing new built
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ... but Lua code that runs between a layout's questions and the render (a handler) may change the child: it is
 // synced again, so the change shows on the same frame.
 TEST_F(LayoutTest, AChangeMadeMidFrameIsSyncedBeforeTheChildRenders) {

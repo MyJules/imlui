@@ -429,6 +429,10 @@ local function buildDelegate(self, item, i, key)
     return c
 end
 
+-- Item `i` of a model table, and of a numeric model (no table: the item is the index).
+local function rawItem(model, i) return model[i] end
+local function numberItem(_, i) return i end
+
 -- The key of `item` at index `i` (the container's `key` function, in the scope the container was built in). A nil
 -- or NaN key can't index a table: the item itself is the key then.
 local function keyOf(self, keyFn, item, i)
@@ -443,12 +447,13 @@ end
 -- that returns fresh item tables every call doesn't rebuild them. In model order, `cache[i]` is the entry shown at
 -- index i; entries whose key went away are dropped.
 local function keyedChildren(self, model, n, keyFn, cache, list)
+    local at = model and rawItem or numberItem
     local oldN = #list
     local i = 1
     -- The common case first: the same keys at the same indices, no table to build.
     while i <= n do
         local c = cache[i]
-        local item = model[i]
+        local item = at(model, i)
         if c == nil or c.key ~= keyOf(self, keyFn, item, i) then break end
         c.item = item
         i = i + 1
@@ -467,7 +472,7 @@ local function keyedChildren(self, model, n, keyFn, cache, list)
         local reused = i - 1
         local taken = {}
         for j = i, n do
-            local item = model[j]
+            local item = at(model, j)
             local k = keyOf(self, keyFn, item, j)
             local c = byKey[k]
             if c ~= nil then
@@ -499,21 +504,24 @@ end
 --- its key is in the model (see keyedChildren).
 local function repeaterChildren(self)
     local model = resolve(self, self.model)
+    local n
     if type(model) == "number" then
-        local n = model
-        model = {}
-        for i = 1, n do model[i] = i end
+        -- Items 1..n, without a table of them.
+        n = model == model and math.max(0, math.floor(math.min(model, math.maxinteger))) or 0
+        model = nil
+    else
+        model = model or EMPTY
+        n = #model
     end
-    model = model or EMPTY
     local cache = self.__cache
     if not cache then cache = {}; self.__cache = cache end
     local list = self.__list
     if not list then list = {}; self.__list = list end
-    local n = #model
     local keyFn = rawget(self, "key")
     if type(keyFn) == "function" then return keyedChildren(self, model, n, keyFn, cache, list) end
     for i = 1, n do
-        local item = model[i]
+        local item
+        if model then item = model[i] else item = i end
         local c = cache[i]
         if not c or c.item ~= item or c.key ~= nil then
             if c then dropped() end
