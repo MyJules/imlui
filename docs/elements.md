@@ -863,9 +863,9 @@ A 44dp-tall Material slider. A value label appears above the handle while you dr
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number | `0` | **two-way.** Kept as a double end to end and written back only when the user moves the slider, so a bound `0.1` stays `0.1`. A stepped value is `from + k * stepSize` without binary noise (three steps of `0.1` are `0.3`); with an integral `stepSize` it is an integer. |
-| `from`, `to` | number | `0`, `1` | Range. |
-| `stepSize` | number | `0` | `0` means continuous. Tick marks are drawn when there are at most 40 steps. |
+| `value` | number | `0` | **two-way.** Kept as a double end to end and written back only when the user moves the slider, so a bound `0.1` stays `0.1`. A stepped value is `from + k * stepSize` without binary noise (three steps of `0.1` are `0.3`), at most the last whole step in the range (`to = 1, stepSize = 0.4` ends at `0.8`); with an integral `stepSize` it is an integer. |
+| `from`, `to` | number | `0`, `1` | Range. An empty range (`from >= to`) or one that isn't finite (an infinite or NaN bound, or bounds too far apart for a double) leaves the value alone. |
+| `stepSize` | number | `0` | `0` (or below, or not finite) means continuous. Tick marks are drawn when there are at most 40 steps. |
 | `format` | printf string | — | Value label. Unset: `"%.0f"` if `stepSize >= 1`, else `"%.2f"`. Exactly one `%f`, `%e` or `%g` conversion (flags, width and precision allowed), plus any `%%`. Anything else is reported once and replaced by `"%.2f"`. |
 | `width` | size | `0` (fill) | *Raw.* |
 
