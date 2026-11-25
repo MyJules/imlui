@@ -3,16 +3,24 @@
 // (PackedMount), and the mount is listed like Resources does. Nothing may crash, whatever the bytes.
 import std;
 
+import zstd;
 import imlui.log;
+import imlui.resources.packed_mount;
 import imlui.resources.pak_mount;
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size);
 
 namespace {
 
-/// Files that declare more than this aren't read: the format allows up to pakMaxFileSize (2 GiB), which is only slow
-/// to allocate, not wrong, and would trip the fuzzer's memory limit.
+/// Files that declare more than this are read only when the read is rejected before allocating: the format allows up
+/// to pakMaxFileSize (2 GiB), which is only slow to allocate, not wrong, and would trip the fuzzer's memory limit.
 constexpr std::uint64_t maxReadSize = std::uint64_t{16} << 20;
+
+/// Whether reading `entry` allocates its declared size: a stored file is served from the archive, and a compressed
+/// one whose frame declares another size is rejected first (PackedMount::read).
+bool allocates(const imlui::PackedMount::Entry& entry) {
+    return entry.compressed && zstd::contentSize(entry.data) == entry.size;
+}
 
 } // namespace
 
@@ -38,7 +46,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         for (std::size_t slash = entry.path.find('/'); slash != std::string::npos;
              slash = entry.path.find('/', slash + 1))
             folders.push_back(entry.path.substr(0, slash));
-        if (entry.size > maxReadSize) continue;
+        if (entry.size > maxReadSize && allocates(entry)) continue;
         // Twice: the second read of a compressed file comes from the cache.
         for (int i = 0; i < 2; ++i)
             if (const auto file = pak->read(entry.path); file && file->size() != entry.size) std::abort();

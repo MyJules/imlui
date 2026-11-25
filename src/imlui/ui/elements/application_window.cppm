@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.color;
+import imlui.image.image_cache;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -15,7 +16,9 @@ export namespace imlui {
 /// The root element: fills the native window without decoration and stacks its children. Non-visual.
 ///
 /// Props:   title = unset (the native window title, applied every frame while the prop exists),
-///          color = unset (surface), padding = 24, scrollable = true
+///          color = unset (surface), padding = 24, scrollable = true,
+///          imageCacheBudget = unset (bytes of decoded image pixels the image cache keeps, ImageCache::setBudget;
+///          0: no limit; applied every frame while the prop exists, else the cache's 256 MiB default stands)
 /// Raw:     menuBar (a MenuBar), spacing, align; width, height (the initial window size, read by the engine)
 ///
 /// Without a `title` prop, the last ui.setTitle() (or "imlui") sticks.
@@ -34,12 +37,16 @@ public:
     void setPadding(float padding);
     [[nodiscard]] bool scrollable() const;
     void setScrollable(bool scrollable);
+    /// Bytes; 0: no limit. A negative value reads as 0.
+    [[nodiscard]] std::int64_t imageCacheBudget() const;
+    void setImageCacheBudget(std::int64_t bytes);
 
 private:
     std::string m_title{"imlui"};
     std::optional<Color> m_color;
     float m_padding = 24.0f;
     bool m_scrollable = true;
+    std::int64_t m_imageCacheBudget = static_cast<std::int64_t>(ImageCache::defaultBudget);
 };
 
 } // namespace imlui
@@ -53,12 +60,15 @@ void ApplicationWindow::declare(TypeBuilder<ApplicationWindow>& type) {
         .property("color", &ApplicationWindow::color, &ApplicationWindow::setColor)
         .property("padding", &ApplicationWindow::padding, &ApplicationWindow::setPadding)
         .property("scrollable", &ApplicationWindow::scrollable, &ApplicationWindow::setScrollable)
+        .property("imageCacheBudget", &ApplicationWindow::imageCacheBudget, &ApplicationWindow::setImageCacheBudget)
         .nonVisual();
 }
 
 void ApplicationWindow::render(Frame& frame) {
     // A `title` prop wins every frame; without one, ui.setTitle() (or the default) sticks.
     if (frame.node().has("title")) frame.setWindowTitle(m_title);
+    if (ImageCache* images = frame.images(); images && frame.node().has("imageCacheBudget"))
+        images->setBudget(static_cast<std::size_t>(m_imageCacheBudget));
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
@@ -90,5 +100,7 @@ float ApplicationWindow::padding() const { return m_padding; }
 void ApplicationWindow::setPadding(float padding) { m_padding = padding; }
 bool ApplicationWindow::scrollable() const { return m_scrollable; }
 void ApplicationWindow::setScrollable(bool scrollable) { m_scrollable = scrollable; }
+std::int64_t ApplicationWindow::imageCacheBudget() const { return m_imageCacheBudget; }
+void ApplicationWindow::setImageCacheBudget(std::int64_t bytes) { m_imageCacheBudget = std::max<std::int64_t>(bytes, 0); }
 
 } // namespace imlui

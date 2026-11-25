@@ -344,8 +344,9 @@ On this target:
 - ASan needs the release dynamic CRT, so the preset sets `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`. The code
   is still `-O0 -g`, but the STL's debug iterators are off in this preset, since they need `/MDd`. Use
   `clang-debug` for those.
-- The ASan runtime DLL (`clang_rt.asan_dynamic-x86_64.dll`) is copied to `build/clang-asan/bin` at configure
-  time, so the tests and the app run without changing `PATH`.
+- The ASan runtime DLL (`clang_rt.asan_dynamic-<arch>.dll`, for the architecture the compiler targets) is copied
+  to `build/clang-asan/bin` at configure time (to `bin/<config>/` for each configuration with a multi-config
+  generator), so the tests and the app run without changing `PATH`.
 - ASan is built without its stack-use-after-return instrumentation (`-fsanitize-address-use-after-return=never`,
   also a usage requirement): with it, throwing from a catch block (`throw;`, or a Lua error raised in a handler:
   Lua is compiled as C++) crashes with a bogus "stack-overflow". The check is off at run time by default anyway.
@@ -406,7 +407,7 @@ On this target:
   matched quickly), one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
-  base folder, a listed file spelled differently on disk, the sandbox and its instruction and memory limits, strings
+  base folder, a listed file or an `include` folder spelled differently on disk, the sandbox and its instruction and memory limits, strings
   that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), the scan and `collectFiles` past entries
 that can't be queried, linked files named by their own path, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
@@ -510,7 +511,7 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 | `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_RESOURCES_DIR` (`src/resources/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), or the library's embedded files with `.embedded = true`, and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. Frames don't apply a pending theme: call `applyPendingTheme()` between frames to apply one (it also switches the theme's fonts; see `fonts_test.cpp`), and set the default theme back at the end. |
 | `registerType<T>(name)`, `renderer()`, `types()` | Register element types before the Lua state starts; the renderer (window title) and the registry. |
 | `resources()`, `loadedResources()` | The harness's `Resources`: mount more (`app:/` on a `test::TempDir`) before the state starts. The names the Lua state read or loaded. |
-| `images()` | The harness's `ImageCache`, which `Image` elements draw from (decoding from `resources()`). Its textures stay `WantCreate`: there is no backend. Test images live in `tests/data/` (`IMLUI_TEST_DATA_DIR`): mount `app:/` on it, or copy one into a `TempDir` with `write`. |
+| `images()` | The harness's `ImageCache`, which `Image` elements draw from (decoding from `resources()`). Its textures stay `WantCreate`: there is no backend. `renderFrame` ends with its `collect()`, like the Engine, so the byte budget applies. Test images live in `tests/data/` (`IMLUI_TEST_DATA_DIR`): mount `app:/` on it, or copy one into a `TempDir` with `write`. |
 | `run(code) -> std::string` | Runs Lua in the UI script environment (`ui.env`: constructors, `state`, `bind`, ids, `ui`), starting the state on first use: the registered types, the real `imlui.native` with empty host hooks, the painter library, the resource loader and `imlui:/imlui.lua`. Returns the error message, `""` on success: `ASSERT_EQ(h.run("..."), "")`. Assignments to free names stay in the environment. |
 | `renderFrame(name)`, `renderFrames(name, n)` | One ImGui frame each (time advances by `deltaTime`): runs `ui.__tick` (timers, `onFrame`), then renders the element held by `name` in a full-display window, inside `luaui::renderProtected` like the engine (an escaped Lua error is reported and ImGui recovered). Events queued before (`native.injectKey`, `native.injectMouse`, `ImGui::GetIO()`) are seen. |
 | `click(root, x, y, framesAfter = 1)` | A left click at `(x, y)` (screen pixels) while rendering `root`: move, press and release through `native.injectMouse`, a frame after each, then `framesAfter - 1` more. Render one frame first on a fresh tree, so the window exists to be hovered. |
@@ -541,7 +542,7 @@ defining libFuzzer's `LLVMFuzzerTestOneInput`:
 
 | Target | Input | What it checks |
 |---|---|---|
-| `pak` | a `.pak` archive | `PakMount::fromBytes` (`parsePak`) accepts or rejects it with a reason; every file of an accepted archive reads back at its declared size (zstd decompression in `PackedMount`, files declaring more than 16 MiB skipped), and `exists`/`list` work on every folder. |
+| `pak` | a `.pak` archive | `PakMount::fromBytes` (`parsePak`) accepts or rejects it with a reason; every file of an accepted archive reads back at its declared size (zstd decompression in `PackedMount`, a file declaring more than 16 MiB is read only when that read is rejected before allocating: a compressed one whose zstd frame declares another size), and `exists`/`list` work on every folder. |
 | `font` | font data | A font `checkFont` accepts is read with stb_truetype the way ImGui reads it (`imlui.fuzz.truetype`, `tests/fuzz/support/`): `stbtt_GetFontOffsetForIndex`, `stbtt_InitFont`, the vertical metrics, `stbtt_FindGlyphIndex` for every code point an `ImWchar` holds (each must map to a glyph the font has), every glyph found but 0 (the glyphs `checkFont` checks, and all ImGui ever loads) with its box and horizontal metrics, the outline of each that ImGui rasterizes (`stbtt_GetGlyphShape`, up to 8192 glyphs), and a bitmap for up to 64 of the glyphs found, spread over the font, as ImGui's `FontBakedLoadGlyph` makes it (`stbtt_MakeGlyphBitmapSubpixelPrefilter` with 2x horizontal oversampling, at a size from 4 to 64px picked by the input's length; a bitmap size ImGui would `IM_ASSERT` on aborts), with `STBTT_assert` aborting (for CFF fonts the box runs the glyph's charstring). |
 | `manifest` | a resource manifest's Lua text | `evaluateManifest` (the sandbox, the instruction and memory limits) returns groups or an error; groups whose `base` stays inside the fixture `tests/fuzz/manifest_root/` are resolved against it (`resolveManifest`, `manifestListing`). |
 | `names` | two strings, split at the first newline | Resource names and glob patterns (`imlui.resources.name`, `imlui.resources.glob`): a normalized path or name is a fixed point, a parsed name round-trips through `full()` and has a folder, a resolved name is normalized, `globMatch` agrees with a backtracking reference matcher on inputs up to 12 characters and with plain comparison on patterns without wildcards, and `globRoot` is a prefix of a valid pattern. |

@@ -23,7 +23,8 @@ export namespace imlui {
 /// Paths are case-sensitive, like the embedded and .pak mounts, even on a file system that isn't (Windows, macOS):
 /// a path whose spelling on disk differs in case, in any of its segments, isn't found (with a warning naming the
 /// spelling on disk), so a misspelled name fails in development, not only once shipped. Each folder's entry names
-/// are cached while its modification time is unchanged.
+/// are cached while its modification time is unchanged; a name missing from a listing read within 2 s of that time
+/// lists the folder again (an entry added in the same tick of the folder's time leaves the time as it was).
 ///
 /// A link to a folder (a symbolic link, a Windows junction or another reparse point) isn't listed or walked, as the
 /// manifest scan doesn't descend into one: a link to the folder itself or to a parent would make a walk endless. A
@@ -60,6 +61,7 @@ private:
     /// The entry names of one folder, as of its modification time.
     struct Folder {
         ResourceTime time;
+        ResourceTime listedAt; ///< when the names were read (the file system's clock)
         std::set<std::string, std::less<>> names;
     };
 
@@ -126,6 +128,10 @@ std::optional<std::string> utf8Name(const fs::path& p) {
         return std::nullopt;
     }
 }
+
+/// The coarsest file system time resolution there is (FAT's 2 s): a folder listing read this long after the
+/// folder's time holds every entry with that time.
+constexpr auto timeTick = std::chrono::seconds{2};
 
 bool equalIgnoringAsciiCase(std::string_view a, std::string_view b) {
     const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
@@ -212,14 +218,26 @@ bool DirectoryMount::spelledAsOnDisk(std::string_view path) const {
         const fs::path folderPath = folder.empty() ? m_root : m_root / pathFromUtf8(folder).value_or(fs::path{});
         const ResourceTime time = fs::last_write_time(folderPath, ec);
         if (ec) return false; // missing, or can't be checked: not found (a check that can't run doesn't pass)
-        auto it = m_folders.find(folder);
-        if (it == m_folders.end() || it->second.time != time) {
-            Folder listed{time, {}};
+        const auto list = [&] {
+            Folder listed{time, fs::file_time_type::clock::now(), {}};
             for (auto entry = fs::directory_iterator(folderPath, ec); !ec && entry != fs::directory_iterator();
                  entry.increment(ec))
                 if (auto name = utf8Name(entry->path().filename())) listed.names.insert(std::move(*name));
-            if (ec) return false;
-            it = m_folders.insert_or_assign(std::string{folder}, std::move(listed)).first;
+            return ec ? m_folders.end() : m_folders.insert_or_assign(std::string{folder}, std::move(listed)).first;
+        };
+        auto it = m_folders.find(folder);
+        bool fresh = false;
+        if (it == m_folders.end() || it->second.time != time) {
+            it = list();
+            if (it == m_folders.end()) return false;
+            fresh = true;
+        }
+        // An entry added within the same tick of the folder's time (coarse on some file systems) doesn't change
+        // it, so a miss in a kept listing that was read within a tick of that time lists the folder again. A
+        // listing read later is complete: anything added since has a later time.
+        if (!fresh && !it->second.names.contains(segment) && it->second.listedAt - it->second.time < timeTick) {
+            it = list();
+            if (it == m_folders.end()) return false;
         }
         const auto& names = it->second.names;
         if (!names.contains(segment)) {

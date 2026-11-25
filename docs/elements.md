@@ -180,6 +180,7 @@ The root element. It fills the native window, with no decoration, and stacks its
 | `padding` | number | `24` | Content padding. |
 | `color` | color | — | Background. Unset: the theme's window background (`surface`). |
 | `scrollable` | bool | `true` | `false` hides the scrollbar. |
+| `imageCacheBudget` | integer | — | Bytes of decoded image pixels (4 per pixel) the image cache keeps; `0`: no limit, a negative value reads as `0`. Applied every frame while the prop exists (so it can be a binding); without it the cache keeps its default, 256 MiB. Over the budget, the images drawn least recently are evicted after a frame (never one drawn in that frame or the one before) and decoded again when next drawn. |
 | `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem) at the top. |
 | `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 

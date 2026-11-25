@@ -460,7 +460,7 @@ read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer, and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing, and an entry whose name has no UTF-8 form (an unpaired surrogate on Windows) is left out while the rest of its folder is served. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged; a folder that can't be timed or listed fails the check, so nothing in it is found). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach. |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer, and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing, and an entry whose name has no UTF-8 form (an unpaired surrogate on Windows) is left out while the rest of its folder is served. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged, and a name missing from a listing read within 2 s of that time lists the folder again, since an entry added in the same tick leaves the time unchanged; a folder that can't be timed or listed fails the check, so nothing in it is found). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach. |
 | `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
 | `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
@@ -588,7 +588,13 @@ and no GL call is made outside the backend. A failure (missing file, not an imag
 `refresh()` drops changed images: a texture the backend has uploaded is marked `WantDestroyNextFrame`, the backend
 destroys it after the next frame and `collect()` (after each frame) deletes it; one that was never uploaded is deleted
 at once. At shutdown the backend destroys the remaining textures with the window, and the cache deletes the data after
-the ImGui context is gone. `smooth = false` uses the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
+the ImGui context is gone. The decoded pixels are kept within a byte budget (`ImageCache::setBudget`, default
+`defaultBudget` = 256 MiB, `0` for no limit; the root `ApplicationWindow`'s `imageCacheBudget` prop sets it): `get()`
+stamps an image with the ImGui frame, and `collect()` evicts the images drawn least recently (through the same
+release path) until the cache fits, never one drawn in the current or the previous frame, whose draw lists may still
+refer to it. A failure costs 0 bytes, so it stays cached and is still reported once; an evicted image is decoded again
+by its next `get()` (`decodeCount` counts it). So a reference from `get()` is valid until the end of the frame, or
+until `refresh()` or `clear()`. `smooth = false` uses the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
 
 ### Resource manifests
 
@@ -617,18 +623,21 @@ return {
   a file under `base`.
 - The manifest itself is never matched by a pattern, so a manifest next to the files isn't embedded; list it in
   `files` to embed it (a dev build's folder mount then serves it too).
-- A listed file must be spelled as on disk, case included (`Main.lua` for `main.lua` is an error): resource names are
-  case-sensitive, and on a file system that ignores case the wrong spelling would be embedded under a name the dev
-  folder mount doesn't serve.
+- A listed file, and the folder an `include` pattern starts with (`UI/**` scans `ui/`), must be spelled as on disk,
+  case included (`Main.lua` for `main.lua` is an error): resource names are case-sensitive, and on a file system that
+  ignores case the wrong spelling would be embedded under a name the dev folder mount doesn't serve.
 - Every path stays under `base`: a `..` segment, an absolute path, a `\` or a `:` is an error, and so is a listed
   file that doesn't exist, an unknown field, a value of the wrong type, a string that isn't valid UTF-8, a missing or
   malformed `prefix`, a group that selects nothing, and a `compress` entry that isn't one of the group's files.
   Errors name the manifest and, in a list, the group (`resources.lua: group 2: 'prefix' is required`).
 - The manifest runs in a sandbox: a fresh Lua state with the base library only (`pairs`, `ipairs`, `tostring`,
-  `error`, ...), without `dofile`, `loadfile`, `load` and `collectgarbage`, and no `io`, `os`, `require`, `string`
-  or `debug`. Bytecode is refused. A Lua error is reported at the manifest's `file:line`. It may run at most
-  10 million Lua instructions and use at most 64 MiB (`manifestMaxInstructions`, `manifestMaxMemory`), so an endless
-  loop or a runaway table fails the build with an error instead of hanging it.
+  `error`, `pcall`, ...), without `dofile`, `loadfile`, `load`, `collectgarbage`, `xpcall` and `setmetatable`, and
+  no `io`, `os`, `require`, `string` or `debug`. Bytecode is refused. A Lua error is reported at the manifest's
+  `file:line`. It may run at most 10 million Lua instructions and use at most 64 MiB (`manifestMaxInstructions`,
+  `manifestMaxMemory`), so an endless loop or a runaway table fails the build with an error instead of hanging it.
+  The instruction limit is sticky: once reached, every further instruction raises the error again, so a `pcall`
+  that catches it gains nothing. (Lua runs an `xpcall` message handler for that error, and a `__gc` finalizer,
+  without its instruction hook, which is why both functions are gone.)
 
 The tools evaluate manifests at build time (`imlui.tools.resource_manifest`, with `imlui.resources.glob`), through the
 `lua` wrapper module, which is its own library (`imlui_lua`) because `imlui_rc` can't link the `imlui` library it
@@ -725,15 +734,17 @@ gets the libraries in a working order.
 
 `parsePak` checks the magic and the version, that the mount point is a full folder name in canonical form (`app:/`,
 `imlui:/fonts/`; not `app:/main.lua`, which would be mounted as a folder of that name), that every path is normalized and appears once and
-every blob lies inside the archive, and caps the sizes, so a truncated or corrupt archive is rejected with a reason instead of being
-read out of bounds.
+none is both a file and a folder (`a` and `a/b`), that every blob lies inside the archive, past the index, and shares no byte with
+another (so a small archive can't declare many large files over the same compressed bytes), and caps the sizes: each file at
+`pakMaxFileSize` (2 GiB) and all of them together at `pakMaxTotalSize` (4 GiB), decompressed. A truncated or corrupt
+archive is rejected with a reason instead of being read out of bounds.
 
 `imlui_pack [--depfile <file>] <out.pak> <manifest>` builds an archive from a manifest, and
 `imlui_add_pak(<name> <manifest> [OUTPUT <file>])` does it from CMake (by default `bin/<name>.pak`, next to the
 executables, `bin/<config>/<name>.pak` with a multi-config generator; tracked like `imlui_add_resources`: a
 dependency file and the list target `<name>_list`). `writePak` refuses what the reader would reject or a field would
-truncate (a file over the size cap, an archive over `pakMaxArchiveSize`, a duplicate path, a string longer than its
-u32 length), and `imlui_pack` writes
+truncate (a file over the size cap, files over `pakMaxTotalSize` together, an archive over `pakMaxArchiveSize`, a
+duplicate path, a path that is also another's folder, a string longer than its u32 length), and `imlui_pack` writes
 `<out.pak>.tmp` and renames it over the output, so a failed run never leaves a partial archive.
 `imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand (a folder under the base that
 can't be listed fails the run rather than packing an incomplete archive; an entry that can't be queried, such as a
@@ -938,7 +949,7 @@ See [Registering C++ types](extending.md).
 | `imlui.resources.selection` | `ResourceSelection`: a manifest group's `files`, `include`, `exclude` and `unmatched` paths; `contains(path)`, `mayContainUnder(folder)` |
 | `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
 | `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |
-| `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry`, `pakMaxFileSize`, `pakMaxArchiveSize` |
+| `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry`, `pakMaxFileSize`, `pakMaxTotalSize`, `pakMaxArchiveSize` |
 | `imlui.resources.package` | `ResourcePackage`: an embedded group's mount point, files, dev source folder and its `ResourceSelection`; `imlui::embedded::<name>::packages()` returns one per manifest group |
 | `imlui.resources.pak_mount` | `PakMount`: a `.pak` archive in memory; `open(file, error)`, `fromBytes(bytes, name, error)`, `mountPoint()` |
 | `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive` (a folder name with or without its trailing `/`, like `list`), `modified`, `origin`, `prefixes`, `describe` |
@@ -947,9 +958,9 @@ See [Registering C++ types](extending.md).
 
 | Module | Purpose |
 |---|---|
-| `imlui.image.decode` | `decodeImage(bytes)`: PNG/JPEG to RGBA8 (`DecodedImage`: `width`, `height`, `rgba`, `error`) |
+| `imlui.image.decode` | `decodeImage(bytes)`: PNG/JPEG to RGBA8 (`DecodedImage`, move-only: `width`, `height`, `rgba` (a view of the decoder's buffer, `pixels`, not a copy), `error`) |
 | `imlui.image.fill_mode` | `FillMode` (`Stretch`, `Fit`, `Crop`, `Tile`), `parseFillMode`, `imageSize(natural, scale, w, h)` (natural size x dp, aspect from one side), `placeImage` (the `ImageQuad`s: screen rects and texture coordinates per fill mode) |
-| `imlui.image.image_cache` | `ImageCache`: one decode per resource name, kept as an ImGui user texture (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`) |
+| `imlui.image.image_cache` | `ImageCache`: one decode per resource name, kept as an ImGui user texture (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`), within a byte budget (`budget`/`setBudget`, `bytes`, `defaultBudget`: the least recently drawn images are evicted after a frame) |
 
 ### App (`src/imlui/app/`)
 
@@ -971,11 +982,11 @@ The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke te
 | `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::packages()` (one `ResourcePackage` per manifest group), `mount(Resources&)`. The library has `imlui.embedded.imlui` (two packages: `imlui:/`, `imlui:/fonts/`). |
 | `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
 | `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data, compress)`, `compressible(path)`: the compression rule and its override |
-| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through `<file>.tmp` and a rename), `utf8`/`pathFromUtf8` |
+| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through `<file>.tmp` and a rename), `utf8`/`utf8Name`/`pathFromUtf8`, `toolMain` (the tools' `wmain`/`main`: UTF-8 arguments from Windows' UTF-16 command line, an exception printed instead of `abort()`) |
 | `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup` (with the selection as written: `listed`, `include`, `exclude`), `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), its two halves `evaluateManifest` (the Lua, into `ManifestGroupFields`) and `resolveManifest` (the file system), `manifestDependencies`, `manifestListing` |
 | `imlui.tools.depfile` | `tools/lib/` | `depfileText`, `writeDepfile`: Make-style dependency files for Ninja |
-| `imlui.tools.rc` | `tools/lib/` | `runRc`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |
-| `imlui.tools.pack` | `tools/` | `runPack`, `packFiles(mountPoint, files, error)`, `mergeGroups(manifest, error)`: the `imlui_pack` tool |
+| `imlui.tools.rc` | `tools/lib/` | `runRc(args)`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |
+| `imlui.tools.pack` | `tools/` | `runPack(args)`, `packFiles(mountPoint, files, error)`, `mergeGroups(manifest, error)`: the `imlui_pack` tool |
 
 The tools are built from `tools/` with the same toolchain. `imlui_rc` doesn't link the library, which is embedded
 with it (only `imlui_lua`, the Lua wrapper, and `imlui_glob`, the patterns); `imlui_pack` links `imlui_core`, for the archive format (not the

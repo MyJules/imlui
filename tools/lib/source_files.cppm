@@ -36,10 +36,22 @@ collectFiles(const std::filesystem::path& base, const std::vector<std::filesyste
 /// A UTF-8 string as a path, and back (on Windows a plain std::string would be read in the ANSI code page).
 [[nodiscard]] std::filesystem::path pathFromUtf8(std::string_view s);
 [[nodiscard]] std::string utf8(const std::filesystem::path& p);
+/// utf8(), or nullopt when `p` has no UTF-8 form (on Windows, a name with an unpaired surrogate), where utf8() throws.
+[[nodiscard]] std::optional<std::string> utf8Name(const std::filesystem::path& p);
 
 /// Whether `relative`, a path made relative to a base folder (lexically_relative), lies outside that folder: it is
 /// empty, absolute, or its first element is `..`. (`..foo.png` is a file name, not a way out.)
 [[nodiscard]] bool leavesBase(const std::filesystem::path& relative);
+
+/// A tool's run function: the arguments after the program name, UTF-8; returns the exit code.
+using ToolRun = int (*)(std::vector<std::string> args);
+
+/// A tool's main(): calls `run` with the arguments after the program name as UTF-8. On Windows the tools start at
+/// wmain() and pass its UTF-16 `argv` (main()'s is in the ANSI code page, which loses any other character); elsewhere
+/// `argv` is taken as UTF-8. An exception (a name with no UTF-8 form, out of memory) is printed as
+/// `<tool>: <what>` and exits with 1, instead of ending the process with abort().
+[[nodiscard]] int toolMain(std::string_view tool, int argc, const wchar_t* const* argv, ToolRun run);
+[[nodiscard]] int toolMain(std::string_view tool, int argc, const char* const* argv, ToolRun run);
 
 } // namespace imlui::tools
 
@@ -56,8 +68,52 @@ std::string utf8(const fs::path& p) {
     return std::string{s.begin(), s.end()};
 }
 
+std::optional<std::string> utf8Name(const fs::path& p) {
+    try {
+        return utf8(p);
+    } catch (const std::system_error&) {
+        return std::nullopt;
+    }
+}
+
 bool leavesBase(const fs::path& relative) {
     return relative.empty() || relative.is_absolute() || *relative.begin() == "..";
+}
+
+namespace {
+
+/// Runs `run` with the arguments `convert` makes, printing what is thrown.
+template <class Convert>
+int guardedMain(std::string_view tool, ToolRun run, Convert convert) {
+    try {
+        return run(convert());
+    } catch (const std::exception& e) {
+        std::cerr << tool << ": " << e.what() << '\n';
+    } catch (...) {
+        std::cerr << tool << ": unknown error\n";
+    }
+    return 1;
+}
+
+} // namespace
+
+int toolMain(std::string_view tool, int argc, const wchar_t* const* argv, ToolRun run) {
+    return guardedMain(tool, run, [&] {
+        std::vector<std::string> args;
+        for (int i = 1; i < argc; ++i) {
+            try {
+                const std::u8string arg = fs::path{argv[i]}.u8string(); // as given: not utf8()'s generic form
+                args.emplace_back(arg.begin(), arg.end());
+            } catch (const std::system_error&) {
+                throw std::runtime_error{"argument " + std::to_string(i) + " has no UTF-8 form"};
+            }
+        }
+        return args;
+    });
+}
+
+int toolMain(std::string_view tool, int argc, const char* const* argv, ToolRun run) {
+    return guardedMain(tool, run, [&] { return std::vector<std::string>{argv + std::min(argc, 1), argv + argc}; });
 }
 
 std::optional<std::vector<std::byte>> readFile(const fs::path& file) {
@@ -134,7 +190,12 @@ std::optional<std::vector<SourceFile>> collectFiles(const fs::path& base, const 
             error = "'" + utf8(input) + "' isn't under the base folder '" + utf8(root) + "'";
             return std::nullopt;
         }
-        out.push_back({utf8(relative), file, std::nullopt});
+        auto name = utf8Name(relative);
+        if (!name) {
+            error = "a file name in '" + utf8(lexical.parent_path()) + "' has no UTF-8 form";
+            return std::nullopt;
+        }
+        out.push_back({std::move(*name), file, std::nullopt});
     }
     std::ranges::sort(out, {}, &SourceFile::path);
     for (std::size_t i = 1; i < out.size(); ++i)

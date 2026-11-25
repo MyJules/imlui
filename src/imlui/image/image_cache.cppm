@@ -15,8 +15,12 @@ export namespace imlui {
 /// backend uploads a new one before the frame that first draws it and destroys it after it was released, so the
 /// cache makes no graphics API calls and works in a headless ImGui context.
 ///
-/// Main thread only. get() needs a current ImGui context; the textures belong to the context that was current
-/// when the first one was created.
+/// The decoded images are kept within a byte budget (setBudget(), 4 bytes per pixel; failures count as 0): after each
+/// frame, collect() evicts the images drawn least recently until the cache fits, never one drawn in the current or
+/// the previous frame (draw lists may still refer to it). An evicted image is decoded again by its next get().
+///
+/// Main thread only. get() and collect() need a current ImGui context (its frame count tells the frames apart); the
+/// textures belong to the context that was current when the first one was created.
 class ImageCache {
 public:
     /// A cached image: a texture ready to draw, or the reason there is none.
@@ -41,7 +45,12 @@ public:
         std::string m_error;
         std::optional<ResourceTime> m_modified; ///< the file's time when it was decoded
         std::unique_ptr<ImTextureData> m_texture;
+        int m_lastUsed = 0;      ///< the ImGui frame of the last get()
+        std::size_t m_bytes = 0; ///< the pixels' size; 0 on error
     };
+
+    /// The default budget: 256 MiB of pixels.
+    static constexpr std::size_t defaultBudget = std::size_t{256} << 20;
 
     /// `resources` must outlive the cache.
     explicit ImageCache(const Resources& resources);
@@ -52,15 +61,24 @@ public:
     ImageCache& operator=(ImageCache&&) = delete;
 
     /// The image of resource `name` (a full, normalized name). Decoded on the first call for a name; after that
-    /// the cached image, also when it failed (a missing or broken file is reported once, not every frame). The
-    /// reference stays valid until refresh() or clear() drops the image.
+    /// the cached image, also when it failed (a missing or broken file is reported once, not every frame). Marks the
+    /// image as drawn in the current frame. The reference stays valid until the end of the frame (collect() may evict
+    /// the image after a later one), or until refresh() or clear() drops the image.
     const Image& get(std::string_view name);
     /// True when `name` is cached (decoded, or failed).
     [[nodiscard]] bool contains(std::string_view name) const;
     /// The cached names, sorted.
     [[nodiscard]] std::vector<std::string> names() const;
-    /// How many files get() has decoded (or tried to) since the cache was created.
+    /// How many files get() has decoded (or tried to) since the cache was created, evicted images decoded again
+    /// included.
     [[nodiscard]] std::size_t decodeCount() const;
+
+    /// The most bytes of pixels (4 per pixel) the cached images may hold once collect() has run; 0: no limit.
+    /// Default: defaultBudget. ApplicationWindow's `imageCacheBudget` prop sets it from Lua.
+    [[nodiscard]] std::size_t budget() const;
+    void setBudget(std::size_t bytes);
+    /// The bytes of pixels the cached images hold now.
+    [[nodiscard]] std::size_t bytes() const;
 
     /// Drops every image whose file changed since it was decoded (Resources::modified differs, or the file
     /// appeared or vanished), so the next get() decodes it again. Returns how many were dropped. The engine calls
@@ -68,7 +86,9 @@ public:
     std::size_t refresh();
     /// Drops every image. Call between frames.
     void clear();
-    /// Deletes released textures that the backend has destroyed. Call once per frame, after rendering.
+    /// Deletes released textures that the backend has destroyed, then evicts the images drawn least recently until
+    /// the cache is within its budget, sparing those drawn in the current or the previous frame. Call once per frame,
+    /// after rendering.
     void collect();
 
 private:
@@ -77,11 +97,19 @@ private:
     /// Removes `texture` from the ImGui texture list, when its context is still the current one.
     void unregister(ImTextureData* texture) const;
 
+    using Images = std::map<std::string, Image, std::less<>>;
+    /// Drops cached image `it`, releasing its texture. Returns the next one.
+    Images::iterator drop(Images::iterator it);
+    /// Evicts the images drawn least recently, before the previous frame, until the cache fits its budget.
+    void evict();
+
     const Resources& m_resources;
-    std::map<std::string, Image, std::less<>> m_images;
+    Images m_images;
     std::vector<std::unique_ptr<ImTextureData>> m_released; ///< waiting for the backend to destroy them
     ImGuiContext* m_context = nullptr;                      ///< where the textures are registered
     std::size_t m_decodes = 0;
+    std::size_t m_budget = defaultBudget;
+    std::size_t m_bytes = 0; ///< the sum of the cached images' m_bytes
 };
 
 } // namespace imlui
@@ -97,6 +125,13 @@ const std::string& ImageCache::Image::error() const { return m_error; }
 bool ImageCache::Image::ready() const { return m_texture != nullptr; }
 ImTextureRef ImageCache::Image::texture() const { return m_texture ? m_texture->GetTexRef() : ImTextureRef{}; }
 
+namespace {
+
+/// The current ImGui frame; 0 without a context.
+int currentFrame() { return ImGui::GetCurrentContext() ? ImGui::GetFrameCount() : 0; }
+
+} // namespace
+
 ImageCache::ImageCache(const Resources& resources) : m_resources{resources} {}
 
 ImageCache::~ImageCache() {
@@ -109,14 +144,19 @@ ImageCache::~ImageCache() {
 }
 
 const ImageCache::Image& ImageCache::get(std::string_view name) {
-    if (const auto it = m_images.find(name); it != m_images.end()) return it->second;
+    const int frame = currentFrame();
+    if (const auto it = m_images.find(name); it != m_images.end()) {
+        it->second.m_lastUsed = frame;
+        return it->second;
+    }
 
     Image image;
+    image.m_lastUsed = frame;
     image.m_name = std::string{name};
     image.m_modified = m_resources.modified(name);
     ++m_decodes;
     const auto bytes = m_resources.read(name);
-    const DecodedImage decoded = bytes ? decodeImage(bytes->bytes()) : DecodedImage{}; // copies the pixels
+    const DecodedImage decoded = bytes ? decodeImage(bytes->bytes()) : DecodedImage{};
     if (!bytes) {
         image.m_error = "image '" + image.m_name + "' not found";
     } else if (!decoded.ok()) {
@@ -132,6 +172,8 @@ const ImageCache::Image& ImageCache::get(std::string_view name) {
         ImGui::RegisterUserTexture(texture.get());
         m_context = ImGui::GetCurrentContext();
         image.m_texture = std::move(texture);
+        image.m_bytes = decoded.rgba.size();
+        m_bytes += image.m_bytes;
     }
     std::string key = image.m_name;
     return m_images.emplace(std::move(key), std::move(image)).first->second;
@@ -149,6 +191,16 @@ std::vector<std::string> ImageCache::names() const {
 
 std::size_t ImageCache::decodeCount() const { return m_decodes; }
 
+std::size_t ImageCache::budget() const { return m_budget; }
+void ImageCache::setBudget(std::size_t bytes) { m_budget = bytes; }
+std::size_t ImageCache::bytes() const { return m_bytes; }
+
+ImageCache::Images::iterator ImageCache::drop(Images::iterator it) {
+    m_bytes -= it->second.m_bytes;
+    release(std::move(it->second.m_texture));
+    return m_images.erase(it);
+}
+
 std::size_t ImageCache::refresh() {
     std::size_t dropped = 0;
     for (auto it = m_images.begin(); it != m_images.end();) {
@@ -156,8 +208,7 @@ std::size_t ImageCache::refresh() {
             ++it;
             continue;
         }
-        release(std::move(it->second.m_texture));
-        it = m_images.erase(it);
+        it = drop(it);
         ++dropped;
     }
     return dropped;
@@ -167,6 +218,7 @@ void ImageCache::clear() {
     for (auto& [name, image] : m_images)
         release(std::move(image.m_texture));
     m_images.clear();
+    m_bytes = 0;
 }
 
 void ImageCache::collect() {
@@ -175,6 +227,22 @@ void ImageCache::collect() {
         unregister(texture.get());
         return true;
     });
+    evict();
+}
+
+void ImageCache::evict() {
+    if (m_budget == 0 || m_bytes <= m_budget) return;
+    // Drawn before the previous frame: no draw list still to be drawn refers to it.
+    const int keepFrom = currentFrame() - 1;
+    std::vector<Images::iterator> candidates;
+    for (auto it = m_images.begin(); it != m_images.end(); ++it)
+        if (it->second.m_bytes > 0 && it->second.m_lastUsed < keepFrom) candidates.push_back(it);
+    // Least recently drawn first; among equals, the map's (name) order.
+    std::ranges::stable_sort(candidates, {}, [](Images::iterator it) { return it->second.m_lastUsed; });
+    for (const auto& it : candidates) {
+        if (m_bytes <= m_budget) break;
+        drop(it);
+    }
 }
 
 void ImageCache::release(std::unique_ptr<ImTextureData> texture) {
