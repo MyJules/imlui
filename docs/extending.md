@@ -517,6 +517,11 @@ SystemInfo backend;                           // declared before the Engine, so 
 engine.registerSingleton("backend", backend);
 ```
 
+If it dies earlier anyway, or a second `registerSingleton` under the same name replaces it (which destroys an
+engine-owned object), the global that running scripts still hold doesn't reach the dead object: any use of it raises
+the Lua error `singleton 'backend' was destroyed`. A replaced object that lives on is unlinked from the running
+state; scripts see the new object after the next reload.
+
 Scripts see a global userdata:
 
 | Lua | C++ |

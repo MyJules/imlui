@@ -613,6 +613,67 @@ TEST(SharedSingletonTest, TheRegistryKeepsASharedSingletonAlive) {
     clearFrameRequests();
 }
 
+/// Runs `code` in `state` and returns the error it raised ("" if none).
+std::string luaError(lua::State* state, std::string_view code) {
+    EXPECT_EQ(lua::loadbuffer(state, code, "=test"), lua::ok);
+    if (lua::pcall(state, 0, 0, 0) == lua::ok) return {};
+    std::string msg{lua::tostring(state, -1)};
+    lua::pop(state);
+    return msg;
+}
+
+/// Expects every kind of access to the singleton global `name` to raise "singleton '<name>' was destroyed".
+void expectDeadSingleton(lua::State* state, const std::string& name) {
+    const std::string dead = "singleton '" + name + "' was destroyed";
+    EXPECT_NE(luaError(state, "local x = " + name + ".level").find(dead), std::string::npos);
+    EXPECT_NE(luaError(state, name + ".level = 1").find(dead), std::string::npos);
+    EXPECT_NE(luaError(state, "local ping = getmetatable(" + name + ").__index(" + name + ", 'ping')").find(dead),
+              std::string::npos);
+}
+
+// Re-registering a singleton while a state is installed destroys the old (registry-owned) object: the global the
+// state still has must not reach it (it was a use after free), and says why.
+TEST(SingletonLifetimeTest, ReplacedSingletonRaisesInTheInstalledState) {
+    TypeRegistry types;
+    std::weak_ptr<Backend> first;
+    {
+        auto backend = std::make_shared<Backend>();
+        first = backend;
+        types.registerSingleton("api", std::move(backend));
+    }
+    lua::State* state = newUiState(types);
+    EXPECT_EQ(luaError(state, "assert(api.level == 0.5); ping = api.ping"), "");
+    types.registerSingleton("api", std::make_shared<Backend>());
+    EXPECT_TRUE(first.expired());
+    expectDeadSingleton(state, "api");
+    EXPECT_NE(luaError(state, "ping(api, 1)").find("singleton 'api' was destroyed"), std::string::npos);
+    lua::close(state);
+
+    lua::State* fresh = newUiState(types); // a new state gets the new object
+    EXPECT_EQ(luaError(fresh, "assert(api.level == 0.5); assert(api:ping(2) == 4)"), "");
+    lua::close(fresh);
+    clearFrameRequests();
+}
+
+// A by-reference singleton the host destroys while the state is installed (or before it is): access raises, and
+// closing the state doesn't touch the dead object.
+TEST(SingletonLifetimeTest, DestroyedByReferenceSingletonRaises) {
+    luaui::clearErrors();
+    TypeRegistry types;
+    auto backend = std::make_optional<Backend>();
+    types.registerSingleton("api", *backend);
+    lua::State* state = newUiState(types);
+    EXPECT_EQ(luaError(state, "assert(api.level == 0.5)"), "");
+    backend.reset();
+    expectDeadSingleton(state, "api");
+    lua::State* later = newUiState(types); // installed after the object died
+    expectDeadSingleton(later, "api");
+    types.activate(state);
+    lua::close(later);
+    lua::close(state);
+    clearFrameRequests();
+}
+
 TEST(OverloadTest, PicksOverloadsByParameterTypes) {
     TypeRegistry types;
     Shape shape;
