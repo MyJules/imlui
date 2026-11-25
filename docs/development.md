@@ -414,7 +414,7 @@ that can't be queried, linked files named by their own path, `replaceFile`, `man
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is
   checked the embedded way and `imlui.embedded.smoke_sources` (forced `EMBED OFF`, dev builds) the other way, with
   its `mount()` mounting the folders.
-- **Fuzz corpus replays** (`fuzz.pak`, `fuzz.font`, `fuzz.manifest`, `fuzz.image`, label `fuzz`): every fuzz
+- **Fuzz corpus replays** (`fuzz.pak`, `fuzz.font`, `fuzz.manifest`, `fuzz.names`, `fuzz.image`, label `fuzz`): every fuzz
   target's seed corpus, crash regressions included, run once through the target in every build. See
   [Fuzzing](#fuzzing).
 - **Smoke test** (`smoke.imlui_smoke_host`, `tests/smoke_run.cmake`) runs the test app host like a shipped release.
@@ -543,6 +543,7 @@ defining libFuzzer's `LLVMFuzzerTestOneInput`:
 | `pak` | a `.pak` archive | `PakMount::fromBytes` (`parsePak`) accepts or rejects it with a reason; every file of an accepted archive reads back at its declared size (zstd decompression in `PackedMount`, files declaring more than 16 MiB skipped), and `exists`/`list` work on every folder. |
 | `font` | font data | A font `checkFont` accepts is read with stb_truetype the way ImGui reads it (`imlui.fuzz.truetype`, `tests/fuzz/support/`): `stbtt_GetFontOffsetForIndex`, `stbtt_InitFont`, the vertical metrics, `stbtt_FindGlyphIndex` for every code point an `ImWchar` holds (each must map to a glyph the font has), every glyph found but 0 (the glyphs `checkFont` checks, and all ImGui ever loads) with its box and horizontal metrics, the outline of each that ImGui rasterizes (`stbtt_GetGlyphShape`, up to 8192 glyphs), and a bitmap for up to 64 of the glyphs found, spread over the font, as ImGui's `FontBakedLoadGlyph` makes it (`stbtt_MakeGlyphBitmapSubpixelPrefilter` with 2x horizontal oversampling, at a size from 4 to 64px picked by the input's length; a bitmap size ImGui would `IM_ASSERT` on aborts), with `STBTT_assert` aborting (for CFF fonts the box runs the glyph's charstring). |
 | `manifest` | a resource manifest's Lua text | `evaluateManifest` (the sandbox, the instruction and memory limits) returns groups or an error; groups whose `base` stays inside the fixture `tests/fuzz/manifest_root/` are resolved against it (`resolveManifest`, `manifestListing`). |
+| `names` | two strings, split at the first newline | Resource names and glob patterns (`imlui.resources.name`, `imlui.resources.glob`): a normalized path or name is a fixed point, a parsed name round-trips through `full()` and has a folder, a resolved name is normalized, `globMatch` agrees with a backtracking reference matcher on inputs up to 12 characters and with plain comparison on patterns without wildcards, and `globRoot` is a prefix of a valid pattern. |
 | `image` | PNG or JPEG bytes | `decodeImage` (stb_image) decodes or fails with a reason; a decoded image has `width * height * 4` bytes. Images over 4096 x 4096 pixels are skipped. |
 
 Each target is built two ways (`tests/fuzz/CMakeLists.txt`, `imlui_add_fuzz_target`):
