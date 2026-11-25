@@ -1009,7 +1009,7 @@ A Material data table: a 56dp header and selectable rows, inside an outlined car
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `columns` | list of strings | `{}` | Header labels; sets the column count. Nothing is drawn without columns. At most 511 are shown (ImGui's table limit); more are reported as a script error. |
-| `rows` | list of lists | — | *Raw.* Cell values, converted to strings (`nil` is empty). A row that isn't a list draws empty and is reported as a script error. |
+| `rows` | list of lists | — | *Raw.* Cell values, converted to strings (`nil` is empty). Only the rows in view are drawn and read (`ImGuiListClipper`; every row is `rowHeight` tall), so a long table costs what its visible rows do; the table still takes the height of all of them. A row that isn't a list draws empty and is reported as a script error when it comes into view. |
 | `currentRow` | integer | `0` | **two-way.** The selected row; `0` means none. |
 | `rowHeight` | number | `52` | Row height (dp). |
 | `outlined` | bool | `true` | Wraps the table in an outlined card. |

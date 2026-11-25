@@ -207,6 +207,31 @@ TEST_F(DataTest, TableRowClickedHandlerMayRemoveRows) {
     EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
+// A large table submits only the rows in view (ImGuiListClipper): it used to read and stringify every cell of every
+// row each frame. It still takes the height of all its rows, and a click on a row in view selects it.
+TEST_F(DataTest, ALargeTableSubmitsOnlyTheRowsInView) {
+    for (const char* outlined : {"false", "true"}) {
+        run(std::string{R"(
+            strings = 0
+            local cell = { __tostring = function(c) strings = strings + 1 return c.text end }
+            rows = {}
+            for i = 1, 5000 do rows[i] = { setmetatable({ text = "r" .. i }, cell), i } end
+            got = nil
+            root = Probe { Table { columns = { "Name", "N" }, rows = rows, width = 400, outlined = )"} +
+            outlined + R"(, onRowClicked = function(_, row) got = row end } })");
+        frames(2);
+        run("strings = 0");
+        frames();
+        run("assert(strings > 0 and strings <= 20, strings)"); // the dozen rows in the 600px window
+        const ImVec2 a = probe().min(), b = probe().max();
+        EXPECT_NEAR(b.y - a.y, 56.0f + 5000 * 52.0f, 3.0f) << outlined; // header + every row
+        click(a.x + 40.0f, a.y + 56.0f + 2 * 52.0f + 26.0f);              // the third row
+        run("assert(got == 3, tostring(got))");
+        run("assert(root[1].currentRow == 3)");
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(DataTest, PlotOfLargeOrConstantValuesDraws) {
     // A float `max = min + 1` doesn't change 1e9, and the axis math took log10(0).
     run(R"(root = Probe { Plot { values = { 1e9, 1e9, 1e9 } }, Plot { values = { 5, 5 }, min = 3, max = 3 },
