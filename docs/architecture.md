@@ -340,6 +340,20 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   element table changed without luaui::changes() counting it ...`): the code that made it probably writes other
   tables the same way, which no fingerprint sees (what bindings read, a nested model table changed in place). C++
   that writes Lua writes through `luaui::Node::set` (or calls `luaui::noteChange()`).
+- **Static properties sync once.** Across frames, the fingerprint also decides how much a sync reads. A full sync
+  records which declared properties hold a *dynamic* raw value: a function, a `bind()` or any other table (changed
+  in place, which the fingerprint can't see), userdata, and, when the element table has a metatable of its own, the
+  fields it doesn't hold (its `__index` answers). While the fingerprint (raw fields and metatable) and
+  `themeGeneration()` (a color role resolves through the theme) are what they were at the last full sync, and that
+  sync ran to its end, a sync converts only the dynamic properties: a plain value would convert to what the
+  instance holds already, and the setters run only on a change anyway. Any write to the table is seen: element
+  tables have no `__newindex` (their shared metatable only has `__index`), so `el.text = "x"` is a raw store, which
+  changes the fingerprint (a per-table version counter would need a proxy table, since `__newindex` only runs for
+  absent keys). So a `nil` reset, a value that becomes a function or back, and a `notify` write-back of a plain
+  value all make the next sync full; `componentComplete()` follows the first sync, which is always full. The
+  per-sync cost left for static properties is the fingerprint's raw read. A property the C++ side changed without
+  `notify()` is no longer put back from a plain table value every frame (see [Registering C++
+  types](extending.md#property-sync)).
 - **`Row` is a flex row.** Before rendering it asks each child whether it fills, gives the fills equal shares of
   the width the others take (their expected widths), asks the fills' heights with their share, and renders each fill
   in a box of its share (fill-minus resolves against it, wrapping text wraps at it). Every other child's box ends
@@ -951,7 +965,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
-| `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `resolveColor`, `imguiColorIndex`, `isStyleField` |
+| `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `resolveColor`, `imguiColorIndex`, `isStyleField` |
 | `imlui.theme.font_scope` | `FontScope`: RAII push/pop of a text style's font |
 
 ### Lua bridge (`src/imlui/lua/`, namespace `imlui::luaui`)
