@@ -87,3 +87,9 @@ add_subdirectory(fuzz)
 # The package tests: a consumer app built with imlui added by add_subdirectory, FetchContent and find_package
 # (package/CMakeLists.txt, label `package`).
 add_subdirectory(package)
+
+# The benchmark (bench/CMakeLists.txt, imlui_bench): built with the tests when imlui is the top-level project, never
+# run by ctest.
+if(PROJECT_IS_TOP_LEVEL)
+    add_subdirectory(bench)
+endif()

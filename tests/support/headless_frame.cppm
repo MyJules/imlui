@@ -170,8 +170,9 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     io.IniFilename = nullptr;
     io.DisplaySize = {m_options.width, m_options.height};
     io.DeltaTime = m_options.deltaTime;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // like the platform window
-    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // no backend: fonts needn't be prebuilt
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;      // like the platform window
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;  // no backend: fonts needn't be prebuilt
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset; // like the OpenGL 3 backend: 64k+ vertices per window
     // Roboto and the icon font in this context's atlas, like the Engine: the Material widgets measure text with
     // them, and icon names (hasIcon) decide whether, e.g., a text field has a trailing button. Every harness loads
     // them, so the font pointers never outlive their context into the next harness.
