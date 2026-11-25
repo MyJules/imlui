@@ -221,7 +221,8 @@ so the handler already sees the new state.
   a frame per element while `luaui::changes()` stands still: the renderer keeps the list it returned (a weak-keyed
   table in the registry, stamped with the frame and the count), so a layout's passes over its children (a `Row`'s
   three, the fill and size questions of its parent) share one call. Lua that may change tables (a handler) running
-  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them.
+  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them; a
+  `Repeater` whose count didn't change (and that has no `key`) returns the list it built last time without a loop.
 
 Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
 own children are laid out as direct children of the parent. That's why a `Repeater` inside a `Row` flows

@@ -1504,6 +1504,17 @@ TEST_F(LayoutTest, ANumericModelIsItsIndices) {
         check(std::string{"count == "} + (count[0] == '2' ? "2" : "0"));
         check("#seen == 0"); // nothing new built
     }
+    // Growing builds the new indices only; the same count again returns the cached list, the same delegates.
+    run("seen = {}; n = 4");
+    m_h.renderFrame("root");
+    run("list = root[1].__list; first = list[1]");
+    check("#seen == 4 and #list == 4");
+    run("seen = {}; n = 4");
+    m_h.renderFrames("root", 2);
+    check("#seen == 0 and root[1].__list == list and list[1] == first and #list == 4");
+    run("n = 5");
+    m_h.renderFrame("root");
+    check("#seen == 1 and seen[1] == 55 and list[1] == first and #list == 5");
     EXPECT_TRUE(luaui::errors().empty());
 }
 

@@ -524,7 +524,13 @@ local function repeaterChildren(self)
     local list = self.__list
     if not list then list = {}; self.__list = list end
     local keyFn = rawget(self, "key")
-    if type(keyFn) == "function" then return keyedChildren(self, model, n, keyFn, cache, list) end
+    if type(keyFn) == "function" then
+        self.__counted = nil
+        return keyedChildren(self, model, n, keyFn, cache, list)
+    end
+    -- A count that didn't change: the items are 1..n again, and every cached delegate was built for its index.
+    if model == nil and self.__counted == n then return list end
+    self.__counted = nil
     for i = 1, n do
         local item
         if model then item = model[i] else item = i end
@@ -538,6 +544,7 @@ local function repeaterChildren(self)
     end
     if #list > n then dropped() end
     for i = n + 1, #list do list[i] = nil; cache[i] = nil end
+    if model == nil then self.__counted = n end
     return list
 end
 
