@@ -27,12 +27,12 @@ theme {
 | `preset` | string | `"material"` | `"material"` maps the scheme onto `ImGuiStyle`. `"imgui-dark"`, `"imgui-light"` and `"imgui-classic"` use ImGui's stock styles instead. Material widgets always draw with the scheme. |
 | `seed` | color | `"#6750A4"` | Seed color: hex, `{r,g,b,a}`, or a role (`"primary"`, `"tertiary/1"`) of the theme currently in effect. An invalid value reports an error and keeps the default. |
 | `dark` | bool | `true` | Dark or light scheme. |
-| `spacing` | number | `8` | Base unit for ImGui paddings and spacings. It's also the default gap in `Column` and `Row`. |
-| `fontScale` | number | `1.0` | Multiplies every text size. Glyphs are rasterized at the final size, so text stays sharp. |
-| `shape` | table | see above | Material shape scale: corner radii in dp. |
+| `spacing` | number | `8` | Base unit for ImGui paddings and spacings. It's also the default gap in `Column` and `Row`. 0 to 10000. |
+| `fontScale` | number | `1.0` | Multiplies every text size. Glyphs are rasterized at the final size, so text stays sharp. 0.25 to 4: a larger scale makes glyphs that outgrow ImGui's font atlas. |
+| `shape` | table | see above | Material shape scale: corner radii in dp, each 0 to 10000. |
 | `colors` | `{ role = color }` | — | Overrides generated roles. Values are [color specs](#color-specs); role names refer to the scheme generated from this table's `seed`/`dark` (before any overrides). An unknown role or invalid color reports an error. |
 | `imgui` | `{ ImGuiColName = color }` | — | Raw ImGui color overrides by name (`"WindowBg"`, `"Text"`, ...), applied after the preset. Values are [color specs](#color-specs), with roles from this table's generated scheme. An unknown name or invalid color reports an error. |
-| `style` | `{ Field = n \| {x, y} }` | — | Raw `ImGuiStyle` overrides, applied after the preset. An unknown field reports an error. |
+| `style` | `{ Field = n \| {x, y} }` | — | Raw `ImGuiStyle` overrides, applied after the preset. An unknown field or a value out of range (below) reports an error. |
 | `fonts` | `{ key = resource name }` | Roboto | The type scale's faces, named fonts and glyph fallbacks. See [Fonts](#fonts). |
 
 **The window's title bar follows the theme.** On Windows the engine colors the native title bar with the theme's
@@ -46,7 +46,13 @@ shows and follows every theme change. Other platforms keep their own title bar.
 `IndentSpacing`, `ScrollbarSize`, `ScrollbarRounding`, `GrabMinSize`, `GrabRounding`, `TabRounding`,
 `TabBorderSize`, `TabBarBorderSize`, `TabBarOverlineSize`, `ButtonTextAlign`, `SelectableTextAlign`,
 `SeparatorTextBorderSize`, `SeparatorTextAlign`, `SeparatorTextPadding`. A number sets a scalar field, and
-`{x, y}` sets a vector field.
+`{x, y}` sets a vector field (a number sets both of its components; a table needs both).
+
+Values are checked, since ImGui asserts on some of them: every component must be a finite number of at most 10000
+in magnitude, `Alpha` and `DisabledAlpha` must be in 0..1, and both components of `WindowMinSize` at least 1. A style
+value, `spacing`, `fontScale` or a radius out of its range, or one that isn't a number, reports an error
+(`theme.style.Alpha: must be in 0..1`) and is ignored: the field keeps its default. A `Theme` built in C++ is held to the same limits by `setTheme`, which
+clamps `fontScale`, `spacing` and the radii and drops style overrides it can't apply (`styleValueProblem`).
 
 After the preset and the overrides, every style size is scaled by the DPI factor
 (`ImGuiStyle::ScaleAllSizes`).
