@@ -796,17 +796,23 @@ int libTickingCount(lua::State* state) {
     return 1;
 }
 
-Box* syncBox(const Node& node, const TypeInfo& info, Sync mode) {
+/// The instance box of the element table `node`, created now when the table has none yet and its `__type` is a
+/// registered type (a table built without the constructor, `{ __type = "Gauge" }`, like at its first sync). nullptr
+/// otherwise. Once there is a box, its type is the element's: the type it was created as (also after its name was
+/// registered again), found without reading `__type` (a string) and looking it up, which the render path would do
+/// several times per element and frame.
+Box* instanceBox(const TypeRegistry& registry, const Node& node) {
     lua::State* state = node.state();
-    Box* b = selfBox(state, node.index());
-    if (!b) b = attachInstance(state, node.index(), info);
-    if (!b || !b->element) return nullptr;
-    // An instance created before its type's name was registered again keeps the type it was created as.
-    if (b->type != &info && b->type->name() != info.name()) {
-        luaui::reportError("element of type '" + info.name() + "' carries an instance of '" + b->type->name() + "'");
-        return nullptr;
-    }
-    syncInstance(state, node.index(), *b, mode);
+    if (Box* b = selfBox(state, node.index())) return b->element ? b : nullptr;
+    const TypeInfo* info = registry.find(node.type());
+    return info ? attachInstance(state, node.index(), *info) : nullptr;
+}
+
+/// instanceBox(), synced.
+Box* syncBox(const TypeRegistry& registry, const Node& node, Sync mode) {
+    Box* b = instanceBox(registry, node);
+    if (!b) return nullptr;
+    syncInstance(node.state(), node.index(), *b, mode);
     return b->element ? b : nullptr;
 }
 
@@ -857,19 +863,18 @@ TypeRegistry::Kind TypeRegistry::kind(std::string_view type) const {
 }
 
 void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
-    const TypeInfo* info = find(node.type());
-    if (!info) return;
-    Box* b = syncBox(node, *info, Sync::OncePerFrame);
+    Box* b = syncBox(*this, node, Sync::OncePerFrame);
     if (!b) return;
-    Frame frame{renderer, node, &m_instances, info->fillsWidth(b->element)};
+    Frame frame{renderer, node, &m_instances, b->type->fillsWidth(b->element)};
     b->element->render(frame);
 }
 
 std::optional<ImVec2> TypeRegistry::intrinsicSize(Renderer& renderer, const Node& node, float maxWidth) {
-    const TypeInfo* info = find(node.type());
-    if (!info || !info->visual()) return std::nullopt;
-    Box* b = syncBox(node, *info, Sync::OncePerFrame);
-    if (!b) return std::nullopt;
+    Box* b = instanceBox(*this, node);
+    if (!b || !b->type->visual()) return std::nullopt;
+    const TypeInfo* info = b->type;
+    syncInstance(node.state(), node.index(), *b, Sync::OncePerFrame);
+    if (!b->element) return std::nullopt;
     const bool shrink = layout::shrinkToFit();
     if (const auto* known = freshMemo(*b).find(maxWidth, shrink)) return known->size;
     const std::uint64_t changes = luaui::changes();
@@ -881,11 +886,12 @@ std::optional<ImVec2> TypeRegistry::intrinsicSize(Renderer& renderer, const Node
 }
 
 bool TypeRegistry::fillsWidth(Renderer& renderer, const Node& node) {
-    const TypeInfo* info = find(node.type());
-    if (!info) return false;
-    Box* b = syncBox(node, *info, Sync::OncePerFrame);
-    if (!b) return info->fillsWidth(nullptr);
-    if (info->fillsWidth(b->element)) return true;
+    Box* b = syncBox(*this, node, Sync::OncePerFrame);
+    if (!b) {
+        const TypeInfo* info = find(node.type()); // no instance (its constructor failed): what the type says
+        return info && info->fillsWidth(nullptr);
+    }
+    if (b->type->fillsWidth(b->element)) return true;
     Box::LayoutMemo& memo = freshMemo(*b);
     if (memo.fills) return *memo.fills;
     const std::uint64_t changes = luaui::changes();
@@ -896,28 +902,18 @@ bool TypeRegistry::fillsWidth(Renderer& renderer, const Node& node) {
 }
 
 std::uint64_t TypeRegistry::elementId(const Node& node) {
-    lua::State* state = node.state();
-    lua::checkstack(state, 4);
-    Box* b = selfBox(state, node.index());
-    if (!b) {
-        // A table built without the constructor ({ __type = "Gauge" }) gets its instance now, like at its first sync.
-        const TypeInfo* info = find(node.type());
-        if (info) b = attachInstance(state, node.index(), *info);
-    }
-    return b && b->element ? b->element->objectId() : 0;
+    lua::checkstack(node.state(), 4);
+    const Box* b = instanceBox(*this, node);
+    return b ? b->element->objectId() : 0;
 }
 
 Element* TypeRegistry::sync(const Node& node) const {
-    const TypeInfo* info = find(node.type());
-    if (!info) return nullptr;
-    Box* b = syncBox(node, *info, Sync::Always);
+    Box* b = syncBox(*this, node, Sync::Always);
     return b ? b->element : nullptr;
 }
 
 Element* TypeRegistry::renderSync(const Node& node) const {
-    const TypeInfo* info = find(node.type());
-    if (!info) return nullptr;
-    Box* b = syncBox(node, *info, Sync::OncePerFrame);
+    Box* b = syncBox(*this, node, Sync::OncePerFrame);
     return b ? b->element : nullptr;
 }
 
