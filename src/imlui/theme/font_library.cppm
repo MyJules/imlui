@@ -64,6 +64,10 @@ void useFontSet(const FontSet& set);
 /// Atlas fonts the library holds (cached and replaced-but-not-yet-removed); for tests.
 [[nodiscard]] std::size_t libraryFontCount();
 
+/// How many times checkFont() ran since the last resetFontLibrary(); for tests. Each font's bytes are checked once
+/// while they live: loading a set again, or the same file as a face and as a fallback, reuses the result.
+[[nodiscard]] std::size_t fontCheckCount();
+
 /// The face that replaces the type scale's faces in the current scope (see FontFaceScope); nullptr: none.
 [[nodiscard]] ImFont* faceOverride();
 /// Sets the face override; returns the previous one, to restore.
@@ -103,6 +107,27 @@ std::map<std::string, ImFont*, std::less<>> currentNamed;
 ImFont* currentOverride = nullptr;
 std::set<std::string> loggedErrors; ///< useFontSet() logs each failure once
 
+/// checkFont()'s verdict on bytes that are still alive. Keyed by their address and size: while they live, no other
+/// bytes can be at that address.
+struct CheckedFont {
+    std::weak_ptr<const void> owner; ///< the bytes' owner; once it expired, the address may hold other bytes
+    bool owned = false;              ///< false: memory of an immutable mount, valid for as long as it is mounted
+    std::optional<std::string> problem;
+};
+std::map<std::pair<const std::byte*, std::size_t>, CheckedFont> checked;
+std::size_t checks = 0;
+
+/// checkFont(bytes), once per bytes while they live (a font is checked again when its file changed).
+std::optional<std::string> checkOnce(const ResourceData& bytes) {
+    std::erase_if(checked, [](const auto& e) { return e.second.owned && e.second.owner.expired(); });
+    const std::pair key{bytes.data(), bytes.size()};
+    if (const auto it = checked.find(key); it != checked.end()) return it->second.problem;
+    ++checks;
+    auto problem = checkFont(bytes.bytes());
+    checked.emplace(key, CheckedFont{bytes.owner(), bytes.owner() != nullptr, problem});
+    return problem;
+}
+
 std::string cacheKey(std::string_view name, std::span<const std::string> fallback) {
     std::string key{name};
     for (const auto& f : fallback)
@@ -123,7 +148,7 @@ std::optional<ResourceData> readFont(std::string_view name, std::string& error) 
         return std::nullopt;
     }
     // stb_truetype trusts the data and aborts (or reads out of bounds) on a damaged font.
-    if (const auto problem = checkFont(bytes->bytes())) {
+    if (const auto problem = checkOnce(*bytes)) {
         error = *problem == notAFont ? "'" + *canonical + "' is not a TrueType/OpenType font"
                                      : "font '" + *canonical + "' is damaged: " + *problem;
         return std::nullopt;
@@ -226,6 +251,8 @@ void clearFontLibrary() {
     currentRegular = currentMedium = currentOverride = nullptr;
     currentNamed.clear();
     loggedErrors.clear();
+    checked.clear(); // the next resources' mounts may reuse the memory
+    checks = 0;
 }
 
 std::vector<std::string> loadFontSet(const FontSet& set) {
@@ -276,6 +303,8 @@ bool declaresFont(std::string_view name) {
 }
 
 std::size_t libraryFontCount() { return cache.size() + replaced.size(); }
+
+std::size_t fontCheckCount() { return checks; }
 
 ImFont* faceOverride() { return currentOverride; }
 ImFont* setFaceOverride(ImFont* face) { return std::exchange(currentOverride, face); }

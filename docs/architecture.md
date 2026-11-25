@@ -487,7 +487,8 @@ The fonts are added to the ImGui atlas without a copy
 by newer bytes; `clearFontLibrary` when the atlas is cleared or destroyed). Immutable mounts own those bytes, so the
 `Resources` in `EngineConfig` must still outlive the atlas. The Engine keeps it for its whole lifetime, and the atlas
 dies with the window in `run()`. Before a font goes to the atlas, `checkFont` (module `imlui.theme.font_check`)
-checks its structure: ImGui parses fonts with stb_truetype, which trusts the data, reads offsets without bounds
+checks its structure (once per font data: the library keeps the verdict, keyed by the bytes' address and size, while
+they live, so a theme applied again or a fallback merged into every face isn't checked again, and a changed file is): ImGui parses fonts with stb_truetype, which trusts the data, reads offsets without bounds
 checks and aborts through `IM_ASSERT_USER_ERROR`/`STBTT_assert` on data it doesn't expect. The check walks what
 stb_truetype reads when a font is added, when glyphs are looked up and when they are rasterized (the table directory,
 `head`, `hhea`, `hmtx`, `maxp`, the Unicode `cmap` subtable it picks, `loca`, or the CFF header, INDEXes, DICTs,
@@ -814,7 +815,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.dpi` | `contentScale`/`setContentScale`, `zoom`/`setZoom`, `zoomStep`, `dpiScale` (their product), `dp(v)` |
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
 | `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font` (the scope's face override, else the theme's face for the weight), `fontSize`, `fontPixels`, `pushFont` |
-| `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount` |
+| `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount`, `fontCheckCount` |
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
