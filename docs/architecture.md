@@ -164,7 +164,9 @@ functions return nil and a message. A C++ exception that reaches a protected cal
 doesn't corrupt anything: the build maps a `std::bad_alloc` to a Lua memory error (`"not enough memory"`), and any
 other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour), which `safeCall`
 reports as `unknown C++ exception`. A registered type's constructor that throws is reported too
-(`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The property sync
+(`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The table remembers
+the failure (`__native = false`), so the constructor isn't tried again (and the error reported again) every time
+the element is rendered or measured. The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
 
