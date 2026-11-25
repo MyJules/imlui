@@ -344,8 +344,9 @@ On this target:
 - ASan needs the release dynamic CRT, so the preset sets `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`. The code
   is still `-O0 -g`, but the STL's debug iterators are off in this preset, since they need `/MDd`. Use
   `clang-debug` for those.
-- The ASan runtime DLL (`clang_rt.asan_dynamic-x86_64.dll`) is copied to `build/clang-asan/bin` at configure
-  time, so the tests and the app run without changing `PATH`.
+- The ASan runtime DLL (`clang_rt.asan_dynamic-<arch>.dll`, for the architecture the compiler targets) is copied
+  to `build/clang-asan/bin` at configure time (to `bin/<config>/` for each configuration with a multi-config
+  generator), so the tests and the app run without changing `PATH`.
 - ASan is built without its stack-use-after-return instrumentation (`-fsanitize-address-use-after-return=never`,
   also a usage requirement): with it, throwing from a catch block (`throw;`, or a Lua error raised in a handler:
   Lua is compiled as C++) crashes with a bogus "stack-overflow". The check is off at run time by default anyway.
