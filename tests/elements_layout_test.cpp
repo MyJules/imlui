@@ -874,6 +874,34 @@ TEST_F(LayoutTest, ListViewVariableHeightsConvergeAndKeepTheViewStill) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A delegate that holds what must keep rendering out of view (here a non-visual element; the active item, the nav
+// focus and an open popup alike, the culling rules) renders after it scrolled out of the range, at its place.
+TEST_F(LayoutTest, ListViewKeepsRenderingAHeldDelegate) {
+    run(R"(
+        made = {}
+        list = ListView { height = 200, spacing = 0, model = 1000,
+                          delegate = function(i)
+                              made[i] = Probe { h = 20 }
+                              if i == 2 then return If { condition = true, made[i], Timer { interval = 1000 } } end
+                              return made[i]
+                          end })");
+    m_h.renderFrames("list", 3);
+    run("p2, p3 = made[2], made[3]");
+    const float y2 = probe("p2").pos().y;
+    run("native.injectMouse(100, 100, nil, -30)");
+    m_h.renderFrames("list", 3);
+    ListView* list = m_h.instance<ListView>("list");
+    ASSERT_NE(list, nullptr);
+    ASSERT_GT(list->renderedRange().first, 3);
+    const int renders2 = probe("p2").renders();
+    const int renders3 = probe("p3").renders();
+    m_h.renderFrames("list", 2);
+    EXPECT_EQ(probe("p2").renders(), renders2 + 2);
+    EXPECT_EQ(probe("p3").renders(), renders3);
+    EXPECT_FLOAT_EQ(probe("p2").pos().y, y2 - list->scroll().y);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // A ListView keeps its scroll when it moves to another place in the tree, like a ScrollView.
 TEST_F(LayoutTest, ListViewKeepsScrollWhenItMovesToAnotherParent) {
     run(R"(

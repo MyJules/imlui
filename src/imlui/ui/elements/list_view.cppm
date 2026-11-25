@@ -18,6 +18,7 @@ import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.culling;
 import imlui.ui.elements.scroll_view;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
@@ -75,6 +76,10 @@ private:
     std::int64_t m_first = 0;
     std::int64_t m_last = -1;
     int m_unsettled = 0; ///< consecutive frames on which heights changed
+    /// Indices (0-based) that held the active item, the nav focus, an open popup or a non-visual element when they
+    /// last rendered: they render out of range too (cull::held), at most maxPinned.
+    std::vector<std::size_t> m_pinned;
+    static constexpr std::size_t maxPinned = 16;
 };
 
 } // namespace imlui
@@ -279,6 +284,15 @@ void ListView::renderContent(Frame& frame) {
         }
         return spaced ? std::max(0.0f, bottom - y) : noSpace;
     };
+    // renderItem() for index `i`, remembering it when it holds what must keep rendering out of view (the culling
+    // rules: the active item, the nav focus, an open popup, a non-visual element).
+    std::vector<std::size_t> pinned;
+    const auto renderIndex = [&](std::size_t i, float y) -> float {
+        const cull::Watch before = cull::watch();
+        const float h = renderItem(y);
+        if (cull::held(before) && pinned.size() < maxPinned) pinned.push_back(i);
+        return h;
+    };
 
     const float est = fixed ? *fixed : estimate(frame);
     const auto stepOf = [&](std::size_t i) { return fixed ? *fixed + gap : step(i, gap, est); };
@@ -295,9 +309,14 @@ void ListView::renderContent(Frame& frame) {
             while (anchor + 1 < n && anchorTop + stepOf(anchor) <= viewTop)
                 anchorTop += stepOf(anchor++);
         }
+        // The margin, and more while a nav move scores items (cull::outOfView widens the view then): the item it
+        // lands on must be submitted.
         first = anchor;
-        for (float above = 0.0f; first > 0 && above < margin;)
+        for (float above = 0.0f; first > 0;) {
+            const float bottom = origin.y + anchorTop - above;
+            if (above >= margin && cull::outOfView(bottom - stepOf(first - 1), bottom)) break;
             above += stepOf(--first);
+        }
 
         // Above the anchor: placed by the heights known so far (out of view, so a wrong estimate isn't seen), and
         // measured.
@@ -309,7 +328,7 @@ void ListView::renderContent(Frame& frame) {
             for (std::size_t i = first; i < anchor; ++i) {
                 const float before = stepOf(i);
                 lua::rawgeti(state, list, static_cast<lua::Integer>(i - first + 1));
-                const float h = renderItem(origin.y + y);
+                const float h = renderIndex(i, origin.y + y);
                 lua::settop(state, list);
                 if (!fixed) changed = setHeight(i, h) || changed;
                 y += before;
@@ -321,16 +340,17 @@ void ListView::renderContent(Frame& frame) {
         // margin. The delegates are asked for in chunks of the estimated number still needed.
         float y = origin.y + anchorTop;
         end = anchor;
-        while (end < n && y < limit) {
+        const auto more = [&] { return y < limit || !cull::outOfView(y, y + 1.0f); };
+        while (end < n && more()) {
             const float perItem = std::max(1.0f, (fixed ? *fixed : est) + gap);
             const std::size_t want = static_cast<std::size_t>(std::ceil((limit - y) / perItem)) + 1;
             const std::size_t chunkEnd = std::min(n, end + want);
             if (!pushRange(node, end + 1, chunkEnd)) break;
             const int list = lua::gettop(state);
             const std::size_t chunkFirst = end;
-            for (; end < chunkEnd && y < limit; ++end) {
+            for (; end < chunkEnd && more(); ++end) {
                 lua::rawgeti(state, list, static_cast<lua::Integer>(end - chunkFirst + 1));
-                const float h = renderItem(y);
+                const float h = renderIndex(end, y);
                 lua::settop(state, list);
                 if (fixed) {
                     y += *fixed + gap;
@@ -341,8 +361,20 @@ void ListView::renderContent(Frame& frame) {
             }
             lua::settop(state, list - 1);
         }
+
+        // Items held last frame (see renderIndex) that are out of range now keep rendering, at their place.
+        for (const std::size_t i : m_pinned) {
+            if (i >= n || (i >= first && i < end)) continue;
+            if (!pushRange(node, i + 1, i + 1)) continue;
+            lua::rawgeti(state, -1, 1);
+            const float at = fixed ? static_cast<float>(i) * (*fixed + gap) : top(i, gap, est);
+            const float h = renderIndex(i, origin.y + at);
+            if (!fixed) changed = setHeight(i, h) || changed;
+            lua::settop(state, wrapper);
+        }
     }
     lua::settop(state, stackTop);
+    m_pinned = std::move(pinned);
 
     // The content's height by what is known now, and the scroll moved by as much as the anchor moved: items above it
     // that were measured at another height than assumed (or the estimate that changed) would otherwise shift what

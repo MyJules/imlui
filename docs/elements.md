@@ -379,9 +379,15 @@ What virtualization changes:
   `key`, when its key leaves a model of at most 256 items. Past that, the cache keeps at most
   max(256, 4 x the items shown) delegates and drops the ones shown longest ago: keep state that must outlive
   scrolling far away in the model, not in the delegate.
-- **Keyboard and gamepad navigation** reach the items that are built: moving to the next item works (the margin
-  holds it, and ImGui scrolls it into view), but a jump past the margin (`Home`, `End`, Tab cycling through the
-  whole list) stops at the last built item.
+- **Keyboard and gamepad navigation** reach the items that are built: while a nav move picks its target, the
+  margin grows by a view's height (as for [culling](architecture.md#culling)), so the arrow keys, Page Up / Down and
+  Tab reach the next items and ImGui scrolls to them; a jump further than that (`Home`, `End`, Ctrl+Tab cycling
+  through the whole list) stops at the last built item.
+- **An item that holds the active item** (a `TextField` being edited, a `Slider` being dragged), the nav focus, an
+  open popup or a non-visual element (a `Dialog`, a `Timer`) keeps rendering, at its place, after it scrolled out of
+  range, like a culled child would ([culling](#stacking-containers)'s rules); at most 16 such items per list.
+- `cull` and `ui.setCulling` don't change which delegates a `ListView` builds; they apply to its own children when it
+  has no `delegate`, and inside each delegate as in any stack.
 - With a `key`, items that share a key get one delegate each in the order they're shown, which can pair them up
   differently after scrolling.
 

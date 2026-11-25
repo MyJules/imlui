@@ -242,7 +242,10 @@ height above it, placed by the heights known so far, then the items from the anc
 heights they render at, asking for delegates in chunks until it passes the view and the margin. A dummy item at the
 content's total height gives ImGui the scroll range. When the measurements move where the anchor starts, it scrolls
 by the same amount (`SetScrollY`, applied on the next frame), so the items in view don't jump; new heights request
-a frame (at most `layout::maxSettleFrames` in a row).
+a frame (at most `layout::maxSettleFrames` in a row). It reuses the [culling](#culling) rules: the margins also
+extend to what `cull::outOfView` counts as in view (a view's height more while a nav move scores items), and an
+item that `cull::held` (the active item, the nav focus, an open popup, a non-visual element) renders on the next
+frames at its place even out of range, up to 16 per list.
 
 A tree is walked at most `Renderer::maxDepth` (256) levels deep: each element rendered or asked for its intrinsic
 size or fill, and each inline container spliced in, is a level. Deeper is almost surely a cycle (`a[1] = b; b[1] = a`,
@@ -366,9 +369,9 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
 
 ### Culling
 
-Only what is in view renders. The stacks (`Renderer::renderStack`: `Column`, `ScrollView`/`ListView`, `Card`,
-`Section`, `Tab`, `Window`, `Dialog`, `ApplicationWindow`, ...) **cull** a visible visual child before rendering it
-(`Renderer::skipOutOfView`, `imlui.ui.culling`): when the layout cache has a settled size for it
+Only what is in view renders. The stacks (`Renderer::renderStack`: `Column`, `ScrollView` and a `ListView` without
+`delegate`, `Card`, `Section`, `Tab`, `Window`, `Dialog`, `ApplicationWindow`, ...) **cull** a visible visual child
+before rendering it (`Renderer::skipOutOfView`, `imlui.ui.culling`): when the layout cache has a settled size for it
 (`layout::settledSize`: the last two sizes it rendered at were the same) and the rect that size takes at the cursor
 (with the stack's `align` offset) is entirely outside the current window's clip rect, widened by `cull::margin`
 (32 dp), the stack lays out an ImGui `Dummy` of that size there and moves on. `EndGroup` (a rendered child's group)
