@@ -886,7 +886,10 @@ void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
 
 std::optional<ImVec2> TypeRegistry::intrinsicSize(Renderer& renderer, const Node& node, float maxWidth) {
     Box* b = instanceBox(*this, node);
-    if (!b || !b->type->visual()) return std::nullopt;
+    // No instance because its constructor threw: it renders nothing, so its size is known, zero. A layout that waited
+    // for it to have a size (a Row's first frame, rendered unseen) would wait, and ask for frames, forever.
+    if (!b) return constructionFailed(node.state(), node.index()) ? std::optional{ImVec2{}} : std::nullopt;
+    if (!b->type->visual()) return std::nullopt;
     const TypeInfo* info = b->type;
     syncInstance(node.state(), node.index(), *b, Sync::OncePerFrame);
     if (!b->element) return std::nullopt;

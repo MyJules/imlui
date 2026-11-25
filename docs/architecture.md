@@ -170,7 +170,8 @@ other exception to Lua's status -1, an error without a usable message (upstream 
 reports as `unknown C++ exception`. A registered type's constructor that throws is reported too
 (`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The table remembers
 the failure (`__native = false`), so the constructor isn't tried again (and the error reported again) every time
-the element is rendered or measured. The property sync
+the element is rendered or measured, and its intrinsic size is zero (it renders nothing), so a `Row` around it
+settles instead of asking for frames while it waits for the size. The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
 

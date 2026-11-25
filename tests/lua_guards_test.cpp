@@ -161,6 +161,7 @@ TEST_F(LuaGuardsTest, AThrowingConstructorIsTriedOnce) {
         root = Row { Column { }, bomb })");
     m_h.renderFrames("root", 4);
     EXPECT_EQ(Bomb::constructions, 1);
+    EXPECT_EQ(secondsUntilFrame(), std::numeric_limits<double>::infinity()); // settled: the Row stops asking
     int reported = 0;
     for (const auto& e : luaui::errors())
         if (e.find("Bomb: constructor failed: bomb constructor exploded") != std::string::npos) ++reported;
