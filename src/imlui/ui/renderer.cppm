@@ -175,10 +175,12 @@ using luaui::Node;
 
 namespace {
 
+/// Its address is the registry key of the children cache (Renderer::pushChildren). Not const: identical const
+/// objects may be folded into one address by the linker.
+char childrenCacheKey = 0;
+
 /// An element id as the "pointer" ImGui hashes for an ID (ImGui::GetID/PushID(const void*) hash the pointer's bytes,
 /// unlike the string overloads, which treat "###" specially).
-/// Its address is the registry key of the children cache (Renderer::pushChildren).
-const char childrenCacheKey = 0;
 
 const void* idKey(std::uint64_t id) {
     static_assert(sizeof(void*) >= sizeof(std::uint64_t), "element ids are hashed as pointers");
