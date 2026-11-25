@@ -27,7 +27,7 @@ flowchart TD
 | **Lua script** | Builds the element tree and returns the root. It owns all state and all decisions, including theme, window title and size. |
 | **DSL prelude** (`src/resources/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment, the `require` searcher for components and `ui.resource`. |
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. An element's identity is its C++ instance's id (`ScriptObject::objectId()`, see [Element identity](#element-identity)), from which its ImGui ID scope is made, so elements keep per-widget state such as animations and focus across frames, and an element never inherits a dead one's. |
-| **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type". |
+| **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type" and takes no layout space, like a non-visual element. |
 | **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
 | **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They call Material widgets, write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
@@ -138,7 +138,10 @@ An error raised outside any `pcall` still reaches the panic handler, and Lua abo
 defence the render pass (step 4, and the overlays in step 5) runs inside `luaui::renderProtected`
 (`imlui.lua.protected_render`): a C function called with `safeCall`, so an unforeseen error in it is reported like
 the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows, tables and Push/Pop stacks the pass
-left open, so the frame still ends. The rest of that pass is skipped, so this is not error handling: code that calls
+left open, so the frame still ends. imlui's own stacks unwind with the error: layout boxes are scopes
+(`layout::BoxScope`), and `Renderer::render` restores the Material surface and card stacks (`md::pushSurface`,
+`md::beginCard`) to their depth before the element that threw, so `md::surfaceColor()` is right for what renders
+next (both stacks also drop entries an earlier frame left). The rest of that pass is skipped, so this is not error handling: code that calls
 into Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error
 that escapes even that before Lua aborts.
 
@@ -195,7 +198,11 @@ so the handler already sees the new state.
 
 - the array part of the table, or
 - the result of `self.__children(self)` if that function exists. The prelude sets it for `Repeater`, `ListView`,
-  `If`, `Loader` and `Responsive`.
+  `If`, `Loader` and `Responsive`. It runs (as a read, `safeRead`: the model function, the delegates it builds) once
+  a frame per element while `luaui::changes()` stands still: the renderer keeps the list it returned (a weak-keyed
+  table in the registry, stamped with the frame and the count), so a layout's passes over its children (a `Row`'s
+  three, the fill and size questions of its parent) share one call. Lua that may change tables (a handler) running
+  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them.
 
 Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
 own children are laid out as direct children of the parent. That's why a `Repeater` inside a `Row` flows
@@ -264,7 +271,7 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
   the element's ImGui ID in the parent's ID scope, made from its identity (see [Element identity](#element-identity)),
   stable for as long as the element lives: `TabBar` pages are the same elements every time, and `Repeater`/`ListView`
-  keep a delegate while the item at its index doesn't change. A new element never finds a dead one's entry, even
+  keep a delegate while the item at its index doesn't change (with a `key`, while an item with its key is in the model). A new element never finds a dead one's entry, even
   when Lua allocated its table at the dead one's address. A new ImGui context starts empty.
 - **First appearance.** A child with neither an intrinsic size nor a cached one, which a layout must place
   horizontally by its width (under a non-start stack `align`; in a `Row` that has fills or justifies; a `TopAppBar`

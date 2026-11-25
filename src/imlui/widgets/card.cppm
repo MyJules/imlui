@@ -23,6 +23,11 @@ enum class CardVariant { Elevated, Filled, Outlined };
 void beginCard(const char* id, CardVariant v, float width = 0.0f, float padding = 16.0f, float height = 0.0f,
                std::optional<Color> color = std::nullopt, float rounding = -1.0f);
 void endCard();
+/// How many cards are open: to restore with restoreCardDepth() when an error cut a render pass short.
+[[nodiscard]] std::size_t cardDepth();
+/// Forgets the cards opened above `depth` (what a render pass that threw left open; ImGui's error recovery ends
+/// their child windows).
+void restoreCardDepth(std::size_t depth);
 /// The size beginCard() .. endCard() takes with the same `width`, `padding` and `height`, around content
 /// `contentHeight` tall (an auto-height card: ImGui fits it to its content, in whole pixels, plus the padding).
 [[nodiscard]] ImVec2 cardSize(float width, float padding, float height, float contentHeight);
@@ -37,9 +42,16 @@ namespace {
 
 struct CardFrame {
     ImGuiID sizeKey; ///< the card's size in the layout cache, for the next frame's shadow
+    int frame;       ///< the ImGui frame it was opened in
 };
 
-std::vector<CardFrame> cards;
+std::vector<CardFrame> cards; // main thread only, like all ImGui code
+
+/// Every frame ends with no card open, unless a render pass threw past an endCard() and nothing restored the
+/// depth: drop what an earlier frame left.
+void dropStale() {
+    if (!cards.empty() && cards.front().frame != ImGui::GetFrameCount()) cards.clear();
+}
 
 } // namespace
 
@@ -80,7 +92,8 @@ void beginCard(const char* id, CardVariant v, float width, float padding, float 
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(2);
     pushSurface(bg);
-    cards.push_back({key});
+    dropStale();
+    cards.push_back({key, ImGui::GetFrameCount()});
 }
 
 ImVec2 cardSize(float width, float padding, float height, float contentHeight) {
@@ -90,6 +103,15 @@ ImVec2 cardSize(float width, float padding, float height, float contentHeight) {
     // ImGui's auto-fit size of a child window: its content's whole pixels plus the padding, at least its minimum.
     const float fit = std::trunc(contentHeight) + 2.0f * dp(padding);
     return {w, std::max({fit, 4.0f, ImGui::GetStyle().WindowRounding - 1.0f})};
+}
+
+std::size_t cardDepth() {
+    dropStale();
+    return cards.size();
+}
+
+void restoreCardDepth(std::size_t depth) {
+    if (cards.size() > depth) cards.resize(depth);
 }
 
 void endCard() {

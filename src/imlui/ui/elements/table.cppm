@@ -25,8 +25,8 @@ export namespace imlui {
 /// Signals: onRowClicked(self, row)
 /// Two-way: currentRow
 ///
-/// A row that isn't a list renders empty and is reported as a script error. At most 511 columns (ImGui's limit)
-/// are shown; more are reported.
+/// A row that isn't a list renders empty and is reported as a script error (when it is in view: only the rows in
+/// view are submitted, through ImGuiListClipper). At most 511 columns (ImGui's limit) are shown; more are reported.
 class Table final : public Element {
 public:
     static void declare(TypeBuilder<Table>& type);
@@ -118,31 +118,38 @@ void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
         // Clicking a row changes the selection, but the rest of this frame still shows the row selected when it
         // started, like the cells drawn before the click.
         const int selected = m_currentRow;
-        for (lua::Integer i = 1; i <= count; ++i) {
-            const bool isRow = lua::rawgeti(state, rows, i) == lua::Type::Table;
-            if (!isRow) luaui::reportError(std::format("Table: rows[{}] is not a list of cells", i));
-            ImGui::TableNextRow(0, rowH);
-            for (int c = 0; c < columnCount; ++c) {
-                ImGui::TableNextColumn();
-                std::string cell;
-                if (isRow) {
-                    lua::rawgeti(state, -1, c + 1);
-                    if (!lua::isnil(state, -1)) cell = lua::toStringAny(state, -1);
-                    lua::pop(state);
+        // Only the rows in view are submitted (and their cells read): every row is rowH tall, so the clipper
+        // measures the first and skips the others' space.
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(std::min<lua::Integer>(count, std::numeric_limits<int>::max())));
+        while (clipper.Step()) {
+            for (lua::Integer i = clipper.DisplayStart + 1; i <= clipper.DisplayEnd; ++i) {
+                const bool isRow = lua::rawgeti(state, rows, i) == lua::Type::Table;
+                if (!isRow) luaui::reportError(std::format("Table: rows[{}] is not a list of cells", i));
+                ImGui::TableNextRow(0, rowH);
+                for (int c = 0; c < columnCount; ++c) {
+                    ImGui::TableNextColumn();
+                    std::string cell;
+                    if (isRow) {
+                        lua::rawgeti(state, -1, c + 1);
+                        if (!lua::isnil(state, -1)) cell = lua::toStringAny(state, -1);
+                        lua::pop(state);
+                    }
+                    if (c == 0) {
+                        ImGui::PushID(static_cast<int>(i));
+                        const ImVec2 p = ImGui::GetCursorScreenPos();
+                        if (ImGui::Selectable("##row", selected == i,
+                                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                                              {0, rowH}))
+                            clicked = static_cast<int>(i);
+                        ImGui::SetCursorScreenPos(p);
+                        ImGui::PopID();
+                    }
+                    md::tableCell(cell, rowH,
+                                  selected == i ? std::optional<Color>{s.onSecondaryContainer} : std::nullopt);
                 }
-                if (c == 0) {
-                    ImGui::PushID(static_cast<int>(i));
-                    const ImVec2 p = ImGui::GetCursorScreenPos();
-                    if (ImGui::Selectable("##row", selected == i,
-                                          ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
-                                          {0, rowH}))
-                        clicked = static_cast<int>(i);
-                    ImGui::SetCursorScreenPos(p);
-                    ImGui::PopID();
-                }
-                md::tableCell(cell, rowH, selected == i ? std::optional<Color>{s.onSecondaryContainer} : std::nullopt);
+                lua::pop(state);
             }
-            lua::pop(state);
         }
     }
     lua::pop(state);

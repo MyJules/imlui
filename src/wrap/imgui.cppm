@@ -38,6 +38,7 @@ export using ::ImGuiStorage;
 export using ::ImGuiViewport;
 export using ::ImGuiContext;
 export using ::ImGuiErrorRecoveryState;
+export using ::ImGuiListClipper;
 // internals: a Dialog reads the popup stacks (another modal open at its level)
 export using ::ImGuiWindow;
 export using ::ImGuiPopupData;

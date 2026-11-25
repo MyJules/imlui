@@ -9,14 +9,16 @@ import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.item_size;
 import imlui.ui.layout_box;
+import imlui.ui.renderer;
 
 export namespace imlui {
 
 /// A vertical stack (also registered as Item).
 ///
-/// Props:   padding = 0, spacing = unset (ImGui item spacing), align = "start" ("center", "end")
-/// Raw:     width (the children's layout box: `align`, fills and wrapping use it; unset: the parent's box, less the
-///          padding on the right, and a column holding a fill fills itself: contentFillsWidth)
+/// Props:   padding = 0 (dp on every side), spacing = unset (ImGui item spacing), align = "start" ("center", "end")
+/// Raw:     width (the column's width, padding included, like a Card's; the children's layout box (`align`, fills,
+///          wrapping) is that less the padding on each side; unset: the parent's box less the padding on each side,
+///          and a column holding a fill fills itself: contentFillsWidth)
 class Column final : public Element {
 public:
     static void declare(TypeBuilder<Column>& type);
@@ -55,45 +57,55 @@ void Column::declare(TypeBuilder<Column>& type) {
 }
 
 void Column::render(Frame& frame) {
-    const float pad = frame.dp(m_padding);
+    const float pad = std::max(0.0f, frame.dp(m_padding));
+    const bool sized = frame.size("width") != 0;
+    if (!sized && pad <= 0) {
+        frame.renderStack(); // the parent's box
+        return;
+    }
+    // The width is the column's own, padding included: resolved from its left edge, before the padding indents.
+    const float left = ImGui::GetCursorScreenPos().x;
+    const float width = sized ? frame.resolvedWidth(0.0f) : 0.0f;
     if (pad > 0) {
         ImGui::Dummy({0, pad - ImGui::GetStyle().ItemSpacing.y});
         ImGui::Indent(pad);
     }
-    const bool sized = frame.size("width") != 0;
-    if (sized || pad > 0) {
-        const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    float right = p.x; // the content's right edge
+    {
         layout::Box inner = layout::insetBox(pad); // the padding on the right (still shrink-to-fit in a Dialog)
         if (sized) {
-            // A fixed or fill width: reserve it (the column is at least that wide), and make it the children's box.
-            const float w = frame.resolvedWidth(0.0f);
-            ImGui::Dummy({w, 0});
+            // A fixed or fill width: reserve it (the column is at least that wide), and its content is the
+            // children's box.
+            const float content = std::max(0.0f, width - 2.0f * pad);
+            ImGui::Dummy({content, 0});
             ImGui::SetCursorScreenPos(p);
-            inner = layout::boxTo(p.x + w);
+            inner = layout::boxTo(p.x + content);
+            right = p.x + content;
         }
         const layout::BoxScope box{inner};
-        frame.renderStack();
-    } else {
-        frame.renderStack(); // the parent's box
+        right = std::max(right, frame.renderer().renderStack(frame.node()));
     }
     if (pad > 0) {
         ImGui::Unindent(pad);
-        ImGui::Dummy({0, pad - ImGui::GetStyle().ItemSpacing.y});
+        // The bottom padding, as wide as the content and the padding on its right: the column's group (its size)
+        // covers the padding on every side.
+        ImGui::Dummy({right + pad - left, pad - ImGui::GetStyle().ItemSpacing.y});
     }
 }
 
 std::optional<ImVec2> Column::intrinsicSize(const Frame& frame, float maxWidth) {
     // render() in numbers: the children's box, the stack in it, and the padding's dummies (ImGui starts each line on
     // a whole pixel).
-    const float pad = frame.dp(m_padding);
+    const float pad = std::max(0.0f, frame.dp(m_padding));
     const float width = frame.size("width");
-    float reserved = 0.0f, inner = pad > 0 ? maxWidth - 2.0f * pad : maxWidth;
-    if (width != 0) inner = reserved = resolveSize(width, std::max(0.0f, maxWidth - pad), 0.0f);
-    const std::optional<ImVec2> stack = frame.stackSize(std::max(0.0f, inner));
+    float reserved = 0.0f, inner = std::max(0.0f, maxWidth - 2.0f * pad);
+    if (width != 0) inner = reserved = std::max(0.0f, resolveSize(width, maxWidth, 0.0f) - 2.0f * pad);
+    const std::optional<ImVec2> stack = frame.stackSize(inner);
     if (!stack) return std::nullopt;
     // Without padding, width or children, its group holds no item: ImGui measures it by whatever came before.
     if (pad <= 0 && width == 0 && stack->x == 0.0f && stack->y == 0.0f) return std::nullopt;
-    const float w = pad + std::max(stack->x, reserved);
+    const float w = std::max(stack->x, reserved) + 2.0f * pad;
     if (pad <= 0) return ImVec2{w, stack->y};
     const float lineGap = ImGui::GetStyle().ItemSpacing.y;
     const float dummy = pad - lineGap; // the padding dummies' height

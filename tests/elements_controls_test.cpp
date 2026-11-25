@@ -205,6 +205,21 @@ TEST_F(ControlsTest, RadioGroupWritesTheOneBasedIndexBackAndEmitsOnActivated) {
     expectNoErrors();
 }
 
+// The model isn't copied every frame any more: an onActivated handler that replaces it still gets the clicked text,
+// and the group shows the new model from the next frame.
+TEST_F(ControlsTest, RadioGroupHandlerMayReplaceTheModel) {
+    run(R"(
+        got = nil
+        root = RadioGroup { model = { "Small", "Medium", "Large" },
+                            onActivated = function(self, i, text) got = text; self.model = { "Only" } end })");
+    m_h.renderFrame("root");
+    click(28, 108);
+    run(R"(assert(got == "Large", tostring(got)))");
+    m_h.renderFrame("root");
+    EXPECT_EQ(m_h.instance<RadioGroup>("root")->model(), std::vector<std::string>{"Only"});
+    expectNoErrors();
+}
+
 TEST_F(ControlsTest, RadioGroupLaysOutHorizontally) {
     run(R"(
         s = state { index = 1 }

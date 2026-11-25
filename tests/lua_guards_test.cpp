@@ -246,6 +246,29 @@ TEST_F(LuaGuardsTest, SetIntervalRejectsNonPositiveAndNonFiniteIntervals) {
     run("local id = ui.setInterval(function() end, 10); ui.clearTimer(id); ui.setTimeout(function() end)");
 }
 
+// A NaN delay used to make the timer's due time NaN: it never fired nor went away, and ui.__tick reported the next
+// timer as due now (math.max(0, NaN) is 0), so the app rendered continuously. Negative and infinite delays and
+// non-numbers are rejected too; nil and 0 mean "on the next frame".
+TEST_F(LuaGuardsTest, SetTimeoutRejectsNegativeAndNonFiniteDelays) {
+    for (const char* ms : {", -5", ", math.huge", ", -math.huge", ", 0 / 0", ", '10'", ", {}"}) {
+        const std::string error = m_h.run(std::string{"ui.setTimeout(function() end"} + ms + ")");
+        EXPECT_NE(error.find("setTimeout: the delay must be a finite number of milliseconds >= 0"), std::string::npos)
+            << ms << ": " << error;
+    }
+    run("assert(ui.__tick(ui.native.time()) == nil)"); // nothing was added
+    run(R"(
+        fired = 0
+        ui.setTimeout(function() fired = fired + 1 end)
+        ui.setTimeout(function() fired = fired + 1 end, 0)
+        local later = ui.setTimeout(function() end, 60000)
+        local now = ui.native.time()
+        local wait = ui.__tick(now + 1)
+        assert(fired == 2, fired)
+        assert(wait > 50 and wait <= 60, wait)
+        ui.clearTimer(later)
+        assert(ui.__tick(now + 2) == nil))");
+}
+
 // A host hook that throws becomes a Lua error of the native function instead of unwinding through Lua.
 TEST(NativeHooksTest, ThrowingHooksRaiseLuaErrors) {
     luaui::NativeHooks hooks;
