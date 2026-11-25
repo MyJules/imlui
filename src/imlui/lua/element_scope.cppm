@@ -27,9 +27,13 @@ namespace imlui::luaui {
 
 namespace {
 
-// Registry keys (their addresses).
-const char scopesKey = 0;
-const char callInKey = 0;
+/// Registry keys (their addresses): two members of one non-const object, so they are distinct. Two identical const
+/// objects needn't be: identical code folding may merge them into one.
+struct RegistryKeys {
+    char scopes;
+    char callIn;
+};
+RegistryKeys keys{};
 
 } // namespace
 
@@ -37,16 +41,16 @@ void setScopeHooks(lua::State* state, int scopes, int callIn) {
     scopes = lua::absindex(state, scopes);
     callIn = lua::absindex(state, callIn);
     lua::pushvalue(state, scopes);
-    lua::rawsetp(state, lua::registryIndex, &scopesKey);
+    lua::rawsetp(state, lua::registryIndex, &keys.scopes);
     lua::pushvalue(state, callIn);
-    lua::rawsetp(state, lua::registryIndex, &callInKey);
+    lua::rawsetp(state, lua::registryIndex, &keys.callIn);
 }
 
 int scopedArgs(lua::State* state, int element, int nargs) {
     element = lua::absindex(state, element);
     const int fn = lua::gettop(state) - nargs;
     lua::checkstack(state, 3);
-    if (lua::rawgetp(state, lua::registryIndex, &scopesKey) != lua::Type::Table) {
+    if (lua::rawgetp(state, lua::registryIndex, &keys.scopes) != lua::Type::Table) {
         lua::pop(state);
         return nargs;
     }
@@ -56,7 +60,7 @@ int scopedArgs(lua::State* state, int element, int nargs) {
         return nargs;
     }
     lua::remove(state, -2);                              // fn, args..., scope
-    lua::rawgetp(state, lua::registryIndex, &callInKey); // fn, args..., scope, callIn
+    lua::rawgetp(state, lua::registryIndex, &keys.callIn); // fn, args..., scope, callIn
     lua::insert(state, fn);                              // callIn, fn, args..., scope
     lua::insert(state, fn + 1);                          // callIn, scope, fn, args...
     return nargs + 2;
