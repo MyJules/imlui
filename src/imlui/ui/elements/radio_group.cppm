@@ -56,17 +56,18 @@ void RadioGroup::declare(TypeBuilder<RadioGroup>& type) {
 void RadioGroup::render(Frame& frame) {
     const int cur = indexValue(m_currentIndex); // NaN, infinities and huge values are safe
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {ImGui::GetStyle().ItemSpacing.x, 0});
-    // Iterate a copy: the handler may replace the model.
-    const std::vector<std::string> items = m_model;
-    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+    // The handlers may replace the model (a sync while they run): the bound is read again for every item, and a
+    // clicked item's text is copied before they run.
+    for (int i = 0; i < static_cast<int>(m_model.size()); ++i) {
         if (m_horizontal && i > 0) ImGui::SameLine(0, frame.dp(16));
         ImGui::PushID(i);
         const auto idx = static_cast<std::size_t>(i);
-        const std::string label = Frame::labelId(items[idx], "r");
+        const std::string label = Frame::labelId(m_model[idx], "r");
         if (md::radio(label.c_str(), cur == i + 1) && cur != i + 1) {
+            const std::string item = m_model[idx];
             m_currentIndex = static_cast<double>(i + 1);
             notify("currentIndex");
-            emit("onActivated", static_cast<double>(i + 1), items[idx]);
+            emit("onActivated", static_cast<double>(i + 1), item);
         }
         ImGui::PopID();
     }
