@@ -280,6 +280,29 @@ TEST_F(SystemTest, ANewTimerRequestsAFrame) {
     EXPECT_EQ(secondsUntilFrame(), 0.0); // made after the frame took its requests: the next one ticks it
 }
 
+// ------------------------------------------------------------------ Lua timers
+
+// setTimeout / setInterval ask for the frame they're due in, also when set outside a frame or during one.
+TEST_F(SystemTest, LuaTimersRequestTheirFrame) {
+    run("root = Column { }");
+    m_h.renderFrame("root");
+    clearFrameRequests();
+    run("ui.setTimeout(function() end, 500)");
+    double wait = secondsUntilFrame();
+    EXPECT_GT(wait, 0.4);
+    EXPECT_LE(wait, 0.5);
+
+    clearFrameRequests();
+    run("ui.setInterval(function() end, 250)");
+    wait = secondsUntilFrame();
+    EXPECT_GT(wait, 0.15);
+    EXPECT_LE(wait, 0.25);
+
+    clearFrameRequests();
+    run("ui.setTimeout(function() end)");
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+}
+
 TEST_F(SystemTest, ACollectedTimerStopsTicking) {
     run(R"(
         n = 0

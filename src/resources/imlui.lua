@@ -710,11 +710,14 @@ ui.color = {
 
 local timers, nextTimer = {}, 0
 
--- A timer set inside a component instance or delegate runs in its id scope.
+-- A timer set inside a component instance or delegate runs in its id scope. Frames are on demand: it asks for the
+-- frame it's due in (ui.__tick asks for the following ones), also when it was set while the app sleeps (a posted
+-- function) or during a frame, whose own request for the next due time was already made.
 local function addTimer(fn, ms, rep)
     fn = inCurrentScope(fn)
     nextTimer = nextTimer + 1
     timers[nextTimer] = { fn = fn, interval = ms / 1000, due = native.time() + ms / 1000, rep = rep }
+    native.requestFrame(ms / 1000)
     return nextTimer
 end
 local function describe(ms) return type(ms) == "number" and tostring(ms) or type(ms) end
