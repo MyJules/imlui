@@ -95,6 +95,12 @@ using `imlui.widgets.common`:
   arc length, snap to whole pixels, and keep strokes whole-pixel wide and inside the shape.
 - `drawTextV(style, x, cy, ...)`, or `textTop(style, cy)` for the y of `drawText`, to center a label vertically.
   It centers the cap height on a whole pixel, so labels line up the same way in every widget.
+- **Off-screen drawing is culled for you.** The shape, text, icon and shadow helpers check the draw list's clip rect
+  (`rectVisible(dl, a, b)`) and build nothing outside it, so a widget scrolled out of view adds no vertices. Submit
+  the item and update every animation (`animate`, `stateLayer`) as usual, out of view too, so a widget scrolling back
+  in isn't mid-transition; only the drawing is skipped. Drawing that bypasses the helpers (`ImDrawList::AddPolyline`,
+  `PrimReserve`, expensive label formatting) checks `rectVisible` over the item's rect first, as `md::chart` does.
+  Never skip side effects (tooltips, popups, an active item's value label in the foreground draw list) by it.
 
 Return what happened (`bool` changed/clicked, or a result struct).
 

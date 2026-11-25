@@ -94,6 +94,8 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
     ImGui::InvisibleButton(id, size);
     const bool hov = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // The rest only draws: out of view, skip formatting the axis labels and building the series.
+    if (!rectVisible(dl, p, {p.x + w, p.y + h})) return;
     const Color c = o.color.value_or(s.primary);
 
     const AxisRange axis = axisRange(values, o);

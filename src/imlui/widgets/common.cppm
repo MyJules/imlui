@@ -69,10 +69,16 @@ void notePopupOver(ImGuiPopupFlags flags);
 /// |requested|, 0 natural.
 [[nodiscard]] float itemWidth(float requested, float natural);
 
+/// Whether the rect [a, b] (with a pixel of slack for the anti-aliased fringe) overlaps the current clip rect of
+/// `dl`, the rect the GPU clips its draw commands to. Geometry outside it is built and then thrown away, so the
+/// drawing helpers below (shapes, text, icons, shadows) check it and draw nothing outside: a widget scrolled out of
+/// view builds no vertices. An empty clip rect (an item rendered unseen) shows nothing.
+[[nodiscard]] bool rectVisible(ImDrawList* dl, ImVec2 a, ImVec2 b);
+
 [[nodiscard]] ImVec2 measure(TextStyle style, std::string_view s);
 void drawText(ImDrawList* dl, TextStyle style, ImVec2 pos, Color c, std::string_view s);
-/// Draws `s` vertically centered on `cy`, starting at x. Returns its width.
-float drawTextV(ImDrawList* dl, TextStyle style, float x, float cy, Color c, std::string_view s);
+/// Draws `s` vertically centered on `cy`, starting at x.
+void drawTextV(ImDrawList* dl, TextStyle style, float x, float cy, Color c, std::string_view s);
 /// The largest icon drawIcon() draws, in pixels: a larger size is drawn at this one (ImGui rasterizes each size
 /// into its font atlas, and a glyph larger than the atlas aborts).
 inline constexpr float maxIconPixels = 1024.0f;
@@ -167,17 +173,29 @@ float itemWidth(float requested, float natural) {
     return resolveSize(requested, layout::availableWidth(), natural);
 }
 
+bool rectVisible(ImDrawList* dl, ImVec2 a, ImVec2 b) {
+    // A draw list nobody pushed a clip rect on clips nothing.
+    if (dl->_ClipRectStack.Size == 0) return true;
+    const ImVec4& clip = dl->_ClipRectStack.back();
+    if (!(clip.z > clip.x && clip.w > clip.y)) return false;
+    return a.x - 1.0f < clip.z && b.x + 1.0f > clip.x && a.y - 1.0f < clip.w && b.y + 1.0f > clip.y;
+}
+
 ImVec2 measure(TextStyle style, std::string_view s) {
     return font(style)->CalcTextSizeA(fontPixels(style), hugeExtent, 0.0f, s.data(), s.data() + s.size());
 }
 
 void drawText(ImDrawList* dl, TextStyle style, ImVec2 pos, Color c, std::string_view s) {
+    // ImGui skips the lines above and below the clip rect cheaply, but walks the glyphs of a line right of it.
+    if (!rectVisible(dl, pos, {hugeExtent, hugeExtent})) return;
     dl->AddText(font(style), fontPixels(style), pos, col(c), s.data(), s.data() + s.size());
 }
 
-float drawTextV(ImDrawList* dl, TextStyle style, float x, float cy, Color c, std::string_view s) {
+void drawTextV(ImDrawList* dl, TextStyle style, float x, float cy, Color c, std::string_view s) {
+    // A line is at most a font size tall around its center: skip textTop()'s glyph lookup out of view.
+    const float size = fontPixels(style);
+    if (!rectVisible(dl, {x, cy - size}, {hugeExtent, cy + size})) return;
     drawText(dl, style, {x, textTop(style, cy)}, c, s);
-    return measure(style, s).x;
 }
 
 float textTop(TextStyle style, float cy) {
@@ -196,10 +214,12 @@ float textTop(TextStyle style, float cy) {
 void drawIcon(ImDrawList* dl, std::string_view name, ImVec2 c, float size, Color color) {
     ImFont* f = iconFont();
     if (!f || name.empty()) return;
-    std::string t = iconText(name);
-    if (t.empty()) return;
     const float px = std::min(dp(size), maxIconPixels);
     if (!(px >= 1.0f)) return; // also NaN
+    // The glyph lies within its size around `c`; out of view, skip the name lookup and the measuring.
+    if (!rectVisible(dl, {c.x - px, c.y - px}, {c.x + px, c.y + px})) return;
+    std::string t = iconText(name);
+    if (t.empty()) return;
     ImVec2 sz = f->CalcTextSizeA(px, hugeExtent, 0.0f, t.c_str());
     dl->AddText(f, px, {std::floor(c.x - sz.x * 0.5f), std::floor(c.y - sz.y * 0.5f)}, col(color), t.c_str());
 }
@@ -297,7 +317,7 @@ void fillRoundRect(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, Color c, Im
     // A radius meant as a pill stays one when snapping changes the size by a pixel.
     const bool pill = radius >= maxRadius(a, b, corners) - 0.01f;
     const ImVec2 sa = snap(a), sb = snap(b);
-    if (sb.x <= sa.x || sb.y <= sa.y) return;
+    if (sb.x <= sa.x || sb.y <= sa.y || !rectVisible(dl, sa, sb)) return;
     pathRoundRect(dl, sa, sb, pill ? hugeExtent : radius, corners);
     dl->PathFillConvex(col(c));
 }
@@ -310,6 +330,7 @@ void strokeRoundRect(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, Color c, 
     // The center line runs `inset` inside the snapped rect: on pixel centers for odd widths, on pixel edges for
     // even ones. Either way the stroke covers whole pixels inside [a, b].
     const ImVec2 sa = snap(a), sb = snap(b);
+    if (!rectVisible(dl, sa, sb)) return;
     const ImVec2 pa{sa.x + inset, sa.y + inset}, pb{sb.x - inset, sb.y - inset};
     if (pb.x <= pa.x || pb.y <= pa.y) {
         fillRoundRect(dl, sa, sb, radius, c, corners);
@@ -321,12 +342,14 @@ void strokeRoundRect(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, Color c, 
 
 void fillCircle(ImDrawList* dl, ImVec2 center, float radius, Color c) {
     if (c.a <= 0.0f || radius <= 0.0f) return;
+    if (!rectVisible(dl, {center.x - radius, center.y - radius}, {center.x + radius, center.y + radius})) return;
     pathCircle(dl, center, radius);
     dl->PathFillConvex(col(c));
 }
 
 void strokeCircle(ImDrawList* dl, ImVec2 center, float radius, Color c, float thickness) {
     if (c.a <= 0.0f || radius <= 0.0f) return;
+    if (!rectVisible(dl, {center.x - radius, center.y - radius}, {center.x + radius, center.y + radius})) return;
     const float t = strokePixels(thickness);
     if (radius <= t) {
         fillCircle(dl, center, radius, c);
@@ -338,6 +361,9 @@ void strokeCircle(ImDrawList* dl, ImVec2 center, float radius, Color c, float th
 
 void strokeArc(ImDrawList* dl, ImVec2 center, float radius, float a0, float a1, Color c, float thickness) {
     if (c.a <= 0.0f || radius <= 0.0f || a1 <= a0) return;
+    // The stroke is centered on the arc.
+    const float outer = radius + thickness * 0.5f;
+    if (!rectVisible(dl, {center.x - outer, center.y - outer}, {center.x + outer, center.y + outer})) return;
     dl->PathArcTo(center, radius, a0, a1, arcSegments(radius, a1 - a0));
     dl->PathStroke(col(c), thickness);
 }
@@ -345,13 +371,15 @@ void strokeArc(ImDrawList* dl, ImVec2 center, float radius, float a0, float a1, 
 void hLine(ImDrawList* dl, float x0, float x1, float y, Color c, float thickness) {
     if (c.a <= 0.0f) return;
     const float sy = snap(y), sx0 = snap(x0), sx1 = snap(x1);
-    if (sx1 > sx0) dl->AddRectFilled({sx0, sy}, {sx1, sy + strokePixels(thickness)}, col(c));
+    const ImVec2 a{sx0, sy}, b{sx1, sy + strokePixels(thickness)};
+    if (sx1 > sx0 && rectVisible(dl, a, b)) dl->AddRectFilled(a, b, col(c));
 }
 
 void vLine(ImDrawList* dl, float x, float y0, float y1, Color c, float thickness) {
     if (c.a <= 0.0f) return;
     const float sx = snap(x), sy0 = snap(y0), sy1 = snap(y1);
-    if (sy1 > sy0) dl->AddRectFilled({sx, sy0}, {sx + strokePixels(thickness), sy1}, col(c));
+    const ImVec2 a{sx, sy0}, b{sx + strokePixels(thickness), sy1};
+    if (sy1 > sy0 && rectVisible(dl, a, b)) dl->AddRectFilled(a, b, col(c));
 }
 
 } // namespace imlui::md
