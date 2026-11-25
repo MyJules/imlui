@@ -151,6 +151,9 @@ int protectedTrampoline(lua::State* state) {
     return 0;
 }
 
+/// The status of a pcall that a foreign C++ exception ended (external/lua_cxx/imlui_lua.cpp, as upstream Lua).
+constexpr int lostExceptionStatus = -1;
+
 /// lua::pcall of the function below `nargs` arguments, with tracebackHandler; reports the error of a failed call.
 bool pcallReporting(lua::State* state, int nargs, int nresults) {
     const int base = lua::gettop(state) - nargs;
@@ -159,7 +162,10 @@ bool pcallReporting(lua::State* state, int nargs, int nresults) {
     const int rc = lua::pcall(state, nargs, nresults, base);
     lua::remove(state, base);
     if (rc != lua::ok) {
-        reportError(std::string{lua::tostring(state, -1)});
+        // Status -1: a C++ exception that wasn't a Lua error, std::bad_alloc or one a C function turned into a Lua
+        // error (catchCxx) reached the pcall. The value Lua leaves is whatever was on top, not a message.
+        reportError(rc == lostExceptionStatus ? std::string{"unknown C++ exception"}
+                                              : std::string{lua::tostring(state, -1)});
         lua::pop(state);
         return false;
     }

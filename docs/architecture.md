@@ -147,12 +147,14 @@ escapes even that before Lua aborts.
 
 C++ exceptions become Lua errors with a message at the library's C functions: methods (`TypeBuilder`, a Lua error
 `Gauge:reset: ...`), the `imlui.native` functions (the host's `NativeHooks`, theme and font loading: a Lua error
-`imlui.native.quit: ...`), `imlui.types.tick` and the render pass (`luaui::catchCxx`, which raises
+`imlui.native.quit: ...`), `imlui.types` (`tick`, `attach`, `names`, `meta`) and the render pass (`luaui::catchCxx`, which raises
 `<where>: <what>` and lets a Lua error pass). Property hooks, `componentComplete()`, `tick()` and `destroyed()` (from
 `__gc`, which must never raise) are reported as script errors instead (`luaui::reportCxx`), and the `imlui.resource`
 functions return nil and a message. A C++ exception that reaches a protected call without that (a bug) still
 doesn't corrupt anything: the build maps a `std::bad_alloc` to a Lua memory error (`"not enough memory"`), and any
-other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour). The property sync
+other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour), which `safeCall`
+reports as `unknown C++ exception`. A registered type's constructor that throws is reported too
+(`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
 

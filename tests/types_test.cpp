@@ -179,6 +179,14 @@ private:
     double m_value = 0;
 };
 
+/// Its constructor throws something that isn't a std::exception.
+class IntThrower final : public Element {
+public:
+    static void declare(TypeBuilder<IntThrower>&) {}
+    IntThrower() { throw 42; }
+    void render(Frame&) override {}
+};
+
 lua::State* newUiState(TypeRegistry& types) {
     lua::State* state = lua::newstate();
     lua::openlibs(state);
@@ -694,6 +702,20 @@ TEST(SingletonLifetimeTest, DestroyedByReferenceSingletonRaises) {
     lua::close(later);
     lua::close(state);
     clearFrameRequests();
+}
+
+// A constructor that throws a non-std exception is reported with a message (it escaped the catch before), and the
+// element gets no instance.
+TEST(ConstructorExceptionTest, NonStdExceptionIsReported) {
+    luaui::clearErrors();
+    TypeRegistry types;
+    types.registerType<IntThrower>("IntThrower");
+    lua::State* state = newUiState(types);
+    EXPECT_EQ(luaError(state, "t = ui.env.IntThrower {}; assert(rawget(t, '__native') == nil)"), "");
+    ASSERT_FALSE(luaui::errors().empty());
+    EXPECT_NE(luaui::errors().back().find("IntThrower: constructor failed: unknown C++ exception"), std::string::npos);
+    lua::close(state);
+    luaui::clearErrors();
 }
 
 TEST(OverloadTest, PicksOverloadsByParameterTypes) {

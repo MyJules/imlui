@@ -657,8 +657,16 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
         b->element = info.factory()().release();
         // Right after construction: what nil resets each property to.
         if (b->element) b->defaults = info.captureDefaults(*b->element);
+    } catch (const lua::Raised&) {
+        delete b->element; // a Lua error (a constructor that called into Lua): not ours to report, it propagates
+        b->element = nullptr;
+        throw;
     } catch (const std::exception& e) {
         luaui::reportError(info.name() + ": constructor failed: " + e.what());
+        delete b->element;
+        b->element = nullptr;
+    } catch (...) {
+        luaui::reportError(info.name() + ": constructor failed: unknown C++ exception");
         delete b->element;
         b->element = nullptr;
     }
@@ -689,25 +697,36 @@ TypeRegistry* upvalueRegistry(lua::State* state) {
 }
 
 int libNames(lua::State* state) {
-    const std::vector<std::string> names = upvalueRegistry(state)->typeNames();
-    lua::createtable(state, static_cast<int>(names.size()), 0);
-    lua::Integer i = 0;
-    for (const auto& n : names) {
-        lua::pushstring(state, n);
-        lua::rawseti(state, -2, ++i);
-    }
-    return 1;
+    return luaui::catchCxx(
+        state,
+        [&] {
+            const std::vector<std::string> names = upvalueRegistry(state)->typeNames();
+            lua::createtable(state, static_cast<int>(names.size()), 0);
+            lua::Integer i = 0;
+            for (const auto& n : names) {
+                lua::pushstring(state, n);
+                lua::rawseti(state, -2, ++i);
+            }
+            return 1;
+        },
+        "imlui.types.names");
 }
 
 /// meta(name): the metatable every element table of type `name` shares (nil for an unknown type), for element
 /// tables that get their instance later (the Lua-side containers).
 int libMeta(lua::State* state) {
-    const TypeInfo* info = lua::isstring(state, 1) ? upvalueRegistry(state)->find(lua::tostring(state, 1)) : nullptr;
-    if (info)
-        pushTypeMeta(state, *info);
-    else
-        lua::pushnil(state);
-    return 1;
+    return luaui::catchCxx(
+        state,
+        [&] {
+            const TypeInfo* info =
+                lua::isstring(state, 1) ? upvalueRegistry(state)->find(lua::tostring(state, 1)) : nullptr;
+            if (info)
+                pushTypeMeta(state, *info);
+            else
+                lua::pushnil(state);
+            return 1;
+        },
+        "imlui.types.meta");
 }
 
 int libIsType(lua::State* state) {
@@ -717,15 +736,20 @@ int libIsType(lua::State* state) {
 
 /// attach(element): creates the C++ instance of a registered element table. Returns the table.
 int libAttach(lua::State* state) {
-    if (lua::istable(state, 1)) {
-        lua::getfield(state, 1, "__type");
-        const TypeInfo* info =
-            lua::isstring(state, -1) ? upvalueRegistry(state)->find(lua::tostring(state, -1)) : nullptr;
-        lua::pop(state);
-        if (info) attachInstance(state, 1, *info);
-    }
-    lua::settop(state, 1);
-    return 1;
+    return luaui::catchCxx(
+        state,
+        [&] {
+            if (lua::istable(state, 1)) {
+                lua::getfield(state, 1, "__type");
+                const TypeInfo* info =
+                    lua::isstring(state, -1) ? upvalueRegistry(state)->find(lua::tostring(state, -1)) : nullptr;
+                lua::pop(state);
+                if (info) attachInstance(state, 1, *info);
+            }
+            lua::settop(state, 1);
+            return 1;
+        },
+        "imlui.types.attach");
 }
 
 /// tick(now): calls Element::tick(now) on the ticking elements of this state, each synced first, so a Timer
