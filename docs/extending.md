@@ -432,6 +432,16 @@ instance:
 Bindings that read singletons (`function() return backend.load end`) are re-evaluated on every rendered frame,
 like any binding.
 
+**Static properties are converted once.** A property whose raw value in the element table is a plain value (a
+string, number, boolean, or nil) converts to the same thing until that field is written, so a sync converts it only
+when something changed: the element table's declared fields (a fingerprint of their raw values: an assignment from
+Lua, a `notify` write-back, a raw write), its metatable, or the theme (a color role). Otherwise only the **dynamic**
+properties are read again: functions, `bind()`s and any other table (it may have changed in place), userdata, and,
+on an element table with a metatable of its own, the fields its `__index` answers. A full sync also follows one that
+an error cut short. The setter rule is unchanged, so this only saves work: a static property's setter wasn't called
+on those frames anyway. A `LuaConvert<V>::get` must therefore depend only on the Lua value (and the theme), not on
+other state that changes between frames.
+
 **Lazy sync.** An element that isn't rendered (on a hidden page, `visible = false`, a model item that isn't shown)
 is synced when something needs it:
 
@@ -461,7 +471,9 @@ that calls a method of its own element
 element's property through the instance (it reads the element table), so that needs no sync.
 
 Because the sync compares with the getter, the element table is the source of truth: a C++ change that isn't
-`notify`'d is overwritten by the Lua value at the next sync. Always `notify` after changing a property in C++.
+`notify`'d is overwritten by the Lua value at the next sync that converts the property, which for a plain value is
+only after its field (or the theme) changes, for a binding or `bind()` at the next sync. Always `notify` after
+changing a property in C++: it writes the value to the table, so Lua sees it and every sync after it agrees.
 
 ## Telling Lua about changes
 
