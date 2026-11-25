@@ -12,7 +12,6 @@ import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.font_face_scope;
 import imlui.theme.typography;
-import imlui.theme.icons;
 import imlui.theme.theme;
 import imlui.lua.node;
 import imlui.lua.value;
@@ -119,19 +118,15 @@ int text(lua::State* state) {
     return 0;
 }
 
-/// p:icon(cx, cy, name, size = 24, color) — centered at (cx, cy)
+/// p:icon(cx, cy, name, size = 24, color) — centered at (cx, cy). md::drawIcon: nothing below a pixel, at most
+/// md::maxIconPixels.
 int icon(lua::State* state) {
     ready(state);
-    ImVec2 c = pt(state, 2);
-    std::string_view name = lua::tostring(state, 4);
-    float size = num(state, 5, 24.0f);
-    Color col = colorArg(state, 6, theme().scheme.onSurfaceVariant);
-    ImFont* f = iconFont();
-    std::string t = iconText(name);
-    if (!f || t.empty()) return 0;
-    float px = dp(size);
-    ImVec2 sz = f->CalcTextSizeA(px, 3.4e38f, 0.0f, t.c_str());
-    target->AddText(f, px, {c.x - sz.x * 0.5f, c.y - sz.y * 0.5f}, u32(col), t.c_str());
+    const ImVec2 c = pt(state, 2);
+    const std::string_view name = lua::type(state, 4) == lua::Type::String ? lua::tostring(state, 4) : "";
+    const float size = num(state, 5, 24.0f);
+    const Color col = colorArg(state, 6, theme().scheme.onSurfaceVariant);
+    md::drawIcon(target, name, c, size, col);
     return 0;
 }
 

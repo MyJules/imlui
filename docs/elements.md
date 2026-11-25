@@ -648,7 +648,7 @@ A Material icon glyph.
 | `name` | icon | — | The glyph. |
 | `icon` | icon | — | The glyph, when `name` isn't set. |
 | `text` | string | `""` | Positional. The glyph, when neither `name` nor `icon` is set. |
-| `size` | number | `24` | Size (dp). |
+| `size` | number | `24` | Size (dp). Below a pixel nothing is drawn; the glyph is drawn at most 1024 pixels tall. |
 | `color` | color | — | Tint. Unset: `onSurfaceVariant`. |
 
 ### Image
@@ -1059,7 +1059,7 @@ use ImGui's anti-aliased lines.
 | `p:rect(x, y, w, h, color, rounding, outline, thickness)` | `color = "primary"`, `rounding = 0`, `outline = false` (filled), `thickness = 1` |
 | `p:circle(cx, cy, r, color, outline, thickness)` | `color = "primary"`, `outline = false` (filled), `thickness = 1` |
 | `p:text(x, y, text, color, style, font)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"`, `font` = a [named font](theming.md#fonts) (unset: the style's face) |
-| `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"` |
+| `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"`; a size below a pixel draws nothing, the glyph is at most 1024 pixels |
 | `p:polyline({x1, y1, x2, y2, ...}, color, thickness, closed)` | `color = "primary"`, `thickness = 1`, `closed = false` |
 
 Calling the painter outside `onPaint` raises an error.
