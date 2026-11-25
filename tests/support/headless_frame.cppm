@@ -95,7 +95,8 @@ public:
 
     /// Renders one ImGui frame: advances the time by Options::deltaTime, runs ui.__tick (timers, onFrame),
     /// and renders the element held by `root` in the script environment inside a full-display window.
-    /// Key and mouse events queued before (native.injectKey / injectMouse, or ImGui::GetIO()) are seen.
+    /// Key and mouse events queued before (native.injectKey / injectMouse, or ImGui::GetIO()) are seen. Ends with
+    /// images().collect(), like the Engine.
     void renderFrame(std::string_view root);
     void renderFrames(std::string_view root, int count);
     /// A left click at (x, y) in screen pixels, rendering `root`: move, press and release (native.injectMouse),
@@ -265,6 +266,7 @@ void HeadlessFrame::renderFrame(std::string_view root) {
     lua::settop(m_state, top);
     ImGui::End();
     ImGui::Render();
+    m_images.collect(); // after the frame, like the Engine: destroyed textures, the budget
     ++m_frames;
 }
 

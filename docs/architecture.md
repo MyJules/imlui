@@ -569,7 +569,13 @@ and no GL call is made outside the backend. A failure (missing file, not an imag
 `refresh()` drops changed images: a texture the backend has uploaded is marked `WantDestroyNextFrame`, the backend
 destroys it after the next frame and `collect()` (after each frame) deletes it; one that was never uploaded is deleted
 at once. At shutdown the backend destroys the remaining textures with the window, and the cache deletes the data after
-the ImGui context is gone. `smooth = false` uses the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
+the ImGui context is gone. The decoded pixels are kept within a byte budget (`ImageCache::setBudget`, default
+`defaultBudget` = 256 MiB, `0` for no limit; the root `ApplicationWindow`'s `imageCacheBudget` prop sets it): `get()`
+stamps an image with the ImGui frame, and `collect()` evicts the images drawn least recently (through the same
+release path) until the cache fits, never one drawn in the current or the previous frame, whose draw lists may still
+refer to it. A failure costs 0 bytes, so it stays cached and is still reported once; an evicted image is decoded again
+by its next `get()` (`decodeCount` counts it). So a reference from `get()` is valid until the end of the frame, or
+until `refresh()` or `clear()`. `smooth = false` uses the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
 
 ### Resource manifests
 
@@ -934,7 +940,7 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.image.decode` | `decodeImage(bytes)`: PNG/JPEG to RGBA8 (`DecodedImage`, move-only: `width`, `height`, `rgba` (a view of the decoder's buffer, `pixels`, not a copy), `error`) |
 | `imlui.image.fill_mode` | `FillMode` (`Stretch`, `Fit`, `Crop`, `Tile`), `parseFillMode`, `imageSize(natural, scale, w, h)` (natural size x dp, aspect from one side), `placeImage` (the `ImageQuad`s: screen rects and texture coordinates per fill mode) |
-| `imlui.image.image_cache` | `ImageCache`: one decode per resource name, kept as an ImGui user texture (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`) |
+| `imlui.image.image_cache` | `ImageCache`: one decode per resource name, kept as an ImGui user texture (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`), within a byte budget (`budget`/`setBudget`, `bytes`, `defaultBudget`: the least recently drawn images are evicted after a frame) |
 
 ### App (`src/imlui/app/`)
 

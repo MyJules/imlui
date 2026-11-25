@@ -1,5 +1,5 @@
 // Tests for images: decoding (imlui.image.decode), sizes and fill modes (imlui.image.fill_mode), the ImageCache
-// (hits, misses, errors, reloading changed files, textures) and the Image element through the headless harness,
+// (hits, misses, errors, reloading changed files, textures, the byte budget) and the Image element through the headless harness,
 // with `app:/` on tests/data or on a temporary folder.
 #include <gtest/gtest.h>
 
@@ -268,6 +268,79 @@ TEST(ImageCache, KeepsUploadedTexturesUntilTheBackendDestroyedThem) {
     cache.collect(); // deletes it (ASan would flag a leak or a use after free)
 }
 
+// The byte budget: after a frame, the images drawn least recently go until the cache fits, never one drawn in the
+// current or the previous frame; an evicted image is decoded again when it's next drawn. (The harness collects after
+// each frame, like the Engine; an image fetched between frames counts as drawn in the frame before.)
+TEST(ImageCache, EvictsTheLeastRecentlyDrawnImagesOverItsBudget) {
+    test::TempDir dir;
+    for (const char* name : {"a.png", "b.png", "c.png"})
+        dir.write(name, asText(testFile("rgba_4x2.png"))); // 4 x 2 x 4 = 32 bytes each
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(dir.path()));
+    ImageCache& cache = h.images();
+    EXPECT_EQ(cache.budget(), ImageCache::defaultBudget);
+    EXPECT_EQ(ImageCache::defaultBudget, std::size_t{256} << 20);
+    cache.setBudget(64);
+    const auto frame = [&] { h.renderFrame("nothing"); };
+
+    frame();
+    EXPECT_TRUE(cache.get("app:/a.png").ready());
+    frame();
+    EXPECT_TRUE(cache.get("app:/b.png").ready());
+    frame();
+    EXPECT_TRUE(cache.get("app:/c.png").ready());
+    EXPECT_EQ(cache.bytes(), 96u);
+    frame(); // over budget: `a` (drawn longest ago) goes, `b` is enough to keep
+    EXPECT_FALSE(cache.contains("app:/a.png"));
+    EXPECT_TRUE(cache.contains("app:/b.png"));
+    EXPECT_TRUE(cache.contains("app:/c.png"));
+    EXPECT_EQ(cache.bytes(), 64u);
+    EXPECT_EQ(cache.decodeCount(), 3u);
+
+    // Drawn in this frame: kept over budget, until two frames later.
+    cache.setBudget(1);
+    cache.get("app:/b.png");
+    cache.get("app:/c.png");
+    frame();
+    EXPECT_EQ(cache.names(), (std::vector<std::string>{"app:/b.png", "app:/c.png"})) << "drawn in the previous frame";
+    frame();
+    EXPECT_TRUE(cache.names().empty());
+    EXPECT_EQ(cache.bytes(), 0u);
+
+    // Evicted images decode again.
+    EXPECT_TRUE(cache.get("app:/a.png").ready());
+    EXPECT_EQ(cache.decodeCount(), 4u);
+}
+
+// A failure costs no bytes: it stays cached, so a missing file is reported once, whatever the budget.
+TEST(ImageCache, KeepsFailuresAndAnUnlimitedBudget) {
+    test::TempDir dir;
+    for (const char* name : {"a.png", "b.png"})
+        dir.write(name, asText(testFile("rgba_4x2.png")));
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(dir.path()));
+    ImageCache& cache = h.images();
+    const auto frame = [&] { h.renderFrame("nothing"); };
+
+    cache.setBudget(1);
+    EXPECT_FALSE(cache.get("app:/missing.png").ready());
+    EXPECT_EQ(cache.bytes(), 0u);
+    for (int i = 0; i < 3; ++i)
+        frame();
+    EXPECT_TRUE(cache.contains("app:/missing.png"));
+    cache.get("app:/missing.png");
+    EXPECT_EQ(cache.decodeCount(), 1u);
+
+    // 0: no limit.
+    cache.setBudget(0);
+    cache.get("app:/a.png");
+    cache.get("app:/b.png");
+    for (int i = 0; i < 3; ++i)
+        frame();
+    EXPECT_EQ(cache.bytes(), 64u);
+    EXPECT_EQ(cache.names().size(), 3u);
+}
+
 // ------------------------------------------------------------------ the Image element
 
 namespace {
@@ -287,6 +360,23 @@ protected:
 };
 
 } // namespace
+
+// ApplicationWindow's `imageCacheBudget` sets the cache's budget while the prop exists.
+TEST_F(ImageElement, ApplicationWindowSetsTheCacheBudget) {
+    show(R"(root = ApplicationWindow { Image { id = "img", source = "rgba_4x2.png" } })");
+    EXPECT_EQ(m_h.images().budget(), ImageCache::defaultBudget) << "without the prop";
+    show(R"(s = state { budget = 1000 }
+            root = ApplicationWindow { imageCacheBudget = bind(s, "budget"),
+                                       Image { id = "img2", source = "rgba_4x2.png" } })");
+    EXPECT_EQ(m_h.images().budget(), 1000u);
+    ASSERT_EQ(m_h.run("s.budget = 0"), "");
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(m_h.images().budget(), 0u);
+    ASSERT_EQ(m_h.run("s.budget = -5"), "");
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(m_h.images().budget(), 0u) << "a negative budget reads as 0";
+    EXPECT_TRUE(luaui::errors().empty());
+}
 
 TEST_F(ImageElement, DrawsAtItsNaturalSizeTimesTheScale) {
     show(R"(
