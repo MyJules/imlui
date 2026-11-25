@@ -256,6 +256,30 @@ TEST_F(SystemTest, TimerRequestsAFrameAtItsDueTime) {
     EXPECT_LE(wait, 0.5);
 }
 
+// Frames are on demand: a Timer created while the app sleeps, or during a frame (after the frame's requests were
+// taken), asks for the frame that runs its first tick.
+TEST_F(SystemTest, ANewTimerRequestsAFrame) {
+    run(R"(
+        n = 0
+        root = Column { })");
+    m_h.renderFrame("root");
+    clearFrameRequests();
+    run("t = Timer { interval = 250, triggeredOnStart = true, onTriggered = function() n = n + 1 end }");
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+    m_h.renderFrame("root");
+    EXPECT_EQ(number("n"), 1);
+
+    clearFrameRequests();
+    run(R"(
+        local remove
+        remove = ui.onFrame(function()
+            remove()
+            t2 = Timer { interval = 250 }
+        end))");
+    m_h.renderFrame("root");
+    EXPECT_EQ(secondsUntilFrame(), 0.0); // made after the frame took its requests: the next one ticks it
+}
+
 TEST_F(SystemTest, ACollectedTimerStopsTicking) {
     run(R"(
         n = 0

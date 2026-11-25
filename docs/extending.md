@@ -809,9 +809,10 @@ due time. The built-in `Timer` does the latter.
 `render()` only runs while the element is rendered. An element that must act on its own, also when its page isn't
 shown (a timer, a poller), turns on **ticking** with `setTicking(true)` (protected; typically in the constructor or
 in a setter). While it's on, `tick(now)` runs at the start of every frame, before the tree renders, whether the
-element is rendered or not, with its properties synced first. `now` is the ImGui time in seconds. Frames are
-rendered on demand, so ask for the frame you need with `requestFrameAfter(seconds)` (module
-`imlui.ui.frame_request`). `setTicking(false)` stops it, and so does the destructor.
+element is rendered or not, with its properties synced first. `now` is the ImGui time in seconds. Turning ticking
+on requests a frame, so the first `tick()` comes on the next frame; after that, frames are rendered on demand, so ask
+for the frame you need with `requestFrameAfter(seconds)` (module `imlui.ui.frame_request`). `setTicking(false)`
+stops it, and so does the destructor.
 
 ```cpp
 class Poller final : public imlui::Element {
