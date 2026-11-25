@@ -336,7 +336,7 @@ TEST_F(LayoutTest, ColumnPaddingSpacingWidthAndAlign) {
     const ImVec2 a = probe("a").pos(), b = probe("b").pos(), c = probe("c").pos();
     EXPECT_FLOAT_EQ(b.y - a.y, 10.0f);         // the padding above
     EXPECT_FLOAT_EQ(c.y - b.y, 10.0f + 20.0f); // b's height, then the spacing
-    EXPECT_FLOAT_EQ(probe("b").itemWidth(), 200.0f);
+    EXPECT_FLOAT_EQ(probe("b").itemWidth(), 200.0f - 2.0f * 10.0f); // the width less the padding on each side
     EXPECT_FLOAT_EQ(b.x - a.x, probe("a").w() + ImGui::GetStyle().ItemSpacing.x + 10.0f); // and on the left
     EXPECT_FLOAT_EQ(probe("d").itemWidth(), 100.0f);
 }
@@ -395,15 +395,47 @@ TEST_F(LayoutTest, AFixedWidthColumnWrapsText) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
-// A padded Column without a width keeps the padding on the right too; with a width, the width is the content's.
+// The padding insets a Column's content on every side, with or without a width; a width is the column's own,
+// padding included (like a Card's).
 TEST_F(LayoutTest, ColumnPaddingBoundsFillsOnBothSides) {
     run(R"(
         root = Column { Column { padding = 10, Last { id = "padded", ProgressBar { fillWidth = true } } },
-                        Column { padding = 10, width = 200, Last { id = "sized", ProgressBar { fillWidth = true } } } })");
+                        Column { padding = 10, width = 200, Last { id = "sized", ProgressBar { fillWidth = true } } },
+                        Column { padding = 16, width = -1, Last { id = "filled", ProgressBar { fillWidth = true } } } })");
     m_h.renderFrames("root", 2);
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
     EXPECT_FLOAT_EQ(lastSize("padded").x, contentWidth() - 20.0f);
-    EXPECT_FLOAT_EQ(lastMin("padded").x, ImGui::GetStyle().WindowPadding.x + 10.0f);
-    EXPECT_FLOAT_EQ(lastSize("sized").x, 200.0f);
+    EXPECT_FLOAT_EQ(lastMin("padded").x, x0 + 10.0f);
+    EXPECT_FLOAT_EQ(lastSize("sized").x, 200.0f - 20.0f);
+    EXPECT_FLOAT_EQ(lastMin("sized").x, x0 + 10.0f);
+    EXPECT_FLOAT_EQ(lastSize("filled").x, contentWidth() - 32.0f); // used to reach the right edge: no inset there
+    EXPECT_FLOAT_EQ(lastMin("filled").x, x0 + 16.0f);
+}
+
+// A padded Column's size (its group's, and the intrinsic size a layout places it by) is its content plus the padding
+// on both sides, so a Row puts the next child after the right padding.
+TEST_F(LayoutTest, APaddedColumnsSizeIncludesThePaddingOnBothSides) {
+    run(R"(
+        a = Probe { w = 40, h = 20, intrinsic = true } b = Probe { w = 30, h = 20, intrinsic = true }
+        c = Probe { w = 10, intrinsic = true } d = Probe { w = 10, intrinsic = true }
+        measure = Measure { Column { padding = 10, a },
+                            Column { padding = 10, width = 200, b },
+                            Column { padding = 8, width = -1, Probe { w = 10, intrinsic = true } } }
+        row = Row { spacing = 0, align = "top", Column { padding = 12, c }, d })");
+    m_h.renderFrames("measure", 2);
+    Measure* m = m_h.instance<Measure>("measure");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 3u);
+    const float widths[] = {40.0f + 20.0f, 200.0f, contentWidth()};
+    for (std::size_t i = 0; i < 3; ++i) {
+        ASSERT_TRUE(m->results[i].intrinsic.has_value()) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->x, widths[i]) << i;
+        EXPECT_FLOAT_EQ(m->results[i].rendered.x, widths[i]) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->y, m->results[i].rendered.y) << i;
+    }
+    m_h.renderFrames("row", 2);
+    EXPECT_FLOAT_EQ(probe("d").pos().x - probe("c").pos().x, 10.0f + 12.0f);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // The containers that size from the available width take a fixed Column's: Grid (a table), ScrollView (a child
@@ -1356,8 +1388,8 @@ TEST_F(LayoutTest, NestedContainersArePlacedOnTheirFirstFrame) {
     EXPECT_FLOAT_EQ(probe("title").pos().x, x0 + (contentWidth() - 50.0f) * 0.5f);
     EXPECT_FLOAT_EQ(probe("ok").pos().x, probe("title").pos().x);
     EXPECT_FLOAT_EQ(probe("cancel").pos().x, probe("ok").pos().x + 20.0f);
-    // The padded column (5 + 50) at the row's end.
-    EXPECT_FLOAT_EQ(probe("ended").pos().x, x0 + contentWidth() - 50.0f);
+    // The padded column (5 + 50 + 5) at the row's end.
+    EXPECT_FLOAT_EQ(probe("ended").pos().x, x0 + contentWidth() - 55.0f);
     // The column holding a fill takes what the probes leave.
     EXPECT_FLOAT_EQ(probe("after").pos().x, x0 + contentWidth() - 20.0f);
     // The two-probe column (10 + spacing 0 + 10) centered by height next to the 60px probe.

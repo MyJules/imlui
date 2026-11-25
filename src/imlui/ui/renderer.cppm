@@ -146,8 +146,9 @@ public:
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
     /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box), by their
-    /// intrinsic widths or else last frame's (imlui.ui.layout_cache).
-    void renderStack(const luaui::Node& node);
+    /// intrinsic widths or else last frame's (imlui.ui.layout_cache). Returns the right edge (screen x) of the widest
+    /// visual child, or the stack's left edge without one: for a container that pads its content on the right.
+    float renderStack(const luaui::Node& node);
     /// The size renderStack(node) takes with `maxWidth` available, composed from the visual children's intrinsic
     /// sizes (and ImGui's whole-pixel line advance); {0, 0} without visual children. nullopt when a child has none,
     /// or when an aligned stack is in an auto-sized window (it aligns in the widest child of the last frame).
@@ -272,13 +273,14 @@ bool Renderer::renderUnseen(lua::State* state, int idx) {
     return rendered;
 }
 
-void Renderer::renderStack(const Node& node) {
+float Renderer::renderStack(const Node& node) {
     const auto spacing = node.number("spacing");
     const float align = alignFactor(node.string("align", "start"));
     lua::State* state = node.state();
     const float boxAvail = layout::availableWidth();
     float avail = boxAvail;
     const float x0 = ImGui::GetCursorScreenPos().x;
+    float right = x0;
     // In an auto-sized window the stack is as wide as its widest child (a fill there is only the window's minimum
     // width), so `align` places the children in that width, as measured on the last frame. Not in the window's
     // width: it would follow the window, which follows the aligned children.
@@ -332,18 +334,23 @@ void Renderer::renderStack(const Node& node) {
                     {x0 + std::max(0.0f, (avail - w.value_or(0.0f)) * align), ImGui::GetCursorScreenPos().y});
             }
         }
+        bool rendered = false;
         if (unseen) {
-            renderUnseen(state, idx);
+            rendered = renderUnseen(state, idx);
         } else if (fillOffset > 0.0f) {
             const layout::BoxScope box{layout::insetBox(-fillOffset)};
-            render(state, idx);
+            rendered = render(state, idx);
         } else {
-            render(state, idx);
+            rendered = render(state, idx);
         }
-        if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
+        if (rendered) {
+            if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
+            right = std::max(right, ImGui::GetItemRectMax().x);
+        }
         first = false;
     });
     if (fit) layout::recordSize(widestKey, {widest, 0.0f});
+    return right;
 }
 
 std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {

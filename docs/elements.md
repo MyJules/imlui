@@ -278,8 +278,8 @@ A vertical stack. `Item` is an alias.
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child, by its width ([how it knows it](#stacking-containers)). |
-| `padding` | number | `0` | Inset on every side: the children start `padding` in and, without a `width`, fill up to `padding` from the right edge. |
-| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the children's available width. They fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. Unset, a column that holds a child that fills is as wide as the available width, so it fills itself: a `Row` gives it a share. |
+| `padding` | number | `0` | Inset on every side: the children start `padding` in and fill up to `padding` from the column's right edge. The column's size (what a `Row` places it by) includes the padding on both sides. |
+| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the column's own, padding included (like a `Card`'s), so `Column { padding = 16, width = -1 }` fills the available width and its children get that less 16dp on each side. The children's available width is the width less the padding: they fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. Unset, a column that holds a child that fills is as wide as the available width, so it fills itself: a `Row` gives it a share. |
 
 ### Row
 
