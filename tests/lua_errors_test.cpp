@@ -110,3 +110,18 @@ TEST_F(LuaErrorsTest, RequestFrameRejectsNonFiniteDelays) {
     EXPECT_NE(m_h.run("ui.native.requestFrame(-math.huge)").find("finite"), std::string::npos);
     run("ui.requestFrame(5); ui.native.requestFrame()");
 }
+
+// A foreign C++ exception (not a std::exception, not turned into a Lua error) that reaches safeCall's pcall ends it with
+// status -1, which leaves no message on the stack: it is reported as "unknown C++ exception".
+TEST(SafeCallTest, ForeignExceptionIsReportedWithAMessage) {
+    luaui::clearErrors();
+    lua::State* state = lua::newstate();
+    lua::pushstring(state, "below");
+    lua::pushcfunction(state, [](lua::State*) -> int { throw 42; });
+    EXPECT_FALSE(luaui::safeCall(state, 0, 0));
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_EQ(luaui::errors().front(), "unknown C++ exception");
+    EXPECT_EQ(lua::gettop(state), 1); // only what was below the call
+    lua::close(state);
+    luaui::clearErrors();
+}

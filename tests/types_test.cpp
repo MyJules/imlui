@@ -179,6 +179,14 @@ private:
     double m_value = 0;
 };
 
+/// Its constructor throws something that isn't a std::exception.
+class IntThrower final : public Element {
+public:
+    static void declare(TypeBuilder<IntThrower>&) {}
+    IntThrower() { throw 42; }
+    void render(Frame&) override {}
+};
+
 lua::State* newUiState(TypeRegistry& types) {
     lua::State* state = lua::newstate();
     lua::openlibs(state);
@@ -296,6 +304,28 @@ TEST(LuaConvertTest, ChecksAndCoerces) {
     lua::settop(s, 0);
     LuaConvert<std::string_view>::push(s, "view");
     EXPECT_EQ(lua::tostring(s, -1), "view");
+    lua::close(s);
+}
+
+// Narrowing to float is checked: out-of-range numbers clamp (the cast is undefined behaviour), NaN reads as 0 like an
+// integer's, infinities stay.
+TEST(LuaConvertTest, FloatsAreNarrowedSafely) {
+    lua::State* s = lua::newstate();
+    constexpr float max = std::numeric_limits<float>::max();
+    const auto get = [&](double v) {
+        lua::pushnumber(s, v);
+        const float f = LuaConvert<float>::get(s, -1);
+        lua::pop(s);
+        return f;
+    };
+    EXPECT_EQ(get(1e300), max);
+    EXPECT_EQ(get(-1e300), -max);
+    EXPECT_EQ(get(std::numeric_limits<double>::quiet_NaN()), 0.0f);
+    EXPECT_EQ(get(std::numeric_limits<double>::infinity()), std::numeric_limits<float>::infinity());
+    EXPECT_EQ(get(-std::numeric_limits<double>::infinity()), -std::numeric_limits<float>::infinity());
+    EXPECT_EQ(get(0.5), 0.5f);
+    lua::pushnumber(s, std::numeric_limits<double>::quiet_NaN());
+    EXPECT_EQ(LuaConvert<int>::get(s, -1), 0); // the integral conversion's NaN, for comparison
     lua::close(s);
 }
 
@@ -611,6 +641,81 @@ TEST(SharedSingletonTest, TheRegistryKeepsASharedSingletonAlive) {
     }
     EXPECT_TRUE(weak.expired()); // released with the registry
     clearFrameRequests();
+}
+
+/// Runs `code` in `state` and returns the error it raised ("" if none).
+std::string luaError(lua::State* state, std::string_view code) {
+    EXPECT_EQ(lua::loadbuffer(state, code, "=test"), lua::ok);
+    if (lua::pcall(state, 0, 0, 0) == lua::ok) return {};
+    std::string msg{lua::tostring(state, -1)};
+    lua::pop(state);
+    return msg;
+}
+
+/// Expects every kind of access to the singleton global `name` to raise "singleton '<name>' was destroyed".
+void expectDeadSingleton(lua::State* state, const std::string& name) {
+    const std::string dead = "singleton '" + name + "' was destroyed";
+    EXPECT_NE(luaError(state, "local x = " + name + ".level").find(dead), std::string::npos);
+    EXPECT_NE(luaError(state, name + ".level = 1").find(dead), std::string::npos);
+    EXPECT_NE(luaError(state, "local ping = getmetatable(" + name + ").__index(" + name + ", 'ping')").find(dead),
+              std::string::npos);
+}
+
+// Re-registering a singleton while a state is installed destroys the old (registry-owned) object: the global the
+// state still has must not reach it (it was a use after free), and says why.
+TEST(SingletonLifetimeTest, ReplacedSingletonRaisesInTheInstalledState) {
+    TypeRegistry types;
+    std::weak_ptr<Backend> first;
+    {
+        auto backend = std::make_shared<Backend>();
+        first = backend;
+        types.registerSingleton("api", std::move(backend));
+    }
+    lua::State* state = newUiState(types);
+    EXPECT_EQ(luaError(state, "assert(api.level == 0.5); ping = api.ping"), "");
+    types.registerSingleton("api", std::make_shared<Backend>());
+    EXPECT_TRUE(first.expired());
+    expectDeadSingleton(state, "api");
+    EXPECT_NE(luaError(state, "ping(api, 1)").find("singleton 'api' was destroyed"), std::string::npos);
+    lua::close(state);
+
+    lua::State* fresh = newUiState(types); // a new state gets the new object
+    EXPECT_EQ(luaError(fresh, "assert(api.level == 0.5); assert(api:ping(2) == 4)"), "");
+    lua::close(fresh);
+    clearFrameRequests();
+}
+
+// A by-reference singleton the host destroys while the state is installed (or before it is): access raises, and
+// closing the state doesn't touch the dead object.
+TEST(SingletonLifetimeTest, DestroyedByReferenceSingletonRaises) {
+    luaui::clearErrors();
+    TypeRegistry types;
+    auto backend = std::make_optional<Backend>();
+    types.registerSingleton("api", *backend);
+    lua::State* state = newUiState(types);
+    EXPECT_EQ(luaError(state, "assert(api.level == 0.5)"), "");
+    backend.reset();
+    expectDeadSingleton(state, "api");
+    lua::State* later = newUiState(types); // installed after the object died
+    expectDeadSingleton(later, "api");
+    types.activate(state);
+    lua::close(later);
+    lua::close(state);
+    clearFrameRequests();
+}
+
+// A constructor that throws a non-std exception is reported with a message (it escaped the catch before), and the
+// element gets no instance.
+TEST(ConstructorExceptionTest, NonStdExceptionIsReported) {
+    luaui::clearErrors();
+    TypeRegistry types;
+    types.registerType<IntThrower>("IntThrower");
+    lua::State* state = newUiState(types);
+    EXPECT_EQ(luaError(state, "t = ui.env.IntThrower {}; assert(rawget(t, '__native') == nil)"), "");
+    ASSERT_FALSE(luaui::errors().empty());
+    EXPECT_NE(luaui::errors().back().find("IntThrower: constructor failed: unknown C++ exception"), std::string::npos);
+    lua::close(state);
+    luaui::clearErrors();
 }
 
 TEST(OverloadTest, PicksOverloadsByParameterTypes) {

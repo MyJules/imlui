@@ -494,7 +494,8 @@ Sizes in scripts are in **dp**. One dp is `dpiScale()` pixels, where
 - `zoom()` is a user zoom factor (1 = 100 %), for example from a settings slider.
 
 The root `ApplicationWindow`'s `width`/`height` are dp at 100 % zoom: they're multiplied by the content scale (not
-by the zoom) when the native window size is set.
+by the zoom) when the native window size is set. A size that isn't a finite positive number is ignored, and one above
+100000 dp is clamped to it, like `setWindowSize`'s limit.
 
 | Function | Description |
 |---|---|

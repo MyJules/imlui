@@ -141,18 +141,23 @@ the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows,
 left open, so the frame still ends. imlui's own stacks unwind with the error: layout boxes are scopes
 (`layout::BoxScope`), and `Renderer::render` restores the Material surface and card stacks (`md::pushSurface`,
 `md::beginCard`) to their depth before the element that threw, so `md::surfaceColor()` is right for what renders
-next (both stacks also drop entries an earlier frame left). The rest of that pass is skipped, so this is not error handling: code that calls
-into Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error
-that escapes even that before Lua aborts.
+next (both stacks also drop entries an earlier frame left). The rest of that pass is skipped, so this is not error
+handling: code that calls into Lua while rendering still uses `safeCall`. Code that touches Lua outside a frame and
+outside any Lua call runs inside `luaui::protectedCall` (`imlui.lua.errors`) for the same reason:
+`ScriptObject::notify()` and `emit()` (which posted functions and ticks call), the engine's setup of a new state
+(`openlibs`, `install`, the boot script) and its read of the root window's size and title. The engine also installs
+`luaui::panicHandler`, which logs an error that escapes even that before Lua aborts.
 
 C++ exceptions become Lua errors with a message at the library's C functions: methods (`TypeBuilder`, a Lua error
 `Gauge:reset: ...`), the `imlui.native` functions (the host's `NativeHooks`, theme and font loading: a Lua error
-`imlui.native.quit: ...`), `imlui.types.tick` and the render pass (`luaui::catchCxx`, which raises
+`imlui.native.quit: ...`), `imlui.types` (`tick`, `attach`, `names`, `meta`) and the render pass (`luaui::catchCxx`, which raises
 `<where>: <what>` and lets a Lua error pass). Property hooks, `componentComplete()`, `tick()` and `destroyed()` (from
 `__gc`, which must never raise) are reported as script errors instead (`luaui::reportCxx`), and the `imlui.resource`
 functions return nil and a message. A C++ exception that reaches a protected call without that (a bug) still
 doesn't corrupt anything: the build maps a `std::bad_alloc` to a Lua memory error (`"not enough memory"`), and any
-other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour). The property sync
+other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour), which `safeCall`
+reports as `unknown C++ exception`. A registered type's constructor that throws is reported too
+(`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
 
@@ -833,9 +838,9 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `raiseException`, `toDisplayString` (protected `tostring`) |
+| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `protectedCall` (C++ code that uses the Lua API outside any Lua call, run protected), `raiseException`, `toDisplayString` (protected `tostring`) |
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
-| `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
+| `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind`, `toFloat` (a Lua number narrowed safely) |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |
@@ -894,7 +899,7 @@ See [Registering C++ types](extending.md).
 | Module | Purpose |
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
-| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives) |
+| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives), `cancelHandles()` |
 | `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `pushId`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), `stackSize`, element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `widthIn`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
 | `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `contentFillsWidth(frame)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)`; the ticking list by id (`tickingElements()`, `findTicking(id)`) |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag, fills-width policy) |

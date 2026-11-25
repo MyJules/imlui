@@ -19,6 +19,7 @@ import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.theme_table;
+import imlui.lua.value;
 import imlui.ui.frame_request;
 import imlui.ui.size_class;
 
@@ -152,18 +153,18 @@ constexpr NativeFn nativeFns[] = {
      [](lua::State* state) -> int {
          Oklch o = toOklch(argColor(state, 1));
          TonalPalette p{o.h, o.c};
-         lua::pushstring(state, toHex(p.tone(static_cast<float>(lua::tonumber(state, 2)))));
+         lua::pushstring(state, toHex(p.tone(toFloat(lua::tonumber(state, 2)))));
          return 1;
      }},
     {"mix",
      [](lua::State* state) -> int {
          lua::pushstring(
-             state, toHex(mix(argColor(state, 1), argColor(state, 2), static_cast<float>(lua::tonumber(state, 3)))));
+             state, toHex(mix(argColor(state, 1), argColor(state, 2), toFloat(lua::tonumber(state, 3)))));
          return 1;
      }},
     {"alpha",
      [](lua::State* state) -> int {
-         lua::pushstring(state, toHex(argColor(state, 1).withAlpha(static_cast<float>(lua::tonumber(state, 2)))));
+         lua::pushstring(state, toHex(argColor(state, 1).withAlpha(toFloat(lua::tonumber(state, 2)))));
          return 1;
      }},
     {"time",
@@ -200,7 +201,7 @@ constexpr NativeFn nativeFns[] = {
     {"setZoom",
      [](lua::State* state) -> int {
          if (!lua::isnumber(state, 1)) lua::error(state, "setZoom expects a number");
-         const float z = static_cast<float>(lua::tonumber(state, 1));
+         const float z = toFloat(lua::tonumber(state, 1));
          if (auto& fn = hostHooks(state).setZoom)
              fn(z);
          else
@@ -230,7 +231,7 @@ constexpr NativeFn nativeFns[] = {
     {"sizeClassFor",
      [](lua::State* state) -> int {
          if (!lua::isnumber(state, 1)) lua::error(state, "sizeClassFor expects a width in dp");
-         lua::pushstring(state, sizeClassName(sizeClassForWidth(static_cast<float>(lua::tonumber(state, 1)))));
+         lua::pushstring(state, sizeClassName(sizeClassForWidth(toFloat(lua::tonumber(state, 1)))));
          return 1;
      }},
     // setWindowSize(w, h): native window size in dp, applied after the current frame.
@@ -317,9 +318,9 @@ constexpr NativeFn nativeFns[] = {
     {"injectMouse",
      [](lua::State* state) -> int {
          ImGuiIO& io = ImGui::GetIO();
-         io.AddMousePosEvent(static_cast<float>(lua::tonumber(state, 1)), static_cast<float>(lua::tonumber(state, 2)));
+         io.AddMousePosEvent(toFloat(lua::tonumber(state, 1)), toFloat(lua::tonumber(state, 2)));
          if (!lua::isnoneornil(state, 3)) io.AddMouseButtonEvent(0, lua::toboolean(state, 3));
-         if (lua::isnumber(state, 4)) io.AddMouseWheelEvent(0.0f, static_cast<float>(lua::tonumber(state, 4)));
+         if (lua::isnumber(state, 4)) io.AddMouseWheelEvent(0.0f, toFloat(lua::tonumber(state, 4)));
          requestFramesFor(0.3); // like real input: let the UI react and settle
          return 0;
      }},
