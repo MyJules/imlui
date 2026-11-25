@@ -131,7 +131,8 @@ public:
 
     void renderChildren(const luaui::Node& node);
 
-    /// True unless the element at `idx` is of a registered non-visual type (Timer, Dialog, ...).
+    /// True when the element at `idx` is of a registered visual type: false for the non-visual types (Timer,
+    /// Dialog, ...) and for an unknown type, which render() only reports, so neither takes a layout slot.
     [[nodiscard]] bool isVisual(lua::State* state, int idx) const;
     /// Whether the element at `idx` fills the available width when its `width` is unset (Types::fillsWidth: its
     /// type's policy or its content).
@@ -251,7 +252,7 @@ void Renderer::renderChildren(const Node& node) {
 }
 
 bool Renderer::isVisual(lua::State* state, int idx) const {
-    return m_types.kind(Node{state, idx}.type()) != Types::Kind::NonVisual;
+    return m_types.kind(Node{state, idx}.type()) == Types::Kind::Visual;
 }
 
 bool Renderer::fillsWidth(lua::State* state, int idx) { return m_types.fillsWidth(*this, Node{state, idx}); }

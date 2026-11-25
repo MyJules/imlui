@@ -565,6 +565,27 @@ TEST_F(LayoutTest, RowSkipsHiddenAndRendersNonVisualChildren) {
     check("fired > 0");
 }
 
+// A child of an unknown type (a misspelled `__type`) is reported and takes no slot: it used to count as visual, so a
+// Row gave it a gap and advanced by the previous sibling's size, and a stack couldn't compose its size.
+TEST_F(LayoutTest, AnUnknownElementTypeTakesNoSlot) {
+    run(R"(
+        a = Probe { w = 50, intrinsic = true } c = Probe { w = 30, intrinsic = true }
+        d = Probe { w = 20, intrinsic = true }
+        measure = Measure { Row { spacing = 10, a, { __type = "Buttn" }, c },
+                            Column { align = "end", width = 100, { __type = "Buttn" }, d } })");
+    m_h.renderFrames("measure", 2);
+    EXPECT_TRUE(hasError("unknown element type 'Buttn'"));
+    EXPECT_FLOAT_EQ(probe("c").pos().x - probe("a").pos().x, 50.0f + 10.0f);
+    Measure* m = m_h.instance<Measure>("measure");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 2u);
+    ASSERT_TRUE(m->results[0].intrinsic.has_value()); // known: the unknown child isn't asked
+    EXPECT_FLOAT_EQ(m->results[0].intrinsic->x, 50.0f + 10.0f + 30.0f);
+    EXPECT_FLOAT_EQ(m->results[0].rendered.x, 90.0f);
+    ASSERT_TRUE(m->results[1].intrinsic.has_value());
+    EXPECT_TRUE(probe("d").seen()); // placed by its size, not rendered unseen for the unknown sibling
+}
+
 // ------------------------------------------------------------ Grid
 
 TEST_F(LayoutTest, GridColumnsBindingSpacingAndBorder) {
