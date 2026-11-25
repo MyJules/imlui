@@ -66,9 +66,10 @@ bool beginModalDrawer(const char* id, bool* open, float width) {
     ImGui::SetCursorScreenPos({sheetEnd, vp->Pos.y});
     if (ImGui::InvisibleButton("##scrim", {std::max(1.0f, end.x - sheetEnd), std::max(1.0f, vp->Size.y)}))
         *open = false;
-    // Escape closes it too, unless a menu or popup opened from the drawer takes the key first.
+    // Escape closes it too, unless a menu or popup opened from the drawer takes the key first (or took it: ImGui's
+    // nav closes a menu in NewFrame).
     if (*open && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        !popupOver(ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         *open = false;
 
     const ImVec2 a{x0, vp->Pos.y}, b{sheetEnd, end.y};
@@ -89,6 +90,7 @@ bool beginModalDrawer(const char* id, bool* open, float width) {
 void endModalDrawer() {
     popSurface();
     ImGui::EndChild();
+    notePopupOver(ImGuiPopupFlags_AnyPopup);
     ImGui::End();
 }
 

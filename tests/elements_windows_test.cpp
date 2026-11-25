@@ -17,6 +17,7 @@ import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
 import imlui.test.render_counter;
+import imlui.test.last_item_probe;
 
 using namespace imlui;
 
@@ -52,6 +53,7 @@ protected:
     void SetUp() override {
         m_h.registerType<Probe>("Probe");
         m_h.registerType<WidthProbe>("WidthProbe");
+        m_h.registerType<test::LastItemProbe>("Last");
     }
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
     int renders(const char* name) { return m_h.instance<Probe>(name)->renders(); }
@@ -396,6 +398,35 @@ TEST_F(WindowsTest, ANestedDialogIsItsOwnPopupAndEscapeClosesTheTopOne) {
     run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
     m_h.renderFrames("root", 3);
     run("assert(s.outer == false, 'the outer dialog is still open')");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ImGui's keyboard nav closes an open menu on Escape in NewFrame, before the Dialog or drawer under it looks at the
+// key: they must not take the same press as their own (one Escape, one popup).
+TEST_F(WindowsTest, EscapeClosesAMenuButNotTheDialogOrDrawerUnderIt) {
+    for (const std::string container : {"Dialog { title = 'D', ", "ModalNavigationDrawer { "}) {
+        // The previous tree is collected first: its ids would stay with it.
+        run("root = nil; collectgarbage(); s = state { open = true }; root = Column { " + container +
+            R"(open = bind(s, "open"),
+                Last { id = "last", Button { "More", menu = Menu { MenuItem { "One" }, Probe { id = "m" } } } } } })");
+        m_h.renderFrames("root", 30); // the dialog settles in the middle, the drawer slides in
+        const test::LastItemProbe* last = m_h.instance<test::LastItemProbe>("last");
+        ASSERT_NE(last, nullptr) << container;
+        click("root", last->center().x, last->center().y);
+        m_h.renderFrames("root", 4);
+        ASSERT_GE(renders("m"), 2) << container; // the menu is open
+
+        run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
+        m_h.renderFrames("root", 3);
+        EXPECT_EQ(m_h.run("assert(s.open == true, 'closed too')"), "") << container;
+        const int afterEscape = renders("m");
+        m_h.renderFrames("root", 2);
+        EXPECT_EQ(renders("m"), afterEscape) << container; // the menu is closed
+
+        run(R"(ui.native.injectKey("Escape", true); ui.native.injectKey("Escape", false))");
+        m_h.renderFrames("root", 3);
+        EXPECT_EQ(m_h.run("assert(s.open == false, 'still open')"), "") << container;
+    }
     EXPECT_TRUE(luaui::errors().empty());
 }
 
