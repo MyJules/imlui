@@ -475,11 +475,14 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
         scanned.push_back(folder);
         for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator();
              it.increment(ec)) {
-            if (it->is_directory(ec)) {
+            // Its own error code: an entry that can't be queried (a link to nothing) isn't a file, and the walk goes
+            // on.
+            std::error_code entryEc;
+            if (it->is_directory(entryEc)) {
                 scanned.push_back(it->path());
                 continue;
             }
-            if (!it->is_regular_file(ec) || it->path() == self) continue;
+            if (!it->is_regular_file(entryEc) || it->path() == self) continue;
             const std::string path = utf8(it->path().lexically_relative(group.base));
             if (!matchesAny(fields.include, path) || matchesAny(fields.exclude, path) || selected.contains(path))
                 continue;

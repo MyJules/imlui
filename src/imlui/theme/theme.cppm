@@ -33,19 +33,33 @@ struct Theme {
     Color seed = *parseHex("#6750A4");
     bool dark = true;
     Scheme scheme = generateScheme(seed, dark);
-    Shape shape;
-    float spacing = 8.0f; ///< base spacing unit (dp)
-    float fontScale = 1.0f;
+    Shape shape;                                    ///< each in 0..maxStyleValue
+    float spacing = 8.0f;                           ///< base spacing unit (dp), in 0..maxStyleValue
+    float fontScale = 1.0f;                         ///< in minFontScale..maxFontScale
     std::vector<std::pair<int, Color>> imguiColors; ///< ImGuiCol index -> color
     std::vector<StyleOverride> style;               ///< ImGuiStyle field overrides
     FontSet fonts;                                  ///< type-scale faces, named fonts and fallbacks
 };
 
+/// The range of Theme::fontScale. A larger scale would make glyphs that outgrow ImGui's font atlas (font_check's
+/// maxGlyphExtent() assumes sizes this side of it).
+inline constexpr float minFontScale = 0.25f;
+inline constexpr float maxFontScale = 4.0f;
+/// The largest Theme::spacing, Theme::shape radius and magnitude of a style value (dp, before the DPI scale).
+inline constexpr float maxStyleValue = 10000.0f;
+
+/// Why `value` can't set ImGuiStyle field `name` ("" when it can, or when `name` isn't a field): a component that
+/// isn't finite or whose magnitude exceeds maxStyleValue, an `Alpha` or `DisabledAlpha` outside 0..1, or a
+/// `WindowMinSize` below 1 (ImGui asserts on those). A scalar field uses `value.x` only.
+[[nodiscard]] std::string styleValueProblem(std::string_view name, ImVec2 value);
+
 /// The theme currently in effect.
 [[nodiscard]] const Theme& theme();
 
 /// Schedules `t` to become the theme at the start of the next frame
-/// (safe to call from inside a frame, e.g. from a Lua click handler).
+/// (safe to call from inside a frame, e.g. from a Lua click handler). Values out of range are brought into it:
+/// `fontScale` is clamped (not finite: 1), `spacing` and `shape` radii too (not finite: the default), and style
+/// overrides with a styleValueProblem() are dropped. imlui.lua.theme_table reports them to the script first.
 void setTheme(Theme t);
 
 /// Applies a pending theme, its fonts included (useFontSet()); call between frames. Returns true if it changed.
@@ -218,16 +232,22 @@ void applyMaterial(const Theme& t, ImGuiStyle& st) {
 void applyNow(const Theme& t) {
     ImGuiStyle& st = ImGui::GetStyle();
     st = ImGuiStyle{};
-    if (t.preset == "imgui-light") ImGui::StyleColorsLight(&st);
-    else if (t.preset == "imgui-classic") ImGui::StyleColorsClassic(&st);
-    else if (t.preset == "imgui-dark") ImGui::StyleColorsDark(&st);
-    else applyMaterial(t, st);
+    if (t.preset == "imgui-light")
+        ImGui::StyleColorsLight(&st);
+    else if (t.preset == "imgui-classic")
+        ImGui::StyleColorsClassic(&st);
+    else if (t.preset == "imgui-dark")
+        ImGui::StyleColorsDark(&st);
+    else
+        applyMaterial(t, st);
 
     for (const auto& o : t.style) {
         for (const auto& f : styleFields) {
             if (f.name != o.name) continue;
-            if (const auto* fp = std::get_if<FloatField>(&f.member)) st.*(*fp) = o.value.x;
-            else st.*std::get<VecField>(f.member) = o.value;
+            if (const auto* fp = std::get_if<FloatField>(&f.member))
+                st.*(*fp) = o.value.x;
+            else
+                st.*std::get<VecField>(f.member) = o.value;
         }
     }
     for (const auto& [idx, col] : t.imguiColors)
@@ -251,7 +271,35 @@ void applyNow(const Theme& t) {
 
 const Theme& theme() { return currentTheme; }
 
-void setTheme(Theme t) { pendingTheme = std::move(t); }
+void setTheme(Theme t) {
+    const Theme defaults;
+    const auto bounded = [](float& v, float lo, float hi, float fallback) {
+        v = std::isfinite(v) ? std::clamp(v, lo, hi) : fallback;
+    };
+    bounded(t.fontScale, minFontScale, maxFontScale, defaults.fontScale);
+    bounded(t.spacing, 0.0f, maxStyleValue, defaults.spacing);
+    for (auto [radius, fallback] :
+         {std::pair{&t.shape.extraSmall, defaults.shape.extraSmall}, std::pair{&t.shape.small, defaults.shape.small},
+          std::pair{&t.shape.medium, defaults.shape.medium}, std::pair{&t.shape.large, defaults.shape.large},
+          std::pair{&t.shape.extraLarge, defaults.shape.extraLarge}})
+        bounded(*radius, 0.0f, maxStyleValue, fallback);
+    std::erase_if(t.style, [](const Theme::StyleOverride& o) { return !styleValueProblem(o.name, o.value).empty(); });
+    pendingTheme = std::move(t);
+}
+
+std::string styleValueProblem(std::string_view name, ImVec2 value) {
+    const auto field = std::ranges::find(styleFields, name, &StyleField::name);
+    if (field == std::ranges::end(styleFields)) return {};
+    const bool scalar = std::holds_alternative<FloatField>(field->member);
+    for (const float v : {value.x, value.y}) {
+        if (!std::isfinite(v)) return "not a finite number";
+        if (std::abs(v) > maxStyleValue) return "larger than " + std::to_string(static_cast<int>(maxStyleValue));
+        if (scalar) break;
+    }
+    if ((name == "Alpha" || name == "DisabledAlpha") && !(value.x >= 0.0f && value.x <= 1.0f)) return "must be in 0..1";
+    if (name == "WindowMinSize" && !(value.x >= 1.0f && value.y >= 1.0f)) return "must be at least 1";
+    return {};
+}
 
 bool applyPendingTheme() {
     if (!pendingTheme) return false;

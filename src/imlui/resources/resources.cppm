@@ -150,18 +150,23 @@ std::vector<std::string> Resources::listRecursive(std::string_view name) const {
     if (!parsed) return out;
     std::string folder = parsed->full();
     if (!folder.ends_with('/')) folder += '/';
-    std::vector<std::string> pending{std::move(folder)};
-    while (!pending.empty()) {
-        const std::string current = std::move(pending.back());
-        pending.pop_back();
-        for (const std::string& entry : list(current)) {
-            if (entry.ends_with('/'))
-                pending.push_back(current + entry);
-            else
-                out.push_back(current + entry);
+    // One walk per mount: the mounts covering the folder from its path in them, the mounts inside it from their root.
+    for (const Entry& e : m_mounts) {
+        if (e.prefix != parsed->prefix) continue;
+        std::string at = folder;
+        auto path = relativeTo(parsed->path, e.at);
+        if (!path) {
+            const auto below = relativeTo(e.at, parsed->path);
+            if (!below) continue;
+            at += *below + "/";
+            path = std::string{};
         }
+        for (const std::string& file : e.mount->listFiles(*path))
+            out.push_back(at + file);
     }
     std::ranges::sort(out);
+    const auto [first, last] = std::ranges::unique(out);
+    out.erase(first, last);
     return out;
 }
 

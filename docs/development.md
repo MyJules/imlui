@@ -380,10 +380,12 @@ On this target:
   paths are rejected), `DirectoryMount` (read, exists, list, modified, the read cache, a `ResourceSelection`
   serving only the manifest's files and new files matching a pattern, a listed manifest served, the previous bytes
   served while a changed file is locked (`test::FileLock`, `imlui.test.file_lock`: a handle without sharing on
-  Windows, no permissions elsewhere), no exceptions for names that aren't UTF-8), mount stacking and mount points in
+  Windows, no permissions elsewhere), no exceptions for names that aren't UTF-8, files whose names have no UTF-8 form left out, links to folders neither listed nor
+  walked, a selection listed recursively in one walk), mount stacking and mount points in
   `Resources` (`listRecursive` of a folder with or without its trailing slash), and the Lua side through the harness: `require "imlui"` and components through the
   searchers, chunk names in errors, and `ui.resource.*` resolving against the calling script. It uses two support
-  modules: `test::TempDir` (`imlui.test.temp_dir`, a temporary folder removed afterwards, with `write` and `touch`)
+  modules: `test::TempDir` (`imlui.test.temp_dir`, a temporary folder removed afterwards, with `write`, `touch` and
+  `linkFolder`: a symbolic link to a folder, or on Windows without the privilege for one a directory junction)
   and `test::MemoryMount` (`imlui.test.memory_mount`, an immutable in-memory mount, like an embedded one).
 - `resources_packed_test.cpp` covers the packed mounts: the compression rule, `EmbeddedMount` (stored and
   compressed files, zero-copy reads, decompression on first read, concurrent reads, bad paths, corrupt data),
@@ -400,18 +402,19 @@ On this target:
   on the library's packages (`Options::embedded`: embedded data, or the source folders in a build that doesn't embed). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
 - `log_test.cpp` covers `log::addFileSink`: a log file whose name is outside the ANSI code page, and a file that
   can't be opened reported as `false` without an exception.
-- `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns, one group
+- `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns (their corners, and pathological ones
+  matched quickly), one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
   base folder, a listed file spelled differently on disk, the sandbox and its instruction and memory limits, strings
-  that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), `collectFiles` past entries
-that can't be queried, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
+  that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), the scan and `collectFiles` past entries
+that can't be queried, linked files named by their own path, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
   hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is
   checked the embedded way and `imlui.embedded.smoke_sources` (forced `EMBED OFF`, dev builds) the other way, with
   its `mount()` mounting the folders.
-- **Fuzz corpus replays** (`fuzz.pak`, `fuzz.font`, `fuzz.manifest`, `fuzz.image`, label `fuzz`): every fuzz
+- **Fuzz corpus replays** (`fuzz.pak`, `fuzz.font`, `fuzz.manifest`, `fuzz.names`, `fuzz.image`, label `fuzz`): every fuzz
   target's seed corpus, crash regressions included, run once through the target in every build. See
   [Fuzzing](#fuzzing).
 - **Smoke test** (`smoke.imlui_smoke_host`, `tests/smoke_run.cmake`) runs the test app host like a shipped release.
@@ -540,6 +543,7 @@ defining libFuzzer's `LLVMFuzzerTestOneInput`:
 | `pak` | a `.pak` archive | `PakMount::fromBytes` (`parsePak`) accepts or rejects it with a reason; every file of an accepted archive reads back at its declared size (zstd decompression in `PackedMount`, files declaring more than 16 MiB skipped), and `exists`/`list` work on every folder. |
 | `font` | font data | A font `checkFont` accepts is read with stb_truetype the way ImGui reads it (`imlui.fuzz.truetype`, `tests/fuzz/support/`): `stbtt_GetFontOffsetForIndex`, `stbtt_InitFont`, the vertical metrics, `stbtt_FindGlyphIndex` for every code point an `ImWchar` holds (each must map to a glyph the font has), every glyph found but 0 (the glyphs `checkFont` checks, and all ImGui ever loads) with its box and horizontal metrics, the outline of each that ImGui rasterizes (`stbtt_GetGlyphShape`, up to 8192 glyphs), and a bitmap for up to 64 of the glyphs found, spread over the font, as ImGui's `FontBakedLoadGlyph` makes it (`stbtt_MakeGlyphBitmapSubpixelPrefilter` with 2x horizontal oversampling, at a size from 4 to 64px picked by the input's length; a bitmap size ImGui would `IM_ASSERT` on aborts), with `STBTT_assert` aborting (for CFF fonts the box runs the glyph's charstring). |
 | `manifest` | a resource manifest's Lua text | `evaluateManifest` (the sandbox, the instruction and memory limits) returns groups or an error; groups whose `base` stays inside the fixture `tests/fuzz/manifest_root/` are resolved against it (`resolveManifest`, `manifestListing`). |
+| `names` | two strings, split at the first newline | Resource names and glob patterns (`imlui.resources.name`, `imlui.resources.glob`): a normalized path or name is a fixed point, a parsed name round-trips through `full()` and has a folder, a resolved name is normalized, `globMatch` agrees with a backtracking reference matcher on inputs up to 12 characters and with plain comparison on patterns without wildcards, and `globRoot` is a prefix of a valid pattern. |
 | `image` | PNG or JPEG bytes | `decodeImage` (stb_image) decodes or fails with a reason; a decoded image has `width * height * 4` bytes. Images over 4096 x 4096 pixels are skipped. |
 
 Each target is built two ways (`tests/fuzz/CMakeLists.txt`, `imlui_add_fuzz_target`):
