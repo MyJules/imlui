@@ -483,17 +483,22 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
                 continue;
             }
             if (!it->is_regular_file(entryEc) || it->path() == self) continue;
-            const std::string path = utf8(it->path().lexically_relative(group.base));
-            if (!matchesAny(fields.include, path) || matchesAny(fields.exclude, path) || selected.contains(path))
+            const auto path = utf8Name(it->path().lexically_relative(group.base));
+            if (!path) {
+                error = where + "a file name in " + utf8(it->path().parent_path()) +
+                        " has no UTF-8 form, so it can't be a resource name";
+                return std::nullopt;
+            }
+            if (!matchesAny(fields.include, *path) || matchesAny(fields.exclude, *path) || selected.contains(*path))
                 continue;
             // A matched link may lead out of the base folder, like a `files` entry.
             std::error_code linkEc;
             const fs::path target = fs::weakly_canonical(it->path(), linkEc);
             if (linkEc || leavesBase(target.lexically_relative(group.base))) {
-                error = where + "'" + path + "' is outside the base folder";
+                error = where + "'" + *path + "' is outside the base folder";
                 return std::nullopt;
             }
-            selected[path] = {path, it->path(), std::nullopt};
+            selected[*path] = {*path, it->path(), std::nullopt};
         }
         if (ec) {
             error = where + "can't list " + utf8(folder) + ": " + ec.message();

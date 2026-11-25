@@ -23,8 +23,8 @@ import imlui.tools.source_files;
 
 export namespace imlui::tools {
 
-/// The tool's main(); returns the process exit code.
-[[nodiscard]] int runPack(int argc, char** argv);
+/// The tool: `args` are the arguments after the program name, UTF-8 (toolMain()); returns the process exit code.
+[[nodiscard]] int runPack(std::vector<std::string> args);
 
 /// The bytes of a .pak archive holding `files`, mounted at `mountPoint`; nullopt (with the reason in `error`) when
 /// the mount point is invalid, a file can't be read or the archive can't hold it (writePak()).
@@ -134,8 +134,7 @@ std::optional<std::vector<std::byte>> packFiles(std::string_view mountPoint, con
     return pak;
 }
 
-int runPack(int argc, char** argv) {
-    std::vector<std::string_view> args{argv + 1, argv + argc};
+int runPack(std::vector<std::string> args) {
     fs::path depfile;
     if (args.size() >= 2 && args.front() == "--depfile") {
         depfile = pathFromUtf8(args[1]);

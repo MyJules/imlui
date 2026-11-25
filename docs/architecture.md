@@ -951,11 +951,11 @@ The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke te
 | `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::packages()` (one `ResourcePackage` per manifest group), `mount(Resources&)`. The library has `imlui.embedded.imlui` (two packages: `imlui:/`, `imlui:/fonts/`). |
 | `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
 | `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data, compress)`, `compressible(path)`: the compression rule and its override |
-| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through `<file>.tmp` and a rename), `utf8`/`pathFromUtf8` |
+| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through `<file>.tmp` and a rename), `utf8`/`utf8Name`/`pathFromUtf8`, `toolMain` (the tools' `wmain`/`main`: UTF-8 arguments from Windows' UTF-16 command line, an exception printed instead of `abort()`) |
 | `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup` (with the selection as written: `listed`, `include`, `exclude`), `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), its two halves `evaluateManifest` (the Lua, into `ManifestGroupFields`) and `resolveManifest` (the file system), `manifestDependencies`, `manifestListing` |
 | `imlui.tools.depfile` | `tools/lib/` | `depfileText`, `writeDepfile`: Make-style dependency files for Ninja |
-| `imlui.tools.rc` | `tools/lib/` | `runRc`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |
-| `imlui.tools.pack` | `tools/` | `runPack`, `packFiles(mountPoint, files, error)`, `mergeGroups(manifest, error)`: the `imlui_pack` tool |
+| `imlui.tools.rc` | `tools/lib/` | `runRc(args)`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |
+| `imlui.tools.pack` | `tools/` | `runPack(args)`, `packFiles(mountPoint, files, error)`, `mergeGroups(manifest, error)`: the `imlui_pack` tool |
 
 The tools are built from `tools/` with the same toolchain. `imlui_rc` doesn't link the library, which is embedded
 with it (only `imlui_lua`, the Lua wrapper, and `imlui_glob`, the patterns); `imlui_pack` links `imlui_core`, for the archive format (not the

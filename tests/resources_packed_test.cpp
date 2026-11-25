@@ -257,11 +257,8 @@ TEST(PakMount, PackToolReplacesTheOutputWhole) {
     dir.write("out.pak", "previous");
     const std::string output = tools::utf8(dir.path() / "out.pak");
     const std::string base = tools::utf8(dir.path() / "src");
-    std::string program = "imlui_pack";
-    std::string point = "app:/";
-    std::vector<char*> args{program.data(), const_cast<char*>(output.c_str()), point.data(),
-                            const_cast<char*>(base.c_str())};
-    ASSERT_EQ(tools::runPack(static_cast<int>(args.size()), args.data()), 0);
+    std::vector<std::string> args{output, "app:/", base};
+    ASSERT_EQ(tools::runPack(args), 0);
     EXPECT_FALSE(std::filesystem::exists(dir.path() / "out.pak.tmp"));
     std::string error;
     const auto pak = PakMount::open(dir.path() / "out.pak", &error);
@@ -269,10 +266,42 @@ TEST(PakMount, PackToolReplacesTheOutputWhole) {
     EXPECT_EQ(text(pak->read("a.txt")), "aaa");
 
     // A failed run (no such base folder) leaves the archive as it was.
-    const std::string missing = tools::utf8(dir.path() / "nowhere");
-    args[3] = const_cast<char*>(missing.c_str());
-    EXPECT_NE(tools::runPack(static_cast<int>(args.size()), args.data()), 0);
+    args[2] = tools::utf8(dir.path() / "nowhere");
+    EXPECT_NE(tools::runPack(args), 0);
     EXPECT_TRUE(PakMount::open(dir.path() / "out.pak", &error)) << error;
+}
+
+// The tools take their arguments in UTF-16 on Windows (wmain): a folder name outside the ANSI code page reaches them
+// whole. An exception is printed and exits with 1, not abort().
+TEST(PakMount, PackToolTakesWideArguments) {
+    test::TempDir dir;
+    const std::filesystem::path folder = dir.path() / std::filesystem::path{u8"Ünï_日本"};
+    std::filesystem::create_directories(folder);
+    { std::ofstream{folder / "a.txt", std::ios::binary} << "aaa"; }
+    const std::wstring program = L"imlui_pack";
+    const std::filesystem::path pakFile = dir.path() / std::filesystem::path{u8"ä.pak"};
+    const std::wstring output = pakFile.wstring();
+    const std::wstring point = L"app:/";
+    const std::wstring base = folder.wstring();
+    const wchar_t* args[] = {program.c_str(), output.c_str(), point.c_str(), base.c_str()};
+    ASSERT_EQ(tools::toolMain("imlui_pack", 4, args, tools::runPack), 0);
+    std::string error;
+    const auto pak = PakMount::open(pakFile, &error);
+    ASSERT_TRUE(pak) << error;
+    EXPECT_EQ(text(pak->read("a.txt")), "aaa");
+
+#ifdef _WIN32
+    // A scanned file whose name has no UTF-8 form (an unpaired surrogate) fails with a message too.
+    const std::wstring unpaired = std::wstring{L"bad"} + static_cast<wchar_t>(0xD800) + L".txt";
+    { std::ofstream{folder / unpaired, std::ios::binary} << "x"; }
+    ASSERT_TRUE(std::filesystem::exists(folder / unpaired));
+    EXPECT_EQ(tools::toolMain("imlui_pack", 4, args, tools::runPack), 1);
+#endif
+
+    const auto throws = [](std::vector<std::string>) -> int { throw std::runtime_error{"boom"}; };
+    EXPECT_EQ(tools::toolMain("imlui_pack", 1, args, throws), 1);
+    const char* narrow[] = {"imlui_pack"};
+    EXPECT_EQ(tools::toolMain("imlui_pack", 1, narrow, throws), 1);
 }
 
 TEST(PakMount, RejectsCorruptAndTruncatedArchives) {

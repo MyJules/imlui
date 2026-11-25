@@ -349,6 +349,24 @@ TEST(ResourceManifest, ScansPastEntriesThatCantBeQueried) {
     EXPECT_EQ(paths(m->groups[0]), (std::vector<std::string>{"a.lua", "z/z.lua"}));
 }
 
+// A scanned file whose name has no UTF-8 form (on Windows, an unpaired surrogate) has no resource name: the scan
+// fails with a reason naming its folder (converting the name threw, which ended imlui_rc with abort()).
+TEST(ResourceManifest, ScannedNamesWithoutUtf8FormFail) {
+#ifdef _WIN32
+    test::TempDir dir;
+    dir.write("app/a.lua", "");
+    const std::wstring unpaired = std::wstring{L"b"} + static_cast<wchar_t>(0xD800) + L".lua";
+    { std::ofstream{dir.path() / "app" / unpaired, std::ios::binary} << "x"; }
+    ASSERT_TRUE(fs::exists(dir.path() / "app" / unpaired));
+    std::string error = failure(dir, R"(return { prefix = "app", base = "app", include = "**" })");
+    EXPECT_NE(error.find("has no UTF-8 form"), std::string::npos) << error;
+    EXPECT_FALSE(tools::collectFiles(dir.path() / "app", {}, error));
+    EXPECT_NE(error.find("has no UTF-8 form"), std::string::npos) << error;
+#else
+    GTEST_SKIP() << "file names are bytes here: every name converts";
+#endif
+}
+
 // A file reached through a link keeps the name it has where it is, as in a manifest's scan (it used to be named after
 // the link's target); the target must still lie under the base folder.
 TEST(SourceFiles, LinkedFilesKeepTheirOwnName) {
