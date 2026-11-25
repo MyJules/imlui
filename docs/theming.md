@@ -76,6 +76,9 @@ tonal palettes, each a hue and a chroma, are derived from it:
 | neutral variant | seed hue | 0.018 |
 | error | 25° | 0.19 |
 
+A grey seed (OKLCH chroma below `1e-4`, where its hue is only rounding noise) has no hue to give: every palette but
+error gets chroma 0, so the scheme is grey apart from the error roles.
+
 `TonalPalette::tone(t)` maps the Material tone `t` (CIE L\*, 0 = black, 100 = white) to OKLab lightness. It is
 exact for greys. The color is then converted back to sRGB, with chroma reduced until it fits the gamut.
 
