@@ -631,16 +631,24 @@ local timers, nextTimer = {}, 0
 local function addTimer(fn, ms, rep)
     fn = inCurrentScope(fn)
     nextTimer = nextTimer + 1
-    timers[nextTimer] = { fn = fn, interval = (ms or 0) / 1000, due = native.time() + (ms or 0) / 1000, rep = rep }
+    timers[nextTimer] = { fn = fn, interval = ms / 1000, due = native.time() + ms / 1000, rep = rep }
     return nextTimer
 end
-function ui.setTimeout(fn, ms) return addTimer(fn, ms, false) end
+local function describe(ms) return type(ms) == "number" and tostring(ms) or type(ms) end
+--- `ms` must be a finite number >= 0 (nil is 0): a NaN or infinite delay would never fire, and a NaN due time would
+--- keep the app rendering continuously.
+function ui.setTimeout(fn, ms)
+    if ms == nil then ms = 0 end
+    if type(ms) ~= "number" or not (ms >= 0 and ms < math.huge) then
+        error("setTimeout: the delay must be a finite number of milliseconds >= 0, got " .. describe(ms), 2)
+    end
+    return addTimer(fn, ms, false)
+end
 --- `ms` must be a positive, finite number: an interval of 0 (or nil) would run every frame and keep the app
 --- rendering continuously.
 function ui.setInterval(fn, ms)
     if type(ms) ~= "number" or not (ms > 0 and ms < math.huge) then
-        error("setInterval: the interval must be a positive, finite number of milliseconds, got "
-            .. (type(ms) == "number" and tostring(ms) or type(ms)), 2)
+        error("setInterval: the interval must be a positive, finite number of milliseconds, got " .. describe(ms), 2)
     end
     return addTimer(fn, ms, true)
 end
@@ -698,7 +706,9 @@ function ui.__tick(now)
     for _, fn in ipairs({ table.unpack(frameCallbacks) }) do protectedCall(fn, now) end
     local nextDue
     for _, t in pairs(timers) do
-        if not nextDue or t.due < nextDue then nextDue = t.due end
+        -- A NaN due time never comes (and math.max(0, NaN) is 0: a frame every iteration); the checks above keep
+        -- it out, this keeps it from spinning the loop if one gets in anyway.
+        if t.due == t.due and (not nextDue or t.due < nextDue) then nextDue = t.due end
     end
     return nextDue and math.max(0, nextDue - now) or nil
 end

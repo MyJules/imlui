@@ -448,7 +448,7 @@ its rate even with no input. Callbacks may add or clear timers. A callback that 
 
 | Function | Description |
 |---|---|
-| `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds. |
+| `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds (`nil` or `0`: on the next frame). `ms` must be a finite number `>= 0`: a negative, infinite or NaN delay raises an error (it would never fire). |
 | `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. `ms` must be a positive, finite number: `nil`, `0`, a negative or a non-finite interval raises an error (it would fire every frame and keep the app rendering). |
 | `clearTimer(id)` | Cancels a timeout or interval. |
 | `onFrame(fn) -> stop` | Calls `fn(time)` at the start of every **rendered** frame, after the timers. Call the returned `stop()` to remove it (also from inside `fn`). |
