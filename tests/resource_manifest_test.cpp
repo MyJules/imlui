@@ -298,6 +298,55 @@ TEST(SourceFiles, CollectsPastEntriesThatCantBeQueried) {
     EXPECT_FALSE(tools::collectFiles(dir.path() / "nowhere", {}, error));
 }
 
+// A manifest's `include` scan goes past an entry that can't be queried (two links to each other; a link to nothing
+// just isn't there): it isn't a file, and it used to end the walk with the iterator's error, failing the build with
+// "can't list".
+TEST(ResourceManifest, ScansPastEntriesThatCantBeQueried) {
+    test::TempDir dir;
+    dir.write("app/a.lua", "");
+    dir.write("app/z/z.lua", "");
+    if (!dir.linkFolder("app/b_dangling", "app/missing") || !dir.linkFolder("app/c_loop1", "app/c_loop2") ||
+        !dir.linkFolder("app/c_loop2", "app/c_loop1"))
+        GTEST_SKIP() << "can't create a link to a folder here";
+    std::error_code ec;
+    fs::create_symlink(dir.path() / "app" / "missing.lua", dir.path() / "app" / "d_dangling.lua", ec);
+    std::string error;
+    const auto m = manifest(dir, R"(return { prefix = "app", base = "app", include = "**" })", error);
+    ASSERT_TRUE(m) << error;
+    EXPECT_EQ(paths(m->groups[0]), (std::vector<std::string>{"a.lua", "z/z.lua"}));
+}
+
+// A file reached through a link keeps the name it has where it is, as in a manifest's scan (it used to be named after
+// the link's target); the target must still lie under the base folder.
+TEST(SourceFiles, LinkedFilesKeepTheirOwnName) {
+    test::TempDir dir;
+    dir.write("app/real/a.txt", "a");
+    dir.write("outside/x.txt", "x");
+    if (!dir.linkFolder("app/linked", "app/real") || !dir.linkFolder("app/out", "outside"))
+        GTEST_SKIP() << "can't create a link to a folder here";
+    std::string error;
+    auto collected = tools::collectFiles(dir.path() / "app", {"linked/a.txt"}, error);
+    ASSERT_TRUE(collected) << error;
+    ASSERT_EQ(collected->size(), 1U);
+    EXPECT_EQ((*collected)[0].path, "linked/a.txt");
+    collected = tools::collectFiles(dir.path() / "app", {dir.path() / "app" / "linked" / "a.txt"}, error);
+    ASSERT_TRUE(collected) << error;
+    EXPECT_EQ((*collected)[0].path, "linked/a.txt");
+    EXPECT_FALSE(tools::collectFiles(dir.path() / "app", {"out/x.txt"}, error));
+    EXPECT_NE(error.find("isn't under the base folder"), std::string::npos) << error;
+
+    // A linked file found by the scan (needs a symbolic link to a file).
+    std::error_code ec;
+    fs::create_symlink(dir.path() / "app" / "real" / "a.txt", dir.path() / "app" / "b.txt", ec);
+    if (ec) GTEST_SKIP() << "can't create a symbolic link here: " << ec.message();
+    collected = tools::collectFiles(dir.path() / "app", {}, error);
+    ASSERT_TRUE(collected) << error;
+    std::vector<std::string> names;
+    for (const auto& f : *collected)
+        names.push_back(f.path);
+    EXPECT_EQ(names, (std::vector<std::string>{"b.txt", "real/a.txt"}));
+}
+
 // The tools replace their outputs through a temporary file, so an interrupted write never leaves a partial one.
 TEST(SourceFiles, ReplaceFileWritesWholeFilesOnly) {
     test::TempDir dir;

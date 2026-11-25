@@ -406,8 +406,8 @@ On this target:
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
   base folder, a listed file spelled differently on disk, the sandbox and its instruction and memory limits, strings
-  that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), `collectFiles` past entries
-that can't be queried, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
+  that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), the scan and `collectFiles` past entries
+that can't be queried, linked files named by their own path, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
   hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is

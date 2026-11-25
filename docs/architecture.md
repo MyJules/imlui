@@ -580,7 +580,9 @@ return {
 - Patterns: `*` matches any characters but `/`, `?` one character but `/`, `**` any characters including `/`; as a
   whole segment, `**/` also matches no folder (`**/*.lua` matches `main.lua` and `ui/Card.lua`). Files added later
   that match a pattern are picked up on the next build. Only the folders a pattern can match under are scanned (its
-  leading segments without a wildcard: `ui/icons/*.png` scans `ui/icons/`).
+  leading segments without a wildcard: `ui/icons/*.png` scans `ui/icons/`). The scan doesn't descend into links to
+  folders and skips entries it can't query (a link to nothing); a linked file is named where it lies and must lead to
+  a file under `base`.
 - The manifest itself is never matched by a pattern, so a manifest next to the files isn't embedded; list it in
   `files` to embed it (a dev build's folder mount then serves it too).
 - A listed file must be spelled as on disk, case included (`Main.lua` for `main.lua` is an error): resource names are
@@ -702,7 +704,8 @@ truncate (a file over the size cap, an archive over `pakMaxArchiveSize`, a dupli
 u32 length), and `imlui_pack` writes
 `<out.pak>.tmp` and renames it over the output, so a failed run never leaves a partial archive.
 `imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand (a folder under the base that
-can't be listed fails the run rather than packing an incomplete archive). An archive keeps its single
+can't be listed fails the run rather than packing an incomplete archive; an entry that can't be queried, such as a
+link to nothing, is skipped; linked folders aren't walked, and a linked file keeps its own name, as in a manifest). An archive keeps its single
 mount point (format version 1 is unchanged), so **the groups of a manifest packed into one archive must share their
 prefix**: the archive is mounted at the deepest folder that holds every group's mount point, and each group's files
 are stored under their folder below it (`tools::mergeGroups`). The library's manifest, with groups at `imlui:/` and
