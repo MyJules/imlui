@@ -197,7 +197,8 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
         std::snprintf(buf, sizeof buf, "%.3g", static_cast<double>(values[static_cast<std::size_t>(hoverIdx)]));
         ImVec2 ts = measure(TextStyle::LabelMedium, buf);
         float bw = ts.x + dp(16), bh = dp(24);
-        float bx = std::clamp(x - bw * 0.5f, p.x, p.x + w - bw), by = std::max(p.y, y - bh - dp(10));
+        // Inside the chart; a chart narrower than the readout starts it at its left edge.
+        const float bx = std::max(p.x, std::min(x - bw * 0.5f, p.x + w - bw)), by = std::max(p.y, y - bh - dp(10));
         fillRoundRect(dl, {bx, by}, {bx + bw, by + bh}, dp(shape().extraSmall), s.inverseSurface);
         drawText(dl, TextStyle::LabelMedium, {bx + dp(8), textTop(TextStyle::LabelMedium, by + bh * 0.5f)},
                  s.inverseOnSurface, buf);
