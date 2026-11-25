@@ -421,11 +421,15 @@ end
 -- referenced, e.g. a page kept in a table or by an id, is not collected and keeps ticking.)
 local function dropped() ui.__dropped = true end
 
--- Builds the delegate for `item` at index `i` in its own id scope, parented to the container's holder.
+-- Builds the delegate for `item` at index `i` in its own id scope, parented to the container's holder. A delegate
+-- that returns nil shows nothing for the item: its node is `false`, so the child list has no hole (`#list` and the
+-- renderer's rawlen would stop there) and a keyed entry isn't rebuilt every call.
 local function buildDelegate(self, item, i, key)
     local scope = newScope(rawget(self, "__type") .. " delegate", self.delegate)
-    local c = { item = item, key = key, node = inScope(scope, self.delegate, item, i, scope.ids) }
-    setParent(c.node, holder(self))
+    local node = inScope(scope, self.delegate, item, i, scope.ids)
+    if node == nil then node = false end
+    local c = { item = item, key = key, node = node }
+    setParent(node, holder(self))
     return c
 end
 

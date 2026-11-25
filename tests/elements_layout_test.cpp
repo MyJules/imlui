@@ -1238,6 +1238,40 @@ TEST_F(LayoutTest, ANumericModelIsItsIndices) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A delegate that returns nil shows nothing for its item. It left a hole in the child list, where `#list` and the
+// renderer's rawlen stopped: later delegates didn't render and a shrinking model didn't clear them. Its entry is
+// `false` now; a keyed one is kept, not rebuilt every frame.
+TEST_F(LayoutTest, ADelegateThatReturnsNilLeavesNoHole) {
+    run(R"(
+        built, keyedBuilt = 0, 0
+        n = 4
+        made = {}
+        local function delegate(item)
+            built = built + 1
+            if item % 2 == 1 then return nil end
+            made[item] = Probe { h = 5 }
+            return made[item]
+        end
+        rep = Repeater { model = function() return n end, delegate = delegate }
+        keyed = Repeater { model = 3, key = function(item) return item end,
+                           delegate = function(item)
+                               keyedBuilt = keyedBuilt + 1
+                               if item ~= 3 then return nil end
+                               return Probe { h = 5 }
+                           end }
+        root = Column { rep, keyed })");
+    m_h.renderFrames("root", 2);
+    check("#rep.__list == 4 and rep.__list[1] == false and rep.__list[2] == made[2] and rep.__list[4] == made[4]");
+    check("built == 4 and keyedBuilt == 3");
+    check("#keyed.__list == 3 and keyed.__list[3].parent == root");
+    run("p4 = made[4]");
+    EXPECT_GT(probe("p4").renders(), 0);
+    run("n = 1");
+    m_h.renderFrame("root");
+    check("#rep.__list == 1 and rep.__list[1] == false and rep.__list[4] == nil");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ... but Lua code that runs between a layout's questions and the render (a handler) may change the child: it is
 // synced again, so the change shows on the same frame.
 TEST_F(LayoutTest, AChangeMadeMidFrameIsSyncedBeforeTheChildRenders) {

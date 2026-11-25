@@ -299,6 +299,7 @@ one of them hides all of its children.
 
 Delegate instances are **cached per index**. They are rebuilt only when the item at that index changes
 (`~=` comparison), so per-delegate state survives frames. Extra cached entries are dropped when the model shrinks.
+A delegate that returns `nil` shows nothing for its item (the item's entry in the child list is `false`).
 Each instance's ids go to its own `ids` (a new table per instance), so every row can declare `id = "name"`. The
 delegates' [`parent`](#selfparent) is the element the `Repeater` is in.
 
