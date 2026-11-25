@@ -533,7 +533,10 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 `frame_test.cpp` (Frame, child handles, re-registration, unknown types), `element_test.cpp`
 (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a `Dialog` and a
 `ModalNavigationDrawer` through `native.injectKey`) and one `elements_<family>_test.cpp` per element family
-(windows, layout, navigation, controls, inputs, data, system) use it.
+(windows, layout, navigation, controls, inputs, data, system) use it. So does `culling_test.cpp`
+([culling](architecture.md#culling): bindings of culled children don't run, positions and the scroll range are the
+same with culling on and off, also on the first frame after a scroll, a `Timer`, a `Dialog`, a focused `TextField`
+and nested `ScrollView`s out of view, no settle frames while scrolling, `cull = false` and `ui.setCulling`).
 
 ## Benchmark
 

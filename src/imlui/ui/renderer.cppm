@@ -21,6 +21,7 @@ import imlui.widgets;
 import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.ui.culling;
 import imlui.ui.layout_box;
 import imlui.ui.layout_cache;
 import imlui.ui.frame_request;
@@ -151,6 +152,65 @@ public:
     /// or when an aligned stack is in an auto-sized window (it aligns in the widest child of the last frame).
     [[nodiscard]] std::optional<ImVec2> stackSize(const luaui::Node& node, float maxWidth);
 
+    /// Whether the children of `node` that are out of view are skipped (imlui.ui.culling): culling is on
+    /// (ui.setCulling) and `node`'s `cull` prop isn't false. renderStack() and Grid cull.
+    [[nodiscard]] bool cullsChildren(const luaui::Node& node) const;
+    /// Culls a visible visual child, `key` its elementImGuiId(): when it isn't pinned (cull::pinned) and its size in
+    /// the layout cache puts it out of view at `at` (its x moved right by `(alignIn - width) * align` for a stack's
+    /// `align`), lays out an item of that size there (a Dummy), as its group would, and returns where and
+    /// how big. Else (no cached size yet, pinned, in view) returns nullopt and changes nothing. The cached size is only
+    /// read (kept from decaying), never re-recorded or compared, so a culled child asks for no settle frames.
+    struct Skipped {
+        ImVec2 at;   ///< where its size was laid out
+        ImVec2 size; ///< the size from the layout cache
+    };
+    std::optional<Skipped> skipOutOfView(ImGuiID key, ImVec2 at, float alignIn = 0.0f, float align = 0.0f);
+
+    /// A container's culling for one render of its children (renderStack, Grid). Whether it pins and culls, and a
+    /// memo of its children by position from the last frame (their tables, ImGui IDs and whether they are visual),
+    /// so a child out of view costs no type lookup or id: a long list walks its culled children cheaply. Visit the
+    /// children in order with next(); the memo is kept per container (by an ImGui ID in its scope).
+    class Culling {
+    public:
+        /// `width`: the width the container gives its children. Culled children keep the sizes they had at the
+        /// width they last rendered in, so on a frame it differs from the last one's (a resize) nothing is culled.
+        Culling(Renderer& renderer, const luaui::Node& node, float width);
+        ~Culling();
+        Culling(const Culling&) = delete;
+        Culling& operator=(const Culling&) = delete;
+        Culling(Culling&&) = delete;
+        Culling& operator=(Culling&&) = delete;
+
+        /// The container may cull: pins are recorded (also on a frame it doesn't cull, for the next).
+        [[nodiscard]] bool pins() const { return m_pins; }
+        /// It culls on this frame.
+        [[nodiscard]] bool culls() const { return m_culls; }
+        /// Moves to the next child, at stack index `idx`; returns whether it is visual (isVisual()), from the memo
+        /// when its table is the one at this position last frame.
+        bool next(int idx);
+        /// The current child's elementImGuiId(): from the memo when it may be culled (`fresh` false), else looked
+        /// up (and remembered). A memo entry can only be stale for a table Lua collected and reallocated at the
+        /// same address and position since the last frame: then a culled child is laid out at the dead one's size
+        /// until it comes into view, where it renders and is looked up afresh.
+        ImGuiID key(const luaui::Node& child, bool fresh);
+
+        /// A child as the memo remembers it.
+        struct Child {
+            const void* table = nullptr;
+            ImGuiID key = 0;
+            bool visual = false;
+        };
+
+    private:
+        Renderer& m_renderer;
+        lua::State* m_state;
+        std::vector<Child>* m_children = nullptr; ///< the memo (null: not pinning, or a second render this frame)
+        std::size_t m_index = 0;                  ///< children visited
+        bool m_hit = false;                       ///< the current child matches its memo entry
+        bool m_pins = false;
+        bool m_culls = false;
+    };
+
     /// Pops up `node.menu` (a Menu element) anchored to the last item when
     /// `clicked`; renders it while open.
     void attachMenu(const luaui::Node& node, bool clicked);
@@ -188,7 +248,20 @@ private:
     /// render() from the element's ID scope on, for a known type.
     bool renderElement(const luaui::Node& node, Types::Kind kind);
 
+    /// Culling's memo of a container's children, by an ImGui ID in the container's scope.
+    struct CullMemo {
+        float width = -1.0f;
+        int frame = -1;
+        std::vector<Culling::Child> children;
+    };
+    struct CullMemos {
+        ImGuiContext* context = nullptr;
+        int swept = 0;
+        std::unordered_map<ImGuiID, CullMemo> byId;
+    };
+
     Types& m_types;
+    CullMemos m_cullMemos;
     std::string m_title{"imlui"};
     ImageCache* m_images = nullptr;
     int m_depth = 0; ///< levels of nesting entered (Nesting)
@@ -290,7 +363,10 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
     // Every visual element is exactly one layout item (a group), so
     // composite elements (label + field, ...) behave inside Rows.
     const bool visual = kind == Types::Kind::Visual;
-    if (visual) ImGui::BeginGroup();
+    if (visual)
+        ImGui::BeginGroup();
+    else
+        cull::noteNonVisual(); // it has no rect in the flow: its ancestors must not be culled
     m_types.renderElement(*this, n);
     if (visual) {
         ImGui::EndGroup();
@@ -413,9 +489,15 @@ float Renderer::renderStack(const Node& node) {
         layout::assumeWidth(widestKey, last);
         avail = std::max(avail, last);
     }
+    // Culled children keep the sizes they had at the width they last rendered in: on a frame the stack's width
+    // changed (a window resize), every child renders, and those whose size changed with it until they settle.
+    // Pins are recorded whenever the stack may cull (`pins`), also on such a frame, for the next.
+    Culling culling{*this, node, boxAvail};
+    const bool pins = culling.pins();
+    const bool cull = culling.culls();
     bool first = true;
     forEachChild(node, [&](int idx) {
-        if (!isVisual(state, idx)) {
+        if (!culling.next(idx)) {
             render(state, idx);
             return;
         }
@@ -430,6 +512,16 @@ float Renderer::renderStack(const Node& node) {
         // whole-pixel indent, which would put the children after the first a fraction of a pixel left of it in a
         // stack that starts at a fractional x (after a Text in a Row), and their sizes would no longer compose.
         ImGui::SetCursorScreenPos({x0, ImGui::GetCursorScreenPos().y});
+        if (cull) {
+            // Out of view: only its size from the layout cache, placed where `align` would place it.
+            if (const auto culled = skipOutOfView(culling.key(c, false), ImGui::GetCursorScreenPos(), avail, align)) {
+                if (align > 0.0f) widest = std::max(widest, culled->size.x);
+                right = std::max(right, culled->at.x + culled->size.x);
+                first = false;
+                return;
+            }
+        }
+        const ImGuiID key = pins ? culling.key(c, true) : align > 0.0f ? elementImGuiId(c) : 0;
         if (align > 0.0f) {
             const float width = sizeProp(c, "width");
             if (width != 0.0f ? width < 0.0f : fillsWidth(state, idx)) {
@@ -443,7 +535,6 @@ float Renderer::renderStack(const Node& node) {
             } else {
                 // Placed by its intrinsic width, else by its width on the last frame; render() records the one it
                 // takes (another frame if it differs). On its first frame without either, it renders unseen.
-                const ImGuiID key = elementImGuiId(c);
                 std::optional<float> w;
                 if (const auto intrinsic = intrinsicSize(c, avail))
                     w = intrinsic->x;
@@ -456,6 +547,7 @@ float Renderer::renderStack(const Node& node) {
             }
         }
         bool rendered = false;
+        const cull::Watch watch = pins ? cull::watch() : cull::Watch{};
         if (unseen) {
             rendered = renderUnseen(state, idx);
         } else if (fillOffset > 0.0f) {
@@ -464,6 +556,7 @@ float Renderer::renderStack(const Node& node) {
         } else {
             rendered = renderShown(state, idx);
         }
+        if (pins && rendered && cull::held(watch)) cull::pin(key);
         if (rendered) {
             if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
             right = std::max(right, ImGui::GetItemRectMax().x);
@@ -476,6 +569,73 @@ float Renderer::renderStack(const Node& node) {
     });
     if (fit) layout::recordSize(widestKey, {widest, 0.0f});
     return right;
+}
+
+bool Renderer::cullsChildren(const Node& node) const { return cull::enabled() && node.boolean("cull", true); }
+
+Renderer::Culling::Culling(Renderer& renderer, const Node& node, float width)
+    : m_renderer{renderer}, m_state{node.state()}, m_pins{renderer.cullsChildren(node)} {
+    if (!m_pins) return;
+    CullMemos& memos = renderer.m_cullMemos;
+    const int frame = ImGui::GetFrameCount();
+    if (memos.context != ImGui::GetCurrentContext()) {
+        memos.byId.clear();
+        memos.context = ImGui::GetCurrentContext();
+    }
+    // Containers that stopped rendering leave their memo: dropped once it is old, checked every keepFrames.
+    if (frame - memos.swept >= layout::keepFrames) {
+        memos.swept = frame;
+        std::erase_if(memos.byId, [&](const auto& e) { return frame - e.second.frame >= layout::keepFrames; });
+    }
+    CullMemo& memo = memos.byId[ImGui::GetID("##imlui.cull")];
+    if (memo.frame == frame) return; // rendered twice in a frame (one element in two places): no memo, no culling
+    m_culls = memo.frame >= 0 && std::fabs(memo.width - width) <= 0.5f;
+    memo.frame = frame;
+    memo.width = width;
+    m_children = &memo.children;
+}
+
+Renderer::Culling::~Culling() {
+    if (m_children && m_children->size() > m_index) m_children->resize(m_index);
+}
+
+bool Renderer::Culling::next(int idx) {
+    if (!m_children) {
+        m_hit = false;
+        return m_renderer.isVisual(m_state, idx);
+    }
+    const void* table = lua::topointer(m_state, idx);
+    const std::size_t i = m_index++;
+    if (i < m_children->size() && (*m_children)[i].table == table) {
+        m_hit = true;
+        return (*m_children)[i].visual;
+    }
+    m_hit = false;
+    const bool visual = m_renderer.isVisual(m_state, idx);
+    if (i >= m_children->size()) m_children->resize(i + 1);
+    (*m_children)[i] = {table, 0, visual};
+    return visual;
+}
+
+ImGuiID Renderer::Culling::key(const Node& child, bool fresh) {
+    Child* c = m_children && m_index > 0 ? &(*m_children)[m_index - 1] : nullptr;
+    if (c && m_hit && !fresh && c->key != 0) return c->key;
+    const ImGuiID id = m_renderer.elementImGuiId(child);
+    if (c) c->key = id;
+    return id;
+}
+
+std::optional<Renderer::Skipped> Renderer::skipOutOfView(ImGuiID key, ImVec2 at, float alignIn, float align) {
+    if (cull::pinned(key)) return std::nullopt;
+    const std::optional<ImVec2> size = layout::settledSize(key); // also keeps the entry from being dropped
+    if (!size) return std::nullopt;
+    if (align > 0.0f) at.x += std::max(0.0f, (alignIn - size->x) * align);
+    if (!cull::outOfView(at, {at.x + size->x, at.y + size->y})) return std::nullopt;
+    // What its group would take: EndGroup and Dummy both lay out an item of this size from here (ItemSize) and add it,
+    // so the last item is where the child would have been, as code after it may read.
+    ImGui::SetCursorScreenPos(at);
+    ImGui::Dummy(*size);
+    return Skipped{at, *size};
 }
 
 std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
