@@ -647,12 +647,23 @@ void pushTypeMeta(lua::State* state, const TypeInfo& info) {
     lua::pop(state);                // meta
 }
 
-/// Creates the instance for the element table at `tbl`. Returns its box (nullptr on failure).
+/// Whether the constructor of the element table at `tbl` failed before (attachInstance stored `__native = false`).
+bool constructionFailed(lua::State* state, int tbl) {
+    lua::pushstring(state, "__native");
+    lua::rawget(state, tbl);
+    const bool failed = lua::isboolean(state, -1) && !lua::toboolean(state, -1);
+    lua::pop(state);
+    return failed;
+}
+
+/// Creates the instance for the element table at `tbl`. Returns its box (nullptr on failure). A constructor that
+/// threw is remembered in the table (`__native = false`): the element isn't constructed again (and the failure
+/// reported again) at every query, every frame.
 Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     tbl = lua::absindex(state, tbl);
     lua::checkstack(state, 8);
     if (Box* existing = selfBox(state, tbl)) return existing;
-    if (!info.factory()) return nullptr;
+    if (!info.factory() || constructionFailed(state, tbl)) return nullptr;
 
     // The userdata first, so a Lua memory error can't leak a constructed instance.
     Box* b = new (lua::newuserdata(state, sizeof(Box))) Box{};
@@ -678,6 +689,9 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     }
     if (!b->element) {
         lua::pop(state);
+        lua::pushstring(state, "__native");
+        lua::pushboolean(state, false);
+        lua::rawset(state, tbl);
         return nullptr;
     }
     b->object = b->element;
@@ -872,7 +886,10 @@ void TypeRegistry::renderElement(Renderer& renderer, const Node& node) {
 
 std::optional<ImVec2> TypeRegistry::intrinsicSize(Renderer& renderer, const Node& node, float maxWidth) {
     Box* b = instanceBox(*this, node);
-    if (!b || !b->type->visual()) return std::nullopt;
+    // No instance because its constructor threw: it renders nothing, so its size is known, zero. A layout that waited
+    // for it to have a size (a Row's first frame, rendered unseen) would wait, and ask for frames, forever.
+    if (!b) return constructionFailed(node.state(), node.index()) ? std::optional{ImVec2{}} : std::nullopt;
+    if (!b->type->visual()) return std::nullopt;
     const TypeInfo* info = b->type;
     syncInstance(node.state(), node.index(), *b, Sync::OncePerFrame);
     if (!b->element) return std::nullopt;

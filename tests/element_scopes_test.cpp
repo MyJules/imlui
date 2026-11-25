@@ -277,6 +277,23 @@ TEST_F(ElementScopesTest, ParentIsTheElementThatLaysTheChildOut) {
     EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
+// A nil among positional children (a variable that isn't set yet): the renderer walks to rawlen and renders the
+// children after it, and they get their parent too (the Lua side walked with ipairs, which stops at the hole).
+TEST_F(ElementScopesTest, ChildrenAfterANilHoleGetTheirParent) {
+    run(R"(
+        local missing
+        after = Probe {}
+        nested = Probe {}
+        root = Column { Probe {}, missing, after, If { condition = true, Probe {}, Probe {}, missing, nested } }
+        assert(rawlen(root) == 4 and rawlen(root[4]) == 4, "the test needs the holes inside the border")
+        assert(after.parent == root, "after a hole")
+        assert(nested.parent == root, "after a hole in an inline container"))");
+    m_h.renderFrame("root");
+    EXPECT_GT(m_h.instance<test::RenderCounter>("after")->renders(), 0);
+    EXPECT_GT(m_h.instance<test::RenderCounter>("nested")->renders(), 0);
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
 TEST_F(ElementScopesTest, AnInlineRootHoldsItsChildren) {
     run(R"(
         made = {}

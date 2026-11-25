@@ -11,8 +11,9 @@
 #   - LeakSanitizer is not available on Windows.
 #   - ASan is built without stack-use-after-return instrumentation (-fsanitize-address-use-after-return=never): it
 #     breaks throwing from a catch block, which Lua errors (C++ exceptions, external/lua_cxx) do.
-#   - The ASan runtime DLL is copied next to the executables (CMAKE_RUNTIME_OUTPUT_DIRECTORY) so tests and apps run
-#     without PATH edits.
+#   - The ASan runtime DLL (named after the target's architecture, which the compiler reports) is copied next to the
+#     executables (CMAKE_RUNTIME_OUTPUT_DIRECTORY, or its folder per configuration with a multi-config generator) so
+#     tests and apps run without PATH edits.
 #
 # add_compile_options only reaches targets in this directory and below: imlui's own and the vendored libraries. The
 # flags are also usage requirements of the imlui library (IMLUI_SANITIZER_COMPILE_OPTIONS and
@@ -104,13 +105,42 @@ if(_imlui_sanitizers)
     add_link_options(${IMLUI_SANITIZER_LINK_OPTIONS})
 
     if(WIN32 AND IMLUI_SANITIZERS MATCHES "address")
-        execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=clang_rt.asan_dynamic-x86_64.dll
-                        OUTPUT_VARIABLE IMLUI_ASAN_DLL OUTPUT_STRIP_TRAILING_WHITESPACE)
-        file(TO_CMAKE_PATH "${IMLUI_ASAN_DLL}" IMLUI_ASAN_DLL)
-        if(NOT EXISTS ${IMLUI_ASAN_DLL})
-            message(FATAL_ERROR "ASan runtime not found: ${IMLUI_ASAN_DLL}")
+        # The runtime is named after the target's architecture (clang_rt.asan_dynamic-x86_64.dll, -i386, -aarch64),
+        # or has no suffix in a per-target runtime folder (lib/clang/<v>/lib/<triple>/).
+        set(_imlui_target_flags)
+        if(CMAKE_CXX_COMPILER_TARGET)
+            set(_imlui_target_flags --target=${CMAKE_CXX_COMPILER_TARGET})
         endif()
-        if(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} ${_imlui_target_flags} -print-target-triple
+                        OUTPUT_VARIABLE _imlui_triple OUTPUT_STRIP_TRAILING_WHITESPACE)
+        string(REGEX MATCH "^[^-]+" _imlui_arch "${_imlui_triple}")
+        if(_imlui_arch MATCHES "^i[3-6]86$")
+            set(_imlui_arch i386)
+        endif()
+        set(IMLUI_ASAN_DLL)
+        foreach(_imlui_name clang_rt.asan_dynamic-${_imlui_arch}.dll clang_rt.asan_dynamic.dll)
+            execute_process(COMMAND ${CMAKE_CXX_COMPILER} ${_imlui_target_flags} -print-file-name=${_imlui_name}
+                            OUTPUT_VARIABLE _imlui_found OUTPUT_STRIP_TRAILING_WHITESPACE)
+            file(TO_CMAKE_PATH "${_imlui_found}" _imlui_found)
+            # Not found: clang prints the name as given.
+            if(IS_ABSOLUTE "${_imlui_found}" AND EXISTS "${_imlui_found}")
+                set(IMLUI_ASAN_DLL ${_imlui_found})
+                break()
+            endif()
+        endforeach()
+        if(NOT IMLUI_ASAN_DLL)
+            message(FATAL_ERROR "ASan runtime not found for ${_imlui_triple} (clang_rt.asan_dynamic-${_imlui_arch}.dll)")
+        endif()
+        # A multi-config generator puts executables in a folder per configuration under the output folder.
+        get_property(_imlui_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+        if(CMAKE_RUNTIME_OUTPUT_DIRECTORY MATCHES [[\$<]])
+            message(STATUS "imlui: CMAKE_RUNTIME_OUTPUT_DIRECTORY has a generator expression, so ${IMLUI_ASAN_DLL} "
+                           "must be copied next to the executables or be on PATH")
+        elseif(CMAKE_RUNTIME_OUTPUT_DIRECTORY AND _imlui_multi_config)
+            foreach(_imlui_config IN LISTS CMAKE_CONFIGURATION_TYPES)
+                file(COPY ${IMLUI_ASAN_DLL} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${_imlui_config})
+            endforeach()
+        elseif(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
             file(COPY ${IMLUI_ASAN_DLL} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         else()
             message(STATUS "imlui: no CMAKE_RUNTIME_OUTPUT_DIRECTORY, so ${IMLUI_ASAN_DLL} must be on PATH")

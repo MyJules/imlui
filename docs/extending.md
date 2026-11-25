@@ -130,7 +130,7 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes. |
 | `requestFrame()`, `requestFrameAfter(s)` | Frames are [rendered on demand](architecture.md#on-demand-rendering): anything that changes on its own asks for the next one. |
 | `theme()`, `scheme()` | The current theme and Material color scheme. The md surface stack (`md::pushSurface`/`popSurface`/`surfaceColor`, `imlui.widgets`) works as in the widgets. |
-| `images()` | The `ImageCache` (module `imlui.image.image_cache`) that `Image` draws from: `images()->get("app:/x.png")` gives a decoded image (`ready()`, `width()`, `texture()` for `drawList()->AddImage`), or its `error()`. Null when the host set none. |
+| `images()` | The `ImageCache` (module `imlui.image.image_cache`) that `Image` draws from: `images()->get("app:/x.png")` gives a decoded image (`ready()`, `width()`, `texture()` for `drawList()->AddImage`), or its `error()`. The reference is valid until the end of the frame: an image not drawn for two frames may be evicted (the cache's byte budget) and is decoded again on the next `get`. Null when the host set none. |
 | `setWindowTitle(title)` | The native window title (what `ApplicationWindow`'s `title` sets). |
 | `node()` | The element table as a `luaui::Node`: an escape hatch to raw Lua (`node().pushRaw("__children")`, a painter callback, a table of rows). |
 | `renderer()` | The `Renderer`, for the rare layout the members above don't cover (`Grid` walks every child, hidden ones too, with `renderer().forEachChild`). Prefer the members. |
@@ -558,7 +558,7 @@ results, and signal arguments. Built in:
 | `std::string` | string | Numbers convert (`7` reads as `"7"`). |
 | `std::string_view`, `const char*` | string | Push only (results, signal arguments, read-only properties). |
 | `imlui::Color` | color spec | Reads a role name, `"role/alpha"`, hex or `{r, g, b, a}`, like every color prop. Pushes `"#RRGGBB[AA]"`. |
-| `std::optional<T>` | `nil` or `T` | |
+| `std::optional<T>` | `nil` or `T` | A method argument that is left out reads as `nil` too, so trailing optional parameters may be omitted. |
 | `std::vector<T>` | sequence | Every element must convert. |
 
 Add your own by specializing it (in your module, in namespace `imlui`):
@@ -809,9 +809,11 @@ due time. The built-in `Timer` does the latter.
 `render()` only runs while the element is rendered. An element that must act on its own, also when its page isn't
 shown (a timer, a poller), turns on **ticking** with `setTicking(true)` (protected; typically in the constructor or
 in a setter). While it's on, `tick(now)` runs at the start of every frame, before the tree renders, whether the
-element is rendered or not, with its properties synced first. `now` is the ImGui time in seconds. Frames are
-rendered on demand, so ask for the frame you need with `requestFrameAfter(seconds)` (module
-`imlui.ui.frame_request`). `setTicking(false)` stops it, and so does the destructor.
+element is rendered or not, with its properties synced first. `now` is the app clock's time in seconds
+(`clockTime()` from `imlui.ui.clock`, what `ui.time()` returns). Turning ticking on requests a frame, so the first
+`tick()` comes on the next frame; after that, frames are rendered on demand, so ask for the frame you need with
+`requestFrameAfter(seconds)` (module `imlui.ui.frame_request`). `setTicking(false)` stops it, and so does the
+destructor.
 
 ```cpp
 class Poller final : public imlui::Element {

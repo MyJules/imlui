@@ -15,6 +15,11 @@
 //   h.renderFrame("root");
 //   Gauge* g = h.instance<Gauge>("gauge");
 //
+// Time: the harness replaces the app clock (imlui.ui.clock) with a simulated one that starts at 0 and advances by
+// Options::deltaTime at the start of every frame, and by advanceTime() between frames (the app idling: like a
+// backend, the next frame's ImGui DeltaTime then includes the idle time, so ImGui's time catches up at that frame).
+// ui.time(), the timers, the Timer element, the snackbar and the frame requests all run on it.
+//
 // Errors the scripts report go to luaui::errors() (cleared when the harness is created and destroyed).
 // Main thread only, one harness at a time (ImGui and the error list are global).
 export module imlui.test.headless_frame;
@@ -36,6 +41,7 @@ import imlui.image.image_cache;
 import imlui.embedded.imlui;
 import imlui.theme.icons;
 import imlui.theme.typography;
+import imlui.ui.clock;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
@@ -95,7 +101,8 @@ public:
 
     /// Renders one ImGui frame: advances the time by Options::deltaTime, runs ui.__tick (timers, onFrame),
     /// and renders the element held by `root` in the script environment inside a full-display window.
-    /// Key and mouse events queued before (native.injectKey / injectMouse, or ImGui::GetIO()) are seen.
+    /// Key and mouse events queued before (native.injectKey / injectMouse, or ImGui::GetIO()) are seen. Ends with
+    /// images().collect(), like the Engine.
     void renderFrame(std::string_view root);
     void renderFrames(std::string_view root, int count);
     /// A left click at (x, y) in screen pixels, rendering `root`: move, press and release (native.injectMouse),
@@ -104,6 +111,10 @@ public:
     void click(std::string_view root, float x, float y, int framesAfter = 1);
     /// Frames rendered so far.
     [[nodiscard]] int frames() const;
+    /// Advances the simulated app clock by `seconds` without rendering (time passing while the app sleeps).
+    void advanceTime(double seconds);
+    /// The simulated app clock's time (clockTime()).
+    [[nodiscard]] double time() const;
 
     /// The C++ instance of the typed element held by `name` in the script environment, synced (like a
     /// parent's Frame::Child::as<T>()); nullptr when it isn't a T.
@@ -132,6 +143,8 @@ private:
     int m_envRef = lua::noRef;
     int m_tickRef = lua::noRef;
     int m_frames = 0;
+    double m_time = 0.0; ///< the simulated app clock
+    double m_idle = 0.0; ///< advanceTime() since the last frame: added to the next frame's DeltaTime
 };
 
 } // namespace imlui::test
@@ -150,6 +163,7 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
         m_resources.mount("imlui:/fonts/", std::make_shared<DirectoryMount>(IMLUI_FONT_DIR));
     }
     luaui::clearErrors();
+    setClockSource([this] { return m_time; });
     clearFrameRequests();
     m_context = ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -176,6 +190,7 @@ HeadlessFrame::~HeadlessFrame() {
     ImGui::DestroyContext(m_context);
     luaui::clearErrors();
     clearFrameRequests();
+    setClockSource({});
 }
 
 Renderer& HeadlessFrame::renderer() { return m_renderer; }
@@ -183,6 +198,11 @@ TypeRegistry& HeadlessFrame::types() { return m_types; }
 Resources& HeadlessFrame::resources() { return m_resources; }
 const std::set<std::string>& HeadlessFrame::loadedResources() const { return m_loaded; }
 int HeadlessFrame::frames() const { return m_frames; }
+void HeadlessFrame::advanceTime(double seconds) {
+    m_time += seconds;
+    m_idle += seconds;
+}
+double HeadlessFrame::time() const { return m_time; }
 ImageCache& HeadlessFrame::images() { return m_images; }
 
 void HeadlessFrame::start() {
@@ -247,13 +267,15 @@ void HeadlessFrame::renderFrame(std::string_view root) {
     start();
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = {m_options.width, m_options.height};
-    io.DeltaTime = m_options.deltaTime;
+    io.DeltaTime = m_options.deltaTime + static_cast<float>(m_idle);
+    m_time += static_cast<double>(m_options.deltaTime); // ImGui's time advances by DeltaTime in NewFrame
+    m_idle = 0.0;
     beginFrameRequests();
     ImGui::NewFrame();
     const int top = lua::gettop(m_state);
     if (m_tickRef != lua::noRef) {
         lua::rawgeti(m_state, lua::registryIndex, m_tickRef);
-        lua::pushnumber(m_state, ImGui::GetTime());
+        lua::pushnumber(m_state, clockTime());
         luaui::safeCall(m_state, 1, 0);
     }
     ImGui::SetNextWindowPos({0.0f, 0.0f});
@@ -265,6 +287,7 @@ void HeadlessFrame::renderFrame(std::string_view root) {
     lua::settop(m_state, top);
     ImGui::End();
     ImGui::Render();
+    m_images.collect(); // after the frame, like the Engine: destroyed textures, the budget
     ++m_frames;
 }
 

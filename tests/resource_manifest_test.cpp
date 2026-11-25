@@ -280,6 +280,27 @@ TEST(ResourceManifest, ListedFilesMustBeSpelledAsOnDisk) {
     EXPECT_EQ(failure(dir, R"(return { prefix = "app", files = { "ui/main.lua" }, include = "**/*.lua" })"), "");
 }
 
+// The literal folder an `include` pattern starts with is checked the same way: on a file system that ignores case,
+// `UI/**` scans ui/ and named its files `UI/...`, which no mount finds.
+TEST(ResourceManifest, IncludeFoldersMustBeSpelledAsOnDisk) {
+    test::TempDir dir;
+    dir.write("ui/cards/main.lua", "-- main");
+    for (const char* pattern : {"UI/**", "ui/Cards/*.lua"}) {
+        const std::string error =
+            failure(dir, std::string{R"(return { prefix = "app", include = ")"} + pattern + R"(" })");
+        if (fs::exists(dir.path() / "UI" / "CARDS")) { // case-insensitive: found, but spelled differently
+            EXPECT_NE(error.find("is spelled '"), std::string::npos) << pattern << ": " << error;
+            EXPECT_NE(error.find("on disk"), std::string::npos) << error;
+        } else {
+            EXPECT_EQ(error.find("UI/"), std::string::npos) << error; // nothing found under the wrong name
+        }
+    }
+    std::string error;
+    const auto m = manifest(dir, R"(return { prefix = "app", include = { "ui/cards/*.lua", "**/*.lua" } })", error);
+    ASSERT_TRUE(m) << error;
+    EXPECT_EQ(paths(m->groups[0]), (std::vector<std::string>{"ui/cards/main.lua"}));
+}
+
 TEST(ResourceManifest, PathsCantLeaveTheBaseFolder) {
     test::TempDir dir;
     dir.write("secret.txt", "secret");
@@ -349,6 +370,24 @@ TEST(ResourceManifest, ScansPastEntriesThatCantBeQueried) {
     EXPECT_EQ(paths(m->groups[0]), (std::vector<std::string>{"a.lua", "z/z.lua"}));
 }
 
+// A scanned file whose name has no UTF-8 form (on Windows, an unpaired surrogate) has no resource name: the scan
+// fails with a reason naming its folder (converting the name threw, which ended imlui_rc with abort()).
+TEST(ResourceManifest, ScannedNamesWithoutUtf8FormFail) {
+#ifdef _WIN32
+    test::TempDir dir;
+    dir.write("app/a.lua", "");
+    const std::wstring unpaired = std::wstring{L"b"} + static_cast<wchar_t>(0xD800) + L".lua";
+    { std::ofstream{dir.path() / "app" / unpaired, std::ios::binary} << "x"; }
+    ASSERT_TRUE(fs::exists(dir.path() / "app" / unpaired));
+    std::string error = failure(dir, R"(return { prefix = "app", base = "app", include = "**" })");
+    EXPECT_NE(error.find("has no UTF-8 form"), std::string::npos) << error;
+    EXPECT_FALSE(tools::collectFiles(dir.path() / "app", {}, error));
+    EXPECT_NE(error.find("has no UTF-8 form"), std::string::npos) << error;
+#else
+    GTEST_SKIP() << "file names are bytes here: every name converts";
+#endif
+}
+
 // A file reached through a link keeps the name it has where it is, as in a manifest's scan (it used to be named after
 // the link's target); the target must still lie under the base folder.
 TEST(SourceFiles, LinkedFilesKeepTheirOwnName) {
@@ -412,7 +451,8 @@ TEST(ResourceManifest, RunsInASandbox) {
     test::TempDir dir;
     dir.write("main.lua", "");
     for (const char* code : {"require('x')", "io.open('x')", "os.exit(1)", "load('return 1')()", "dofile('x')",
-                             "loadfile('x')", "string.rep('x', 2)", "collectgarbage()"}) {
+                             "loadfile('x')", "string.rep('x', 2)", "collectgarbage()", "xpcall(print, print)",
+                             "setmetatable({}, {})"}) {
         const std::string error = failure(dir, std::string{code} + "\nreturn { prefix = 'app', files = 'main.lua' }");
         // A runtime error, reported at the manifest's file:line.
         EXPECT_NE(error.find("resources.lua:1:"), std::string::npos) << code << ": " << error;
@@ -433,6 +473,17 @@ TEST(ResourceManifest, RunawayManifestsFail) {
     test::TempDir dir;
     // An endless loop hits the instruction limit instead of hanging the build.
     EXPECT_NE(failure(dir, "while true do end").find("runs too long"), std::string::npos);
+    // The limit is sticky: catching its error with pcall doesn't buy another 10 million instructions.
+    dir.write("main.lua", "");
+    for (const char* code :
+         {"for i = 1, 3 do pcall(function() while true do end end) end return { prefix = 'app', files = 'main.lua' }",
+          "while true do pcall(function() while true do end end) end"})
+        EXPECT_NE(failure(dir, code).find("runs too long"), std::string::npos) << code;
+    // Lua runs an xpcall message handler and a __gc finalizer without hooks, so neither is there to loop endlessly
+    // past the limit.
+    for (const char* code : {"xpcall(function() while true do end end, function() while true do end end)",
+                             "setmetatable({}, { __gc = function() while true do end end })"})
+        EXPECT_NE(failure(dir, code).find("attempt to call a nil value"), std::string::npos) << code;
     // A runaway string or table hits the memory limit.
     EXPECT_NE(failure(dir, "local s = 'x'\nfor i = 1, 40 do s = s .. s end").find("not enough memory"),
               std::string::npos);

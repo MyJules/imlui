@@ -103,7 +103,8 @@ Card { title = "Totals",
 
 - The constructor of a container sets it for its children: positional children, and the element props it renders
   (`menu`, `menuBar`, `header`, `otherwise`, a `Responsive`'s classes). Children are built first, so `parent` is
-  set once the container's constructor runs, not while the child's own does.
+  set once the container's constructor runs, not while the child's own does. Positional children are taken up to
+  `rawlen`, as the renderer takes them, so a child after a `nil` (an unset variable) gets its parent too.
 - **Inline containers are skipped**, as in QML: a child of a `Repeater`, `If`, `Loader` or `Responsive` gets the
   element that lays the container out (the `Column` around the `Repeater`), at any nesting depth. An inline
   container that is the root is its children's parent. `Repeater` delegates and a `Loader`'s or `Responsive`'s
@@ -299,6 +300,7 @@ one of them hides all of its children.
 
 Delegate instances are **cached per index**. They are rebuilt only when the item at that index changes
 (`~=` comparison), so per-delegate state survives frames. Extra cached entries are dropped when the model shrinks.
+A delegate that returns `nil` shows nothing for its item (the item's entry in the child list is `false`).
 Each instance's ids go to its own `ids` (a new table per instance), so every row can declare `id = "name"`. The
 delegates' [`parent`](#selfparent) is the element the `Repeater` is in.
 
@@ -461,14 +463,17 @@ These take [color specs](theming.md#color-specs) (role, `role/alpha`, hex, `{r,g
 Frames are **rendered on demand** (see [Architecture](architecture.md#frame-loop)): after input, while an animation
 or indeterminate indicator is moving, when a timer comes due, and when a script asks for one. When nothing changes,
 the app sleeps. Timers run at the start of a frame, and the engine wakes up for the next one, so an interval keeps
-its rate even with no input. Callbacks may add or clear timers. A callback that raises an error is reported
-(with a traceback) in the error overlay; the other timers and callbacks of that frame still run.
+its rate even with no input. An interval's periods start where the last one ended, not at the frame that ran it,
+so it doesn't drift; a frame more than a period late runs it once and skips the missed ones. Timers due in the same
+frame run in the order they came due (then the order they were set). Callbacks may add or clear timers. A callback
+that raises an error is reported (with a traceback) in the error overlay; the other timers and callbacks of that
+frame still run.
 
 | Function | Description |
 |---|---|
 | `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds (`nil` or `0`: on the next frame). `ms` must be a finite number `>= 0`: a negative, infinite or NaN delay raises an error (it would never fire). |
 | `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. `ms` must be a positive, finite number: `nil`, `0`, a negative or a non-finite interval raises an error (it would fire every frame and keep the app rendering). |
-| `clearTimer(id)` | Cancels a timeout or interval. |
+| `clearTimer(id)` | Cancels a timeout or interval. `nil` (a handle that was never set) is ignored. |
 | `onFrame(fn) -> stop` | Calls `fn(time)` at the start of every **rendered** frame, after the timers. Call the returned `stop()` to remove it (also from inside `fn`). |
 | `requestFrame(ms?)` | Asks for a frame now, or after `ms` milliseconds (a finite number; `math.huge` or NaN raise an error). Call it from `onFrame` (or a binding) while something you draw keeps changing on its own. |
 
@@ -553,7 +558,7 @@ Script errors are logged at error level automatically.
 
 | Function | Description |
 |---|---|
-| `time() -> seconds` | Seconds since the app started (`ImGui::GetTime`). |
+| `time() -> seconds` | Seconds on the app clock (monotonic, counted from its first use; current between frames too). The timers, `Timer` and the snackbar run on it. |
 | `deltaTime() -> seconds` | Duration of the last frame. |
 | `fps() -> number` | Current frame rate (ImGui's moving average). |
 | `isDark() -> bool` | Whether the current theme is dark. |

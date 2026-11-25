@@ -166,6 +166,17 @@ TEST_F(NavigationElementsTest, IconPicksNameThenIconThenText) {
     expectNoErrors();
 }
 
+// md::drawIcon skips a size below a pixel (ImGui asserts on it) and caps a huge one.
+TEST_F(NavigationElementsTest, IconOfAnyNumericSizeRendersWithoutAborting) {
+    run(R"(
+        root = Probe {
+            Icon { "star", size = 0 }, Icon { "star", size = -8 }, Icon { "star", size = 0/0 },
+            Icon { "star", size = 0.01 }, Icon { "star", size = 1e9 }, Icon { "star", size = 1/0 },
+        })");
+    frames(2);
+    expectNoErrors();
+}
+
 TEST_F(NavigationElementsTest, LinkDefaultsItsUrlToTheText) {
     run(R"(root = Probe { Link { id = "a", "https://example.com" }, Link { id = "b", text = "Docs", url = "https://x.y" } })");
     frames();

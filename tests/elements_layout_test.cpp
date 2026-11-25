@@ -438,6 +438,38 @@ TEST_F(LayoutTest, APaddedColumnsSizeIncludesThePaddingOnBothSides) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A padding below ImGui's item spacing pads as much above and below as on the sides: it padded by the item spacing
+// vertically (the padding's dummies came out with a negative height).
+TEST_F(LayoutTest, AColumnPaddingBelowTheItemSpacingPadsEverySideAlike) {
+    ASSERT_GT(ImGui::GetStyle().ItemSpacing.y, 3.0f);
+    run(R"(
+        a = Probe { w = 40, h = 20, intrinsic = true } b = Probe { w = 40, h = 20, intrinsic = true }
+        top = Probe { w = 10, h = 10 } below = Probe { w = 10, h = 10 }
+        root = Column { spacing = 0, top, Column { padding = 3, a }, below }
+        measure = Measure { Column { padding = 3, b }, Column { padding = 3, width = 100, Probe { w = 10, h = 10,
+                            intrinsic = true }, Probe { w = 10, h = 10, intrinsic = true } } })");
+    m_h.renderFrames("root", 2);
+    const ImVec2 top = probe("top").pos(), a = probe("a").pos(), below = probe("below").pos();
+    EXPECT_FLOAT_EQ(a.x - top.x, 3.0f);
+    EXPECT_FLOAT_EQ(a.y - (top.y + 10.0f), 3.0f);
+    EXPECT_FLOAT_EQ(below.y - (a.y + 20.0f), 3.0f);
+
+    m_h.renderFrames("measure", 2);
+    Measure* m = m_h.instance<Measure>("measure");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 2u);
+    const ImVec2 sizes[] = {{40.0f + 6.0f, 20.0f + 6.0f},
+                            {100.0f, 10.0f + ImGui::GetStyle().ItemSpacing.y + 10.0f + 6.0f}};
+    for (std::size_t i = 0; i < 2; ++i) {
+        ASSERT_TRUE(m->results[i].intrinsic.has_value()) << i;
+        EXPECT_FLOAT_EQ(m->results[i].rendered.x, sizes[i].x) << i;
+        EXPECT_FLOAT_EQ(m->results[i].rendered.y, sizes[i].y) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->x, sizes[i].x) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->y, sizes[i].y) << i;
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // The containers that size from the available width take a fixed Column's: Grid (a table), ScrollView (a child
 // window), Card, Table, TopAppBar, NavigationBar, Divider, TabBar and Section.
 TEST_F(LayoutTest, ContainersInAFixedWidthColumnTakeItsWidth) {
@@ -780,6 +812,44 @@ TEST_F(LayoutTest, ScrollViewKeepsScrollWhenItMovesToAnotherParent) {
     run("s.wide = false");
     m_h.renderFrames("root", 6);
     EXPECT_FLOAT_EQ(sv->scroll().y, back);
+}
+
+// A Card or ScrollView clipped away (below the window here, like scrolled out of view) doesn't render its content:
+// under SkipItems it would record near-zero sizes, ask for settle frames, and place a Row inside it wrong on the
+// frame it comes back.
+TEST_F(LayoutTest, ClippedCardAndScrollViewSkipTheirContent) {
+    run(R"(
+        big = Probe { h = 10 }
+        a = Probe { w = 50 } b = Probe {}
+        c = Probe { w = 50 } d = Probe {}
+        root = Column { big, Card { Row { a, b } }, ScrollView { height = 100, Row { c, d } } })");
+    m_h.renderFrames("root", 6);
+    Probe* a = m_h.instance<Probe>("a");
+    Probe* b = m_h.instance<Probe>("b");
+    Probe* c = m_h.instance<Probe>("c");
+    Probe* d = m_h.instance<Probe>("d");
+    ASSERT_TRUE(a && b && c && d);
+    const float bx = b->pos().x - a->pos().x;
+    const float dx = d->pos().x - c->pos().x;
+    EXPECT_GE(bx, 50.0f);
+    EXPECT_GE(dx, 50.0f);
+
+    run("big.h = 2000"); // both go below the 600 px window
+    m_h.renderFrames("root", 3);
+    const int aRenders = a->renders();
+    const int cRenders = c->renders();
+    m_h.renderFrames("root", 4);
+    EXPECT_EQ(a->renders(), aRenders);
+    EXPECT_EQ(c->renders(), cRenders);
+    EXPECT_EQ(secondsUntilFrame(), std::numeric_limits<double>::infinity()); // settled, nothing to redo
+
+    run("big.h = 10"); // back in view: the first frame places the Rows right
+    m_h.renderFrame("root");
+    EXPECT_GT(a->renders(), aRenders);
+    EXPECT_GT(c->renders(), cRenders);
+    EXPECT_FLOAT_EQ(b->pos().x - a->pos().x, bx);
+    EXPECT_FLOAT_EQ(d->pos().x - c->pos().x, dx);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // ------------------------------------------------------------ Card
@@ -1238,6 +1308,40 @@ TEST_F(LayoutTest, ANumericModelIsItsIndices) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A delegate that returns nil shows nothing for its item. It left a hole in the child list, where `#list` and the
+// renderer's rawlen stopped: later delegates didn't render and a shrinking model didn't clear them. Its entry is
+// `false` now; a keyed one is kept, not rebuilt every frame.
+TEST_F(LayoutTest, ADelegateThatReturnsNilLeavesNoHole) {
+    run(R"(
+        built, keyedBuilt = 0, 0
+        n = 4
+        made = {}
+        local function delegate(item)
+            built = built + 1
+            if item % 2 == 1 then return nil end
+            made[item] = Probe { h = 5 }
+            return made[item]
+        end
+        rep = Repeater { model = function() return n end, delegate = delegate }
+        keyed = Repeater { model = 3, key = function(item) return item end,
+                           delegate = function(item)
+                               keyedBuilt = keyedBuilt + 1
+                               if item ~= 3 then return nil end
+                               return Probe { h = 5 }
+                           end }
+        root = Column { rep, keyed })");
+    m_h.renderFrames("root", 2);
+    check("#rep.__list == 4 and rep.__list[1] == false and rep.__list[2] == made[2] and rep.__list[4] == made[4]");
+    check("built == 4 and keyedBuilt == 3");
+    check("#keyed.__list == 3 and keyed.__list[3].parent == root");
+    run("p4 = made[4]");
+    EXPECT_GT(probe("p4").renders(), 0);
+    run("n = 1");
+    m_h.renderFrame("root");
+    check("#rep.__list == 1 and rep.__list[1] == false and rep.__list[4] == nil");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ... but Lua code that runs between a layout's questions and the render (a handler) may change the child: it is
 // synced again, so the change shows on the same frame.
 TEST_F(LayoutTest, AChangeMadeMidFrameIsSyncedBeforeTheChildRenders) {
@@ -1575,4 +1679,48 @@ TEST_F(LayoutTest, ARowShowsAChildWithAnUnknownHeightOnItsFirstFrame) {
     EXPECT_FLOAT_EQ(probe("short").pos().y, top + 10.0f);
     EXPECT_FLOAT_EQ(probe("short").pos().x, probe("tall").pos().x + 20.0f);
     EXPECT_GT(secondsUntilFrame(), 0.0);
+}
+
+// ------------------------------------------------------------------ cycles
+
+namespace {
+
+/// Whether a script error says the tree nested deeper than Renderer::maxDepth.
+bool reportedTooDeep() {
+    for (const std::string& e : luaui::errors())
+        if (e.find("element tree nested deeper than") != std::string::npos) return true;
+    return false;
+}
+
+} // namespace
+
+// A tree that contains itself used to recurse until the native stack overflowed. The renderer stops at
+// Renderer::maxDepth levels and reports it, for a cycle through containers, through Rows (which ask their children's
+// fills and intrinsic sizes first), through Cards (child windows) and through inline containers (a Loader that shows
+// its own ancestor, or itself).
+TEST(RendererDepth, ACycleIsCutAndReported) {
+    for (const char* code : {
+             "a = Column {}; b = Column { a }; a[1] = b; root = Column { a }",
+             "a = Row {}; b = Row { Text { 'x' }, a }; a[1] = b; root = a",
+             "a = Card {}; b = Card { a }; a[1] = b; root = a",
+             "root = Column { Text { 'x' }, Loader { item = function() return root end } }",
+             "l = Loader { item = function() return l end }; root = Column { l }",
+         }) {
+        test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+        ASSERT_EQ(h.run(code), "") << code;
+        h.renderFrames("root", 2);
+        EXPECT_TRUE(reportedTooDeep()) << code;
+    }
+}
+
+// A deep tree that isn't a cycle renders whole, with no error.
+TEST(RendererDepth, ADeepTreeBelowTheLimitRenders) {
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    ASSERT_EQ(h.run(R"(
+        root = Text { id = "leaf", "leaf" }
+        for i = 1, 200 do root = (i % 2 == 0 and Column or Row) { root } end)"),
+              "");
+    h.renderFrames("root", 2);
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+    EXPECT_TRUE(h.syncElement("leaf") != nullptr);
 }

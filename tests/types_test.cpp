@@ -47,6 +47,7 @@ public:
             .method("greet", &Probe::greet)
             .method("fire", &Probe::fire)
             .method("bump", &Probe::bump)
+            .method("limitOr", &Probe::limitOr)
             .defaultProperty("value");
     }
 
@@ -84,6 +85,8 @@ public:
         m_value += 1;
         notify("value");
     }
+    /// `limit`, or `fallback` for nil: an optional argument that may also be left out.
+    [[nodiscard]] int limitOr(int fallback, std::optional<int> limit) const { return limit.value_or(fallback); }
 
 private:
     double m_value = 0;
@@ -304,6 +307,8 @@ TEST(LuaConvertTest, ChecksAndCoerces) {
     lua::settop(s, 0);
     LuaConvert<std::string_view>::push(s, "view");
     EXPECT_EQ(lua::tostring(s, -1), "view");
+    EXPECT_TRUE(LuaConvert<std::optional<int>>::check(s, 5)); // an index past the top: an omitted argument
+    EXPECT_EQ(LuaConvert<std::optional<int>>::get(s, 5), std::nullopt);
     lua::close(s);
 }
 
@@ -358,6 +363,20 @@ TEST_F(TypesTest, MethodsConvertArgumentsAndResults) {
               std::string::npos);
     EXPECT_NE(runError(R"(p.add({}, 1, 2))").find("method called without its object"), std::string::npos);
     EXPECT_NE(runError(R"(p:missing())").find("attempt to call a nil value (method 'missing')"), std::string::npos);
+}
+
+// An optional parameter takes nil and an argument that is left out alike (the omitted one was "got no value").
+TEST_F(TypesTest, AnOptionalArgumentMayBeLeftOut) {
+    run(R"(
+        p = Probe {}
+        assert(p:limitOr(-1, 4) == 4)
+        assert(p:limitOr(-1, nil) == -1)
+        assert(p:limitOr(-1) == -1)
+    )");
+    EXPECT_NE(runError(R"(p:limitOr(-1, "x"))").find("bad argument #2 to 'Probe:limitOr' (integer expected, got string)"),
+              std::string::npos);
+    EXPECT_NE(runError(R"(p:limitOr())").find("bad argument #1 to 'Probe:limitOr' (integer expected, got no value)"),
+              std::string::npos);
 }
 
 // ------------------------------------------------------------------ property sync
@@ -705,13 +724,13 @@ TEST(SingletonLifetimeTest, DestroyedByReferenceSingletonRaises) {
 }
 
 // A constructor that throws a non-std exception is reported with a message (it escaped the catch before), and the
-// element gets no instance.
+// element gets no instance (`__native = false`: the failure is remembered, the constructor not tried again).
 TEST(ConstructorExceptionTest, NonStdExceptionIsReported) {
     luaui::clearErrors();
     TypeRegistry types;
     types.registerType<IntThrower>("IntThrower");
     lua::State* state = newUiState(types);
-    EXPECT_EQ(luaError(state, "t = ui.env.IntThrower {}; assert(rawget(t, '__native') == nil)"), "");
+    EXPECT_EQ(luaError(state, "t = ui.env.IntThrower {}; assert(rawget(t, '__native') == false)"), "");
     ASSERT_FALSE(luaui::errors().empty());
     EXPECT_NE(luaui::errors().back().find("IntThrower: constructor failed: unknown C++ exception"), std::string::npos);
     lua::close(state);

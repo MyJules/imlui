@@ -17,8 +17,11 @@ export namespace imlui::md {
 /// Material slider. `step` <= 0 means continuous. `valueFormat` is checked with isValidFloatFormat(); an invalid
 /// one is reported once and replaced by defaultValueFormat. Returns true when the user changed the value; `*v`
 /// is written only then, so a value the user didn't touch keeps its exact double (0.1 stays 0.1). A stepped value
-/// is `vmin + k * step` without binary noise (0.1 * 3 gives 0.3, not 0.30000000000000004). `width` follows
-/// resolveSize (itemWidth): 0 is the natural 200dp, -1 fills (the Slider element passes -1 when unset).
+/// is `vmin + k * step` without binary noise (0.1 * 3 gives 0.3, not 0.30000000000000004), and no more than the
+/// last whole step in the range (range 1, step 0.4: at most 0.8). A range that isn't finite (an infinite or NaN
+/// bound, or bounds too far apart for a double) is empty, like vmin >= vmax: the value is left alone. A step that
+/// isn't finite is continuous. `width` follows resolveSize (itemWidth): 0 is the natural 200dp, -1 fills (the
+/// Slider element passes -1 when unset).
 bool slider(const char* id, double* v, double vmin, double vmax, double step = 0.0, float width = 0.0f,
             const char* valueFormat = "%.2f");
 /// The size of slider() with `width` (resolved like itemWidth(): 0 is the natural 200dp).
@@ -43,10 +46,13 @@ const char* checkedFormat(const char* format) {
     return defaultValueFormat;
 }
 
-/// `vmin + k * step` for the step nearest to `v`, rounded to 15 significant digits: that drops the noise of the
-/// binary multiplication (0.1 * 3 = 0.30000000000000004) and keeps every value a step can mean.
-double snapToStep(double v, double vmin, double step) {
-    const double snapped = vmin + std::round((v - vmin) / step) * step;
+/// `vmin + k * step` for the step nearest to `v` and at most `vmax`, rounded to 15 significant digits: that drops
+/// the noise of the binary multiplication (0.1 * 3 = 0.30000000000000004) and keeps every value a step can mean.
+double snapToStep(double v, double vmin, double vmax, double step) {
+    // The last whole step in the range; the small slack keeps it when the division comes out just below a whole
+    // number (1 / 0.1 = 9.999...), as for the ticks.
+    const double last = std::floor((vmax - vmin) / step + 1e-6);
+    const double snapped = vmin + std::clamp(std::round((v - vmin) / step), 0.0, last) * step;
     char buf[32] = {};
     if (std::snprintf(buf, sizeof buf, "%.15g", snapped) < 0) return snapped;
     return std::strtod(buf, nullptr);
@@ -68,15 +74,19 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
 
     const float r = dp(10);
     const float x0 = p.x + r, x1 = p.x + w - r;
+    // inf - inf is NaN and inf - x is inf: a finite, positive range means finite bounds too.
+    const double range = vmax - vmin;
+    const bool ranged = std::isfinite(range) && range > 0;
+    if (!std::isfinite(step)) step = 0;
     bool changed = false;
-    if (act && vmax > vmin) {
+    if (act && ranged) {
         const float mt = std::clamp((ImGui::GetMousePos().x - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
-        double nv = vmin + static_cast<double>(mt) * (vmax - vmin);
-        if (step > 0) nv = snapToStep(nv, vmin, step);
-        nv = std::clamp(nv, vmin, vmax);
+        double nv = vmin + static_cast<double>(mt) * range;
+        if (step > 0) nv = snapToStep(nv, vmin, vmax, step);
+        nv = std::clamp(nv, vmin, vmax); // the last step's slack
         if (nv != *v) { *v = nv; changed = true; }
     }
-    const float t = vmax > vmin ? static_cast<float>(std::clamp((*v - vmin) / (vmax - vmin), 0.0, 1.0)) : 0.0f;
+    const float t = ranged ? static_cast<float>(std::clamp((*v - vmin) / range, 0.0, 1.0)) : 0.0f;
     float tv = animate(iid + 2, t, 30.0f);
 
     Color active = dis ? s.onSurface.withAlpha(0.38f) : s.primary;
@@ -86,12 +96,12 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
     const float hx = x0 + (x1 - x0) * tv;
     fillRoundRect(dl, {x0, cy - th * 0.5f}, {x1, cy + th * 0.5f}, th * 0.5f, inactive);
     if (hx > x0) fillRoundRect(dl, {x0, cy - th * 0.5f}, {hx, cy + th * 0.5f}, th * 0.5f, active);
-    if (step > 0 && vmax > vmin && (vmax - vmin) / step <= 40) {
+    if (step > 0 && ranged && range / step <= 40) {
         // Only whole steps inside the range (range 1, step 0.4: 0, 0.4, 0.8). The small slack keeps the last tick
         // when the division comes out just below a whole number (1 / 0.1 = 9.999...).
-        const int stops = static_cast<int>(std::floor((vmax - vmin) / step + 1e-6));
+        const int stops = static_cast<int>(std::floor(range / step + 1e-6));
         for (int i = 0; i <= stops; ++i) {
-            const double at = std::min(1.0, static_cast<double>(i) * step / (vmax - vmin));
+            const double at = std::min(1.0, static_cast<double>(i) * step / range);
             const float sx = x0 + (x1 - x0) * static_cast<float>(at);
             fillCircle(dl, {sx, cy}, dp(1),
                        sx <= hx ? s.onPrimary.withAlpha(0.7f) : s.onSecondaryContainer.withAlpha(0.7f));

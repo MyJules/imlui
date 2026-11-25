@@ -52,7 +52,9 @@ Values are checked, since ImGui asserts on some of them: every component must be
 in magnitude, `Alpha` and `DisabledAlpha` must be in 0..1, and both components of `WindowMinSize` at least 1. A style
 value, `spacing`, `fontScale` or a radius out of its range, or one that isn't a number, reports an error
 (`theme.style.Alpha: must be in 0..1`) and is ignored: the field keeps its default. A `Theme` built in C++ is held to the same limits by `setTheme`, which
-clamps `fontScale`, `spacing` and the radii and drops style overrides it can't apply (`styleValueProblem`).
+clamps `fontScale`, `spacing` and the radii and drops style overrides it can't apply (`styleValueProblem`). Sizes are
+scaled by the DPI scale and zoom like the defaults (ImGui truncates them to whole pixels); `WindowMinSize` stays at
+least 1 pixel at any zoom.
 
 After the preset and the overrides, every style size is scaled by the DPI factor
 (`ImGuiStyle::ScaleAllSizes`).
@@ -73,6 +75,9 @@ tonal palettes, each a hue and a chroma, are derived from it:
 | neutral | seed hue | 0.008 |
 | neutral variant | seed hue | 0.018 |
 | error | 25° | 0.19 |
+
+A grey seed (OKLCH chroma below `1e-4`, where its hue is only rounding noise) has no hue to give: every palette but
+error gets chroma 0, so the scheme is grey apart from the error roles.
 
 `TonalPalette::tone(t)` maps the Material tone `t` (CIE L\*, 0 = black, 100 = white) to OKLab lightness. It is
 exact for greys. The color is then converted back to sRGB, with chroma reduced until it fits the gamut.

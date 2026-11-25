@@ -68,9 +68,11 @@ void Card::declare(TypeBuilder<Card>& type) {
 }
 
 void Card::render(Frame& frame) {
-    md::beginCard("##card", md::cardVariant(m_variant), frame.size("width"), m_padding, frame.resolvedHeight(0.0f),
-                  m_color, m_rounding.value_or(-1.0f));
-    {
+    // Clipped away (scrolled out of view): the content isn't rendered, so its sizes in the layout cache stay what
+    // they were, instead of the near-zero sizes items get under SkipItems (settle frames now, a misplaced frame
+    // when it scrolls back).
+    if (md::beginCard("##card", md::cardVariant(m_variant), frame.size("width"), m_padding,
+                      frame.resolvedHeight(0.0f), m_color, m_rounding.value_or(-1.0f))) {
         const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
         frame.renderStack();
     }

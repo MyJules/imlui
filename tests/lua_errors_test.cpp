@@ -125,3 +125,26 @@ TEST(SafeCallTest, ForeignExceptionIsReportedWithAMessage) {
     lua::close(state);
     luaui::clearErrors();
 }
+
+// Showing a value as text (a Text's boolean or table, a Table cell) is a read: it isn't counted as a possible change
+// of the Lua state (luaui::changes()), which would make every element sync again. A raising __tostring is reported.
+TEST(SafeCallTest, DisplayingAValueIsNotAChange) {
+    luaui::clearErrors();
+    lua::State* state = lua::newstate();
+    const std::uint64_t before = luaui::changes();
+    lua::pushboolean(state, true);
+    EXPECT_EQ(luaui::toDisplayString(state, -1), "true");
+    lua::newtable(state);
+    EXPECT_TRUE(luaui::toDisplayString(state, -1).starts_with("table: "));
+    EXPECT_EQ(luaui::changes(), before);
+    EXPECT_EQ(lua::gettop(state), 2);
+    lua::newtable(state); // a metatable whose __tostring raises
+    lua::pushcfunction(state, [](lua::State* s) -> int { lua::error(s, "no text"); });
+    lua::setfield(state, -2, "__tostring");
+    lua::setmetatable(state, -2);
+    EXPECT_EQ(luaui::toDisplayString(state, -1), "");
+    EXPECT_EQ(luaui::errors().size(), 1u);
+    EXPECT_EQ(lua::gettop(state), 2);
+    lua::close(state);
+    luaui::clearErrors();
+}

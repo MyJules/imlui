@@ -2,8 +2,13 @@
 // and imlui.theme.typography name lookup.
 #include <gtest/gtest.h>
 
+import std;
+
 import imgui;
 import imlui.color;
+import imlui.lua.errors;
+import imlui.test.headless_frame;
+import imlui.theme.dpi;
 import imlui.theme.scheme;
 import imlui.theme.theme;
 import imlui.theme.typography;
@@ -77,6 +82,42 @@ TEST_F(ThemeTest, IsStyleFieldKnowsImGuiStyleFields) {
 TEST_F(ThemeTest, IsStyleFieldRejectsUnknown) {
     for (const char* name : {"", "frameRounding", "NotAField", "Colors", "FontScale"})
         EXPECT_FALSE(isStyleField(name)) << name;
+}
+
+// ------------------------------------------------------------------ style overrides at any zoom
+
+// Every style override the validation accepts survives the DPI scale. ImGuiStyle::ScaleAllSizes truncates, so at
+// zoom 0.5 an accepted WindowMinSize of 1 became 0, which NewFrame asserts on (an abort).
+TEST(ThemeStyleOverrides, EveryAcceptedValueRendersAtTheZoomLimits) {
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    ASSERT_EQ(h.run(R"(
+        root = Column { Text { "a" }, Button { "b" }, TextField {}, Slider {}, Card { Text { "c" } },
+                        Row { Checkbox { "d" }, Switch {} }, ScrollView { height = 50, Text { "e" } },
+                        TabBar { Tab { "t", Text { "f" } } }, Separator { "g" } })"),
+              "");
+    int applied = 0;
+    for (const float zoom : {minZoom, maxZoom}) {
+        setZoom(zoom);
+        for (const std::string_view name : styleFieldNames()) {
+            for (const float v : {-maxStyleValue, -1.0f, 0.0f, 0.5f, 1.0f, 1.5f, maxStyleValue}) {
+                if (!styleValueProblem(name, {v, v}).empty()) continue;
+                Theme t;
+                t.style.push_back({std::string{name}, {v, v}});
+                setTheme(std::move(t));
+                applyPendingTheme();
+                h.renderFrame("root");
+                const ImGuiStyle& st = ImGui::GetStyle();
+                ASSERT_GE(st.WindowMinSize.x, 1.0f) << name << " = " << v << " at zoom " << zoom;
+                ASSERT_GE(st.WindowMinSize.y, 1.0f) << name << " = " << v << " at zoom " << zoom;
+                ++applied;
+            }
+        }
+    }
+    EXPECT_GT(applied, 2 * 31 * 3); // every field, with several values each
+    setZoom(1.0f);
+    setTheme(Theme{});
+    applyPendingTheme();
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // ------------------------------------------------------------------ imguiColorIndex

@@ -13,9 +13,10 @@
 //     }
 //
 // The manifest is evaluated in a sandbox: a fresh Lua state with only the base library, without dofile, loadfile,
-// load and collectgarbage (no io, os, require, string, ...), and text chunks only. The manifest file itself is never
+// load, collectgarbage, xpcall and setmetatable (no io, os, require, string, ...), and text chunks only. The manifest file itself is never
 // matched by a pattern (list it in `files` to embed it). It may run at most manifestMaxInstructions Lua instructions
-// and use at most manifestMaxMemory bytes, so a runaway manifest fails the build instead of hanging it.
+// and use at most manifestMaxMemory bytes, so a runaway manifest fails the build instead of hanging it (catching the
+// error with pcall doesn't reset the instruction limit).
 export module imlui.tools.resource_manifest;
 
 import std;
@@ -257,8 +258,12 @@ void* budgetAlloc(void* ud, void* ptr, std::size_t oldSize, std::size_t newSize)
     return block;
 }
 
-/// Runs once the manifest has run manifestMaxInstructions instructions.
+/// Runs once the manifest has run manifestMaxInstructions instructions, and then on every instruction: the limit is
+/// sticky, so a `pcall` that catches the error can't buy another manifestMaxInstructions (the next instruction after
+/// it raises the error again, and so on until it reaches the top). The base library has no coroutines, so the main
+/// thread is the only one with a hook.
 void tooLong(lua::State* state, lua::Debug*) {
+    lua::sethook(state, tooLong, lua::maskCount, 1);
     // A literal: lua::error longjmps, so nothing here may need destroying.
     static_assert(manifestMaxInstructions == 10'000'000);
     lua::error(state, "the manifest runs too long (more than 10000000 Lua instructions: an endless loop?)");
@@ -277,7 +282,9 @@ std::optional<std::vector<GroupFields>> evaluateManifest(std::string_view source
     }
     lua::sethook(state, tooLong, lua::maskCount, manifestMaxInstructions);
     lua::openbase(state);
-    for (const char* unsafe : {"dofile", "loadfile", "load", "collectgarbage"}) {
+    // xpcall and setmetatable too: Lua runs a message handler for an error raised by the hook, and a __gc finalizer,
+    // with hooks off, so either could loop past the instruction limit.
+    for (const char* unsafe : {"dofile", "loadfile", "load", "collectgarbage", "xpcall", "setmetatable"}) {
         lua::pushnil(state);
         lua::setglobal(state, unsafe);
     }
@@ -472,6 +479,13 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
     for (const auto& root : scanRoots(fields.include)) {
         const fs::path folder = root.empty() ? group.base : group.base / pathFromUtf8(root);
         if (!fs::is_directory(folder, ec)) continue;
+        // Like a `files` entry: the folder's name in the pattern becomes part of every resource name.
+        if (const std::string spelled = root.empty() ? std::string{} : spellingOnDisk(group.base, root);
+            !spelled.empty()) {
+            error = where + "include folder '" + root + "' is spelled '" + spelled +
+                    "' on disk (resource names are case-sensitive: use the same spelling)";
+            return std::nullopt;
+        }
         scanned.push_back(folder);
         for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator();
              it.increment(ec)) {
@@ -483,17 +497,22 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
                 continue;
             }
             if (!it->is_regular_file(entryEc) || it->path() == self) continue;
-            const std::string path = utf8(it->path().lexically_relative(group.base));
-            if (!matchesAny(fields.include, path) || matchesAny(fields.exclude, path) || selected.contains(path))
+            const auto path = utf8Name(it->path().lexically_relative(group.base));
+            if (!path) {
+                error = where + "a file name in " + utf8(it->path().parent_path()) +
+                        " has no UTF-8 form, so it can't be a resource name";
+                return std::nullopt;
+            }
+            if (!matchesAny(fields.include, *path) || matchesAny(fields.exclude, *path) || selected.contains(*path))
                 continue;
             // A matched link may lead out of the base folder, like a `files` entry.
             std::error_code linkEc;
             const fs::path target = fs::weakly_canonical(it->path(), linkEc);
             if (linkEc || leavesBase(target.lexically_relative(group.base))) {
-                error = where + "'" + path + "' is outside the base folder";
+                error = where + "'" + *path + "' is outside the base folder";
                 return std::nullopt;
             }
-            selected[path] = {path, it->path(), std::nullopt};
+            selected[*path] = {*path, it->path(), std::nullopt};
         }
         if (ec) {
             error = where + "can't list " + utf8(folder) + ": " + ec.message();

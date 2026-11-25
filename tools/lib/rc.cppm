@@ -31,8 +31,8 @@ import imlui.tools.source_files;
 
 export namespace imlui::tools {
 
-/// The tool's main(); returns the process exit code.
-[[nodiscard]] int runRc(int argc, char** argv);
+/// The tool: `args` are the arguments after the program name, UTF-8 (toolMain()); returns the process exit code.
+[[nodiscard]] int runRc(std::vector<std::string> args);
 
 /// True when `name` can name a generated module and namespace: lowercase ASCII letters, digits and `_`, starting
 /// with a letter.
@@ -236,8 +236,7 @@ bool isResourceIdentifier(std::string_view name) {
     return true;
 }
 
-int runRc(int argc, char** argv) {
-    std::vector<std::string_view> args{argv + 1, argv + argc};
+int runRc(std::vector<std::string> args) {
     if (args.size() == 3 && args[0] == "--list") {
         std::string error;
         const auto manifest = loadManifest(pathFromUtf8(args[1]), error);

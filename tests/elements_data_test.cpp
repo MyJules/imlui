@@ -240,6 +240,20 @@ TEST_F(DataTest, PlotOfLargeOrConstantValuesDraws) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// The hover readout keeps inside the chart; a chart narrower than the readout put it at the left edge (it called
+// std::clamp with the upper bound below the lower one).
+TEST_F(DataTest, PlotNarrowerThanItsHoverReadoutDraws) {
+    for (const char* kind : {"line", "bars"}) {
+        run(std::string{"root = Probe { Plot { width = 12, height = 80, kind = '"} + kind +
+            "', values = { 123456789, -0.000123 } } }");
+        frames();
+        run("ui.native.injectMouse(" + std::to_string(probe().center().x) + ", " +
+            std::to_string(probe().center().y) + ")");
+        frames(2);
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ------------------------------------------------------------------ Canvas
 
 TEST_F(DataTest, CanvasPaintsWithThePainterAndEmitsClickedInDp) {
@@ -273,6 +287,22 @@ TEST_F(DataTest, CanvasPaintsWithThePainterAndEmitsClickedInDp) {
     click(a.x + 50.0f, a.y + 20.0f);
     run(R"(assert(clicked and clicked[1] == 50 and clicked[2] == 20, "onClicked"))");
     run(R"(assert(math.type(clicked[1]) == "integer", "whole positions are integers, like the handler's"))");
+}
+
+// ImGui asserts (and so aborts) on a font size that isn't positive: an icon below a pixel draws nothing, and a huge
+// one is drawn at md::maxIconPixels instead of a glyph larger than the font atlas.
+TEST_F(DataTest, PainterIconOfAnyNumericSizeDrawsWithoutAborting) {
+    run(R"(
+        root = Probe { Canvas { width = 100, height = 100,
+            onPaint = function(_, p)
+                for _, size in ipairs { 0, -8, 0/0, 0.01, 1/0, -1/0, 1e9, 1e300, 32 } do
+                    p:icon(50, 50, "star", size)
+                end
+                p:icon(50, 50, nil)
+                p:icon(50, 50, 42)
+            end } })");
+    frames(2);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 TEST_F(DataTest, PainterOutsideOnPaintIsAnError) {

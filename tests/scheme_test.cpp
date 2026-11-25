@@ -189,3 +189,23 @@ TEST(FindRole, WritesThroughToScheme) {
     *findRole(s, "tertiaryContainer") = {0.25f, 0.5f, 0.75f, 1.0f};
     EXPECT_EQ(s.tertiaryContainer, (Color{0.25f, 0.5f, 0.75f, 1.0f}));
 }
+
+// A grey has no hue: the one OKLCH gives it is rounding noise, and used to pick a colored primary (a different one
+// for each grey). A grey seed gives a grey scheme; only the error roles keep their red.
+TEST(SchemeGreySeed, GivesAGreyScheme) {
+    for (const char* hex : {"#000000", "#404040", "#808080", "#C0C0C0", "#FFFFFF"}) {
+        for (bool dark : {false, true}) {
+            const Scheme s = generateScheme(*parseHex(hex), dark);
+            for (const auto& role : roles()) {
+                if (role.name.starts_with("error") || role.name.starts_with("onError")) continue;
+                const Color c = s.*role.member;
+                EXPECT_NEAR(c.r, c.g, 1e-3f) << hex << " " << role.name;
+                EXPECT_NEAR(c.g, c.b, 1e-3f) << hex << " " << role.name;
+            }
+            EXPECT_GT(s.error.r, s.error.b + 0.2f) << hex;
+        }
+    }
+    // A color one step off grey still has a hue of its own.
+    const Scheme bluish = generateScheme(*parseHex("#808081"), false);
+    EXPECT_GT(bluish.primary.b, bluish.primary.r + 0.1f);
+}

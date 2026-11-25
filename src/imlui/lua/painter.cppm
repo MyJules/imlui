@@ -12,8 +12,8 @@ import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.font_face_scope;
 import imlui.theme.typography;
-import imlui.theme.icons;
 import imlui.theme.theme;
+import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.value;
 import imlui.widgets.common;
@@ -119,19 +119,15 @@ int text(lua::State* state) {
     return 0;
 }
 
-/// p:icon(cx, cy, name, size = 24, color) — centered at (cx, cy)
+/// p:icon(cx, cy, name, size = 24, color) — centered at (cx, cy). md::drawIcon: nothing below a pixel, at most
+/// md::maxIconPixels.
 int icon(lua::State* state) {
     ready(state);
-    ImVec2 c = pt(state, 2);
-    std::string_view name = lua::tostring(state, 4);
-    float size = num(state, 5, 24.0f);
-    Color col = colorArg(state, 6, theme().scheme.onSurfaceVariant);
-    ImFont* f = iconFont();
-    std::string t = iconText(name);
-    if (!f || t.empty()) return 0;
-    float px = dp(size);
-    ImVec2 sz = f->CalcTextSizeA(px, 3.4e38f, 0.0f, t.c_str());
-    target->AddText(f, px, {c.x - sz.x * 0.5f, c.y - sz.y * 0.5f}, u32(col), t.c_str());
+    const ImVec2 c = pt(state, 2);
+    const std::string_view name = lua::type(state, 4) == lua::Type::String ? lua::tostring(state, 4) : "";
+    const float size = num(state, 5, 24.0f);
+    const Color col = colorArg(state, 6, theme().scheme.onSurfaceVariant);
+    md::drawIcon(target, name, c, size, col);
     return 0;
 }
 
@@ -153,23 +149,32 @@ int polyline(lua::State* state) {
     return 0;
 }
 
+struct PainterFn {
+    const char* name;
+    lua::CFunction fn;
+};
+
+constexpr PainterFn painterFns[] = {
+    {"line", &line}, {"rect", &rect}, {"circle", &circle}, {"text", &text}, {"icon", &icon}, {"polyline", &polyline},
+};
+
+/// Upvalue 1: the index of the method in painterFns. Runs it with a C++ exception turned into a Lua error that names
+/// the method ("imlui.painter.polyline: what"); a Lua error passes through.
+int callPainter(lua::State* state) {
+    const PainterFn& f = painterFns[static_cast<std::size_t>(lua::tointeger(state, lua::upvalueindex(1)))];
+    return catchCxx(state, [&] { return f.fn(state); }, "imlui.painter.", f.name);
+}
+
 } // namespace
 
 void registerPainter(lua::State* state) {
-    lua::createtable(state, 0, 2); // metatable
-    lua::createtable(state, 0, 6); // methods
-    lua::pushcfunction(state, &line);
-    lua::setfield(state, -2, "line");
-    lua::pushcfunction(state, &rect);
-    lua::setfield(state, -2, "rect");
-    lua::pushcfunction(state, &circle);
-    lua::setfield(state, -2, "circle");
-    lua::pushcfunction(state, &text);
-    lua::setfield(state, -2, "text");
-    lua::pushcfunction(state, &icon);
-    lua::setfield(state, -2, "icon");
-    lua::pushcfunction(state, &polyline);
-    lua::setfield(state, -2, "polyline");
+    lua::createtable(state, 0, 2);                                        // metatable
+    lua::createtable(state, 0, static_cast<int>(std::size(painterFns))); // methods
+    for (std::size_t i = 0; i < std::size(painterFns); ++i) {
+        lua::pushinteger(state, static_cast<lua::Integer>(i));
+        lua::pushcclosure(state, &callPainter, 1);
+        lua::setfield(state, -2, painterFns[i].name);
+    }
     lua::setfield(state, -2, "__index");
     lua::setfield(state, lua::registryIndex, "imlui.painter");
 }

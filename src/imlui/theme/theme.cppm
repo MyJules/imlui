@@ -71,6 +71,8 @@ void reapplyTheme();
 
 /// Whether a style field name is known (for validating Lua input).
 [[nodiscard]] bool isStyleField(std::string_view name);
+/// The ImGuiStyle field names a theme's `style` can override, in declaration order.
+[[nodiscard]] std::vector<std::string_view> styleFieldNames();
 
 /// Looks up an ImGuiCol index by its name ("WindowBg", "Text", ...); -1 if unknown.
 [[nodiscard]] int imguiColorIndex(std::string_view name);
@@ -262,6 +264,10 @@ void applyNow(const Theme& t) {
 
     const float scale = dpiScale();
     st.ScaleAllSizes(scale);
+    // ScaleAllSizes truncates: below a scale of 1 an accepted WindowMinSize of 1 becomes 0, and NewFrame asserts on
+    // either of these below 1.
+    st.WindowMinSize = {std::max(st.WindowMinSize.x, 1.0f), std::max(st.WindowMinSize.y, 1.0f)};
+    st.WindowBorderHoverPadding = std::max(st.WindowBorderHoverPadding, 1.0f);
     st.FontSizeBase = 16.0f;
     st.FontScaleDpi = scale;
     st.FontScaleMain = t.fontScale;
@@ -316,6 +322,12 @@ bool isStyleField(std::string_view name) {
     for (const auto& f : styleFields)
         if (f.name == name) return true;
     return false;
+}
+
+std::vector<std::string_view> styleFieldNames() {
+    std::vector<std::string_view> names;
+    for (const auto& f : styleFields) names.push_back(f.name);
+    return names;
 }
 
 int imguiColorIndex(std::string_view name) {

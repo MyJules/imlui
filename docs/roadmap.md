@@ -18,6 +18,9 @@ Follow-ups not scheduled yet:
   final pixel size.
 - A file reached through a linked folder is readable but not listed, so hot reload sees it only once loaded.
 - `TextField` copies its text every frame (`md::textField` edits in place).
+- Follow-ups from the November 2026 review: a test for the painter's `catchCxx` path (nothing in it throws on
+  demand); the 240 fps cap with `vsync = false` is a constant, not the monitor's refresh rate; free an image's CPU
+  pixels once the backend has uploaded it, if no backend re-uploads from them.
 
 ## Kept as designed
 

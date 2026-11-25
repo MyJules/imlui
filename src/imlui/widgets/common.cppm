@@ -56,6 +56,15 @@ float animate(ImGuiID id, float target, float speed = 14.0f);
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
 float stateLayer(ImGuiID id, bool hovered, bool active);
 
+/// Whether a popup is open over the current window now, or was at the end of the last frame (notePopupOver()).
+/// ImGui's keyboard nav closes the top popup on Escape in NewFrame, before the window under it sees the key: a
+/// window that closes on Escape (a Dialog, a drawer) checks this, so one press closes one popup. `flags` are
+/// ImGui::IsPopupOpen("", flags)'s.
+[[nodiscard]] bool popupOver(ImGuiPopupFlags flags);
+/// Records whether a popup is open over the current window, for popupOver() on the next frame. Call it after the
+/// window's contents, so a menu they opened this frame counts.
+void notePopupOver(ImGuiPopupFlags flags);
+
 /// Resolves a requested width against the available width of the layout box (resolveSize): > 0 fixed, -1 fill, < -1 fill minus
 /// |requested|, 0 natural.
 [[nodiscard]] float itemWidth(float requested, float natural);
@@ -64,7 +73,11 @@ float stateLayer(ImGuiID id, bool hovered, bool active);
 void drawText(ImDrawList* dl, TextStyle style, ImVec2 pos, Color c, std::string_view s);
 /// Draws `s` vertically centered on `cy`, starting at x. Returns its width.
 float drawTextV(ImDrawList* dl, TextStyle style, float x, float cy, Color c, std::string_view s);
-/// Draws a Material icon centered at `c`, `size` in dp.
+/// The largest icon drawIcon() draws, in pixels: a larger size is drawn at this one (ImGui rasterizes each size
+/// into its font atlas, and a glyph larger than the atlas aborts).
+inline constexpr float maxIconPixels = 1024.0f;
+/// Draws a Material icon centered at `c`, `size` in dp. Nothing is drawn below a pixel (a size of 0, negative or
+/// NaN, which ImGui asserts on); above maxIconPixels the icon is drawn at that size.
 void drawIcon(ImDrawList* dl, std::string_view name, ImVec2 c, float size, Color color);
 /// Top y at which to draw `style` text so that its cap height is centered on `cy`, on a whole pixel.
 [[nodiscard]] float textTop(TextStyle style, float cy);
@@ -122,6 +135,14 @@ std::string scopedWindowName(std::string_view label, std::string_view id) {
     return std::format("{}###{}{:08X}", label, id, ImGui::GetID(id.data(), id.data() + id.size()));
 }
 
+bool popupOver(ImGuiPopupFlags flags) {
+    return ImGui::IsPopupOpen("", flags) || ImGui::GetStateStorage()->GetBool(ImGui::GetID("##popupOver"));
+}
+
+void notePopupOver(ImGuiPopupFlags flags) {
+    ImGui::GetStateStorage()->SetBool(ImGui::GetID("##popupOver"), ImGui::IsPopupOpen("", flags));
+}
+
 float animate(ImGuiID id, float target, float speed) {
     float* v = ImGui::GetStateStorage()->GetFloatRef(id, target);
     // A NaN target (a Slider value of 0/0) would never converge and request frames forever.
@@ -177,7 +198,8 @@ void drawIcon(ImDrawList* dl, std::string_view name, ImVec2 c, float size, Color
     if (!f || name.empty()) return;
     std::string t = iconText(name);
     if (t.empty()) return;
-    float px = dp(size);
+    const float px = std::min(dp(size), maxIconPixels);
+    if (!(px >= 1.0f)) return; // also NaN
     ImVec2 sz = f->CalcTextSizeA(px, hugeExtent, 0.0f, t.c_str());
     dl->AddText(f, px, {std::floor(c.x - sz.x * 0.5f), std::floor(c.y - sz.y * 0.5f)}, col(color), t.c_str());
 }

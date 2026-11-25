@@ -180,6 +180,7 @@ The root element. It fills the native window, with no decoration, and stacks its
 | `padding` | number | `24` | Content padding. |
 | `color` | color | — | Background. Unset: the theme's window background (`surface`). |
 | `scrollable` | bool | `true` | `false` hides the scrollbar. |
+| `imageCacheBudget` | integer | — | Bytes of decoded image pixels (4 per pixel) the image cache keeps; `0`: no limit, a negative value reads as `0`. Applied every frame while the prop exists (so it can be a binding); without it the cache keeps its default, 256 MiB. Over the budget, the images drawn least recently are evicted after a frame (never one drawn in that frame or the one before) and decoded again when next drawn. |
 | `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem) at the top. |
 | `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
 
@@ -648,7 +649,7 @@ A Material icon glyph.
 | `name` | icon | — | The glyph. |
 | `icon` | icon | — | The glyph, when `name` isn't set. |
 | `text` | string | `""` | Positional. The glyph, when neither `name` nor `icon` is set. |
-| `size` | number | `24` | Size (dp). |
+| `size` | number | `24` | Size (dp). Below a pixel nothing is drawn; the glyph is drawn at most 1024 pixels tall. |
 | `color` | color | — | Tint. Unset: `onSurfaceVariant`. |
 
 ### Image
@@ -863,9 +864,9 @@ A 44dp-tall Material slider. A value label appears above the handle while you dr
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number | `0` | **two-way.** Kept as a double end to end and written back only when the user moves the slider, so a bound `0.1` stays `0.1`. A stepped value is `from + k * stepSize` without binary noise (three steps of `0.1` are `0.3`); with an integral `stepSize` it is an integer. |
-| `from`, `to` | number | `0`, `1` | Range. |
-| `stepSize` | number | `0` | `0` means continuous. Tick marks are drawn when there are at most 40 steps. |
+| `value` | number | `0` | **two-way.** Kept as a double end to end and written back only when the user moves the slider, so a bound `0.1` stays `0.1`. A stepped value is `from + k * stepSize` without binary noise (three steps of `0.1` are `0.3`), at most the last whole step in the range (`to = 1, stepSize = 0.4` ends at `0.8`); with an integral `stepSize` it is an integer. |
+| `from`, `to` | number | `0`, `1` | Range. An empty range (`from >= to`) or one that isn't finite (an infinite or NaN bound, or bounds too far apart for a double) leaves the value alone. |
+| `stepSize` | number | `0` | `0` (or below, or not finite) means continuous. Tick marks are drawn when there are at most 40 steps. |
 | `format` | printf string | — | Value label. Unset: `"%.0f"` if `stepSize >= 1`, else `"%.2f"`. Exactly one `%f`, `%e` or `%g` conversion (flags, width and precision allowed), plus any `%%`. Anything else is reported once and replaced by `"%.2f"`. |
 | `width` | size | `0` (fill) | *Raw.* |
 
@@ -1059,7 +1060,7 @@ use ImGui's anti-aliased lines.
 | `p:rect(x, y, w, h, color, rounding, outline, thickness)` | `color = "primary"`, `rounding = 0`, `outline = false` (filled), `thickness = 1` |
 | `p:circle(cx, cy, r, color, outline, thickness)` | `color = "primary"`, `outline = false` (filled), `thickness = 1` |
 | `p:text(x, y, text, color, style, font)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"`, `font` = a [named font](theming.md#fonts) (unset: the style's face) |
-| `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"` |
+| `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"`; a size below a pixel draws nothing, the glyph is at most 1024 pixels |
 | `p:polyline({x1, y1, x2, y2, ...}, color, thickness, closed)` | `color = "primary"`, `thickness = 1`, `closed = false` |
 
 Calling the painter outside `onPaint` raises an error.
@@ -1091,7 +1092,8 @@ until it's collected (or the script reloads). Use `running = false` to stop it. 
 replaced) stops on the next frame when nothing else references it: the next `ui.__tick` collects garbage first. One
 still referenced (a page kept in a table, an `id`) keeps ticking. See
 [ticking elements](extending.md#ticking-elements). The engine wakes up for the next
-trigger, so it keeps its rate without input.
+trigger, so it keeps its rate without input. Each period starts where the last one ended, not at the frame that
+fired it, so it doesn't drift; a frame that comes more than a period late fires once and skips the missed ones.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|

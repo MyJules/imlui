@@ -18,9 +18,11 @@ enum class CardVariant { Elevated, Filled, Outlined };
 /// "elevated" (default), "filled", "outlined".
 [[nodiscard]] CardVariant cardVariant(std::string_view n);
 
-/// Begins a card container (auto-height unless `height` > 0). Pair with endCard(). `width` follows resolveSize
-/// (itemWidth): 0 is the natural 320dp, -1 fills (the Card element passes -1 when its width is unset).
-void beginCard(const char* id, CardVariant v, float width = 0.0f, float padding = 16.0f, float height = 0.0f,
+/// Begins a card container (auto-height unless `height` > 0). Pair with endCard(), also when it returns false.
+/// `width` follows resolveSize (itemWidth): 0 is the natural 320dp, -1 fills (the Card element passes -1 when its
+/// width is unset). Returns false when the card is clipped away (ImGui's BeginChild): its content would render under
+/// SkipItems at near-zero sizes, so skip it (ImGui keeps an auto-height card's last content height meanwhile).
+bool beginCard(const char* id, CardVariant v, float width = 0.0f, float padding = 16.0f, float height = 0.0f,
                std::optional<Color> color = std::nullopt, float rounding = -1.0f);
 void endCard();
 /// How many cards are open: to restore with restoreCardDepth() when an error cut a render pass short.
@@ -61,7 +63,7 @@ CardVariant cardVariant(std::string_view n) {
     return CardVariant::Elevated;
 }
 
-void beginCard(const char* id, CardVariant v, float width, float padding, float height, std::optional<Color> color,
+bool beginCard(const char* id, CardVariant v, float width, float padding, float height, std::optional<Color> color,
                float rounding) {
     const Scheme& s = scheme();
     ImGuiID key = ImGui::GetID(id);
@@ -88,12 +90,13 @@ void beginCard(const char* id, CardVariant v, float width, float padding, float 
     ImGuiChildFlags cf = ImGuiChildFlags_AlwaysUseWindowPadding;
     if (height <= 0) cf |= ImGuiChildFlags_AutoResizeY;
     if (v == CardVariant::Outlined) cf |= ImGuiChildFlags_Borders;
-    ImGui::BeginChild(id, {w, height > 0 ? height : 0.0f}, cf, ImGuiWindowFlags_NoScrollbar);
+    const bool visible = ImGui::BeginChild(id, {w, height > 0 ? height : 0.0f}, cf, ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(2);
     pushSurface(bg);
     dropStale();
     cards.push_back({key, ImGui::GetFrameCount()});
+    return visible;
 }
 
 ImVec2 cardSize(float width, float padding, float height, float contentHeight) {

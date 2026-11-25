@@ -46,19 +46,23 @@ inline constexpr std::uint32_t pakVersion = 1;
 inline constexpr std::uint64_t pakMaxFileSize = std::uint64_t{1} << 31;
 /// Archives larger than this aren't written or opened: an archive is read into memory whole.
 inline constexpr std::uint64_t pakMaxArchiveSize = std::uint64_t{1} << 32;
+/// Archives whose files add up to more than this (decompressed) are rejected as corrupt: a small archive can't make
+/// a mount that reading every file would need terabytes for.
+inline constexpr std::uint64_t pakMaxTotalSize = std::uint64_t{1} << 32;
 
 /// The bytes of an archive holding `files`, mounted at `mountPoint`. nullopt (with a reason in `error`, when given)
 /// when the archive couldn't be read back: a string or the file count doesn't fit its u32 field, a file is larger
-/// than pakMaxFileSize or a stored one's size isn't its stored size, two files have the same path, or the archive
-/// would be larger than pakMaxArchiveSize. Paths and the
-/// mount point aren't checked here (parsePak() does).
+/// than pakMaxFileSize or a stored one's size isn't its stored size, the files add up to more than pakMaxTotalSize,
+/// two files have the same path, a path is a file and a folder (`a` and `a/b`), or the archive would be larger than
+/// pakMaxArchiveSize. Whether the paths and the mount point are normalized isn't checked here (parsePak() does).
 [[nodiscard]] std::optional<std::vector<std::byte>>
 writePak(std::string_view mountPoint, std::span<const PakFile> files, std::string* error = nullptr);
 
 /// Parses and checks the header and index of `archive`: the magic and version, a mount point that is a canonical
-/// full folder name (`app:/`, `imlui:/fonts/`: not `app:/main.lua`), normalized paths without duplicates, and every
-/// file inside the archive. nullopt (with a reason in `error`, when given) for
-/// anything else.
+/// full folder name (`app:/`, `imlui:/fonts/`: not `app:/main.lua`), normalized paths without duplicates and none
+/// that is both a file and a folder, every file's bytes inside the archive, past the index and overlapping no other
+/// file's, and at most pakMaxTotalSize bytes in all once decompressed. nullopt (with a reason in `error`, when given)
+/// for anything else.
 [[nodiscard]] std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string* error = nullptr);
 
 } // namespace imlui
@@ -93,6 +97,8 @@ public:
     explicit Reader(std::span<const std::byte> bytes) : m_bytes{bytes} {}
 
     [[nodiscard]] bool ok() const { return m_ok; }
+    /// How many bytes have been read.
+    [[nodiscard]] std::size_t position() const { return m_pos; }
 
     std::uint64_t number(int width) {
         if (!take(static_cast<std::size_t>(width))) return 0;
@@ -131,6 +137,15 @@ std::nullopt_t failed(std::string* error, std::string reason) {
 
 constexpr std::uint64_t u32Max = std::numeric_limits<std::uint32_t>::max();
 
+/// The first path of `paths` (sorted, unique) that is also a folder of another one (`a` with `a/b`), or nullopt.
+template <class Paths>
+std::optional<std::string_view> fileAndFolder(const Paths& paths) {
+    for (const std::string_view path : paths)
+        for (std::size_t slash = path.find('/'); slash != std::string_view::npos; slash = path.find('/', slash + 1))
+            if (paths.contains(path.substr(0, slash))) return path.substr(0, slash);
+    return std::nullopt;
+}
+
 } // namespace
 
 std::optional<std::vector<std::byte>> writePak(std::string_view mountPoint, std::span<const PakFile> files,
@@ -147,6 +162,14 @@ std::optional<std::vector<std::byte>> writePak(std::string_view mountPoint, std:
         if (!f.compressed && f.size != f.stored.size()) return failed(error, "'" + f.path + "' has an invalid size");
         if (!paths.insert(f.path).second) return failed(error, "'" + f.path + "' is listed twice");
     }
+    if (const auto both = fileAndFolder(paths))
+        return failed(error, "'" + std::string{*both} + "' is both a file and a folder");
+    std::uint64_t declared = 0;
+    for (const auto& f : files)
+        declared += f.size; // each at most pakMaxFileSize (2^31), so no overflow below 2^32 files
+    if (declared > pakMaxTotalSize)
+        return failed(error, "the files are too large together (" + std::to_string(declared) + " bytes, at most " +
+                                 std::to_string(pakMaxTotalSize) + ")");
 
     std::uint64_t total = pakMagic.size() + 4 + 4 + 4 + mountPoint.size();
     for (const auto& f : files)
@@ -197,6 +220,7 @@ std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string
         return failed(error, "invalid mount point '" + index.mountPoint +
                                  "' (a full folder name ending in '/', such as 'app:/' or 'imlui:/fonts/')");
     std::set<std::string, std::less<>> seen;
+    std::uint64_t declared = 0;
 
     for (std::uint64_t i = 0; i < count; ++i) {
         PakIndexEntry e;
@@ -215,7 +239,28 @@ std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string
         if (e.size > pakMaxFileSize || (!e.compressed && e.size != e.storedSize))
             return failed(error, "'" + e.path + "' has an invalid size");
         if (!seen.insert(e.path).second) return failed(error, "'" + e.path + "' is in the index twice");
+        declared += e.size;
+        if (declared > pakMaxTotalSize)
+            return failed(error, "the files are too large together (more than " + std::to_string(pakMaxTotalSize) +
+                                     " bytes)");
         index.entries.push_back(std::move(e));
+    }
+    if (const auto both = fileAndFolder(seen))
+        return failed(error, "'" + std::string{*both} + "' is both a file and a folder");
+
+    // Every file's bytes lie past the index, and no two files share any: a file's bytes are its own.
+    std::vector<const PakIndexEntry*> blobs;
+    for (const auto& e : index.entries)
+        if (e.storedSize > 0) blobs.push_back(&e);
+    std::ranges::sort(blobs, {}, &PakIndexEntry::offset);
+    std::uint64_t end = in.position();
+    const PakIndexEntry* previous = nullptr;
+    for (const PakIndexEntry* e : blobs) {
+        if (e->offset < end)
+            return failed(error, "'" + e->path + "' overlaps " +
+                                     (previous ? "'" + previous->path + "'" : std::string{"the index"}));
+        end = e->offset + e->storedSize;
+        previous = e;
     }
     return index;
 }
