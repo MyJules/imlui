@@ -15,6 +15,7 @@ import imlui.lua.painter;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.clock;
 
 export namespace imlui {
 
@@ -84,7 +85,7 @@ void Canvas::render(Frame& frame) {
     lua::setfield(state, -2, "hovered");
     lua::pushboolean(state, active);
     lua::setfield(state, -2, "pressed");
-    lua::pushnumber(state, ImGui::GetTime());
+    lua::pushnumber(state, clockTime());
     lua::setfield(state, -2, "time");
     lua::getfield(state, lua::registryIndex, "imlui.painter");
     lua::setmetatable(state, -2);

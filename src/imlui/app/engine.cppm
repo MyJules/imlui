@@ -36,6 +36,7 @@ import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.name;
 import imlui.image.image_cache;
+import imlui.ui.clock;
 import imlui.ui.frame_request;
 import imlui.ui.layout_box;
 import imlui.ui.main_thread;
@@ -404,7 +405,7 @@ void Engine::renderTree() {
     if (m_tickRef != lua::noRef) {
         // ui.__tick runs due timers and returns the seconds until the next one.
         lua::rawgeti(m_state, lua::registryIndex, m_tickRef);
-        lua::pushnumber(m_state, ImGui::GetTime());
+        lua::pushnumber(m_state, clockTime());
         if (luaui::safeCall(m_state, 1, 1) && lua::isnumber(m_state, -1)) requestFrameAfter(lua::tonumber(m_state, -1));
         lua::settop(m_state, 0);
     }

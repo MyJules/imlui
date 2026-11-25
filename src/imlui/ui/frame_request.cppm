@@ -2,12 +2,14 @@
 //
 // The engine only renders when something asks for a frame: input (a short
 // settle period), animations that are still moving, timers that come due,
-// or code that calls requestFrame(). All times are on a monotonic clock
-// private to this module; callers pass relative delays in seconds.
+// or code that calls requestFrame(). All times are on the app clock
+// (imlui.ui.clock); callers pass relative delays in seconds.
 // Main thread only.
 export module imlui.ui.frame_request;
 
 import std;
+
+import imlui.ui.clock;
 
 export namespace imlui {
 
@@ -58,11 +60,7 @@ std::vector<double> pending; // absolute due times, sorted ascending
 std::function<void()> wakeHandler;
 bool loopAwake = true;
 
-double clockNow() {
-    using namespace std::chrono;
-    static const steady_clock::time_point start = steady_clock::now();
-    return duration<double>(steady_clock::now() - start).count();
-}
+double clockNow() { return clockTime(); }
 
 void wake() {
     if (!loopAwake && wakeHandler) wakeHandler();

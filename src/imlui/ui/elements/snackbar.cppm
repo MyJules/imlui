@@ -9,12 +9,13 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.clock;
 
 export namespace imlui {
 
 /// The Material snackbar: the app-wide overlay behind ui.snackbar(). Non-visual.
 ///
-/// Props:   text = "", actionText = "", shownAt = -1 (ImGui time in s; < 0 hidden), duration = 4000 (ms),
+/// Props:   text = "", actionText = "", shownAt = -1 (clockTime() in s, ui.time(); < 0 hidden), duration = 4000 (ms),
 ///          closable = false
 /// Signals: onAction(self)
 /// Two-way: shownAt
@@ -71,7 +72,7 @@ void Snackbar::declare(TypeBuilder<Snackbar>& type) {
 
 void Snackbar::render(Frame& frame) {
     if (m_shownAt < 0) return;
-    const double now = ImGui::GetTime();
+    const double now = clockTime();
     const double dur = m_duration / 1000.0;
     const double age = now - m_shownAt;
     float t = static_cast<float>(std::min(1.0, age / slideInSeconds));

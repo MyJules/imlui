@@ -65,7 +65,7 @@ private:
     bool m_repeat = true;
     bool m_triggeredOnStart = false;
     bool m_started = false; ///< m_last is valid: the timer has been running since then
-    double m_last = 0.0;    ///< ImGui time of the start or the last trigger
+    double m_last = 0.0;    ///< app clock time (clockTime()) of the start or the last trigger
     /// A one-shot fired while `running` is a function binding that returned true: stopped until it returns false.
     bool m_stoppedUnderBinding = false;
 };

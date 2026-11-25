@@ -62,6 +62,13 @@ flowchart TD
 `beginFrameRequests()` drops the requests that frame serves, so anything that still needs frames asks again while
 it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`.
 
+All of it runs on one monotonic **app clock**, `clockTime()` in `imlui.ui.clock` (a steady clock): the frame
+requests, `ui.time()` (`native.time`), the `now` that `ui.__tick` passes to the Lua timers and to ticking elements
+(`Timer`), the snackbar's `shownAt` and the `Canvas` painter's `p.time`. Unlike `ImGui::GetTime()`, which advances
+only when a frame starts, it is current between frames, so a time taken in a posted function after an idle period
+(a `setTimeout`, `ui.snackbar`) isn't already in the past when the next frame comes. Tests replace its source
+(`setClockSource`) with a simulated time.
+
 Who requests frames:
 
 | Source | Request |
@@ -879,6 +886,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
+| `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, wake handler |
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs) |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |

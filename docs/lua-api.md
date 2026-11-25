@@ -553,7 +553,7 @@ Script errors are logged at error level automatically.
 
 | Function | Description |
 |---|---|
-| `time() -> seconds` | Seconds since the app started (`ImGui::GetTime`). |
+| `time() -> seconds` | Seconds on the app clock (monotonic, counted from its first use; current between frames too). The timers, `Timer` and the snackbar run on it. |
 | `deltaTime() -> seconds` | Duration of the last frame. |
 | `fps() -> number` | Current frame rate (ImGui's moving average). |
 | `isDark() -> bool` | Whether the current theme is dark. |

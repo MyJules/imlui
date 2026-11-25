@@ -516,6 +516,7 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 | `click(root, x, y, framesAfter = 1)` | A left click at `(x, y)` (screen pixels) while rendering `root`: move, press and release through `native.injectMouse`, a frame after each, then `framesAfter - 1` more. Render one frame first on a fresh tree, so the window exists to be hovered. |
 | `instance<T>(name)` | The C++ instance of the element held by `name`, synced like a parent's `Frame::Child::as<T>()`. |
 | `state()`, `frames()` | The Lua state and the number of frames rendered. |
+| `time()`, `advanceTime(seconds)` | The harness replaces the app clock (`imlui.ui.clock`) with a simulated one that starts at 0 and advances by `deltaTime` at the start of each frame. `advanceTime` moves it between frames, like the app idling (the next frame's ImGui `DeltaTime` includes the idle time, as with a backend). `ui.time()`, the timers, `Timer`, the snackbar and the frame requests all run on it. |
 
 Script errors go to `luaui::errors()`, which the harness clears when it's created and destroyed. One harness at a
 time (ImGui's context, the font pointers and the error list are global; every harness loads its own fonts).

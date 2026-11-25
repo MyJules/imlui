@@ -57,7 +57,7 @@ public:
 
     /// While ticking is on (setTicking(true)): called at the start of every rendered frame, before the tree
     /// renders, whether or not the element is rendered, with its properties synced first. `now` is the
-    /// ImGui time in seconds. Frames are rendered on demand: request the frame you need (requestFrameAfter).
+    /// app clock's time in seconds (clockTime(), module imlui.ui.clock, what ui.time() returns). Frames are rendered on demand: request the frame you need (requestFrameAfter).
     virtual void tick(double now);
 
     /// Whether tick() is called every frame.

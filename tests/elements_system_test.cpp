@@ -303,6 +303,31 @@ TEST_F(SystemTest, LuaTimersRequestTheirFrame) {
     EXPECT_EQ(secondsUntilFrame(), 0.0);
 }
 
+// A timeout set between frames after an idle period counts from now (the app clock), not from the last frame's
+// time: it doesn't fire on the next frame.
+TEST_F(SystemTest, ATimeoutSetAfterAnIdlePeriodCountsFromNow) {
+    run("n = 0; root = Column { }");
+    m_h.renderFrame("root");
+    m_h.advanceTime(10.0);
+    run("ui.setTimeout(function() n = n + 1 end, 100)");
+    m_h.renderFrame("root"); // 62.5 ms later
+    EXPECT_EQ(number("n"), 0);
+    m_h.renderFrame("root"); // 125 ms
+    EXPECT_EQ(number("n"), 1);
+}
+
+// A Timer started between frames after an idle period: its period starts at the frame that ticks it first.
+TEST_F(SystemTest, ATimerCreatedAfterAnIdlePeriodWaitsItsInterval) {
+    run("n = 0; root = Column { }");
+    m_h.renderFrame("root");
+    m_h.advanceTime(10.0);
+    run("t = Timer { interval = 125, onTriggered = function() n = n + 1 end }");
+    m_h.renderFrames("root", 2); // starts, 62.5 ms
+    EXPECT_EQ(number("n"), 0);
+    m_h.renderFrame("root"); // 125 ms after its start
+    EXPECT_EQ(number("n"), 1);
+}
+
 TEST_F(SystemTest, ACollectedTimerStopsTicking) {
     run(R"(
         n = 0
@@ -443,6 +468,17 @@ TEST_F(SystemTest, SnackbarPropsComeFromUiSnackbarAndExpiryWritesShownAtBack) {
     m_h.renderFrames("snack", 2); // hidden: nothing more happens
     EXPECT_EQ(number("changes"), 1);
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ui.time() is the app clock, current between frames too: a snackbar shown after an idle period (from a posted
+// function) starts now, not at the last frame's time, which would expire it before it's drawn.
+TEST_F(SystemTest, SnackbarShownBetweenFramesStartsNow) {
+    run("snack = ui.__overlays[1]; root = Column { }");
+    m_h.renderFrame("root");
+    m_h.advanceTime(10.0);
+    run("ui.snackbar('Saved')");
+    EXPECT_DOUBLE_EQ(number("snack.shownAt"), m_h.time());
+    EXPECT_DOUBLE_EQ(number("ui.time()"), m_h.time());
 }
 
 TEST_F(SystemTest, SnackbarDefaults) {
