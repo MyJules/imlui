@@ -29,6 +29,9 @@ import imlui.theme.theme;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
 import imlui.ui.layout_cache;
+import imlui.color;
+import imlui.widgets.card;
+import imlui.widgets.surface;
 
 using namespace imlui;
 
@@ -227,6 +230,30 @@ private:
     bool m_counted = false;
 };
 
+/// Records the Material surface it renders on (md::surfaceColor) and how many cards are open around it; with
+/// `boom` set it throws instead, cutting the render pass short.
+class SurfaceProbe final : public Element {
+public:
+    static void declare(TypeBuilder<SurfaceProbe>& type) {
+        type.property("boom", &SurfaceProbe::boom, &SurfaceProbe::setBoom);
+    }
+    void render(Frame&) override {
+        if (m_boom) throw std::runtime_error("surface probe exploded");
+        m_surface = md::surfaceColor();
+        m_cards = md::cardDepth();
+        ImGui::Dummy({10.0f, 10.0f});
+    }
+    [[nodiscard]] bool boom() const { return m_boom; }
+    void setBoom(bool on) { m_boom = on; }
+    [[nodiscard]] Color surface() const { return m_surface; }
+    [[nodiscard]] std::size_t cards() const { return m_cards; }
+
+private:
+    bool m_boom = false;
+    Color m_surface{};
+    std::size_t m_cards = 99;
+};
+
 bool hasError(std::string_view part) {
     for (const auto& e : luaui::errors())
         if (e.find(part) != std::string::npos) return true;
@@ -246,6 +273,7 @@ protected:
         m_h.registerType<Inspect>("Inspect");
         m_h.registerType<Counter>("Counter");
         m_h.registerType<RawWriter>("RawWriter");
+        m_h.registerType<SurfaceProbe>("SurfaceProbe");
     }
     [[nodiscard]] ImVec2 lastSize(std::string_view name) {
         test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
@@ -686,6 +714,34 @@ TEST_F(LayoutTest, CardDefaultsAndPadding) {
     EXPECT_EQ(custom->rounding(), 2.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().x - a.x, 14.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().y - a.y, 14.0f);
+}
+
+// An error inside a Card (a C++ exception here, a Lua error alike) cuts the render pass short past md::endCard():
+// the card's surface and card entries are dropped with the ImGui stacks, so what renders afterwards (the rest of the
+// frame, the next frames) isn't drawn on the dead card's surface.
+TEST_F(LayoutTest, ARecoveredRenderErrorLeavesNoCardOrSurfaceBehind) {
+    run(R"(
+        boom = SurfaceProbe { boom = true } inside = SurfaceProbe {} outside = SurfaceProbe {}
+        root = Column { Card { color = "#ff0000", inside, Card { boom } }, outside })");
+    m_h.renderFrame("root");
+    EXPECT_TRUE(hasError("surface probe exploded"));
+    EXPECT_EQ(md::surfaceDepth(), 0u); // unwound in the frame that threw
+    EXPECT_EQ(md::cardDepth(), 0u);
+    luaui::clearErrors();
+    run("boom.boom = false");
+    m_h.renderFrame("root");
+    EXPECT_TRUE(luaui::errors().empty());
+    SurfaceProbe* inside = m_h.instance<SurfaceProbe>("inside");
+    SurfaceProbe* outside = m_h.instance<SurfaceProbe>("outside");
+    ASSERT_NE(inside, nullptr);
+    ASSERT_NE(outside, nullptr);
+    EXPECT_EQ(inside->surface().vec4().x, 1.0f);
+    EXPECT_EQ(inside->cards(), 1u);
+    EXPECT_EQ(outside->cards(), 0u);
+    const Color windowBg = Color::from(ImGui::GetStyle().Colors[ImGuiCol_WindowBg]);
+    EXPECT_EQ(outside->surface().vec4().x, windowBg.vec4().x);
+    EXPECT_EQ(outside->surface().vec4().y, windowBg.vec4().y);
+    EXPECT_EQ(outside->surface().vec4().z, windowBg.vec4().z);
 }
 
 // ------------------------------------------------------------ TabBar / Tab

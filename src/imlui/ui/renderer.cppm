@@ -179,6 +179,28 @@ const void* idKey(std::uint64_t id) {
     return reinterpret_cast<const void*>(static_cast<std::uintptr_t>(id));
 }
 
+/// Restores the Material widgets' own stacks (md::pushSurface, md::beginCard) to their depth before an element
+/// rendered, when an error unwinds its render: luaui::renderProtected recovers the ImGui stacks, but not these, and
+/// a stale surface would color what renders after it (md::surfaceColor) for the rest of the frame.
+class MaterialStacksGuard {
+public:
+    MaterialStacksGuard() = default;
+    ~MaterialStacksGuard() {
+        if (std::uncaught_exceptions() == m_exceptions) return;
+        md::restoreSurfaceDepth(m_surfaces);
+        md::restoreCardDepth(m_cards);
+    }
+    MaterialStacksGuard(const MaterialStacksGuard&) = delete;
+    MaterialStacksGuard& operator=(const MaterialStacksGuard&) = delete;
+    MaterialStacksGuard(MaterialStacksGuard&&) = delete;
+    MaterialStacksGuard& operator=(MaterialStacksGuard&&) = delete;
+
+private:
+    std::size_t m_surfaces = md::surfaceDepth();
+    std::size_t m_cards = md::cardDepth();
+    int m_exceptions = std::uncaught_exceptions();
+};
+
 } // namespace
 
 Renderer::Renderer(Types& types) : m_types{types} {}
@@ -201,6 +223,7 @@ bool Renderer::render(lua::State* state, int idx) {
     const std::uint64_t key = elementId(n);
     if (key == 0) return false; // no instance: its constructor threw, which was reported
     const ImGuiID id = ImGui::GetID(idKey(key));
+    const MaterialStacksGuard stacks;
     ImGui::PushID(idKey(key));
     const bool disabled = n.has("enabled") && !n.boolean("enabled", true);
     if (disabled) ImGui::BeginDisabled();

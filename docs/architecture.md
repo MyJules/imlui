@@ -138,7 +138,10 @@ An error raised outside any `pcall` still reaches the panic handler, and Lua abo
 defence the render pass (step 4, and the overlays in step 5) runs inside `luaui::renderProtected`
 (`imlui.lua.protected_render`): a C function called with `safeCall`, so an unforeseen error in it is reported like
 the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows, tables and Push/Pop stacks the pass
-left open, so the frame still ends. The rest of that pass is skipped, so this is not error handling: code that calls
+left open, so the frame still ends. imlui's own stacks unwind with the error: layout boxes are scopes
+(`layout::BoxScope`), and `Renderer::render` restores the Material surface and card stacks (`md::pushSurface`,
+`md::beginCard`) to their depth before the element that threw, so `md::surfaceColor()` is right for what renders
+next (both stacks also drop entries an earlier frame left). The rest of that pass is skipped, so this is not error handling: code that calls
 into Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error
 that escapes even that before Lua aborts.
 
