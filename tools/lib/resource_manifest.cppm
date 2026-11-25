@@ -13,9 +13,10 @@
 //     }
 //
 // The manifest is evaluated in a sandbox: a fresh Lua state with only the base library, without dofile, loadfile,
-// load and collectgarbage (no io, os, require, string, ...), and text chunks only. The manifest file itself is never
+// load, collectgarbage, xpcall and setmetatable (no io, os, require, string, ...), and text chunks only. The manifest file itself is never
 // matched by a pattern (list it in `files` to embed it). It may run at most manifestMaxInstructions Lua instructions
-// and use at most manifestMaxMemory bytes, so a runaway manifest fails the build instead of hanging it.
+// and use at most manifestMaxMemory bytes, so a runaway manifest fails the build instead of hanging it (catching the
+// error with pcall doesn't reset the instruction limit).
 export module imlui.tools.resource_manifest;
 
 import std;
@@ -257,8 +258,12 @@ void* budgetAlloc(void* ud, void* ptr, std::size_t oldSize, std::size_t newSize)
     return block;
 }
 
-/// Runs once the manifest has run manifestMaxInstructions instructions.
+/// Runs once the manifest has run manifestMaxInstructions instructions, and then on every instruction: the limit is
+/// sticky, so a `pcall` that catches the error can't buy another manifestMaxInstructions (the next instruction after
+/// it raises the error again, and so on until it reaches the top). The base library has no coroutines, so the main
+/// thread is the only one with a hook.
 void tooLong(lua::State* state, lua::Debug*) {
+    lua::sethook(state, tooLong, lua::maskCount, 1);
     // A literal: lua::error longjmps, so nothing here may need destroying.
     static_assert(manifestMaxInstructions == 10'000'000);
     lua::error(state, "the manifest runs too long (more than 10000000 Lua instructions: an endless loop?)");
@@ -277,7 +282,9 @@ std::optional<std::vector<GroupFields>> evaluateManifest(std::string_view source
     }
     lua::sethook(state, tooLong, lua::maskCount, manifestMaxInstructions);
     lua::openbase(state);
-    for (const char* unsafe : {"dofile", "loadfile", "load", "collectgarbage"}) {
+    // xpcall and setmetatable too: Lua runs a message handler for an error raised by the hook, and a __gc finalizer,
+    // with hooks off, so either could loop past the instruction limit.
+    for (const char* unsafe : {"dofile", "loadfile", "load", "collectgarbage", "xpcall", "setmetatable"}) {
         lua::pushnil(state);
         lua::setglobal(state, unsafe);
     }

@@ -606,10 +606,13 @@ return {
   malformed `prefix`, a group that selects nothing, and a `compress` entry that isn't one of the group's files.
   Errors name the manifest and, in a list, the group (`resources.lua: group 2: 'prefix' is required`).
 - The manifest runs in a sandbox: a fresh Lua state with the base library only (`pairs`, `ipairs`, `tostring`,
-  `error`, ...), without `dofile`, `loadfile`, `load` and `collectgarbage`, and no `io`, `os`, `require`, `string`
-  or `debug`. Bytecode is refused. A Lua error is reported at the manifest's `file:line`. It may run at most
-  10 million Lua instructions and use at most 64 MiB (`manifestMaxInstructions`, `manifestMaxMemory`), so an endless
-  loop or a runaway table fails the build with an error instead of hanging it.
+  `error`, `pcall`, ...), without `dofile`, `loadfile`, `load`, `collectgarbage`, `xpcall` and `setmetatable`, and
+  no `io`, `os`, `require`, `string` or `debug`. Bytecode is refused. A Lua error is reported at the manifest's
+  `file:line`. It may run at most 10 million Lua instructions and use at most 64 MiB (`manifestMaxInstructions`,
+  `manifestMaxMemory`), so an endless loop or a runaway table fails the build with an error instead of hanging it.
+  The instruction limit is sticky: once reached, every further instruction raises the error again, so a `pcall`
+  that catches it gains nothing. (Lua runs an `xpcall` message handler for that error, and a `__gc` finalizer,
+  without its instruction hook, which is why both functions are gone.)
 
 The tools evaluate manifests at build time (`imlui.tools.resource_manifest`, with `imlui.resources.glob`), through the
 `lua` wrapper module, which is its own library (`imlui_lua`) because `imlui_rc` can't link the `imlui` library it

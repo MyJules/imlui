@@ -451,7 +451,8 @@ TEST(ResourceManifest, RunsInASandbox) {
     test::TempDir dir;
     dir.write("main.lua", "");
     for (const char* code : {"require('x')", "io.open('x')", "os.exit(1)", "load('return 1')()", "dofile('x')",
-                             "loadfile('x')", "string.rep('x', 2)", "collectgarbage()"}) {
+                             "loadfile('x')", "string.rep('x', 2)", "collectgarbage()", "xpcall(print, print)",
+                             "setmetatable({}, {})"}) {
         const std::string error = failure(dir, std::string{code} + "\nreturn { prefix = 'app', files = 'main.lua' }");
         // A runtime error, reported at the manifest's file:line.
         EXPECT_NE(error.find("resources.lua:1:"), std::string::npos) << code << ": " << error;
@@ -472,6 +473,17 @@ TEST(ResourceManifest, RunawayManifestsFail) {
     test::TempDir dir;
     // An endless loop hits the instruction limit instead of hanging the build.
     EXPECT_NE(failure(dir, "while true do end").find("runs too long"), std::string::npos);
+    // The limit is sticky: catching its error with pcall doesn't buy another 10 million instructions.
+    dir.write("main.lua", "");
+    for (const char* code :
+         {"for i = 1, 3 do pcall(function() while true do end end) end return { prefix = 'app', files = 'main.lua' }",
+          "while true do pcall(function() while true do end end) end"})
+        EXPECT_NE(failure(dir, code).find("runs too long"), std::string::npos) << code;
+    // Lua runs an xpcall message handler and a __gc finalizer without hooks, so neither is there to loop endlessly
+    // past the limit.
+    for (const char* code : {"xpcall(function() while true do end end, function() while true do end end)",
+                             "setmetatable({}, { __gc = function() while true do end end })"})
+        EXPECT_NE(failure(dir, code).find("attempt to call a nil value"), std::string::npos) << code;
     // A runaway string or table hits the memory limit.
     EXPECT_NE(failure(dir, "local s = 'x'\nfor i = 1, 40 do s = s .. s end").find("not enough memory"),
               std::string::npos);
