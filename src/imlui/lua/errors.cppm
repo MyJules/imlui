@@ -36,6 +36,9 @@ bool safeRead(lua::State* state, int nargs, int nresults);
 [[nodiscard]] std::uint64_t changes();
 /// Counts a change made without a call (C++ writing a table field).
 void noteChange();
+/// Whether a safeRead() is running: the Lua code running now (a binding, a bind source) only reads, so it changes
+/// nothing a sync reads (a write to an element's declared field is still caught by the sync's fingerprint).
+[[nodiscard]] bool reading();
 
 /// Raises the Lua error "<where><detail>: <what>" (`what` null: "unknown C++ exception"). Never returns.
 [[noreturn]] void raiseException(lua::State* state, std::string_view where, std::string_view detail, const char* what);
@@ -250,6 +253,7 @@ bool runProtected(lua::State* state, void (*invoke)(lua::State*, void*), void* c
 
 std::uint64_t changes() { return changeCount; }
 void noteChange() { ++changeCount; }
+bool reading() { return readDepth > 0; }
 
 void raiseException(lua::State* state, std::string_view where, std::string_view detail, const char* what) {
     const std::string msg = describeException(where, detail, what);

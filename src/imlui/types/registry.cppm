@@ -23,7 +23,8 @@
 // (sync(), Frame::Child::as<T>()). componentComplete() runs once, right after the first sync. Ticking
 // elements (Element::setTicking) are synced and ticked at the start of every frame by tick(now), which
 // ui.__tick calls, rendered or not. While a frame renders, an element is synced once: a layout's questions about a
-// child (fillsWidth, intrinsicSize, Frame::Child::as) and its render share the sync, unless Lua code that may have
+// child (fillsWidth, intrinsicSize, Frame::Child::as), its render and its methods called from bindings share the
+// sync, unless Lua code that may have
 // changed tables ran in between (luaui::changes(): a handler, a write-back), or the element's own declared fields
 // changed since (a fingerprint of their raw values, which catches a write that bypassed the count: a raw
 // lua_setfield from C++, a binding that writes), which syncs it again. A debug build reports such a bypass.
@@ -510,7 +511,11 @@ int methodTrampoline(lua::State* state) {
         state,
         [&] {
             // An element that hasn't rendered yet (or not since its props changed) gets its current values first.
-            if (b->element && lua::istable(state, 1)) syncInstance(state, 1, *b);
+            // Called from a binding (a read), it reuses this frame's sync like a layout's questions do: nothing that
+            // could change the table ran since. Called from anything else (a handler, a script), it syncs: Lua code
+            // there may have changed what the bindings read without luaui::changes() seeing it.
+            if (b->element && lua::istable(state, 1))
+                syncInstance(state, 1, *b, luaui::reading() ? Sync::OncePerFrame : Sync::Always);
             if (!b->object) lua::error(state, "method called on a destroyed object");
             return method.call(state, *b->object, 2);
         },
