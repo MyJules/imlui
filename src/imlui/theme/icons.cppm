@@ -32,7 +32,12 @@ namespace imlui {
 namespace {
 ImFont* icons = nullptr;
 ResourceData iconBytes; ///< the font's data, which the atlas points into without a copy
-std::unordered_map<std::string, unsigned> iconCodes;
+/// Hashes std::string and std::string_view alike, so a lookup by name doesn't build a std::string.
+struct NameHash {
+    using is_transparent = void;
+    std::size_t operator()(std::string_view name) const noexcept { return std::hash<std::string_view>{}(name); }
+};
+std::unordered_map<std::string, unsigned, NameHash, std::equal_to<>> iconCodes;
 } // namespace
 
 void loadIcons(const Resources& resources) {
@@ -82,7 +87,7 @@ void loadIcons(const Resources& resources) {
 ImFont* iconFont() { return icons; }
 
 std::string iconText(std::string_view name) {
-    auto it = iconCodes.find(std::string{name});
+    auto it = iconCodes.find(name);
     if (it == iconCodes.end()) return {};
     unsigned c = it->second;
     std::string out;
@@ -104,6 +109,6 @@ std::string iconText(std::string_view name) {
     return out;
 }
 
-bool hasIcon(std::string_view name) { return !name.empty() && iconCodes.contains(std::string{name}); }
+bool hasIcon(std::string_view name) { return !name.empty() && iconCodes.contains(name); }
 
 } // namespace imlui

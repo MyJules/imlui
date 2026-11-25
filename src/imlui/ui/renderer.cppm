@@ -88,23 +88,12 @@ public:
 
     /// Calls f(stackIndex) for every child element. Children come from the
     /// element's array part, or from its `__children(self)` function
-    /// (Repeater / ListView / If / Loader on the Lua side). Inline
-    /// containers are spliced into the parent.
+    /// (Repeater / ListView / If / Loader on the Lua side), called once a frame per element (pushChildren).
+    /// Inline containers are spliced into the parent.
     template <class F>
     void forEachChild(const luaui::Node& node, F&& f) {
         lua::State* state = node.state();
-        node.pushRaw("__children");
-        if (lua::isfunction(state, -1)) {
-            lua::pushvalue(state, node.index());
-            if (!luaui::safeRead(state, 1, 1)) return; // a read: the model, the delegates it builds
-            if (!lua::istable(state, -1)) {
-                lua::pop(state);
-                return;
-            }
-        } else {
-            lua::pop(state);
-            lua::pushvalue(state, node.index());
-        }
+        if (!pushChildren(node)) return;
         const int src = lua::gettop(state);
         const lua::Integer len = lua::rawlen(state, src);
         for (lua::Integer i = 1; i <= len; ++i) {
@@ -131,7 +120,8 @@ public:
 
     void renderChildren(const luaui::Node& node);
 
-    /// True unless the element at `idx` is of a registered non-visual type (Timer, Dialog, ...).
+    /// True when the element at `idx` is of a registered visual type: false for the non-visual types (Timer,
+    /// Dialog, ...) and for an unknown type, which render() only reports, so neither takes a layout slot.
     [[nodiscard]] bool isVisual(lua::State* state, int idx) const;
     /// Whether the element at `idx` fills the available width when its `width` is unset (Types::fillsWidth: its
     /// type's policy or its content).
@@ -145,8 +135,9 @@ public:
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
     /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box), by their
-    /// intrinsic widths or else last frame's (imlui.ui.layout_cache).
-    void renderStack(const luaui::Node& node);
+    /// intrinsic widths or else last frame's (imlui.ui.layout_cache). Returns the right edge (screen x) of the widest
+    /// visual child, or the stack's left edge without one: for a container that pads its content on the right.
+    float renderStack(const luaui::Node& node);
     /// The size renderStack(node) takes with `maxWidth` available, composed from the visual children's intrinsic
     /// sizes (and ImGui's whole-pixel line advance); {0, 0} without visual children. nullopt when a child has none,
     /// or when an aligned stack is in an auto-sized window (it aligns in the widest child of the last frame).
@@ -157,6 +148,18 @@ public:
     void attachMenu(const luaui::Node& node, bool clicked);
 
 private:
+    /// Pushes the table that holds the children of `node`: the node itself, or what its `__children(self)` returned.
+    /// That call (a read: the model function, the delegates it builds) runs once a frame per element while
+    /// luaui::changes() stands still, so the passes of a layout (a Row's: which children fill, their sizes, the
+    /// render; the fills and intrinsic sizes its parent asks about) share it; a handler that ran in between makes
+    /// the next pass call it again. Returns false, with nothing pushed, when it failed (reported) or returned no
+    /// table.
+    bool pushChildren(const luaui::Node& node);
+    /// render() of a child whose `visible` the caller has just read as true.
+    bool renderShown(lua::State* state, int idx);
+    /// render() from the element's ID scope on, for a known type.
+    bool renderElement(const luaui::Node& node, Types::Kind kind);
+
     Types& m_types;
     std::string m_title{"imlui"};
     ImageCache* m_images = nullptr;
@@ -172,12 +175,39 @@ using luaui::Node;
 
 namespace {
 
+/// Its address is the registry key of the children cache (Renderer::pushChildren). Not const: identical const
+/// objects may be folded into one address by the linker.
+char childrenCacheKey = 0;
+
 /// An element id as the "pointer" ImGui hashes for an ID (ImGui::GetID/PushID(const void*) hash the pointer's bytes,
 /// unlike the string overloads, which treat "###" specially).
+
 const void* idKey(std::uint64_t id) {
     static_assert(sizeof(void*) >= sizeof(std::uint64_t), "element ids are hashed as pointers");
     return reinterpret_cast<const void*>(static_cast<std::uintptr_t>(id));
 }
+
+/// Restores the Material widgets' own stacks (md::pushSurface, md::beginCard) to their depth before an element
+/// rendered, when an error unwinds its render: luaui::renderProtected recovers the ImGui stacks, but not these, and
+/// a stale surface would color what renders after it (md::surfaceColor) for the rest of the frame.
+class MaterialStacksGuard {
+public:
+    MaterialStacksGuard() = default;
+    ~MaterialStacksGuard() {
+        if (std::uncaught_exceptions() == m_exceptions) return;
+        md::restoreSurfaceDepth(m_surfaces);
+        md::restoreCardDepth(m_cards);
+    }
+    MaterialStacksGuard(const MaterialStacksGuard&) = delete;
+    MaterialStacksGuard& operator=(const MaterialStacksGuard&) = delete;
+    MaterialStacksGuard(MaterialStacksGuard&&) = delete;
+    MaterialStacksGuard& operator=(MaterialStacksGuard&&) = delete;
+
+private:
+    std::size_t m_surfaces = md::surfaceDepth();
+    std::size_t m_cards = md::cardDepth();
+    int m_exceptions = std::uncaught_exceptions();
+};
 
 } // namespace
 
@@ -190,7 +220,7 @@ void Renderer::setImages(ImageCache* images) { m_images = images; }
 
 bool Renderer::render(lua::State* state, int idx) {
     lua::checkstack(state, 32);
-    Node n{state, idx};
+    const Node n{state, idx};
     const std::string type = n.type();
     const Types::Kind kind = m_types.kind(type);
     if (kind == Types::Kind::Unknown) {
@@ -198,9 +228,26 @@ bool Renderer::render(lua::State* state, int idx) {
         return false;
     }
     if (!n.boolean("visible", true)) return false;
+    return renderElement(n, kind);
+}
+
+bool Renderer::renderShown(lua::State* state, int idx) {
+    lua::checkstack(state, 32);
+    const Node n{state, idx};
+    const std::string type = n.type();
+    const Types::Kind kind = m_types.kind(type);
+    if (kind == Types::Kind::Unknown) {
+        luaui::reportError("unknown element type '" + type + "'");
+        return false;
+    }
+    return renderElement(n, kind);
+}
+
+bool Renderer::renderElement(const Node& n, Types::Kind kind) {
     const std::uint64_t key = elementId(n);
     if (key == 0) return false; // no instance: its constructor threw, which was reported
     const ImGuiID id = ImGui::GetID(idKey(key));
+    const MaterialStacksGuard stacks;
     ImGui::PushID(idKey(key));
     const bool disabled = n.has("enabled") && !n.boolean("enabled", true);
     if (disabled) ImGui::BeginDisabled();
@@ -223,12 +270,70 @@ std::uint64_t Renderer::elementId(const Node& node) { return m_types.elementId(n
 ImGuiID Renderer::elementImGuiId(const Node& node) { return ImGui::GetID(idKey(elementId(node))); }
 void Renderer::pushElementId(const Node& node) { ImGui::PushID(idKey(elementId(node))); }
 
+bool Renderer::pushChildren(const Node& node) {
+    lua::State* state = node.state();
+    if (node.pushRaw("__children") != lua::Type::Function) {
+        lua::pop(state);
+        lua::pushvalue(state, node.index());
+        return true;
+    }
+    const int fn = lua::gettop(state);
+    const auto frame = static_cast<lua::Integer>(ImGui::GetFrameCount());
+    const auto changes = static_cast<lua::Integer>(luaui::changes());
+    // The cache, in the registry: element -> { children, frame, changes }, weak keys.
+    if (lua::rawgetp(state, lua::registryIndex, &childrenCacheKey) != lua::Type::Table) {
+        lua::pop(state);
+        lua::createtable(state, 0, 0);
+        lua::createtable(state, 0, 1);
+        lua::pushcstring(state, "k");
+        lua::setfield(state, -2, "__mode");
+        lua::setmetatable(state, -2);
+        lua::pushvalue(state, -1);
+        lua::rawsetp(state, lua::registryIndex, &childrenCacheKey);
+    }
+    const int cache = lua::gettop(state);
+    lua::pushvalue(state, node.index());
+    if (lua::rawget(state, cache) == lua::Type::Table) {
+        const int entry = lua::gettop(state);
+        lua::rawgeti(state, entry, 2);
+        lua::rawgeti(state, entry, 3);
+        const bool fresh = lua::tointeger(state, -2) == frame && lua::tointeger(state, -1) == changes;
+        lua::settop(state, entry);
+        if (fresh && lua::rawgeti(state, entry, 1) == lua::Type::Table) {
+            lua::insert(state, fn); // the children where the function was
+            lua::settop(state, fn);
+            return true;
+        }
+    }
+    lua::settop(state, cache);
+    lua::pushvalue(state, fn);
+    lua::pushvalue(state, node.index());
+    // A read (safeRead): it doesn't move luaui::changes(), so the stamp taken before the call still holds after it.
+    if (!luaui::safeRead(state, 1, 1) || !lua::istable(state, -1)) {
+        lua::settop(state, fn - 1);
+        return false;
+    }
+    const int list = lua::gettop(state);
+    lua::pushvalue(state, node.index());
+    lua::createtable(state, 3, 0);
+    lua::pushvalue(state, list);
+    lua::rawseti(state, -2, 1);
+    lua::pushinteger(state, frame);
+    lua::rawseti(state, -2, 2);
+    lua::pushinteger(state, changes);
+    lua::rawseti(state, -2, 3);
+    lua::rawset(state, cache);
+    lua::insert(state, fn); // the children where the function was
+    lua::settop(state, fn);
+    return true;
+}
+
 void Renderer::renderChildren(const Node& node) {
     forEachChild(node, [&](int idx) { render(node.state(), idx); });
 }
 
 bool Renderer::isVisual(lua::State* state, int idx) const {
-    return m_types.kind(Node{state, idx}.type()) != Types::Kind::NonVisual;
+    return m_types.kind(Node{state, idx}.type()) == Types::Kind::Visual;
 }
 
 bool Renderer::fillsWidth(lua::State* state, int idx) { return m_types.fillsWidth(*this, Node{state, idx}); }
@@ -248,13 +353,14 @@ bool Renderer::renderUnseen(lua::State* state, int idx) {
     return rendered;
 }
 
-void Renderer::renderStack(const Node& node) {
+float Renderer::renderStack(const Node& node) {
     const auto spacing = node.number("spacing");
     const float align = alignFactor(node.string("align", "start"));
     lua::State* state = node.state();
     const float boxAvail = layout::availableWidth();
     float avail = boxAvail;
     const float x0 = ImGui::GetCursorScreenPos().x;
+    float right = x0;
     // In an auto-sized window the stack is as wide as its widest child (a fill there is only the window's minimum
     // width), so `align` places the children in that width, as measured on the last frame. Not in the window's
     // width: it would follow the window, which follows the aligned children.
@@ -308,18 +414,23 @@ void Renderer::renderStack(const Node& node) {
                     {x0 + std::max(0.0f, (avail - w.value_or(0.0f)) * align), ImGui::GetCursorScreenPos().y});
             }
         }
+        bool rendered = false;
         if (unseen) {
-            renderUnseen(state, idx);
+            rendered = renderUnseen(state, idx);
         } else if (fillOffset > 0.0f) {
             const layout::BoxScope box{layout::insetBox(-fillOffset)};
-            render(state, idx);
+            rendered = renderShown(state, idx);
         } else {
-            render(state, idx);
+            rendered = renderShown(state, idx);
         }
-        if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
+        if (rendered) {
+            if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
+            right = std::max(right, ImGui::GetItemRectMax().x);
+        }
         first = false;
     });
     if (fit) layout::recordSize(widestKey, {widest, 0.0f});
+    return right;
 }
 
 std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {

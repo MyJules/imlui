@@ -57,5 +57,8 @@ imlui_add_fuzz_target(font LIBRARIES imlui_core imlui_fuzz_support
 imlui_add_fuzz_target(manifest LIBRARIES imlui_resource_tools
                       DEFINITIONS IMLUI_FUZZ_MANIFEST_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/manifest_root")
 
+# Resource names and glob patterns: normalizing, parsing, resolving, matching (against a backtracking reference).
+imlui_add_fuzz_target(names LIBRARIES imlui_core)
+
 # PNG and JPEG decoding (stb_image).
 imlui_add_fuzz_target(image LIBRARIES imlui_core)

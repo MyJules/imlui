@@ -27,7 +27,7 @@ flowchart TD
 | **Lua script** | Builds the element tree and returns the root. It owns all state and all decisions, including theme, window title and size. |
 | **DSL prelude** (`src/resources/imlui.lua`) | Turns tables into elements (`Button {...}` tags the table with `__type`), and provides observable state, bindings, dynamic children, theme helpers, timers, the snackbar and logging. It also sets up the script environment, the `require` searcher for components and `ui.resource`. |
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. An element's identity is its C++ instance's id (`ScriptObject::objectId()`, see [Element identity](#element-identity)), from which its ImGui ID scope is made, so elements keep per-widget state such as animations and focus across frames, and an element never inherits a dead one's. |
-| **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type". |
+| **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type" and takes no layout space, like a non-visual element. |
 | **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
 | **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They call Material widgets, write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
@@ -138,18 +138,26 @@ An error raised outside any `pcall` still reaches the panic handler, and Lua abo
 defence the render pass (step 4, and the overlays in step 5) runs inside `luaui::renderProtected`
 (`imlui.lua.protected_render`): a C function called with `safeCall`, so an unforeseen error in it is reported like
 the others, and `ImGui::ErrorRecoveryTryToRecoverState` then closes the windows, tables and Push/Pop stacks the pass
-left open, so the frame still ends. The rest of that pass is skipped, so this is not error handling: code that calls
-into Lua while rendering still uses `safeCall`. The engine also installs `luaui::panicHandler`, which logs an error
-that escapes even that before Lua aborts.
+left open, so the frame still ends. imlui's own stacks unwind with the error: layout boxes are scopes
+(`layout::BoxScope`), and `Renderer::render` restores the Material surface and card stacks (`md::pushSurface`,
+`md::beginCard`) to their depth before the element that threw, so `md::surfaceColor()` is right for what renders
+next (both stacks also drop entries an earlier frame left). The rest of that pass is skipped, so this is not error
+handling: code that calls into Lua while rendering still uses `safeCall`. Code that touches Lua outside a frame and
+outside any Lua call runs inside `luaui::protectedCall` (`imlui.lua.errors`) for the same reason:
+`ScriptObject::notify()` and `emit()` (which posted functions and ticks call), the engine's setup of a new state
+(`openlibs`, `install`, the boot script) and its read of the root window's size and title. The engine also installs
+`luaui::panicHandler`, which logs an error that escapes even that before Lua aborts.
 
 C++ exceptions become Lua errors with a message at the library's C functions: methods (`TypeBuilder`, a Lua error
 `Gauge:reset: ...`), the `imlui.native` functions (the host's `NativeHooks`, theme and font loading: a Lua error
-`imlui.native.quit: ...`), `imlui.types.tick` and the render pass (`luaui::catchCxx`, which raises
+`imlui.native.quit: ...`), `imlui.types` (`tick`, `attach`, `names`, `meta`) and the render pass (`luaui::catchCxx`, which raises
 `<where>: <what>` and lets a Lua error pass). Property hooks, `componentComplete()`, `tick()` and `destroyed()` (from
 `__gc`, which must never raise) are reported as script errors instead (`luaui::reportCxx`), and the `imlui.resource`
 functions return nil and a message. A C++ exception that reaches a protected call without that (a bug) still
 doesn't corrupt anything: the build maps a `std::bad_alloc` to a Lua memory error (`"not enough memory"`), and any
-other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour). The property sync
+other exception to Lua's status -1, an error without a usable message (upstream Lua's behaviour), which `safeCall`
+reports as `unknown C++ exception`. A registered type's constructor that throws is reported too
+(`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
 
@@ -195,7 +203,11 @@ so the handler already sees the new state.
 
 - the array part of the table, or
 - the result of `self.__children(self)` if that function exists. The prelude sets it for `Repeater`, `ListView`,
-  `If`, `Loader` and `Responsive`.
+  `If`, `Loader` and `Responsive`. It runs (as a read, `safeRead`: the model function, the delegates it builds) once
+  a frame per element while `luaui::changes()` stands still: the renderer keeps the list it returned (a weak-keyed
+  table in the registry, stamped with the frame and the count), so a layout's passes over its children (a `Row`'s
+  three, the fill and size questions of its parent) share one call. Lua that may change tables (a handler) running
+  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them.
 
 Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
 own children are laid out as direct children of the parent. That's why a `Repeater` inside a `Row` flows
@@ -264,7 +276,7 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
   the element's ImGui ID in the parent's ID scope, made from its identity (see [Element identity](#element-identity)),
   stable for as long as the element lives: `TabBar` pages are the same elements every time, and `Repeater`/`ListView`
-  keep a delegate while the item at its index doesn't change. A new element never finds a dead one's entry, even
+  keep a delegate while the item at its index doesn't change (with a `key`, while an item with its key is in the model). A new element never finds a dead one's entry, even
   when Lua allocated its table at the dead one's address. A new ImGui context starts empty.
 - **First appearance.** A child with neither an intrinsic size nor a cached one, which a layout must place
   horizontally by its width (under a non-start stack `align`; in a `Row` that has fills or justifies; a `TopAppBar`
@@ -399,8 +411,8 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
    old state and applies the window title and size (size only if it changed since the last load). Closing a
    state destroys the C++ instances of its elements and detaches the singletons from it.
 
-The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`)
-and for every resource a Lua state read or loaded. Only directory mounts report times; files in immutable mounts
+The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`,
+which walks each mount once through `Mount::listFiles`) and for every resource a Lua state read or loaded. Only directory mounts report times; files in immutable mounts
 (embedded data, `.pak` archives) never change while the app runs. With the same check, `ImageCache::refresh` drops
 the images whose file changed; they're decoded again at their next use, without a reload.
 
@@ -429,7 +441,7 @@ read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer, and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged). |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged; the cache keeps each file's latest buffer only (a removed file's is dropped), older ones live as long as a `ResourceData` holds them. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer, and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing, and an entry whose name has no UTF-8 form (an unpaired surrogate on Windows) is left out while the rest of its folder is served. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged; a folder that can't be timed or listed fails the check, so nothing in it is found). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach. |
 | `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
 | `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
@@ -487,7 +499,8 @@ The fonts are added to the ImGui atlas without a copy
 by newer bytes; `clearFontLibrary` when the atlas is cleared or destroyed). Immutable mounts own those bytes, so the
 `Resources` in `EngineConfig` must still outlive the atlas. The Engine keeps it for its whole lifetime, and the atlas
 dies with the window in `run()`. Before a font goes to the atlas, `checkFont` (module `imlui.theme.font_check`)
-checks its structure: ImGui parses fonts with stb_truetype, which trusts the data, reads offsets without bounds
+checks its structure (once per font data: the library keeps the verdict, keyed by the bytes' address and size, while
+they live, so a theme applied again or a fallback merged into every face isn't checked again, and a changed file is): ImGui parses fonts with stb_truetype, which trusts the data, reads offsets without bounds
 checks and aborts through `IM_ASSERT_USER_ERROR`/`STBTT_assert` on data it doesn't expect. The check walks what
 stb_truetype reads when a font is added, when glyphs are looked up and when they are rasterized (the table directory,
 `head`, `hhea`, `hmtx`, `maxp`, the Unicode `cmap` subtable it picks, `loca`, or the CFF header, INDEXes, DICTs,
@@ -580,7 +593,9 @@ return {
 - Patterns: `*` matches any characters but `/`, `?` one character but `/`, `**` any characters including `/`; as a
   whole segment, `**/` also matches no folder (`**/*.lua` matches `main.lua` and `ui/Card.lua`). Files added later
   that match a pattern are picked up on the next build. Only the folders a pattern can match under are scanned (its
-  leading segments without a wildcard: `ui/icons/*.png` scans `ui/icons/`).
+  leading segments without a wildcard: `ui/icons/*.png` scans `ui/icons/`). The scan doesn't descend into links to
+  folders and skips entries it can't query (a link to nothing); a linked file is named where it lies and must lead to
+  a file under `base`.
 - The manifest itself is never matched by a pattern, so a manifest next to the files isn't embedded; list it in
   `files` to embed it (a dev build's folder mount then serves it too).
 - A listed file must be spelled as on disk, case included (`Main.lua` for `main.lua` is an error): resource names are
@@ -702,7 +717,8 @@ truncate (a file over the size cap, an archive over `pakMaxArchiveSize`, a dupli
 u32 length), and `imlui_pack` writes
 `<out.pak>.tmp` and renames it over the output, so a failed run never leaves a partial archive.
 `imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand (a folder under the base that
-can't be listed fails the run rather than packing an incomplete archive). An archive keeps its single
+can't be listed fails the run rather than packing an incomplete archive; an entry that can't be queried, such as a
+link to nothing, is skipped; linked folders aren't walked, and a linked file keeps its own name, as in a manifest). An archive keeps its single
 mount point (format version 1 is unchanged), so **the groups of a manifest packed into one archive must share their
 prefix**: the archive is mounted at the deepest folder that holds every group's mount point, and each group's files
 are stored under their folder below it (`tools::mergeGroups`). The library's manifest, with groups at `imlui:/` and
@@ -811,7 +827,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.dpi` | `contentScale`/`setContentScale`, `zoom`/`setZoom`, `zoomStep`, `dpiScale` (their product), `dp(v)` |
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
 | `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font` (the scope's face override, else the theme's face for the weight), `fontSize`, `fontPixels`, `pushFont` |
-| `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount` |
+| `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount`, `fontCheckCount` |
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
@@ -822,9 +838,9 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `raiseException`, `toDisplayString` (protected `tostring`) |
+| `imlui.lua.errors` | `reportError`, `errors`, `clearErrors`, `tracebackHandler`, `panicHandler`, `safeCall`, `safeRead` (a call that only reads), `changes`/`noteChange` (a count that moves when Lua may have changed tables: one sync a frame); `catchCxx` / `reportCxx` (C++ exceptions at Lua C functions: raised as Lua errors / reported), `protectedCall` (C++ code that uses the Lua API outside any Lua call, run protected), `raiseException`, `toDisplayString` (protected `tostring`) |
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
-| `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind` |
+| `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind`, `toFloat` (a Lua number narrowed safely) |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |
@@ -883,7 +899,7 @@ See [Registering C++ types](extending.md).
 | Module | Purpose |
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
-| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives) |
+| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives), `cancelHandles()` |
 | `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `pushId`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), `stackSize`, element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `widthIn`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
 | `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `contentFillsWidth(frame)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)`; the ticking list by id (`tickingElements()`, `findTicking(id)`) |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag, fills-width policy) |
@@ -896,9 +912,9 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.resources.name` | `ResourceName`, `parseName`, `normalizeName`, `normalizePath`, `hasPrefix`, `resolveName(base, name)`, `folderOf` |
 | `imlui.resources.data` | `ResourceData`: the bytes `read` returns and the handle that keeps them alive (`bytes`, `data`, `size`, `text`, `owner`) |
-| `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `modified`, `origin`); `ResourceTime` |
+| `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `listFiles`, `modified`, `origin`); `ResourceTime` |
 | `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache holding each file's latest buffer, and an optional `ResourceSelection` |
-| `imlui.resources.glob` | `globMatch(pattern, path)`, `globRoot`, `globProblem`: manifest patterns. Its own library, `imlui_glob`, shared by the tools and the library |
+| `imlui.resources.glob` | `globMatch(pattern, path)` (dynamic programming, time proportional to pattern × path), `globRoot`, `globProblem`: manifest patterns. Its own library, `imlui_glob`, shared by the tools and the library |
 | `imlui.resources.selection` | `ResourceSelection`: a manifest group's `files`, `include`, `exclude` and `unmatched` paths; `contains(path)`, `mayContainUnder(folder)` |
 | `imlui.resources.packed_mount` | `PackedMount` + `PackedMount::Entry`: an immutable table of stored or zstd-compressed files, decompressed on first read and cached; `entries()`, `decompressedCount()` |
 | `imlui.resources.embedded_mount` | `EmbeddedMount` + `EmbeddedMount::Record`: files compiled into the executable (the generated `imlui.embedded.<name>` modules build it) |

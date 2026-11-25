@@ -270,6 +270,41 @@ TEST_F(FontsTest, AChangedFontFileReplacesItsAtlasFont) {
     m_h.renderFrame("nothing"); // a frame with the new atlas font set renders
 }
 
+// Each font's bytes are checked once while they live: applying the theme again (both loadFontSet and useFontSet run),
+// or a file that is a face and every face's fallback, doesn't run checkFont() again. A changed file is checked again.
+TEST_F(FontsTest, FontsAreCheckedOncePerData) {
+    const auto bytes = m_h.resources().read("app:/fonts/Roboto-Medium.ttf");
+    ASSERT_TRUE(bytes);
+    m_dir.write("Custom.ttf", std::string_view{reinterpret_cast<const char*>(bytes->data()), bytes->size()});
+    const std::string theme = R"(ui.theme { fonts = { custom = "app:/Custom.ttf", mono = "app:/fonts/Roboto-Medium.ttf",
+        fallback = { "app:/Custom.ttf", "app:/fonts/MaterialIconsRound-Regular.otf" } } })";
+    apply(theme);
+    const std::size_t checks = fontCheckCount();
+    for (int i = 0; i < 3; ++i) {
+        apply(theme);
+        apply("ui.theme {}");
+    }
+    apply(theme);
+    EXPECT_TRUE(luaui::errors().empty());
+    EXPECT_EQ(fontCheckCount(), checks);
+
+    m_dir.touch("Custom.ttf", 10); // the directory mount reads it again into a new buffer
+    apply(theme);
+    EXPECT_EQ(fontCheckCount(), checks + 1);
+    EXPECT_TRUE(luaui::errors().empty());
+
+    // Damaged now: the new bytes are checked, and the problem is reported every time the theme declares them.
+    m_dir.write("Custom.ttf", "not a font");
+    apply(theme);
+    EXPECT_EQ(fontCheckCount(), checks + 2);
+    EXPECT_FALSE(luaui::errors().empty());
+    luaui::clearErrors();
+    apply(theme);
+    EXPECT_EQ(fontCheckCount(), checks + 2);
+    EXPECT_FALSE(luaui::errors().empty());
+    luaui::clearErrors();
+}
+
 // ------------------------------------------------------------------ relative names
 
 TEST_F(FontsTest, RelativeFontNamesResolveAgainstTheDeclaringScript) {

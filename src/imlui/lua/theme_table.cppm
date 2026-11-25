@@ -3,6 +3,7 @@ export module imlui.lua.theme_table;
 
 import std;
 
+import imgui;
 import lua;
 import lua.stack_guard;
 import imlui.color;
@@ -44,8 +45,18 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         lua::pop(state);
         return r;
     };
-    auto num = [&](int tbl, const char* k, float& out) {
-        if (lua::getfield(state, tbl, k) == lua::Type::Number) out = static_cast<float>(lua::tonumber(state, -1));
+    // A number in lo..hi; another value is reported (`where` names it) and `out` keeps its default.
+    auto num = [&](int tbl, const char* k, float& out, float lo, float hi, std::string_view where) {
+        lua::Type type = lua::getfield(state, tbl, k);
+        if (type == lua::Type::Number) {
+            const double v = lua::tonumber(state, -1);
+            if (v >= static_cast<double>(lo) && v <= static_cast<double>(hi))
+                out = static_cast<float>(v); // not NaN
+            else
+                type = lua::Type::None;
+        }
+        if (type != lua::Type::Number && type != lua::Type::Nil)
+            reportError("theme." + std::string{where} + k + ": expected a number in " + std::format("{}..{}", lo, hi));
         lua::pop(state);
     };
     // Strings may be hex, a role name or "role/alpha"; roles resolve against `scheme`.
@@ -58,25 +69,26 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
     if (auto p = str("preset")) t.preset = *p;
     // The seed has no scheme of its own yet, so its roles come from the current theme.
     if (lua::getfield(state, idx, "seed") != lua::Type::Nil) {
-        if (auto c = colorAt(lua::gettop(state), theme().scheme)) t.seed = *c;
-        else reportError("theme: invalid seed color '" + toDisplayString(state, -1) + "'");
+        if (auto c = colorAt(lua::gettop(state), theme().scheme))
+            t.seed = *c;
+        else
+            reportError("theme: invalid seed color '" + toDisplayString(state, -1) + "'");
     }
     lua::pop(state);
     if (lua::getfield(state, idx, "dark") != lua::Type::Nil) t.dark = lua::toboolean(state, -1);
     lua::pop(state);
-    num(idx, "spacing", t.spacing);
-    num(idx, "fontScale", t.fontScale);
+    num(idx, "spacing", t.spacing, 0.0f, maxStyleValue, "");
+    num(idx, "fontScale", t.fontScale, minFontScale, maxFontScale, "");
     t.scheme = generateScheme(t.seed, t.dark);
     // `colors` / `imgui` role names refer to this table's generated scheme, before overrides.
     const Scheme generated = t.scheme;
 
     if (lua::getfield(state, idx, "shape") == lua::Type::Table) {
         int s = lua::gettop(state);
-        num(s, "extraSmall", t.shape.extraSmall);
-        num(s, "small", t.shape.small);
-        num(s, "medium", t.shape.medium);
-        num(s, "large", t.shape.large);
-        num(s, "extraLarge", t.shape.extraLarge);
+        for (auto [key, radius] : {std::pair{"extraSmall", &t.shape.extraSmall}, std::pair{"small", &t.shape.small},
+                                   std::pair{"medium", &t.shape.medium}, std::pair{"large", &t.shape.large},
+                                   std::pair{"extraLarge", &t.shape.extraLarge}})
+            num(s, key, *radius, 0.0f, maxStyleValue, "shape.");
     }
     lua::pop(state);
 
@@ -94,9 +106,12 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
             std::string role{lua::tostring(state, -2)};
             Color* target = findRole(t.scheme, role);
             auto c = colorAt(lua::gettop(state), generated);
-            if (!target) reportError("theme.colors: unknown role '" + role + "'");
-            else if (!c) reportError("theme.colors." + role + ": invalid color");
-            else *target = *c;
+            if (!target)
+                reportError("theme.colors: unknown role '" + role + "'");
+            else if (!c)
+                reportError("theme.colors." + role + ": invalid color");
+            else
+                *target = *c;
             lua::pop(state);
         }
     }
@@ -116,9 +131,12 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
             std::string name{lua::tostring(state, -2)};
             int ci = imguiColorIndex(name);
             auto c = colorAt(lua::gettop(state), generated);
-            if (ci < 0) reportError("theme.imgui: unknown ImGuiCol '" + name + "'");
-            else if (!c) reportError("theme.imgui." + name + ": invalid color");
-            else t.imguiColors.emplace_back(ci, *c);
+            if (ci < 0)
+                reportError("theme.imgui: unknown ImGuiCol '" + name + "'");
+            else if (!c)
+                reportError("theme.imgui." + name + ": invalid color");
+            else
+                t.imguiColors.emplace_back(ci, *c);
             lua::pop(state);
         }
     }
@@ -136,17 +154,27 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
                 continue;
             }
             std::string name{lua::tostring(state, -2)};
+            // A number sets both components; a table needs both, {x, y} (a missing y used to become 0).
+            std::optional<ImVec2> value;
+            if (lua::type(state, -1) == lua::Type::Number) {
+                const auto v = static_cast<float>(lua::tonumber(state, -1));
+                value = ImVec2{v, v};
+            } else if (lua::istable(state, -1)) {
+                const bool x = lua::rawgeti(state, -1, 1) == lua::Type::Number;
+                const bool y = lua::rawgeti(state, -2, 2) == lua::Type::Number;
+                if (x && y)
+                    value = ImVec2{static_cast<float>(lua::tonumber(state, -2)),
+                                   static_cast<float>(lua::tonumber(state, -1))};
+                lua::pop(state, 2);
+            }
             if (!isStyleField(name)) {
                 reportError("theme.style: unknown ImGuiStyle field '" + name + "'");
-            } else if (lua::isnumber(state, -1)) {
-                float v = static_cast<float>(lua::tonumber(state, -1));
-                t.style.push_back({name, {v, v}});
-            } else if (lua::istable(state, -1)) {
-                lua::rawgeti(state, -1, 1);
-                lua::rawgeti(state, -2, 2);
-                t.style.push_back(
-                    {name, {static_cast<float>(lua::tonumber(state, -2)), static_cast<float>(lua::tonumber(state, -1))}});
-                lua::pop(state, 2);
+            } else if (!value) {
+                reportError("theme.style." + name + ": expected a number or {x, y}");
+            } else if (const std::string problem = styleValueProblem(name, *value); !problem.empty()) {
+                reportError("theme.style." + name + ": " + problem);
+            } else {
+                t.style.push_back({name, *value});
             }
             lua::pop(state);
         }

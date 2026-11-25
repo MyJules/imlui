@@ -27,6 +27,7 @@ import lua;
 import imlui.color;
 import imlui.theme.theme;
 import imlui.lua.node;
+import imlui.lua.value;
 
 export namespace imlui {
 
@@ -103,7 +104,13 @@ struct LuaConvert<T> {
             lua::pushnumber(s, d);
     }
     static bool check(lua::State* s, int idx) { return lua::isnumber(s, idx); }
-    static T get(lua::State* s, int idx) { return static_cast<T>(lua::tonumber(s, idx)); }
+    /// A float is narrowed safely (luaui::toFloat: NaN reads as 0, out-of-range values clamp).
+    static T get(lua::State* s, int idx) {
+        if constexpr (std::is_same_v<T, float>)
+            return luaui::toFloat(lua::tonumber(s, idx));
+        else
+            return static_cast<T>(lua::tonumber(s, idx));
+    }
 };
 
 template <>

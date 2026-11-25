@@ -15,6 +15,7 @@ import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.theme.theme;
 import imlui.lua.node;
+import imlui.lua.value;
 import imlui.widgets.common;
 
 export namespace imlui::luaui {
@@ -48,7 +49,7 @@ Color colorArg(lua::State* state, int idx, Color def) {
 ImU32 u32(Color c) { return ImGui::ColorConvertFloat4ToU32(c.vec4()); }
 
 float num(lua::State* state, int idx, float def = 0.0f) {
-    return lua::isnumber(state, idx) ? static_cast<float>(lua::tonumber(state, idx)) : def;
+    return lua::isnumber(state, idx) ? luaui::toFloat(lua::tonumber(state, idx)) : def;
 }
 
 ImVec2 pt(lua::State* state, int idx) {

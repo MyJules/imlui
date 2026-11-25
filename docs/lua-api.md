@@ -295,11 +295,21 @@ one of them hides all of its children.
 |---|---|---|
 | `model` | list, number, function or `bind` | Items. A number `n` means items `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | Builds the element for one item. `ids` is the delegate instance's own [id scope](#element-ids). |
+| `key` | `function(item, index) -> key` | *Optional.* Identifies an item: delegates are kept by key instead of per index (below). |
 
 Delegate instances are **cached per index**. They are rebuilt only when the item at that index changes
 (`~=` comparison), so per-delegate state survives frames. Extra cached entries are dropped when the model shrinks.
 Each instance's ids go to its own `ids` (a new table per instance), so every row can declare `id = "name"`. The
 delegates' [`parent`](#selfparent) is the element the `Repeater` is in.
+
+**Keys.** A `model` function that builds new item tables on every call (`map`, a query result) would rebuild every
+delegate on every call, and the delegates would lose their state (focus, a text being edited, a scroll position). Give
+the items a `key` (any value but `nil` or NaN; those fall back to the item itself): a delegate is then kept while an
+item with its key is in the model, also when it moves to another index (a sort, an insertion above it), and dropped
+when its key goes away. Items with the same key get one delegate each, in order. A kept delegate **keeps the `item`
+and `index` it was built with**: the delegate function isn't called again, so make the key change with whatever the
+delegate shows from the item (`key = function(t) return t.id .. ":" .. t.title end`), or have it read changing data
+through a binding (a `state{}` looked up by the key) instead of from the item table.
 
 ```lua
 Repeater { model = people, delegate = function(person, i, ids)
@@ -328,6 +338,14 @@ their `parent`. It takes all `ScrollView` props (`height`, `width`, `padding`, `
 ```lua
 ListView { height = 240, model = function() return todo.items end,
     delegate = function(item, index) return ListItem { text = item } end }
+```
+
+It takes `key` like a `Repeater`:
+
+```lua
+ListView { height = 240, model = function() return db.query("select id, title from notes") end,
+    key = function(row) return row.id .. ":" .. row.title end,
+    delegate = function(row) return ListItem { text = row.title } end }
 ```
 
 ### `If { condition, ...children, otherwise = element }`
@@ -448,7 +466,7 @@ its rate even with no input. Callbacks may add or clear timers. A callback that 
 
 | Function | Description |
 |---|---|
-| `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds. |
+| `setTimeout(fn, ms) -> id` | Calls `fn()` once after `ms` milliseconds (`nil` or `0`: on the next frame). `ms` must be a finite number `>= 0`: a negative, infinite or NaN delay raises an error (it would never fire). |
 | `setInterval(fn, ms) -> id` | Calls `fn()` every `ms` milliseconds. `ms` must be a positive, finite number: `nil`, `0`, a negative or a non-finite interval raises an error (it would fire every frame and keep the app rendering). |
 | `clearTimer(id)` | Cancels a timeout or interval. |
 | `onFrame(fn) -> stop` | Calls `fn(time)` at the start of every **rendered** frame, after the timers. Call the returned `stop()` to remove it (also from inside `fn`). |
@@ -476,7 +494,8 @@ Sizes in scripts are in **dp**. One dp is `dpiScale()` pixels, where
 - `zoom()` is a user zoom factor (1 = 100 %), for example from a settings slider.
 
 The root `ApplicationWindow`'s `width`/`height` are dp at 100 % zoom: they're multiplied by the content scale (not
-by the zoom) when the native window size is set.
+by the zoom) when the native window size is set. A size that isn't a finite positive number is ignored, and one above
+100000 dp is clamped to it, like `setWindowSize`'s limit.
 
 | Function | Description |
 |---|---|
@@ -584,4 +603,5 @@ it. The ones not wrapped are marked **native only**.
 | `native.log(level, message)` | Backs `log.*`. `level` is `"trace"`, `"debug"`, `"info"`, `"warn"` or `"error"` (anything else logs at info). |
 | `native.injectMouse(x, y, down?, wheel?)` | **Native only.** Feeds ImGui a mouse event for scripted UI tests: position in window coordinates, an optional left-button state, and an optional vertical wheel delta. See [Development](development.md#scripted-ui-tests). |
 | `native.injectKey(key, down, ctrl?, shift?, alt?)` | **Native only.** Feeds ImGui a key event for scripted UI tests, with the modifier states (sent first, so the key sees them). `key` is an ImGui key name, case-insensitive: `"Escape"`, `"Enter"`, `"Tab"`, `"Space"`, `"A"`..`"Z"`, `"0"`..`"9"`, `"F1"`..`"F12"`, `"Equal"`, `"Minus"`, `"LeftArrow"`, `"Keypad1"`, ..., or an alias (`"Esc"`, `"Return"`, `"Left"`/`"Right"`/`"Up"`/`"Down"`, `"Ctrl"`, `"Shift"`, `"Alt"`, `"="`, `"-"`). An unknown name raises an error. Starts the same settle period as real input. A press and a release sent together are seen in consecutive frames. |
+| `native.setScopeHooks(scopes, callIn)` | **Internal.** Called once by the DSL: hands C++ the element scope table and the function that runs an element's function in its id scope, so C++ calls of handlers and bindings run in their instance's scope ([Architecture](architecture.md)). Not for scripts. |
 | `native.reportError(message)` | **Native only.** Shows `message` in the error overlay (and logs it once). `ui.reportError(message)` wraps it. |

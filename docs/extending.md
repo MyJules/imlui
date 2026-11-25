@@ -445,7 +445,9 @@ size or for `as<T>()`, and then renders it, syncs it on the first of these, and 
 tables in between (a signal handler, a `notify` write-back: anything run through `luaui::safeCall`, which counts in
 `luaui::changes()`) makes the next of them sync again, so a change a handler made earlier in the frame is rendered
 in the same frame. Property reads (bindings, bind sources, `__children`) run through `luaui::safeRead` and don't
-count. `TypeRegistry::sync(node)`, method calls and `tick()` always sync. A skip also checks a fingerprint of the
+count. A method called from such a read (a binding that calls `other:formatted()`) reuses the frame's sync the same
+way; called from anything else (a handler, a script), it syncs, because Lua code there may have changed what the
+bindings read without the count seeing it. `TypeRegistry::sync(node)` and `tick()` always sync. A skip also checks a fingerprint of the
 element's declared fields, so a write to them that bypassed the count is synced anyway, and a debug build reports it
 as a script error: C++ that writes a Lua table writes through `luaui::Node::set` (or calls `luaui::noteChange()`
 after a raw `lua::setfield`), and a binding only reads.
@@ -517,6 +519,11 @@ SystemInfo backend;                           // declared before the Engine, so 
 engine.registerSingleton("backend", backend);
 ```
 
+If it dies earlier anyway, or a second `registerSingleton` under the same name replaces it (which destroys an
+engine-owned object), the global that running scripts still hold doesn't reach the dead object: any use of it raises
+the Lua error `singleton 'backend' was destroyed`. A replaced object that lives on is unlinked from the running
+state; scripts see the new object after the next reload.
+
 Scripts see a global userdata:
 
 | Lua | C++ |
@@ -547,7 +554,7 @@ results, and signal arguments. Built in:
 |---|---|---|
 | `bool` | any | Lua truthiness: only `nil` and `false` are false. |
 | integral types | number | Numeric strings convert. Floats truncate toward zero; out-of-range values clamp. |
-| `float`, `double` | number | Numeric strings convert. |
+| `float`, `double` | number | Numeric strings convert. A `float` reads NaN as 0 and clamps finite values beyond its range; infinities stay. |
 | `std::string` | string | Numbers convert (`7` reads as `"7"`). |
 | `std::string_view`, `const char*` | string | Push only (results, signal arguments, read-only properties). |
 | `imlui::Color` | color spec | Reads a role name, `"role/alpha"`, hex or `{r, g, b, a}`, like every color prop. Pushes `"#RRGGBB[AA]"`. |
@@ -722,7 +729,8 @@ imlui::post([&backend, result] { backend.setResult(result); }); // thread-safe; 
 outside any frame, in the order things were posted. It may call `notify` or `emit`, which request a frame. The
 loop is woken through `glfwPostEmptyEvent`, so this works while the app is idle and sleeping. A posted function
 that throws is reported like a script error (the error overlay and the log, `posted function: <what>`), and the
-functions after it still run.
+functions after it still run. `notify` and `emit` run protected, so a Lua error they meet (a script's `__newindex` on
+the element table, out of memory) is reported the same way instead of aborting the process.
 
 Functions posted before `run()` wait and run at its first loop iteration. Functions still queued when `run()`
 returns are dropped (destroyed on the main thread without running).
@@ -768,22 +776,24 @@ private:
 
 | `Handle` member | What |
 |---|---|
-| `alive()` | True until the object is destroyed. Thread-safe; a worker polls it as its "cancelled" flag. |
+| `alive()` | True until the object is destroyed (or `cancelHandles()` ran). Thread-safe; a worker polls it as its "cancelled" flag. |
 | `post(fn)` | Queues `fn` like `imlui::post`. On the main thread, `fn` runs **only if the object is still alive** (otherwise it is destroyed without running), so it may use the object's `this`. Returns false, dropping `fn`, when the object is already gone. |
 
-Elements and singletons both have it (it lives on `ScriptObject`). `ScriptObject`'s destructor clears the token
-on the main thread, where posted functions run too, so the object can't die between the check and `fn`. Every way
-an element dies goes through that destructor: garbage collection, a rebuilt page, and a hot reload or shutdown
-closing the Lua state (a reload closes the old state before the loop runs posted functions again).
+Elements and singletons both have it (it lives on `ScriptObject`). `ScriptObject::cancelHandles()` or, at the
+latest, `ScriptObject`'s destructor clears the token on the main thread, where posted functions run too, so the
+object can't die between the check and `fn`. Every way an element dies goes through the registry's finalizer, which
+calls `cancelHandles()` before `destroyed()` and the destructors: garbage collection, a rebuilt page, and a hot
+reload or shutdown closing the Lua state (a reload closes the old state before the loop runs posted functions
+again).
 
 Rules for the worker thread:
 
 - **Don't join slow work in the destructor** (or in `destroyed()`): that freezes the UI, a reload or the app's exit
   until the work finishes. Detach the thread (or let a shared object own it) and let it notice the cancellation:
-  through `handle.alive()`, which turns false once `ScriptObject`'s destructor ran (after your own destructor), or
+  through `handle.alive()`, which an element's handles turn false before its `destroyed()` and destructors run, or
   a flag of your own that your destructor sets (a `std::stop_source`, or an `atomic<bool>` shared through a
-  `shared_ptr`). If you do join (`std::jthread`), stop the worker first with your own flag: `alive()` is still
-  true while your destructor runs.
+  `shared_ptr`). A singleton the host destroys keeps `alive()` true until `ScriptObject`'s destructor, after your
+  own: call `cancelHandles()` first in your destructor (before a `std::jthread` member joins, for example).
 - The worker never touches the element or its members itself, only the copies it was given. Everything that reads
   or writes the element goes into `handle.post`.
 - A detached worker may outlive the element, the `Engine`, even `main()`'s return: what it uses must stay alive
@@ -895,7 +905,7 @@ skeleton.
 | Module | Contents |
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations; the `LuaPushable` / `LuaReadable` concepts |
-| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `handle()` (`ScriptObject::Handle`: `alive()`, `post(fn)`, for worker threads), the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
+| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `handle()` (`ScriptObject::Handle`: `alive()`, `post(fn)`, for worker threads), `cancelHandles()`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
 | `imlui.types.element` | `Element`: `render`, `intrinsicSize`, `contentFillsWidth`, `componentComplete`, `destroyed`, `tick` / `setTicking` |

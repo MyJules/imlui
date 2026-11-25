@@ -1,0 +1,2 @@
+**/*.lua
+ui/cards/Card.lua

@@ -29,6 +29,9 @@ import imlui.theme.theme;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
 import imlui.ui.layout_cache;
+import imlui.color;
+import imlui.widgets.card;
+import imlui.widgets.surface;
 
 using namespace imlui;
 
@@ -227,6 +230,30 @@ private:
     bool m_counted = false;
 };
 
+/// Records the Material surface it renders on (md::surfaceColor) and how many cards are open around it; with
+/// `boom` set it throws instead, cutting the render pass short.
+class SurfaceProbe final : public Element {
+public:
+    static void declare(TypeBuilder<SurfaceProbe>& type) {
+        type.property("boom", &SurfaceProbe::boom, &SurfaceProbe::setBoom);
+    }
+    void render(Frame&) override {
+        if (m_boom) throw std::runtime_error("surface probe exploded");
+        m_surface = md::surfaceColor();
+        m_cards = md::cardDepth();
+        ImGui::Dummy({10.0f, 10.0f});
+    }
+    [[nodiscard]] bool boom() const { return m_boom; }
+    void setBoom(bool on) { m_boom = on; }
+    [[nodiscard]] Color surface() const { return m_surface; }
+    [[nodiscard]] std::size_t cards() const { return m_cards; }
+
+private:
+    bool m_boom = false;
+    Color m_surface{};
+    std::size_t m_cards = 99;
+};
+
 bool hasError(std::string_view part) {
     for (const auto& e : luaui::errors())
         if (e.find(part) != std::string::npos) return true;
@@ -246,6 +273,7 @@ protected:
         m_h.registerType<Inspect>("Inspect");
         m_h.registerType<Counter>("Counter");
         m_h.registerType<RawWriter>("RawWriter");
+        m_h.registerType<SurfaceProbe>("SurfaceProbe");
     }
     [[nodiscard]] ImVec2 lastSize(std::string_view name) {
         test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
@@ -308,7 +336,7 @@ TEST_F(LayoutTest, ColumnPaddingSpacingWidthAndAlign) {
     const ImVec2 a = probe("a").pos(), b = probe("b").pos(), c = probe("c").pos();
     EXPECT_FLOAT_EQ(b.y - a.y, 10.0f);         // the padding above
     EXPECT_FLOAT_EQ(c.y - b.y, 10.0f + 20.0f); // b's height, then the spacing
-    EXPECT_FLOAT_EQ(probe("b").itemWidth(), 200.0f);
+    EXPECT_FLOAT_EQ(probe("b").itemWidth(), 200.0f - 2.0f * 10.0f); // the width less the padding on each side
     EXPECT_FLOAT_EQ(b.x - a.x, probe("a").w() + ImGui::GetStyle().ItemSpacing.x + 10.0f); // and on the left
     EXPECT_FLOAT_EQ(probe("d").itemWidth(), 100.0f);
 }
@@ -367,15 +395,47 @@ TEST_F(LayoutTest, AFixedWidthColumnWrapsText) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
-// A padded Column without a width keeps the padding on the right too; with a width, the width is the content's.
+// The padding insets a Column's content on every side, with or without a width; a width is the column's own,
+// padding included (like a Card's).
 TEST_F(LayoutTest, ColumnPaddingBoundsFillsOnBothSides) {
     run(R"(
         root = Column { Column { padding = 10, Last { id = "padded", ProgressBar { fillWidth = true } } },
-                        Column { padding = 10, width = 200, Last { id = "sized", ProgressBar { fillWidth = true } } } })");
+                        Column { padding = 10, width = 200, Last { id = "sized", ProgressBar { fillWidth = true } } },
+                        Column { padding = 16, width = -1, Last { id = "filled", ProgressBar { fillWidth = true } } } })");
     m_h.renderFrames("root", 2);
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
     EXPECT_FLOAT_EQ(lastSize("padded").x, contentWidth() - 20.0f);
-    EXPECT_FLOAT_EQ(lastMin("padded").x, ImGui::GetStyle().WindowPadding.x + 10.0f);
-    EXPECT_FLOAT_EQ(lastSize("sized").x, 200.0f);
+    EXPECT_FLOAT_EQ(lastMin("padded").x, x0 + 10.0f);
+    EXPECT_FLOAT_EQ(lastSize("sized").x, 200.0f - 20.0f);
+    EXPECT_FLOAT_EQ(lastMin("sized").x, x0 + 10.0f);
+    EXPECT_FLOAT_EQ(lastSize("filled").x, contentWidth() - 32.0f); // used to reach the right edge: no inset there
+    EXPECT_FLOAT_EQ(lastMin("filled").x, x0 + 16.0f);
+}
+
+// A padded Column's size (its group's, and the intrinsic size a layout places it by) is its content plus the padding
+// on both sides, so a Row puts the next child after the right padding.
+TEST_F(LayoutTest, APaddedColumnsSizeIncludesThePaddingOnBothSides) {
+    run(R"(
+        a = Probe { w = 40, h = 20, intrinsic = true } b = Probe { w = 30, h = 20, intrinsic = true }
+        c = Probe { w = 10, intrinsic = true } d = Probe { w = 10, intrinsic = true }
+        measure = Measure { Column { padding = 10, a },
+                            Column { padding = 10, width = 200, b },
+                            Column { padding = 8, width = -1, Probe { w = 10, intrinsic = true } } }
+        row = Row { spacing = 0, align = "top", Column { padding = 12, c }, d })");
+    m_h.renderFrames("measure", 2);
+    Measure* m = m_h.instance<Measure>("measure");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 3u);
+    const float widths[] = {40.0f + 20.0f, 200.0f, contentWidth()};
+    for (std::size_t i = 0; i < 3; ++i) {
+        ASSERT_TRUE(m->results[i].intrinsic.has_value()) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->x, widths[i]) << i;
+        EXPECT_FLOAT_EQ(m->results[i].rendered.x, widths[i]) << i;
+        EXPECT_FLOAT_EQ(m->results[i].intrinsic->y, m->results[i].rendered.y) << i;
+    }
+    m_h.renderFrames("row", 2);
+    EXPECT_FLOAT_EQ(probe("d").pos().x - probe("c").pos().x, 10.0f + 12.0f);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // The containers that size from the available width take a fixed Column's: Grid (a table), ScrollView (a child
@@ -537,6 +597,27 @@ TEST_F(LayoutTest, RowSkipsHiddenAndRendersNonVisualChildren) {
     check("fired > 0");
 }
 
+// A child of an unknown type (a misspelled `__type`) is reported and takes no slot: it used to count as visual, so a
+// Row gave it a gap and advanced by the previous sibling's size, and a stack couldn't compose its size.
+TEST_F(LayoutTest, AnUnknownElementTypeTakesNoSlot) {
+    run(R"(
+        a = Probe { w = 50, intrinsic = true } c = Probe { w = 30, intrinsic = true }
+        d = Probe { w = 20, intrinsic = true }
+        measure = Measure { Row { spacing = 10, a, { __type = "Buttn" }, c },
+                            Column { align = "end", width = 100, { __type = "Buttn" }, d } })");
+    m_h.renderFrames("measure", 2);
+    EXPECT_TRUE(hasError("unknown element type 'Buttn'"));
+    EXPECT_FLOAT_EQ(probe("c").pos().x - probe("a").pos().x, 50.0f + 10.0f);
+    Measure* m = m_h.instance<Measure>("measure");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 2u);
+    ASSERT_TRUE(m->results[0].intrinsic.has_value()); // known: the unknown child isn't asked
+    EXPECT_FLOAT_EQ(m->results[0].intrinsic->x, 50.0f + 10.0f + 30.0f);
+    EXPECT_FLOAT_EQ(m->results[0].rendered.x, 90.0f);
+    ASSERT_TRUE(m->results[1].intrinsic.has_value());
+    EXPECT_TRUE(probe("d").seen()); // placed by its size, not rendered unseen for the unknown sibling
+}
+
 // ------------------------------------------------------------ Grid
 
 TEST_F(LayoutTest, GridColumnsBindingSpacingAndBorder) {
@@ -626,6 +707,43 @@ TEST_F(LayoutTest, ListViewRendersItsDelegates) {
     EXPECT_LT(probe("px").pos().y, probe("pz").pos().y);
 }
 
+// A model function that returns fresh item tables on every call rebuilt every delegate on every call (identity by
+// item), losing their state. With `key`, a delegate is kept while an item with its key is in the model, also when it
+// moves to another index; repeated keys keep one delegate each, and a delegate whose key went away is dropped.
+TEST_F(LayoutTest, KeyedDelegatesSurviveFreshModelItems) {
+    run(R"(
+        built, plainBuilt = 0, 0
+        items = { 1, 2, 3 }
+        local function fresh()
+            local out = {}
+            for i, id in ipairs(items) do out[i] = { id = id } end
+            return out
+        end
+        rep = Repeater { model = fresh, key = function(item) return item.id end,
+                         delegate = function(item) built = built + 1; return Probe { h = 5 } end }
+        lv = ListView { height = 100, model = fresh, key = function(item, i) return item.id end,
+                        delegate = function(item) return Probe { h = 5 } end }
+        plain = Repeater { model = fresh, delegate = function() plainBuilt = plainBuilt + 1; return Probe {} end }
+        root = Column { rep, lv, plain })");
+    m_h.renderFrames("root", 3);
+    check("built == 3");
+    check("plainBuilt > 3"); // without a key every call rebuilds them
+    run("first, third, lvFirst = rep.__list[1], rep.__list[3], lv.__list[1]");
+    run("ui.__dropped = false; items = { 4, 1, 3 }");
+    m_h.renderFrame("root");
+    check("built == 4");
+    check("#rep.__list == 3 and rep.__list[2] == first and rep.__list[3] == third");
+    check("rep.__list[1] ~= first and lv.__list[2] == lvFirst");
+    check("ui.__dropped"); // 2 went away
+    run("items = { 3, 3, 1 }");
+    m_h.renderFrames("root", 2);
+    check("built == 5 and rep.__list[1] == third and rep.__list[3] == first");
+    run("items = {}");
+    m_h.renderFrame("root");
+    check("#rep.__list == 0 and #lv.__list == 0");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(LayoutTest, ScrollViewKeepsScrollWhenItMovesToAnotherParent) {
     // The same ScrollView, first inside a Column, then inside a Row (like Responsive switching layouts): a
     // different ImGui ID path, so a different child window.
@@ -686,6 +804,34 @@ TEST_F(LayoutTest, CardDefaultsAndPadding) {
     EXPECT_EQ(custom->rounding(), 2.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().x - a.x, 14.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().y - a.y, 14.0f);
+}
+
+// An error inside a Card (a C++ exception here, a Lua error alike) cuts the render pass short past md::endCard():
+// the card's surface and card entries are dropped with the ImGui stacks, so what renders afterwards (the rest of the
+// frame, the next frames) isn't drawn on the dead card's surface.
+TEST_F(LayoutTest, ARecoveredRenderErrorLeavesNoCardOrSurfaceBehind) {
+    run(R"(
+        boom = SurfaceProbe { boom = true } inside = SurfaceProbe {} outside = SurfaceProbe {}
+        root = Column { Card { color = "#ff0000", inside, Card { boom } }, outside })");
+    m_h.renderFrame("root");
+    EXPECT_TRUE(hasError("surface probe exploded"));
+    EXPECT_EQ(md::surfaceDepth(), 0u); // unwound in the frame that threw
+    EXPECT_EQ(md::cardDepth(), 0u);
+    luaui::clearErrors();
+    run("boom.boom = false");
+    m_h.renderFrame("root");
+    EXPECT_TRUE(luaui::errors().empty());
+    SurfaceProbe* inside = m_h.instance<SurfaceProbe>("inside");
+    SurfaceProbe* outside = m_h.instance<SurfaceProbe>("outside");
+    ASSERT_NE(inside, nullptr);
+    ASSERT_NE(outside, nullptr);
+    EXPECT_EQ(inside->surface().vec4().x, 1.0f);
+    EXPECT_EQ(inside->cards(), 1u);
+    EXPECT_EQ(outside->cards(), 0u);
+    const Color windowBg = Color::from(ImGui::GetStyle().Colors[ImGuiCol_WindowBg]);
+    EXPECT_EQ(outside->surface().vec4().x, windowBg.vec4().x);
+    EXPECT_EQ(outside->surface().vec4().y, windowBg.vec4().y);
+    EXPECT_EQ(outside->surface().vec4().z, windowBg.vec4().z);
 }
 
 // ------------------------------------------------------------ TabBar / Tab
@@ -1045,6 +1191,53 @@ TEST_F(LayoutTest, ARowSyncsEachChildOncePerFrame) {
     check("calls == 4");
 }
 
+// A container's children are resolved once a frame: a Repeater's model function ran for every pass (a Row's three,
+// its parent's fill and size questions). A handler that runs in between makes the next pass resolve them again, so it
+// sees the change on the same frame.
+TEST_F(LayoutTest, ChildrenAreResolvedOncePerFrame) {
+    run(R"(
+        calls, built = 0, 0
+        items = { "a", "b", "c" }
+        root = Column { align = "center",
+                        Row { Repeater { model = function() calls = calls + 1 return items end,
+                                         delegate = function() built = built + 1 return Probe { w = 5 } end } } })");
+    m_h.renderFrames("root", 3);
+    run("calls = 0");
+    m_h.renderFrame("root");
+    check("calls == 1");
+    run("calls = 0");
+    m_h.renderFrames("root", 4);
+    check("calls == 4 and built == 3");
+    run(R"(
+        calls = 0
+        added = false
+        mid = Row { Writer { onRender = function() if not added then added = true; items[#items + 1] = "d" end end },
+                    Repeater { model = function() calls = calls + 1 return items end,
+                               delegate = function() built = built + 1 return Probe { w = 5 } end } })");
+    m_h.renderFrame("mid");
+    check("calls == 2"); // the layout passes, then the render after the handler
+    check("built == 3 + 4");
+}
+
+// A numeric model is items 1..n, without a table of them: fractions round down, and NaN or less than 0 is none.
+TEST_F(LayoutTest, ANumericModelIsItsIndices) {
+    run(R"(
+        seen = {}
+        n = 3
+        root = Column { Repeater { model = function() return n end,
+                                   delegate = function(item, i) seen[#seen + 1] = item * 10 + i return Probe {} end } })");
+    m_h.renderFrame("root");
+    check("#seen == 3 and seen[1] == 11 and seen[3] == 33");
+    for (const char* count : {"2.7", "-1", "0 / 0", "0"}) {
+        run(std::string{"seen = {}; n = "} + count);
+        m_h.renderFrame("root");
+        run("count = #root[1].__list");
+        check(std::string{"count == "} + (count[0] == '2' ? "2" : "0"));
+        check("#seen == 0"); // nothing new built
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ... but Lua code that runs between a layout's questions and the render (a handler) may change the child: it is
 // synced again, so the change shows on the same frame.
 TEST_F(LayoutTest, AChangeMadeMidFrameIsSyncedBeforeTheChildRenders) {
@@ -1279,8 +1472,8 @@ TEST_F(LayoutTest, NestedContainersArePlacedOnTheirFirstFrame) {
     EXPECT_FLOAT_EQ(probe("title").pos().x, x0 + (contentWidth() - 50.0f) * 0.5f);
     EXPECT_FLOAT_EQ(probe("ok").pos().x, probe("title").pos().x);
     EXPECT_FLOAT_EQ(probe("cancel").pos().x, probe("ok").pos().x + 20.0f);
-    // The padded column (5 + 50) at the row's end.
-    EXPECT_FLOAT_EQ(probe("ended").pos().x, x0 + contentWidth() - 50.0f);
+    // The padded column (5 + 50 + 5) at the row's end.
+    EXPECT_FLOAT_EQ(probe("ended").pos().x, x0 + contentWidth() - 55.0f);
     // The column holding a fill takes what the probes leave.
     EXPECT_FLOAT_EQ(probe("after").pos().x, x0 + contentWidth() - 20.0f);
     // The two-probe column (10 + spacing 0 + 10) centered by height next to the 60px probe.

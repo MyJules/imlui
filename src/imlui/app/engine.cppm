@@ -170,6 +170,17 @@ constexpr double caretBlinkSeconds = 0.1;
 /// While minimized, the loop wakes at most this often.
 constexpr double minimizedSeconds = 0.1;
 
+/// The largest root window width or height, in dp: ui.setWindowSize's limit, bigger than any screen and far from
+/// overflowing an int once scaled to pixels.
+constexpr double maxWindowExtent = 100000.0;
+
+/// A root window width/height from the script as a whole number of dp: 0 (no size) unless finite and positive,
+/// at most maxWindowExtent.
+int windowExtent(double v) {
+    if (!std::isfinite(v) || v <= 0.0) return 0;
+    return static_cast<int>(std::min(v, maxWindowExtent));
+}
+
 void closeState(lua::State* state) {
     if (state) lua::close(state);
 }
@@ -485,37 +496,53 @@ void Engine::reloadNow() {
     setTheme(Theme{}); // scripts start from the default theme
 
     lua::State* state = lua::newstate();
+    if (!state) {
+        luaui::reportError("cannot create a Lua state: out of memory");
+        setTheme(std::move(previous));
+        return;
+    }
     lua::atpanic(state, &luaui::panicHandler); // an error outside every protected call: log why before the abort
-    lua::openlibs(state);
-    luaui::registerNative(state, &m_hooks);
-    luaui::registerPainter(state);
-    m_types.install(state); // before the DSL: its constructors look the registered types up
+    int root = lua::noRef;
+    int tick = lua::noRef;
+    int overlays = lua::noRef;
+    bool ok = false;
+    // All of the setup runs protected: a Lua error it raises (out of memory, a library's loader) is reported like a
+    // script error instead of reaching the panic handler, which aborts.
+    luaui::protectedCall(state, "loading the script", [&] {
+        lua::openlibs(state);
+        luaui::registerNative(state, &m_hooks);
+        luaui::registerPainter(state);
+        m_types.install(state); // before the DSL: its constructors look the registered types up
 
-    // Lua comes from the resources: `require "imlui"` is imlui:/imlui.lua, components are found next to the
-    // entry script.
-    luaui::registerResources(state, m_config.resources, &m_loaded);
+        // Lua comes from the resources: `require "imlui"` is imlui:/imlui.lua, components are found next to the
+        // entry script.
+        luaui::registerResources(state, m_config.resources, &m_loaded);
 
-    constexpr std::string_view boot = R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
-    bool ok = lua::loadbuffer(state, boot, "=imlui.boot") == lua::ok;
-    if (!ok) luaui::reportError(std::string{lua::tostring(state, -1)});
-    if (ok) {
+        constexpr std::string_view boot =
+            R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
+        if (lua::loadbuffer(state, boot, "=imlui.boot") != lua::ok) {
+            luaui::reportError(std::string{lua::tostring(state, -1)});
+            return;
+        }
         lua::pushstring(state, m_config.entry);
-        ok = luaui::safeCall(state, 1, 3);
-    }
-    if (ok && !lua::istable(state, -3)) {
-        luaui::reportError(m_config.entry +
-                           ": script must return a root element, e.g. `return ApplicationWindow { ... }`");
-        ok = false;
-    }
+        if (!luaui::safeCall(state, 1, 3)) return;
+        if (!lua::istable(state, -3)) {
+            luaui::reportError(m_config.entry +
+                               ": script must return a root element, e.g. `return ApplicationWindow { ... }`");
+            return;
+        }
+        overlays = lua::istable(state, -1) ? lua::ref(state) : (lua::pop(state), lua::noRef);
+        tick = lua::ref(state); // pops __tick
+        root = lua::ref(state); // pops root
+        ok = true;
+    });
     if (!ok) {
-        lua::close(state); // destroys its instances and detaches the singletons from it
+        lua::close(state);         // destroys its instances and detaches the singletons from it
+        m_types.detachState(state); // also when the setup failed before install() made the state detach them
         if (m_state) m_types.activate(m_state);
         setTheme(std::move(previous));
         return;
     }
-    int overlays = lua::istable(state, -1) ? lua::ref(state) : (lua::pop(state), lua::noRef);
-    int tick = lua::ref(state); // pops __tick
-    int root = lua::ref(state); // pops root
 
     applyRootWindowProps(state, root);
 
@@ -529,10 +556,20 @@ void Engine::reloadNow() {
 }
 
 void Engine::applyRootWindowProps(lua::State* state, int rootRef) {
-    // Size is re-applied on hot reload only when the script changed it.
-    lua::rawgeti(state, lua::registryIndex, rootRef);
-    luaui::Node n{state, -1};
-    int w = static_cast<int>(n.number("width", 0)), h = static_cast<int>(n.number("height", 0));
+    double width = 0;
+    double height = 0;
+    std::string title;
+    // Protected: the root table's own metatable (a script's __index) may raise.
+    luaui::protectedCall(state, "the root window's properties", [&] {
+        lua::rawgeti(state, lua::registryIndex, rootRef);
+        const luaui::Node n{state, -1};
+        width = n.number("width", 0);
+        height = n.number("height", 0);
+        title = n.string("title", "");
+    });
+    // Size is re-applied on hot reload only when the script changed it. A script's size may be anything (math.huge,
+    // NaN, 1e12): checked before the cast to int, which is undefined behaviour out of int's range.
+    const int w = windowExtent(width), h = windowExtent(height);
     if (w > 0 && h > 0 && (w != m_appliedWidth || h != m_appliedHeight)) {
         m_appliedWidth = w;
         m_appliedHeight = h;
@@ -540,9 +577,7 @@ void Engine::applyRootWindowProps(lua::State* state, int rootRef) {
         m_window.setScaledSize(w, h);
         m_window.keepInWorkArea();
     }
-    std::string title = n.string("title", "");
     if (!title.empty()) m_window.setTitle(title);
-    lua::pop(state);
 }
 
 } // namespace imlui

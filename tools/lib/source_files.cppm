@@ -15,7 +15,9 @@ struct SourceFile {
     std::optional<bool> compress;
 };
 
-/// Names `files` relative to `base`, or every regular file under `base` (recursively) when `files` is empty.
+/// Names `files` relative to `base`, or every regular file under `base` (recursively, not into linked folders) when
+/// `files` is empty. A file is named by its own path, also when it is a link (`logo.png` for a link to
+/// `art/logo-v2.png`); it must resolve to a file under `base`.
 /// nullopt, with the reason in `error`, when a file is missing, outside `base`, two files get the same path, or a
 /// folder under `base` can't be listed (an incomplete list would make an incomplete archive). Entries that can't be
 /// queried (a link to nothing) aren't files and are left out.
@@ -113,15 +115,22 @@ std::optional<std::vector<SourceFile>> collectFiles(const fs::path& base, const 
         }
     }
 
+    // The base as given (made absolute) and resolved: a file is named by where it is, not where a link leads.
+    const fs::path given = fs::absolute(base, ec).lexically_normal();
     std::vector<SourceFile> out;
     for (const auto& input : inputs) {
-        const fs::path file = fs::weakly_canonical(input.is_absolute() ? input : root / input, ec);
+        const fs::path lexical = (input.is_absolute() ? input : root / input).lexically_normal();
+        const fs::path file = fs::weakly_canonical(lexical, ec);
         if (ec || !fs::is_regular_file(file, ec)) {
             error = "'" + utf8(input) + "' isn't a file";
             return std::nullopt;
         }
-        const fs::path relative = file.lexically_relative(root);
-        if (leavesBase(relative)) {
+        // The canonical path decides containment (a link may lead out of the base folder); the name comes from the
+        // path itself, so a linked file keeps its own name, as in a manifest's scan.
+        fs::path relative = lexical.lexically_relative(root);
+        if (leavesBase(relative)) relative = lexical.lexically_relative(given);
+        if (leavesBase(relative)) relative = file.lexically_relative(root); // spelled through a link above the base
+        if (leavesBase(relative) || leavesBase(file.lexically_relative(root))) {
             error = "'" + utf8(input) + "' isn't under the base folder '" + utf8(root) + "'";
             return std::nullopt;
         }

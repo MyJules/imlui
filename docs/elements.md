@@ -278,8 +278,8 @@ A vertical stack. `Item` is an alias.
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child, by its width ([how it knows it](#stacking-containers)). |
-| `padding` | number | `0` | Inset on every side: the children start `padding` in and, without a `width`, fill up to `padding` from the right edge. |
-| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the children's available width. They fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. Unset, a column that holds a child that fills is as wide as the available width, so it fills itself: a `Row` gives it a share. |
+| `padding` | number | `0` | Inset on every side: the children start `padding` in and fill up to `padding` from the column's right edge. The column's size (what a `Row` places it by) includes the padding on both sides. |
+| `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the column's own, padding included (like a `Card`'s), so `Column { padding = 16, width = -1 }` fills the available width and its children get that less 16dp on each side. The children's available width is the width less the padding: they fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. Unset, a column that holds a child that fills is as wide as the available width, so it fills itself: a `Row` gives it a share. |
 
 ### Row
 
@@ -354,6 +354,7 @@ A `ScrollView` whose children come from `model` / `delegate` (built on the Lua s
 |---|---|---|---|
 | `model` | list, number, function or `bind` | — | Items; a number `n` means `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
+| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by item: see [Repeater](lua-api.md#repeater--model-delegate-). |
 
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,
@@ -442,7 +443,7 @@ root. `visible = false` hides all of their children.
 
 | Element | Props (Lua side) |
 |---|---|
-| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index, ids)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
+| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index, ids)`, optional `key = function(item, index)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
 | `If` | `condition`, array children, `otherwise` (one element). See [If](lua-api.md#if--condition-children-otherwise--element-). |
 | `Loader` | `item` (an element, or a function returning one). See [Loader](lua-api.md#loader--item-). |
 | `Responsive` | `compact`, `medium`, `expanded`, `large`, `extraLarge`: the element (or a function returning one, or `false`) for each window size class. See [Responsive](lua-api.md#responsive--compact-medium-expanded-large-extralarge-). |
@@ -1008,7 +1009,7 @@ A Material data table: a 56dp header and selectable rows, inside an outlined car
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `columns` | list of strings | `{}` | Header labels; sets the column count. Nothing is drawn without columns. At most 511 are shown (ImGui's table limit); more are reported as a script error. |
-| `rows` | list of lists | — | *Raw.* Cell values, converted to strings (`nil` is empty). A row that isn't a list draws empty and is reported as a script error. |
+| `rows` | list of lists | — | *Raw.* Cell values, converted to strings (`nil` is empty). Only the rows in view are drawn and read (`ImGuiListClipper`; every row is `rowHeight` tall), so a long table costs what its visible rows do; the table still takes the height of all of them. A row that isn't a list draws empty and is reported as a script error when it comes into view. |
 | `currentRow` | integer | `0` | **two-way.** The selected row; `0` means none. |
 | `rowHeight` | number | `52` | Row height (dp). |
 | `outlined` | bool | `true` | Wraps the table in an outlined card. |

@@ -22,6 +22,9 @@ public:
     void touch(std::string_view relative, int seconds) const;
     /// Deletes file `relative`.
     void remove(std::string_view relative) const;
+    /// Makes `link` a link to folder `target` (both relative; `target` needn't exist): a symbolic link, or on
+    /// Windows, where those need a privilege, a directory junction. False when neither can be made (tests skip then).
+    [[nodiscard]] bool linkFolder(std::string_view link, std::string_view target) const;
 
 private:
     std::filesystem::path m_path;
@@ -67,6 +70,22 @@ void TempDir::touch(std::string_view relative, int seconds) const {
 
 void TempDir::remove(std::string_view relative) const {
     fs::remove(m_path / fs::path{std::u8string{relative.begin(), relative.end()}});
+}
+
+bool TempDir::linkFolder(std::string_view link, std::string_view target) const {
+    fs::path from = m_path / fs::path{std::u8string{link.begin(), link.end()}};
+    fs::path to = m_path / fs::path{std::u8string{target.begin(), target.end()}};
+    std::error_code ec;
+    fs::create_directory_symlink(to, from, ec);
+    if (!ec) return true;
+#ifdef _WIN32
+    // A junction needs no privilege; `mklink` is a cmd built-in. The temp folder's path is plain enough to quote.
+    const std::string command = "cmd /c mklink /J \"" + from.make_preferred().string() + "\" \"" +
+                                to.make_preferred().string() + "\" >nul 2>&1";
+    return std::system(command.c_str()) == 0 && fs::exists(fs::symlink_status(from, ec));
+#else
+    return false;
+#endif
 }
 
 } // namespace imlui::test

@@ -131,6 +131,27 @@ TEST_F(ElementTest, AnElementThatNeverRenderedIsSyncedBeforeItsFirstMethodCall) 
     EXPECT_EQ(events, expected); // componentComplete once, after the first sync
 }
 
+// A method called from a binding reuses the element's sync of this frame (its bindings run once a frame, not once per
+// call); called from a script, it syncs again, so it sees what the script changed just before.
+TEST_F(ElementTest, MethodCallsFromBindingsReuseTheFramesSync) {
+    run(R"(
+        s = state { title = "a" }
+        evals = 0
+        root = Column {
+            Panel { id = "p", title = function() evals = evals + 1; return s.title end },
+            Text { text = function() return p:describe() .. p:describe() .. p:describe() end },
+        })");
+    m_h.renderFrame("root");
+    run("evals = 0");
+    m_h.renderFrames("root", 3);
+    run("assert(evals == 3, 'the binding ran ' .. evals .. ' times in 3 frames')");
+    run(R"(
+        s.title = "b"
+        local d = p:describe()
+        assert(d:match("^b after"), d))");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(ElementTest, ABindingThatCallsAMethodOfItsOwnElementDoesNotRecurse) {
     run(R"(
         p = Panel { title = function(self) return "n" .. #self:describe() end }

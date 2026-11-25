@@ -41,8 +41,9 @@ public:
         /// An empty handle: never alive, posts are dropped.
         Handle() = default;
 
-        /// Thread-safe. True until the object's destructor runs (ScriptObject's, so after a derived destructor);
-        /// false for an empty handle. A worker polls it as its "cancelled" flag.
+        /// Thread-safe. True until the object is destroyed: until cancelHandles(), which an element gets before its
+        /// destroyed() hook, or else ScriptObject's destructor (after a derived destructor). False for an empty
+        /// handle. A worker polls it as its "cancelled" flag.
         [[nodiscard]] bool alive() const;
 
         /// Thread-safe: queues `fn` on the main thread (imlui::post, which wakes the loop). There, `fn` runs only if
@@ -75,6 +76,48 @@ public:
     template <class... Args>
     bool emit(std::string_view signal, const Args&... args) {
         if (!m_state) return false;
+        bool called = false;
+        // Protected: emit() may run outside every Lua call (a posted function, a tick), where a Lua error raised by
+        // an API call below (a script's __index, out of memory) would abort instead of being reported.
+        luaui::protectedCall(m_state, "emit", [&] { called = callHandler(signal, args...); });
+        requestFrame();
+        return called;
+    }
+
+    /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
+    [[nodiscard]] Handle handle();
+
+    /// Main thread: makes every handle of this object dead now (alive() false, posts dropped), before the destructor
+    /// gets to it. The registry calls it before an element's destroyed(); a derived class's destructor that waits
+    /// for its workers, or a host destroying a singleton, calls it first, so the workers see the cancellation while
+    /// the derived members still live. Handles taken afterwards are dead too.
+    void cancelHandles();
+
+    /// This object's id: unique for the process's lifetime, never 0 and never reused (a monotonic 64-bit count), so
+    /// a stale id can't name a newer object that happens to live at a dead one's address.
+    [[nodiscard]] std::uint64_t objectId() const;
+
+    /// The Lua state this object is linked to, or nullptr.
+    [[nodiscard]] lua::State* luaState() const;
+    [[nodiscard]] bool isSingleton() const;
+
+    /// Pushes the linked Lua value (element table or singleton userdata). Pushes nothing and returns
+    /// false without a link, or when the element table was already collected.
+    bool pushSelf() const;
+
+    // ---- linking, used by TypeRegistry
+
+    /// Links the object to the value at `idx` in `state`.
+    void attach(lua::State* state, int idx, bool singleton);
+    /// Points the link at `state` again, where attach() was already called (a reload that failed).
+    void relink(lua::State* state);
+    /// Drops the link (the state is closing or the instance is being destroyed).
+    void detach();
+
+private:
+    /// emit()'s body, inside its protected call. Returns whether the handler ran without an error.
+    template <class... Args>
+    bool callHandler(std::string_view signal, const Args&... args) {
         lua::State* state = m_state;
         lua::checkstack(state, static_cast<int>(sizeof...(Args)) + 8);
         const int top = lua::gettop(state);
@@ -99,40 +142,18 @@ public:
         if (!m_singleton) nargs = luaui::scopedArgs(state, top + 1, nargs);
         const bool ok = luaui::safeCall(state, nargs, 0);
         lua::settop(state, top);
-        requestFrame();
         return ok;
     }
 
-    /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
-    [[nodiscard]] Handle handle();
+    /// notify()'s Lua part, inside its protected call.
+    void writeBack(std::string_view property);
 
-    /// This object's id: unique for the process's lifetime, never 0 and never reused (a monotonic 64-bit count), so
-    /// a stale id can't name a newer object that happens to live at a dead one's address.
-    [[nodiscard]] std::uint64_t objectId() const;
-
-    /// The Lua state this object is linked to, or nullptr.
-    [[nodiscard]] lua::State* luaState() const;
-    [[nodiscard]] bool isSingleton() const;
-
-    /// Pushes the linked Lua value (element table or singleton userdata). Pushes nothing and returns
-    /// false without a link, or when the element table was already collected.
-    bool pushSelf() const;
-
-    // ---- linking, used by TypeRegistry
-
-    /// Links the object to the value at `idx` in `state`.
-    void attach(lua::State* state, int idx, bool singleton);
-    /// Points the link at `state` again, where attach() was already called (a reload that failed).
-    void relink(lua::State* state);
-    /// Drops the link (the state is closing or the instance is being destroyed).
-    void detach();
-
-private:
     std::uint64_t m_objectId;
     lua::State* m_state = nullptr;
     bool m_singleton = false;
-    /// Shared with every Handle, created by the first handle(). Set to false by the destructor.
+    /// Shared with every Handle, created by the first handle(). Set to false by cancelHandles() or the destructor.
     std::shared_ptr<std::atomic<bool>> m_alive;
+    bool m_cancelled = false; ///< cancelHandles() ran: a handle taken later starts dead
 };
 
 } // namespace imlui
@@ -206,8 +227,13 @@ bool ScriptObject::Handle::post(std::function<void()> fn) const {
 }
 
 ScriptObject::Handle ScriptObject::handle() {
-    if (!m_alive) m_alive = std::make_shared<std::atomic<bool>>(true);
+    if (!m_alive) m_alive = std::make_shared<std::atomic<bool>>(!m_cancelled);
     return Handle{m_alive};
+}
+
+void ScriptObject::cancelHandles() {
+    m_cancelled = true;
+    if (m_alive) m_alive->store(false, std::memory_order_release);
 }
 
 lua::State* ScriptObject::luaState() const { return m_state; }
@@ -242,6 +268,13 @@ void ScriptObject::detach() { m_state = nullptr; }
 void ScriptObject::notify(std::string_view property) {
     requestFrame();
     if (!m_state) return;
+    // Protected: notify() may run outside every Lua call (a posted function, a tick), where a Lua error raised by an
+    // API call (a script's __index/__newindex on the element table, out of memory) would abort instead of being
+    // reported.
+    luaui::protectedCall(m_state, "notify", [&] { writeBack(property); });
+}
+
+void ScriptObject::writeBack(std::string_view property) {
     lua::State* state = m_state;
     lua::checkstack(state, 16);
     const int top = lua::gettop(state);

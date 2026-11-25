@@ -421,30 +421,112 @@ end
 -- referenced, e.g. a page kept in a table or by an id, is not collected and keeps ticking.)
 local function dropped() ui.__dropped = true end
 
---- Builds (and caches) delegate instances for a model. Delegates are only
---- re-created when the item at an index changes, so per-delegate state survives.
+-- Builds the delegate for `item` at index `i` in its own id scope, parented to the container's holder.
+local function buildDelegate(self, item, i, key)
+    local scope = newScope(rawget(self, "__type") .. " delegate", self.delegate)
+    local c = { item = item, key = key, node = inScope(scope, self.delegate, item, i, scope.ids) }
+    setParent(c.node, holder(self))
+    return c
+end
+
+-- Item `i` of a model table, and of a numeric model (no table: the item is the index).
+local function rawItem(model, i) return model[i] end
+local function numberItem(_, i) return i end
+
+-- The key of `item` at index `i` (the container's `key` function, in the scope the container was built in). A nil
+-- or NaN key can't index a table: the item itself is the key then.
+local function keyOf(self, keyFn, item, i)
+    local scope = scopeOf[self]
+    local k
+    if scope ~= nil then k = inScope(scope, keyFn, item, i) else k = keyFn(item, i) end
+    if k == nil or k ~= k then return item end
+    return k
+end
+
+-- Delegates by key: one is reused (also at another index) while an item with its key is in the model, so a model
+-- that returns fresh item tables every call doesn't rebuild them. In model order, `cache[i]` is the entry shown at
+-- index i; entries whose key went away are dropped.
+local function keyedChildren(self, model, n, keyFn, cache, list)
+    local at = model and rawItem or numberItem
+    local oldN = #list
+    local i = 1
+    -- The common case first: the same keys at the same indices, no table to build.
+    while i <= n do
+        local c = cache[i]
+        local item = at(model, i)
+        if c == nil or c.key ~= keyOf(self, keyFn, item, i) then break end
+        c.item = item
+        i = i + 1
+    end
+    if i <= n then
+        -- Index the entries not reused yet by key (a repeated key chains its entries in order), then take them.
+        -- New delegates are built after the matching: `cache` still holds the entries being moved until then.
+        local byKey = {}
+        for j = oldN, i, -1 do
+            local c = cache[j]
+            if c.key ~= nil then
+                c.nextSame = byKey[c.key]
+                byKey[c.key] = c
+            end
+        end
+        local reused = i - 1
+        local taken = {}
+        for j = i, n do
+            local item = at(model, j)
+            local k = keyOf(self, keyFn, item, j)
+            local c = byKey[k]
+            if c ~= nil then
+                byKey[k] = c.nextSame
+                c.item = item
+                reused = reused + 1
+            else
+                c = { item = item, key = k } -- no node yet
+            end
+            taken[j - i + 1] = c
+        end
+        for j = i, n do
+            local c = taken[j - i + 1]
+            if c.node == nil then c = buildDelegate(self, c.item, j, c.key) end
+            c.nextSame = nil
+            cache[j] = c
+            list[j] = c.node
+        end
+        if reused < oldN then dropped() end
+    elseif n < oldN then
+        dropped()
+    end
+    for j = n + 1, oldN do list[j] = nil; cache[j] = nil end
+    return list
+end
+
+--- Builds (and caches) delegate instances for a model. Without a `key`, delegates are re-created only when the
+--- item at an index changes (`~=`), so per-delegate state survives; with one, a delegate is kept while an item with
+--- its key is in the model (see keyedChildren).
 local function repeaterChildren(self)
     local model = resolve(self, self.model)
+    local n
     if type(model) == "number" then
-        local n = model
-        model = {}
-        for i = 1, n do model[i] = i end
+        -- Items 1..n, without a table of them.
+        n = model == model and math.max(0, math.floor(math.min(model, math.maxinteger))) or 0
+        model = nil
+    else
+        model = model or EMPTY
+        n = #model
     end
-    model = model or EMPTY
     local cache = self.__cache
     if not cache then cache = {}; self.__cache = cache end
     local list = self.__list
     if not list then list = {}; self.__list = list end
-    local n = #model
+    local keyFn = rawget(self, "key")
+    if type(keyFn) == "function" then return keyedChildren(self, model, n, keyFn, cache, list) end
     for i = 1, n do
-        local item = model[i]
+        local item
+        if model then item = model[i] else item = i end
         local c = cache[i]
-        if not c or c.item ~= item then
+        if not c or c.item ~= item or c.key ~= nil then
             if c then dropped() end
-            local scope = newScope(rawget(self, "__type") .. " delegate", self.delegate)
-            c = { item = item, node = inScope(scope, self.delegate, item, i, scope.ids) }
+            c = buildDelegate(self, item, i, nil)
             cache[i] = c
-            setParent(c.node, holder(self))
         end
         list[i] = c.node
     end
@@ -453,7 +535,8 @@ local function repeaterChildren(self)
     return list
 end
 
---- Repeater { model = list | count | function, delegate = function(item, index, ids) ... end }
+--- Repeater { model = list | count | function, delegate = function(item, index, ids) ... end,
+---            key = function(item, index) ... end }   -- optional: delegates are kept by key (see keyedChildren)
 --- Its delegates are laid out by the parent (inside a Row they flow horizontally), which is also their `parent`.
 --- Each delegate instance has an id scope of its own, `ids` (see ui.component).
 function ui.Repeater(p)
@@ -631,16 +714,24 @@ local timers, nextTimer = {}, 0
 local function addTimer(fn, ms, rep)
     fn = inCurrentScope(fn)
     nextTimer = nextTimer + 1
-    timers[nextTimer] = { fn = fn, interval = (ms or 0) / 1000, due = native.time() + (ms or 0) / 1000, rep = rep }
+    timers[nextTimer] = { fn = fn, interval = ms / 1000, due = native.time() + ms / 1000, rep = rep }
     return nextTimer
 end
-function ui.setTimeout(fn, ms) return addTimer(fn, ms, false) end
+local function describe(ms) return type(ms) == "number" and tostring(ms) or type(ms) end
+--- `ms` must be a finite number >= 0 (nil is 0): a NaN or infinite delay would never fire, and a NaN due time would
+--- keep the app rendering continuously.
+function ui.setTimeout(fn, ms)
+    if ms == nil then ms = 0 end
+    if type(ms) ~= "number" or not (ms >= 0 and ms < math.huge) then
+        error("setTimeout: the delay must be a finite number of milliseconds >= 0, got " .. describe(ms), 2)
+    end
+    return addTimer(fn, ms, false)
+end
 --- `ms` must be a positive, finite number: an interval of 0 (or nil) would run every frame and keep the app
 --- rendering continuously.
 function ui.setInterval(fn, ms)
     if type(ms) ~= "number" or not (ms > 0 and ms < math.huge) then
-        error("setInterval: the interval must be a positive, finite number of milliseconds, got "
-            .. (type(ms) == "number" and tostring(ms) or type(ms)), 2)
+        error("setInterval: the interval must be a positive, finite number of milliseconds, got " .. describe(ms), 2)
     end
     return addTimer(fn, ms, true)
 end
@@ -698,7 +789,9 @@ function ui.__tick(now)
     for _, fn in ipairs({ table.unpack(frameCallbacks) }) do protectedCall(fn, now) end
     local nextDue
     for _, t in pairs(timers) do
-        if not nextDue or t.due < nextDue then nextDue = t.due end
+        -- A NaN due time never comes (and math.max(0, NaN) is 0: a frame every iteration); the checks above keep
+        -- it out, this keeps it from spinning the loop if one gets in anyway.
+        if t.due == t.due and (not nextDue or t.due < nextDue) then nextDue = t.due end
     end
     return nextDue and math.max(0, nextDue - now) or nil
 end

@@ -1,6 +1,7 @@
 // Tests for imlui.lua.theme_table: building a Theme from a Lua table.
 #include <gtest/gtest.h>
 
+import std;
 import lua;
 import imgui;
 import imlui.color;
@@ -63,14 +64,16 @@ TEST_F(ThemeTableTest, EmptyTableGivesDefaults) {
     EXPECT_FLOAT_EQ(t.spacing, defaults.spacing);
     EXPECT_FLOAT_EQ(t.fontScale, defaults.fontScale);
     EXPECT_FLOAT_EQ(t.shape.medium, defaults.shape.medium);
-    for (const auto& role : roles()) EXPECT_EQ(t.scheme.*role.member, defaults.scheme.*role.member) << role.name;
+    for (const auto& role : roles())
+        EXPECT_EQ(t.scheme.*role.member, defaults.scheme.*role.member) << role.name;
     EXPECT_TRUE(t.imguiColors.empty());
     EXPECT_TRUE(t.style.empty());
     EXPECT_TRUE(luaui::errors().empty());
 }
 
 TEST_F(ThemeTableTest, ScalarFields) {
-    Theme t = parse(R"(return { preset = "imgui-classic", seed = "#006A6A", dark = false, spacing = 6, fontScale = 1.25 })");
+    Theme t =
+        parse(R"(return { preset = "imgui-classic", seed = "#006A6A", dark = false, spacing = 6, fontScale = 1.25 })");
     EXPECT_EQ(t.preset, "imgui-classic");
     EXPECT_EQ(t.seed, *parseHex("#006A6A"));
     EXPECT_FALSE(t.dark);
@@ -82,7 +85,8 @@ TEST_F(ThemeTableTest, ScalarFields) {
 TEST_F(ThemeTableTest, SchemeIsGeneratedFromSeedAndMode) {
     Theme t = parse(R"(return { seed = "#B3261E", dark = false })");
     Scheme expected = generateScheme(*parseHex("#B3261E"), false);
-    for (const auto& role : roles()) EXPECT_EQ(t.scheme.*role.member, expected.*role.member) << role.name;
+    for (const auto& role : roles())
+        EXPECT_EQ(t.scheme.*role.member, expected.*role.member) << role.name;
 }
 
 TEST_F(ThemeTableTest, ShapeOverridesOnlyGivenCorners) {
@@ -145,6 +149,62 @@ TEST_F(ThemeTableTest, StyleOverrides) {
     EXPECT_TRUE(sawRounding);
     EXPECT_TRUE(sawSpacing);
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Values ImGui asserts on, or that aren't numbers at all, are reported and left out instead of reaching ImGuiStyle.
+TEST_F(ThemeTableTest, BadStyleValuesAreReported) {
+    Theme t = parse(R"(return { style = {
+        Alpha = 1.5, DisabledAlpha = -0.1, WindowMinSize = { 0, 0 }, ItemSpacing = { 8 }, FramePadding = "4",
+        FrameRounding = 0/0, GrabMinSize = 1/0, IndentSpacing = 1e9, WindowPadding = { 4, 0/0 },
+        FrameBorderSize = 1, CellPadding = { 2, 3 }, ScrollbarSize = { 12 },
+    } })");
+    ASSERT_EQ(t.style.size(), 2u);
+    for (const char* error :
+         {"theme.style.Alpha: must be in 0..1", "theme.style.DisabledAlpha: must be in 0..1",
+          "theme.style.WindowMinSize: must be at least 1", "theme.style.ItemSpacing: expected a number or {x, y}",
+          "theme.style.FramePadding: expected a number or {x, y}", "theme.style.FrameRounding: not a finite number",
+          "theme.style.GrabMinSize: not a finite number", "theme.style.IndentSpacing: larger than 10000",
+          "theme.style.WindowPadding: not a finite number", "theme.style.ScrollbarSize: expected a number or {x, y}"})
+        EXPECT_TRUE(hasError(error)) << error;
+    EXPECT_EQ(luaui::errors().size(), 10u);
+}
+
+TEST_F(ThemeTableTest, BadScalesAndSizesAreReported) {
+    Theme t = parse(R"(return { fontScale = 100, spacing = -1, shape = { small = 0/0, large = "x", medium = 20 } })");
+    const Theme defaults;
+    EXPECT_FLOAT_EQ(t.fontScale, defaults.fontScale);
+    EXPECT_FLOAT_EQ(t.spacing, defaults.spacing);
+    EXPECT_FLOAT_EQ(t.shape.small, defaults.shape.small);
+    EXPECT_FLOAT_EQ(t.shape.large, defaults.shape.large);
+    EXPECT_FLOAT_EQ(t.shape.medium, 20.0f);
+    EXPECT_TRUE(hasError("theme.fontScale: expected a number in 0.25..4"));
+    EXPECT_TRUE(hasError("theme.spacing: expected a number in 0..10000"));
+    EXPECT_TRUE(hasError("theme.shape.small: expected a number in 0..10000"));
+    EXPECT_TRUE(hasError("theme.shape.large: expected a number in 0..10000"));
+    luaui::clearErrors();
+    t = parse("return { fontScale = 0/0 }");
+    EXPECT_FLOAT_EQ(t.fontScale, defaults.fontScale);
+    EXPECT_TRUE(hasError("theme.fontScale"));
+}
+
+// A Theme built in C++ goes through the same limits when it's applied: ImGui's style checks pass with it.
+TEST_F(ThemeTableTest, SetThemeBringsValuesIntoRange) {
+    Theme t;
+    t.fontScale = 1000.0f;
+    t.spacing = std::numeric_limits<float>::quiet_NaN();
+    t.style = {{"Alpha", {1.5f, 1.5f}}, {"WindowMinSize", {8.0f, 0.0f}}, {"FrameRounding", {6.0f, 6.0f}}};
+    setTheme(t);
+    ASSERT_TRUE(applyPendingTheme());
+    EXPECT_FLOAT_EQ(theme().fontScale, maxFontScale);
+    EXPECT_FLOAT_EQ(theme().spacing, Theme{}.spacing);
+    ASSERT_EQ(theme().style.size(), 1u);
+    EXPECT_EQ(theme().style[0].name, "FrameRounding");
+    const ImGuiStyle& st = ImGui::GetStyle();
+    EXPECT_GE(st.Alpha, 0.0f);
+    EXPECT_LE(st.Alpha, 1.0f);
+    EXPECT_GE(st.WindowMinSize.y, 1.0f);
+    setTheme(Theme{});
+    applyPendingTheme();
 }
 
 TEST_F(ThemeTableTest, UnknownRoleIsReported) {
@@ -210,7 +270,8 @@ TEST_F(ThemeTableTest, PushedSchemeParsesBackAsColors) {
     lua::setfield(m_state, -2, "colors");
     Theme t = luaui::themeFromTable(m_state, -1);
     EXPECT_TRUE(luaui::errors().empty());
-    for (const auto& role : roles()) EXPECT_EQ(toHex(t.scheme.*role.member), toHex(s.*role.member)) << role.name;
+    for (const auto& role : roles())
+        EXPECT_EQ(toHex(t.scheme.*role.member), toHex(s.*role.member)) << role.name;
 }
 
 TEST_F(ThemeTableTest, ColorOverridesAcceptRolesOfTheNewScheme) {
