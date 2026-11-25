@@ -79,6 +79,11 @@ module :private;
 
 namespace imlui {
 
+// checkFont() checks the glyphs of code points up to font_check's lastCodepoint (0xFFFF), the most a 16-bit ImWchar
+// can ask for. With IMGUI_USE_WCHAR32, ImGui would reach glyphs beyond it that were never checked: raise
+// lastCodepoint to 0x10FFFF before changing this.
+static_assert(sizeof(ImWchar) == 2 && lastCodepoint == 0xFFFF, "font_check's lastCodepoint assumes a 16-bit ImWchar");
+
 namespace {
 
 /// One loaded source: identifies the bytes a font was built from.
