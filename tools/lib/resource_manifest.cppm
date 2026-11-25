@@ -472,6 +472,13 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
     for (const auto& root : scanRoots(fields.include)) {
         const fs::path folder = root.empty() ? group.base : group.base / pathFromUtf8(root);
         if (!fs::is_directory(folder, ec)) continue;
+        // Like a `files` entry: the folder's name in the pattern becomes part of every resource name.
+        if (const std::string spelled = root.empty() ? std::string{} : spellingOnDisk(group.base, root);
+            !spelled.empty()) {
+            error = where + "include folder '" + root + "' is spelled '" + spelled +
+                    "' on disk (resource names are case-sensitive: use the same spelling)";
+            return std::nullopt;
+        }
         scanned.push_back(folder);
         for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator();
              it.increment(ec)) {

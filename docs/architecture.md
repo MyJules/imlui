@@ -598,9 +598,9 @@ return {
   a file under `base`.
 - The manifest itself is never matched by a pattern, so a manifest next to the files isn't embedded; list it in
   `files` to embed it (a dev build's folder mount then serves it too).
-- A listed file must be spelled as on disk, case included (`Main.lua` for `main.lua` is an error): resource names are
-  case-sensitive, and on a file system that ignores case the wrong spelling would be embedded under a name the dev
-  folder mount doesn't serve.
+- A listed file, and the folder an `include` pattern starts with (`UI/**` scans `ui/`), must be spelled as on disk,
+  case included (`Main.lua` for `main.lua` is an error): resource names are case-sensitive, and on a file system that
+  ignores case the wrong spelling would be embedded under a name the dev folder mount doesn't serve.
 - Every path stays under `base`: a `..` segment, an absolute path, a `\` or a `:` is an error, and so is a listed
   file that doesn't exist, an unknown field, a value of the wrong type, a string that isn't valid UTF-8, a missing or
   malformed `prefix`, a group that selects nothing, and a `compress` entry that isn't one of the group's files.

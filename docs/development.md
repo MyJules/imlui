@@ -406,7 +406,7 @@ On this target:
   matched quickly), one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
-  base folder, a listed file spelled differently on disk, the sandbox and its instruction and memory limits, strings
+  base folder, a listed file or an `include` folder spelled differently on disk, the sandbox and its instruction and memory limits, strings
   that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), the scan and `collectFiles` past entries
 that can't be queried, linked files named by their own path, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages

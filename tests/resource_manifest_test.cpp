@@ -280,6 +280,27 @@ TEST(ResourceManifest, ListedFilesMustBeSpelledAsOnDisk) {
     EXPECT_EQ(failure(dir, R"(return { prefix = "app", files = { "ui/main.lua" }, include = "**/*.lua" })"), "");
 }
 
+// The literal folder an `include` pattern starts with is checked the same way: on a file system that ignores case,
+// `UI/**` scans ui/ and named its files `UI/...`, which no mount finds.
+TEST(ResourceManifest, IncludeFoldersMustBeSpelledAsOnDisk) {
+    test::TempDir dir;
+    dir.write("ui/cards/main.lua", "-- main");
+    for (const char* pattern : {"UI/**", "ui/Cards/*.lua"}) {
+        const std::string error =
+            failure(dir, std::string{R"(return { prefix = "app", include = ")"} + pattern + R"(" })");
+        if (fs::exists(dir.path() / "UI" / "CARDS")) { // case-insensitive: found, but spelled differently
+            EXPECT_NE(error.find("is spelled '"), std::string::npos) << pattern << ": " << error;
+            EXPECT_NE(error.find("on disk"), std::string::npos) << error;
+        } else {
+            EXPECT_EQ(error.find("UI/"), std::string::npos) << error; // nothing found under the wrong name
+        }
+    }
+    std::string error;
+    const auto m = manifest(dir, R"(return { prefix = "app", include = { "ui/cards/*.lua", "**/*.lua" } })", error);
+    ASSERT_TRUE(m) << error;
+    EXPECT_EQ(paths(m->groups[0]), (std::vector<std::string>{"ui/cards/main.lua"}));
+}
+
 TEST(ResourceManifest, PathsCantLeaveTheBaseFolder) {
     test::TempDir dir;
     dir.write("secret.txt", "secret");
