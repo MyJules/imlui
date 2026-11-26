@@ -564,6 +564,21 @@ Switch { text = "Paused", checked = bind(function() return backend.paused end,
                                          function(v) backend.paused = v end) }
 ```
 
+**Work a singleton started outlives the script that started it.** A singleton doesn't die on a
+[hot reload](#hot-reload), so neither do its [handles](#lower-level-handles-and-posts): a sampler it started with
+`runAsync`, the `Live<T>` writers it handed out, a `runAsync(work) -> Future` job keep running after the script that
+asked for them is gone. Their results still arrive (`done` runs, `Live` values apply and reach the new script's
+bindings), but nothing in the new script asked for them, and a script that starts the work again on load starts a
+second copy. There is no C++ hook for a reload; make the work's lifetime explicit instead:
+
+- **Starting again replaces the old run.** Keep the run's `std::stop_source` (and a run counter) in the singleton;
+  `start` stops the previous run before it starts a new one, and a `done` from an older run is ignored. Then a
+  reloaded script that calls `backend:startSampling()` on load gets one sampler, not two.
+- **Give the script a stop method** (`backend:stopSampling()`) and let the script stop it when it no longer wants it
+  (or at the top of the script, to start each load from a clean slate).
+- A future the old script awaited is settled on the C++ side only (a no-op for Lua). Its job runs to the end unless
+  it is cancelled first: cancel long jobs with `fut:cancel()` when the script moves on.
+
 ## Value conversion
 
 `imlui::LuaConvert<T>` (module `imlui.types.lua_convert`) converts property values, method arguments and
@@ -578,19 +593,34 @@ results, and signal arguments. Built in:
 | `std::string_view`, `const char*` | string | Push only (results, signal arguments, read-only properties). |
 | `imlui::Color` | color spec | Reads a role name, `"role/alpha"`, hex or `{r, g, b, a}`, like every color prop. Pushes `"#RRGGBB[AA]"`. |
 | `std::optional<T>` | `nil` or `T` | A method argument that is left out reads as `nil` too, so trailing optional parameters may be omitted. |
-| `std::vector<T>` | sequence | Every element must convert. |
+| `std::vector<T>` | sequence | Every key must be an integer 1..n (`{ x = 1 }` and `{ 1, x = 2 }` fail instead of losing `x`; `{}` is an empty vector) and every element convert. |
 | `std::map<std::string, T>`, `std::unordered_map<std::string, T>` | table with string keys | Every key must be a string (a number key fails, so `{ "a" }` is no map) and every value convert. |
-| `std::pair<A, B>`, `std::tuple<Ts...>` | sequence `{a, b, ...}` | Element *i* converts as the *i*-th type. A longer sequence fails; a missing trailing element is `nil` (a `std::optional` element takes it). |
-| `std::variant<Ts...>` | any alternative | Pushes the active alternative. Reads the **first** alternative whose check passes, so list the specific ones first: `bool` takes every value, `std::string` takes numbers, an integer takes numeric strings. |
+| `std::pair<A, B>`, `std::tuple<Ts...>` | sequence `{a, b, ...}` | Element *i* converts as the *i*-th type. A longer sequence, or any other key, fails; a missing trailing element is `nil` (a `std::optional` element takes it). |
+| `std::variant<Ts...>` | any alternative | Pushes the active alternative. Reads the **first** alternative whose check passes, so list the specific ones first: `bool` takes every value, `std::string` takes numbers, an integer takes numeric strings. A vector and a map tell sequences from string-keyed tables in either order; `{}` is both an empty sequence and an empty map, so the one listed first takes it. |
 | `std::monostate` | `nil` | The empty alternative of a variant. |
 | an enum with [`EnumNames<E>`](#enums-and-structs) | one of its names | Pushes the name. Reads the names only (case-sensitive): an integer or an unknown name fails. A value without a name pushes its underlying integer, which doesn't read back. |
 | a struct with [`LuaFields<T>`](#enums-and-structs) | table | One key per field. A missing field keeps its default (see below). |
 | [`imlui::LuaFunction`](#lua-functions-luafunction) | function | A callback the script hands to C++. |
 
 They compose: a `std::vector` of structs whose fields are maps of variants converts, and so does a method taking a
-`std::optional<LuaFunction>`. Tables are read raw (no `__index`), so a check never runs Lua code. Each type has a
-`name` for error messages, built at compile time from its parts: `bad argument #1 to 'Plot:setSeries'
-({[string] = {x, y}...} expected, got string)`, `Plot.quality: 'low'|'high' expected, got number`.
+`std::optional<LuaFunction>`. Tables are read raw (no `__index`, `__len` or `__pairs`), so a check never runs Lua
+code. Each type has a `name` for error messages, built at compile time from its parts: `bad argument #1 to
+'Plot:setSeries' ({[string] = {x, y}...} expected, got string)`, `Plot.quality: 'low'|'high' expected, got number`.
+
+**Errors name the field.** When a composite value doesn't convert, the message points at the part that failed, with a
+path into the value (`.field`, `[index]`, `.key` or `["some key"]` for a map), and an enum shows the string it got:
+
+```text
+bad argument #1 to 'lab:crunch' (CrunchOptions.method: 'trial'|'wheel' expected, got string "fast")
+Plot.series.points[3].x: number expected, got string
+bad argument #1 to 'Plot:setTags' ({[string] = number} expected, got table with key 1)
+LuaFunction: bad result (y: number expected, got string)
+```
+
+A property's path starts at `Type.property`; a method argument's or a callback result's at the struct's name when it
+has a [`name`](#enums-and-structs) that is a plain identifier, else at the path itself (`[2].x: ...`). A variant
+reports the one alternative the value had the shape of (a table that is a sequence, for the vector), else
+`integer|{x, y} expected, got string`.
 
 ### Enums and structs
 
@@ -671,6 +701,12 @@ struct imlui::LuaConvert<Vec2> {
 called after `check` returned true. Leave out `check`/`get` for a push-only type. Give the type an `operator==`
 so the sync can skip unchanged values.
 
+Optionally, say *why* a value doesn't convert with `static std::string mismatch(lua::State*, int idx)`. It is only
+called after `check` returned false, and like `check` must not raise or leave anything on the stack. Return
+`"<what> expected, got <what>"`, or for a part inside the value that part's path first: `".x: number expected, got
+string"` (`imlui::luaMismatch<M>(s, idx)` gives a member type's text to build on). Without it, errors say
+`{x, y} expected, got table` (`luaMismatch<T>` falls back to `name`), also inside a vector or struct of your type.
+
 ### Lua functions: `LuaFunction`
 
 `imlui::LuaFunction` (module `imlui.types.lua_function`) is a C++ handle to a Lua function. A property, method
@@ -684,11 +720,15 @@ int Backend::forEach(const imlui::LuaFunction& fn) {
     int n = 0;
     for (const Item& item : m_items) {
         ++n;
-        if (fn.call<bool>(item) == false) break; // std::optional<bool>: nullopt after an error or a non-boolean
+        if (fn.call<std::optional<bool>>(item) == false) break; // only an explicit `return false` stops
     }
     return n;
 }
 ```
+
+`call<bool>` would read Lua truthiness, so a callback that returns nothing (`nil`) would read as `false` and stop after
+the first item; `call<std::optional<bool>>` reads `nil` as `std::nullopt` (and an error as an empty outer optional),
+which keep going.
 
 ```lua
 backend:forEach(function(item) print(item.name); return item.name ~= "stop" end)
@@ -699,7 +739,7 @@ Chart { formatter = function(v) return ("%.1f"):format(v) end } -- a LuaFunction
 | Member | What |
 |---|---|
 | `call(args...)` | Calls the function with `args` converted by `LuaConvert`. Returns whether it ran without an error (`false` when expired). |
-| `call<R>(args...)` | The same, returning the first result as `std::optional<R>`: `std::nullopt` when expired, after an error, or when the result doesn't convert (reported: `LuaFunction: integer expected as the result, got string`). |
+| `call<R>(args...)` | The same, returning the first result as `std::optional<R>`: `std::nullopt` when expired, after an error, or when the result doesn't convert (reported: `LuaFunction: bad result (integer expected, got string)`). `R = bool` is Lua truthiness (`nil` is `false`); use `std::optional<bool>` to tell `nil` from `false`. |
 | `expired()`, `explicit operator bool` | Whether the handle is empty or its Lua state is closing or closed. |
 | `push(state)` | Pushes the function, or `nil` when expired or when `state` is another Lua state. `LuaConvert` uses it. |
 | `operator==` | The same Lua function in the same state (copies, or two handles taken from one function). |
@@ -802,7 +842,8 @@ reload. When the old state closes, every element instance in it is destroyed (`d
 singletons are re-linked to the new state. `LuaFunction` handles taken from the old state expire (calls become
 no-ops; see [Lua functions](#lua-functions-luafunction)). Singleton handlers (`backend.onTick = ...`) belong to a state, so the
 reloaded script sets them again. If the new script fails to load, the engine keeps the old state and points
-the singletons back at it.
+the singletons back at it. Singletons themselves live on, and so does the background work they started: see
+[work a singleton started](#singletons) for how to keep a reload from leaving it running twice.
 
 ## Resources and the host config
 
@@ -912,9 +953,10 @@ thread (it takes `handle()`); after `cancelHandles()` it does nothing.
 
 The object's death is the cancellation: every way an element dies goes through the registry's finalizer, which calls
 `cancelHandles()` before `destroyed()` and the destructors (garbage collection, a rebuilt page, a hot reload or
-shutdown closing the Lua state). A singleton the host destroys keeps its handles alive until `ScriptObject`'s
-destructor, after your own: call `cancelHandles()` first in your destructor if its work must see the stop while your
-members still live.
+shutdown closing the Lua state). A singleton isn't cancelled by a hot reload: its work keeps running into the next
+script ([work a singleton started](#singletons)). A singleton the host destroys keeps its handles alive until
+`ScriptObject`'s destructor, after your own: call `cancelHandles()` first in your destructor if its work must see the
+stop while your members still live.
 
 ### Futures
 

@@ -39,7 +39,21 @@ struct Segment {
     bool operator==(const Segment&) const = default;
 };
 
+/// A type with its own LuaConvert that has no mismatch(): errors fall back to "<name> expected, got <type>".
+struct Celsius {
+    double degrees = 0;
+    bool operator==(const Celsius&) const = default;
+};
+
 } // namespace
+
+template <>
+struct imlui::LuaConvert<Celsius> {
+    static constexpr std::string_view name = "celsius";
+    static void push(lua::State* s, const Celsius& c) { lua::pushnumber(s, c.degrees); }
+    static bool check(lua::State* s, int idx) { return lua::type(s, idx) == lua::Type::Number; }
+    static Celsius get(lua::State* s, int idx) { return {lua::tonumber(s, idx)}; }
+};
 
 template <>
 struct imlui::EnumNames<Quality> {
@@ -117,6 +131,16 @@ public:
         lua::pop(m_state);
         return ok;
     }
+    /// luaMismatch<T> of `expr` (after a failing check).
+    template <class T>
+    [[nodiscard]] std::string why(std::string_view expr) const {
+        eval(expr);
+        EXPECT_FALSE(LuaConvert<T>::check(m_state, -1)) << expr;
+        std::string out = luaMismatch<T>(m_state, -1);
+        lua::pop(m_state);
+        EXPECT_EQ(lua::gettop(m_state), 0);
+        return out;
+    }
     /// LuaConvert<T>::get of `expr` (after a passing check).
     template <class T>
     [[nodiscard]] T read(std::string_view expr) const {
@@ -133,6 +157,9 @@ private:
 
 using IntMap = std::map<std::string, int>;
 using IntOrVec2 = std::variant<int, Vec2>;
+using Ints = std::vector<int>;
+using ListOrMap = std::variant<std::monostate, std::vector<double>, std::map<std::string, double>>;
+using MapOrList = std::variant<std::monostate, std::map<std::string, double>, std::vector<double>>;
 
 bool hasError(std::string_view part) {
     return std::ranges::any_of(luaui::errors(),
@@ -236,6 +263,92 @@ TEST(LuaValuesTest, PairsAndTuplesAreSequences) {
     EXPECT_EQ(lua::gettop(s.get()), 0);
 }
 
+// A sequence is a table whose keys are all integers 1..n: other keys fail the check instead of being dropped. `{}` is
+// an empty sequence (and an empty map).
+TEST(LuaValuesTest, SequencesHaveOnlyIndexKeys) {
+    const LuaState s;
+    EXPECT_TRUE(s.read<Ints>("{}").empty());
+    EXPECT_EQ(s.read<Ints>("{ 1, 2, 3 }"), (Ints{1, 2, 3}));
+    EXPECT_EQ(s.read<Ints>("{ [2] = 2, [1] = 1 }"), (Ints{1, 2}));
+    EXPECT_FALSE(s.checks<Ints>("{ x = 1 }"));
+    EXPECT_FALSE(s.checks<Ints>("{ a = 1, 2 }"));
+    EXPECT_FALSE(s.checks<Ints>("{ [0] = 0, 1 }"));
+    EXPECT_FALSE(s.checks<Ints>("{ [1.5] = 1 }"));
+    EXPECT_FALSE(s.checks<Ints>("{ [true] = 1 }"));
+    EXPECT_FALSE(s.checks<std::vector<Vec2>>("{ { x = 1 }, n = 1 }"));
+    // Pairs and tuples too.
+    EXPECT_FALSE((s.checks<std::pair<int, std::string>>("{ 1, 'x', extra = true }")));
+    EXPECT_FALSE(s.checks<std::tuple<>>("{ x = 1 }"));
+    EXPECT_TRUE((s.checks<std::tuple<int, std::optional<int>>>("{ 1 }")));
+    // Maps reject non-string keys, symmetrically.
+    EXPECT_FALSE(s.checks<IntMap>("{ a = 1, [2] = 3 }"));
+    EXPECT_FALSE(s.checks<IntMap>("{ [true] = 1 }"));
+    // Raw: no metamethod runs (__index, __pairs, __len).
+    const char* guarded = "setmetatable({ 1, 2 }, { __index = error, __pairs = error, __len = error })";
+    EXPECT_EQ(s.read<Ints>(guarded), (Ints{1, 2}));
+    EXPECT_EQ(lua::gettop(s.get()), 0);
+}
+
+// A variant of a list and a map takes the map for a table with string keys and the list for a sequence, in either
+// order; `{}` goes to the first of the two.
+TEST(LuaValuesTest, VariantsTellListsFromMaps) {
+    const LuaState s;
+    using Map = std::map<std::string, double>;
+    using List = std::vector<double>;
+    EXPECT_EQ(s.read<ListOrMap>("{ x = 1 }"), (ListOrMap{Map{{"x", 1}}}));
+    EXPECT_EQ(s.read<MapOrList>("{ x = 1 }"), (MapOrList{Map{{"x", 1}}}));
+    EXPECT_EQ(s.read<ListOrMap>("{ 1, 2 }"), (ListOrMap{List{1, 2}}));
+    EXPECT_EQ(s.read<MapOrList>("{ 1, 2 }"), (MapOrList{List{1, 2}}));
+    EXPECT_EQ(s.read<ListOrMap>("{}"), ListOrMap{List{}});
+    EXPECT_EQ(s.read<MapOrList>("{}"), MapOrList{Map{}});
+    EXPECT_FALSE(s.checks<ListOrMap>("{ a = 1, 2 }")); // neither
+    EXPECT_EQ(lua::gettop(s.get()), 0);
+}
+
+// luaMismatch says where inside a value it failed, and why.
+TEST(LuaValuesTest, MismatchesNameThePath) {
+    const LuaState s;
+    EXPECT_EQ(s.why<Quality>("'medium'"), R"('low'|'high' expected, got string "medium")");
+    EXPECT_EQ(s.why<Quality>("3"), "'low'|'high' expected, got number");
+    EXPECT_EQ(s.why<Quality>("'" + std::string(50, 'a') + "'"),
+              "'low'|'high' expected, got string \"" + std::string(40, 'a') + "...\"");
+    EXPECT_EQ(s.why<Segment>("5"), "Segment expected, got number");
+    EXPECT_EQ(s.why<Segment>("{ from = { x = 'left' } }"), ".from.x: number expected, got string");
+    EXPECT_EQ(s.why<Segment>("{ points = { { x = 1 }, 5 } }"), ".points[2]: {x, y} expected, got number");
+    EXPECT_EQ(s.why<Segment>("{ points = { {}, {}, { y = {} } } }"), ".points[3].y: number expected, got table");
+    EXPECT_EQ(s.why<Segment>("{ quality = 'medium' }"), R"(.quality: 'low'|'high' expected, got string "medium")");
+    EXPECT_EQ(s.why<Segment>("{ tags = { a = 1, b = 'x' } }"), ".tags.b: integer expected, got string");
+    EXPECT_EQ(s.why<Segment>("{ tags = { 1 } }"), ".tags: {[string] = integer} expected, got table with key 1");
+    EXPECT_EQ(s.why<std::vector<Segment>>("{ {}, { from = { y = false } } }"),
+              "[2].from.y: number expected, got boolean");
+    EXPECT_EQ(s.why<IntMap>(R"({ ["two words"] = 'x' })"), R"(["two words"]: integer expected, got string)");
+    EXPECT_EQ(s.why<IntMap>("{ [true] = 1 }"), "{[string] = integer} expected, got table with a boolean key");
+    EXPECT_EQ(s.why<Ints>("{ 1, x = 2 }"), R"({integer...} expected, got table with key "x")");
+    EXPECT_EQ(s.why<Ints>("{ [1.5] = 2 }"), "{integer...} expected, got table with key 1.5");
+    EXPECT_EQ(s.why<Ints>("'1, 2'"), "{integer...} expected, got string");
+    EXPECT_EQ(s.why<std::optional<Vec2>>("{ y = true }"), ".y: number expected, got boolean");
+    using T = std::tuple<std::string, Vec2, std::optional<int>>;
+    EXPECT_EQ(s.why<T>("{ 'a', { x = 'no' } }"), "[2].x: number expected, got string");
+    EXPECT_EQ(s.why<T>("{ 'a' }"), "[2]: {x, y} expected, got nil");
+    EXPECT_EQ(s.why<T>("{ 'a', {}, 1, 'extra' }"), "{string, {x, y}, integer} expected, got table with key 4");
+    // A variant reports the one alternative the value had the shape of, else its own name.
+    EXPECT_EQ(s.why<ListOrMap>("{ x = 'a' }"), ".x: number expected, got string");
+    EXPECT_EQ(s.why<ListOrMap>("{ 1, 'a' }"), "[2]: number expected, got string");
+    EXPECT_EQ(s.why<ListOrMap>("true"), "nil|{number...}|{[string] = number} expected, got boolean");
+    // A LuaConvert without mismatch(): its name, also inside a composite.
+    EXPECT_EQ(s.why<Celsius>("'hot'"), "celsius expected, got string");
+    EXPECT_EQ(s.why<std::vector<Celsius>>("{ 20, 'hot' }"), "[2]: celsius expected, got string");
+    EXPECT_EQ(s.read<std::vector<Celsius>>("{ 20 }"), std::vector<Celsius>{Celsius{20}});
+
+    EXPECT_EQ(luaMismatchAt("Plot.points", "[3].x: number expected, got string"),
+              "Plot.points[3].x: number expected, got string");
+    EXPECT_EQ(luaMismatchAt("Plot.max", "number expected, got string"), "Plot.max: number expected, got string");
+    EXPECT_EQ(luaMismatchOf("Segment", ".from.x: number expected"), "Segment.from.x: number expected");
+    EXPECT_EQ(luaMismatchOf("{x, y}", ".x: number expected"), "x: number expected");
+    EXPECT_EQ(luaMismatchOf("{integer...}", "[2]: integer expected"), "[2]: integer expected");
+    EXPECT_EQ(luaMismatchOf("Segment", "Segment expected, got number"), "Segment expected, got number");
+}
+
 TEST(LuaValuesTest, VariantsTakeTheFirstMatchingAlternative) {
     const LuaState s;
     using V = std::variant<std::monostate, int, std::string, Vec2>;
@@ -287,7 +400,12 @@ TEST(LuaFunctionTest, ErrorsAreReportedNotThrown) {
     EXPECT_TRUE(hasError("negative: -1"));
     luaui::clearErrors();
     EXPECT_EQ(f.call<int>(1), std::nullopt); // 'ok' isn't an integer
-    EXPECT_TRUE(hasError("LuaFunction: integer expected as the result, got string"));
+    EXPECT_TRUE(hasError("LuaFunction: bad result (integer expected, got string)"));
+    s.eval("function() return { x = 1, y = 'up' } end");
+    const LuaFunction g{s.get(), -1};
+    lua::pop(s.get());
+    EXPECT_EQ(g.call<Vec2>(), std::nullopt);
+    EXPECT_TRUE(hasError("LuaFunction: bad result (y: number expected, got string)"));
     EXPECT_EQ(f.call<std::optional<int>>(-2), std::nullopt); // an error: no result at all
     EXPECT_EQ(lua::gettop(s.get()), 0);
     luaui::clearErrors();
@@ -384,7 +502,10 @@ public:
             .method("total", &Plotter::total)
             .method("swap", &Plotter::swap)
             .method("emitSegment", &Plotter::emitSegment)
-            .method("runCallback", &Plotter::runCallback);
+            .method("runCallback", &Plotter::runCallback)
+            .method("measure", &Plotter::measure)
+            .method("hottest", &Plotter::hottest)
+            .property("temperature", &Plotter::temperature, &Plotter::setTemperature);
     }
     ~Plotter() override {
         ++calls.destroyed;
@@ -411,15 +532,24 @@ public:
     [[nodiscard]] const std::unordered_map<std::string, std::string>& labels() const { return m_labels; }
     void setLabels(std::unordered_map<std::string, std::string> l) { m_labels = std::move(l); }
 
-    /// Calls `fn` for each point of the segment; stops when it returns false.
+    /// Calls `fn` for each point of the segment; stops when it returns false (nil, or an error, keeps going).
     int forEach(const LuaFunction& fn) const {
         int n = 0;
         for (const Vec2& p : m_segment.points) {
             ++n;
-            if (fn.call<bool>(p, n) == false) break;
+            if (fn.call<std::optional<bool>>(p, n) == false) break;
         }
         return n;
     }
+    [[nodiscard]] std::size_t measure(const Segment& s) const { return s.points.size(); }
+    [[nodiscard]] double hottest(const std::vector<Celsius>& all) const {
+        double out = -273.15;
+        for (const Celsius& c : all)
+            out = std::max(out, c.degrees);
+        return out;
+    }
+    [[nodiscard]] Celsius temperature() const { return m_temperature; }
+    void setTemperature(Celsius c) { m_temperature = c; }
     [[nodiscard]] double total(const std::map<std::string, double>& values) const {
         double sum = 0;
         for (const auto& [k, v] : values)
@@ -440,14 +570,19 @@ private:
     std::variant<int, std::string> m_pick;
     LuaFunction m_callback;
     std::unordered_map<std::string, std::string> m_labels;
+    Celsius m_temperature;
 };
 
 /// A singleton keeping a Lua callback across reloads.
 class Hub final : public ScriptObject {
 public:
     static void declare(TypeBuilder<Hub>& type) {
-        type.property("filter", &Hub::filter, &Hub::setFilter).method("keep", &Hub::keep);
+        type.property("filter", &Hub::filter, &Hub::setFilter)
+            .property("points", &Hub::points, &Hub::setPoints)
+            .method("keep", &Hub::keep);
     }
+    [[nodiscard]] const std::vector<Vec2>& points() const { return m_points; }
+    void setPoints(std::vector<Vec2> p) { m_points = std::move(p); }
     [[nodiscard]] const std::optional<LuaFunction>& filter() const { return m_filter; }
     void setFilter(std::optional<LuaFunction> f) { m_filter = std::move(f); }
     [[nodiscard]] std::vector<int> keep(const std::vector<int>& in) const {
@@ -459,6 +594,7 @@ public:
 
 private:
     std::optional<LuaFunction> m_filter;
+    std::vector<Vec2> m_points;
 };
 
 lua::State* newUiState(TypeRegistry& types) {
@@ -537,8 +673,8 @@ TEST_F(LuaValuesTypesTest, PropertiesSyncCompositeValues) {
 
     run(R"(p.quality = "medium"; p.segment = { from = { x = "left" } }; p.pick = 4)");
     sync("p");
-    EXPECT_TRUE(hasError("Plotter.quality: 'low'|'high' expected, got string"));
-    EXPECT_TRUE(hasError("Plotter.segment: Segment expected, got table"));
+    EXPECT_TRUE(hasError(R"(Plotter.quality: 'low'|'high' expected, got string "medium")"));
+    EXPECT_TRUE(hasError("Plotter.segment.from.x: number expected, got string"));
     EXPECT_EQ(p->quality(), Quality::High); // unchanged
     EXPECT_EQ(p->pick(), (std::variant<int, std::string>{4}));
 }
@@ -553,15 +689,55 @@ TEST_F(LuaValuesTypesTest, MethodsTakeAndReturnCompositeValues) {
         assert(p:forEach(function(pt, i) xs[#xs + 1] = pt.x; return i < 2 end) == 2)
         assert(#xs == 2 and xs[2] == 2)
     )");
+    run("assert(p:forEach(function() end) == 3)"); // nil keeps going: only false stops
     EXPECT_NE(runError("p:total({ 1, 2 })")
-                  .find("bad argument #1 to 'Plotter:total' ({[string] = number} expected, got table)"),
+                  .find("bad argument #1 to 'Plotter:total' ({[string] = number} expected, got table with key 1)"),
+              std::string::npos);
+    EXPECT_NE(runError("p:total({ a = 1, b = 'x' })").find("bad argument #1 to 'Plotter:total' (b: number expected"),
               std::string::npos);
     EXPECT_NE(runError("p:forEach(5)").find("bad argument #1 to 'Plotter:forEach' (function expected, got number)"),
               std::string::npos);
-    EXPECT_NE(runError("p:swap({ 'x', 1 })").find("({integer, string} expected, got table)"), std::string::npos);
+    EXPECT_NE(runError("p:swap({ 'x', 1 })").find("([1]: integer expected, got string)"), std::string::npos);
+    EXPECT_NE(runError("p:swap({ 1, 'x', 3 })").find("({integer, string} expected, got table with key 3)"),
+              std::string::npos);
     // An error inside the callback is reported, not raised through the method.
     run("assert(p:forEach(function() error('cb failed') end) == 3)");
     EXPECT_TRUE(hasError("cb failed"));
+}
+
+// Conversion errors name the field and the element inside the value that failed, wherever a value converts.
+TEST_F(LuaValuesTypesTest, ConversionErrorsNameTheField) {
+    run(R"(p = Plotter { segment = { points = { { x = 1 }, { x = 2 } } } })");
+    EXPECT_NE(runError("p:measure({ points = { { x = 1 }, { x = 'a' } } })")
+                  .find("bad argument #1 to 'Plotter:measure' (Segment.points[2].x: number expected, got string)"),
+              std::string::npos);
+    EXPECT_NE(runError("p:measure({ quality = 'medium' })")
+                  .find(R"((Segment.quality: 'low'|'high' expected, got string "medium"))"),
+              std::string::npos);
+    EXPECT_NE(runError("p:measure(5)").find("(Segment expected, got number)"), std::string::npos);
+    run("assert(p:measure({ points = { {}, {}, {} } }) == 3)");
+    // A LuaConvert without mismatch(): the plain message, alone and inside a vector.
+    EXPECT_NE(runError("p:hottest({ 20, 'hot' })").find("bad argument #1 to 'Plotter:hottest' ([2]: celsius expected"),
+              std::string::npos);
+    run("assert(p:hottest({ 20, 31 }) == 31)");
+
+    // Property sync.
+    run(R"(p.segment = { points = { { x = 1 }, { y = 'up' } } }; p.temperature = "warm")");
+    sync("p");
+    EXPECT_TRUE(hasError("Plotter.segment.points[2].y: number expected, got string"));
+    EXPECT_TRUE(hasError("Plotter.temperature: celsius expected, got string"));
+    luaui::clearErrors();
+    run(R"(p.segment = { tags = { ok = 1, ["no way"] = {} } })");
+    sync("p");
+    EXPECT_TRUE(hasError(R"(Plotter.segment.tags["no way"]: integer expected, got table)"));
+
+    // A singleton property.
+    EXPECT_NE(runError("hub.points = { { x = 1 }, { y = 'a' } }").find("hub.points[2].y: number expected, got string"),
+              std::string::npos);
+    EXPECT_NE(runError("hub.points = { x = 1 }").find(R"(hub.points: {{x, y}...} expected, got table with key "x")"),
+              std::string::npos);
+    run("hub.points = { { x = 3 } }");
+    EXPECT_EQ(m_hub.points(), (std::vector<Vec2>{Vec2{3, 0}}));
 }
 
 TEST_F(LuaValuesTypesTest, SignalsPassCompositeValues) {

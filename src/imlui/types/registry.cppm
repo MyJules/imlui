@@ -49,6 +49,7 @@ import imlui.ui.renderer;
 import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_info;
 import imlui.types.type_builder;
 
@@ -470,6 +471,18 @@ void resetProperty(const Box& b, std::size_t index) {
         p.reset((*b.defaults)[index].get(), *b.object);
 }
 
+/// "Gauge.value: number expected, got string", "Plot.points[2].x: number expected, got string": why the value at `idx`
+/// didn't convert to property `p` of `info`.
+std::string mismatchMessage(lua::State* state, int idx, const TypeInfo& info, const TypeInfo::Property& p) {
+    std::string why;
+    if (p.mismatch) {
+        why = p.mismatch(state, idx);
+    } else {
+        why = std::string{p.typeName} + " expected, got " + lua::typeName(state, idx);
+    }
+    return luaMismatchAt(info.name() + "." + p.name, why);
+}
+
 /// Writes declared property `index` of the element table `node` into b's object.
 void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index) {
     const TypeInfo& info = *b.type;
@@ -493,8 +506,7 @@ void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index
         return;
     }
     if (p.assign(state, -1, *b.object) == TypeInfo::Assign::TypeMismatch)
-        luaui::reportError(info.name() + "." + p.name + ": " + std::string{p.typeName} + " expected, got " +
-                           lua::typeName(state, -1));
+        luaui::reportError(mismatchMessage(state, -1, info, p));
     lua::pop(state);
 }
 
@@ -660,8 +672,7 @@ int singletonNewIndex(lua::State* state) {
         if (lua::isnil(state, 3) && !p->nullable)
             resetProperty(*b, static_cast<std::size_t>(p - b->type->properties().data()));
         else if (p->assign(state, 3, *b->object) == TypeInfo::Assign::TypeMismatch)
-            lua::error(state, b->type->name() + "." + key + ": " + std::string{p->typeName} + " expected, got " +
-                                  lua::typeName(state, 3));
+            lua::error(state, mismatchMessage(state, 3, *b->type, *p));
         return 0;
     }
     if (!key.starts_with("on") || !(lua::isfunction(state, 3) || lua::isnil(state, 3)))

@@ -5,7 +5,7 @@
 // argument) and is called with C++ arguments, which convert through LuaConvert too:
 //
 //   void Backend::forEach(imlui::LuaFunction fn) { for (int x : m_items) fn.call(x); }
-//   std::optional<bool> keep = filter.call<bool>(item);   // nullopt: no result of that type, an error, or expired
+//   std::optional<bool> keep = filter.call<bool>(item);   // nullopt: an error, or expired (bool: Lua truthiness)
 //
 // The function lives in a Lua state, which a hot reload closes. The handle never keeps a state alive and never
 // dangles: each state carries a liveness token (a userdata in its registry whose finalizer clears the token when the
@@ -47,8 +47,9 @@ public:
     /// error with its traceback, a C++ exception while converting) go to the error overlay and never propagate.
     /// R = void: returns whether the function ran without an error (false when expired). Otherwise the first result
     /// converted to R, or std::nullopt when expired, after an error, or when the result doesn't convert (reported:
-    /// "LuaFunction: integer expected as the result, got string"). Doesn't request a frame: call
-    /// imlui::requestFrame() if the callback changed what is shown and no frame is coming anyway.
+    /// "LuaFunction: bad result (integer expected, got string)"). R = bool reads Lua truthiness, so a function that
+    /// returns nothing gives false; call<std::optional<bool>> tells nil (nullopt inside) from false. Doesn't request a
+    /// frame: call imlui::requestFrame() if the callback changed what is shown and no frame is coming anyway.
     template <class R = void, class... Args>
     CallResult<R> call(const Args&... args) const {
         CallResult<R> result{};
@@ -66,7 +67,7 @@ public:
                 if (LuaConvert<R>::check(state, -1))
                     result.emplace(LuaConvert<R>::get(state, -1));
                 else
-                    reportBadResult(LuaConvert<R>::name, lua::typeName(state, -1));
+                    reportBadResult(luaMismatchOf(LuaConvert<R>::name, luaMismatch<R>(state, -1)));
             }
         });
         return result;
@@ -89,7 +90,8 @@ private:
     [[nodiscard]] lua::State* liveState() const;
     /// Pushes the function onto `state` (its state's main thread; the handle isn't expired).
     void pushFunction(lua::State* state) const;
-    static void reportBadResult(std::string_view expected, std::string_view got);
+    /// Reports "LuaFunction: bad result (<why>)".
+    static void reportBadResult(std::string_view why);
     /// The liveness token of the state `state` belongs to, made at its first use; a closing state's is dead.
     static std::shared_ptr<Life> lifeOf(lua::State* state);
     /// The token's finalizer (__gc).
@@ -212,11 +214,10 @@ bool LuaFunction::operator==(const LuaFunction& other) const {
     return m_ref->life == other.m_ref->life && m_ref->identity == other.m_ref->identity;
 }
 
-void LuaFunction::reportBadResult(std::string_view expected, std::string_view got) {
-    std::string msg = "LuaFunction: ";
-    msg += expected;
-    msg += " expected as the result, got ";
-    msg += got;
+void LuaFunction::reportBadResult(std::string_view why) {
+    std::string msg = "LuaFunction: bad result (";
+    msg += why;
+    msg += ")";
     luaui::reportError(std::move(msg));
 }
 
