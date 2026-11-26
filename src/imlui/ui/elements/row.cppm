@@ -215,13 +215,18 @@ void Row::render(Frame& frame) {
             y = top + std::floor(std::max(0.0f, (plan.rowH - slot.h) * (m_align == "center" ? 0.5f : 1.0f)));
         ImGui::SetCursorScreenPos({x, y});
         const float right = slot.fills ? x + plan.share : std::max(x, rowRight - after[i]);
+        bool rendered = false;
         if (unseen) {
             const layout::BoxScope box{layout::boxTo(right)};
-            c.renderUnseen();
+            rendered = c.renderUnseen();
         } else {
-            c.render(right);
+            rendered = c.render(right);
         }
-        const ImVec2 sz = ImGui::GetItemRectSize();
+        // Not rendered (no instance, an unknown type, past maxDepth): no item was submitted, so the last item's rect
+        // is the previous sibling's and would shift the ones after it. It takes no width (a fill keeps its share),
+        // and an empty item ends the cursor move, which ImGui asserts on otherwise.
+        if (!rendered) ImGui::Dummy({0.0f, 0.0f});
+        const ImVec2 sz = rendered ? ImGui::GetItemRectSize() : ImVec2{0.0f, 0.0f};
         maxH = std::max(maxH, sz.y);
         x += slot.fills ? std::max(plan.share, sz.x) : sz.x;
         ++i;

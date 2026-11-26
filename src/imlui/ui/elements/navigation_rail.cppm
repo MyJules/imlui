@@ -54,10 +54,13 @@ float renderCentered(Frame::Child& child, float x, float width, float y) {
     const bool unseen = !fills && !child.expectedSize(width);
     const float w = fills ? width : child.expectedWidth(width, width);
     ImGui::SetCursorScreenPos({x + std::floor((width - w) * 0.5f), y});
-    if (unseen)
-        child.renderUnseen();
-    else
-        child.render();
+    const bool rendered = unseen ? child.renderUnseen() : child.render();
+    // Not rendered (no instance, an unknown type, past maxDepth): no item was submitted, so the last item's rect is
+    // the previous destination's. It takes no height, and an empty item ends the cursor move.
+    if (!rendered) {
+        ImGui::Dummy({0.0f, 0.0f});
+        return 0.0f;
+    }
     return ImGui::GetItemRectSize().y;
 }
 

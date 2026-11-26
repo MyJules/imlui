@@ -346,6 +346,31 @@ TEST_F(WidgetsTest, ShortMultilineTextFieldKeepsItsHeight) {
     EXPECT_LT(height, dp(80));
 }
 
+// A field narrower than its insets left a negative input width, which ImGui takes as "the available width minus
+// that": the input stretched past the field, over whatever is beside it. The field's group (its input included) stays
+// within its width.
+TEST_F(WidgetsTest, NarrowFieldsKeepTheirInputInside) {
+    const float w = dp(20);
+    float x0 = 0.0f, field = 0.0f, multiline = 0.0f, spin = 0.0f;
+    frame([&] {
+        x0 = ImGui::GetCursorScreenPos().x;
+        std::string text = "hello";
+        md::TextFieldOptions options;
+        options.width = w;
+        md::textField("##field", text, options);
+        field = ImGui::GetItemRectMax().x;
+        options.multiline = true;
+        md::textField("##multiline", text, options);
+        multiline = ImGui::GetItemRectMax().x;
+        double v = 1.0;
+        md::spinBox("##spin", &v, 0.0, 10.0, 1.0, 0, {}, w);
+        spin = ImGui::GetItemRectMax().x;
+    });
+    EXPECT_LE(field, x0 + w);
+    EXPECT_LE(multiline, x0 + w);
+    EXPECT_LE(spin, x0 + w);
+}
+
 // ------------------------------------------------------------------ Navigation
 
 TEST_F(WidgetsTest, DisabledSelectedNavigationItemLooksDisabled) {

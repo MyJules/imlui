@@ -3,7 +3,8 @@
 // end; no frames while nothing changes), positionViewAtIndex() to items that were never built (fixed and variable
 // heights, every mode, out-of-range indices, a bad mode, before the first render, inside a ScrollView),
 // positionViewAtBeginning() / positionViewAtEnd() and `firstVisibleIndex`, and requests made while the list isn't
-// rendered. Renders headless ImGui frames (tests/support/headless_frame.cppm).
+// rendered, and the chunked rendering staying finite: while a nav move scores items (which widens the view), and with
+// a negative `spacing` that cancels `itemHeight`. Renders headless ImGui frames (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
 import std;
@@ -43,6 +44,47 @@ private:
     int m_renders = 0;
 };
 
+/// Marks the frame as scoring a nav move from where it renders on, as ImGui does on the frame an arrow key moves the
+/// focus (NavUpdate clears it on the next frame): cull::outOfView widens the view by a page then.
+class NavScoring final : public Element {
+public:
+    static void declare(TypeBuilder<NavScoring>&) {}
+    void render(Frame&) override {
+        ImGui::GetCurrentContext()->NavMoveScoringItems = true;
+        ImGui::Dummy({0.0f, 0.0f});
+    }
+};
+
+/// Ends the process if the scope isn't left within `seconds`: a regression that loops forever then fails the suite
+/// instead of hanging it.
+class Watchdog {
+public:
+    explicit Watchdog(double seconds)
+        : m_thread{[this, seconds] {
+              std::unique_lock lock{m_mutex};
+              if (!m_done.wait_for(lock, std::chrono::duration<double>{seconds}, [this] { return m_left; })) {
+                  std::cerr << "Watchdog: still running after " << seconds << " s, a loop that never ends" << std::endl;
+                  std::_Exit(3);
+              }
+          }} {}
+    ~Watchdog() {
+        {
+            const std::lock_guard lock{m_mutex};
+            m_left = true;
+        }
+        m_done.notify_one();
+        m_thread.join();
+    }
+    Watchdog(const Watchdog&) = delete;
+    Watchdog& operator=(const Watchdog&) = delete;
+
+private:
+    std::mutex m_mutex;
+    std::condition_variable m_done;
+    bool m_left = false;
+    std::thread m_thread; // last: it starts once the others are there
+};
+
 /// A singleton with a model that grows by appends, like a log.
 class Feed final : public ScriptObject {
 public:
@@ -68,9 +110,13 @@ protected:
         luaui::clearErrors();
         clearFrameRequests();
         m_h.registerType<Bar>("Bar");
+        m_h.registerType<NavScoring>("NavScoring");
         m_h.types().registerSingleton("feed", m_feed);
     }
-    void TearDown() override { clearFrameRequests(); }
+    void TearDown() override {
+        clearFrameRequests();
+        ImGui::GetCurrentContext()->NavMoveScoringItems = false;
+    }
 
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
     void check(std::string_view lua) { EXPECT_EQ(m_h.run("assert(" + std::string{lua} + ")"), "") << lua; }
@@ -464,6 +510,55 @@ TEST_F(ListViewScrollTest, RequestsWaitWhileTheListIsNotRendered) {
     settle("root");
     EXPECT_NEAR(l.scroll().y, 69.0f * 20.0f, 1.0f);
     check("list.firstVisibleIndex == 70");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ finite rendering
+
+// While a nav move scores items, cull::outOfView widens the view by a page, so the list renders past its own limit.
+// Each chunk of delegates asked for past it was sized by the (negative) distance left to the limit, cast to size_t:
+// an empty chunk, asked for again and again, and the frame never ended. Now it renders the page the nav move can
+// reach, and stops there.
+TEST_F(ListViewScrollTest, ANavMoveRendersTheWidenedViewAndEnds) {
+    for (const char* heights : {"itemHeight = 20,", ""}) {
+        SCOPED_TRACE(heights);
+        run(std::string{R"(
+            made = {}
+            list = ListView { height = 200, spacing = 0, )"} +
+            heights + R"( model = 10000,
+                              delegate = function(i) made[i] = Bar { h = 20 }; return made[i] end }
+            root = Column { NavScoring {}, list })");
+        const Watchdog watchdog{30.0};
+        m_h.renderFrame("root");
+        // The view (10 items), half a view below it, and a page more for the nav move: past index 20, not to the end.
+        check("made[21] ~= nil and made[2000] == nil");
+        ImGui::GetCurrentContext()->NavMoveScoringItems = false;
+        settle("root");
+        run("made = {}");
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A negative `spacing` that cancels `itemHeight` (or more) put every item at one place: the step between them was
+// zero or negative, so no number of items reached the end of the view and every delegate was built, and the index in
+// view (the scroll divided by the step) was a division by zero. The step is at least a pixel.
+TEST_F(ListViewScrollTest, ASpacingThatCancelsTheItemHeightStepsAPixel) {
+    for (const char* spacing : {"-20", "-30"}) {
+        SCOPED_TRACE(spacing);
+        run(std::string{R"(
+            made = {}
+            list = ListView { height = 200, itemHeight = 20, model = 10000, spacing = )"} +
+            spacing + R"(,
+                              delegate = function(i) made[i] = Bar { h = 20 }; return made[i] end })");
+        settle("list");
+        check("made[1] ~= nil and made[2000] == nil");
+        ListView& l = list();
+        EXPECT_FLOAT_EQ(l.contentHeight(), 9999.0f + 20.0f); // the last item's bottom, a pixel per item before it
+        run("list:positionViewAtIndex(5000)");
+        settle("list");
+        EXPECT_NEAR(l.scroll().y, 4999.0f, 1.0f);
+        check("list.firstVisibleIndex == 5000 and made[5000] ~= nil and made[7000] == nil");
+    }
     EXPECT_TRUE(luaui::errors().empty());
 }
 
