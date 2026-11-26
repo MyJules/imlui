@@ -3,6 +3,13 @@
 // "table<string, Vec2>", "Future<Report>"); the named types those expressions refer to (a struct with a LuaFields
 // name becomes a `---@class`, an enum with an EnumNames name an `---@alias`) are declared once in a LuaTypes, which
 // the generator writes out sorted by name.
+//
+// Flows. A LuaTypes also records which way each named type's values go: Output (C++ hands them to Lua: a property's
+// value, a method's result, a signal argument) or Input (Lua hands them to C++: a writable property, a method
+// parameter, a raw prop). The generator sets the flow before it describes a member (setFlow), a struct with a name
+// records it (use) and describes its fields in it too, so a struct inside an output-only one is output-only as well.
+// The generator describes everything twice (restart in between): the second pass knows every use, and declares an
+// output-only struct with required fields (outputOnly), any other with optional ones.
 export module imlui.types.lua_types;
 
 import std;
@@ -14,6 +21,23 @@ public:
     /// Describes a C++ type: returns its LuaLS type expression and declares the named types it uses in `types`.
     /// TypeInfo keeps one per property, method parameter and result, and typed signal argument (luaTypeOf<V>).
     using Describe = std::string (*)(LuaTypes& types);
+
+    /// Which way the values being described go (see the module comment).
+    enum class Flow {
+        Input,  ///< Lua -> C++: a table may leave out a struct's fields (they keep their defaults)
+        Output, ///< C++ -> Lua: every field is there
+    };
+
+    /// The flow of what is described next; Input until set (the conservative one: optional fields).
+    [[nodiscard]] Flow flow() const;
+    void setFlow(Flow flow);
+    /// Records that named type `name` is used in the current flow. True the first time for that flow: the caller then
+    /// describes what the type contains (in the same flow), so the types inside it get the use too.
+    bool use(std::string_view name);
+    /// Whether named type `name` was used, and only in the Output flow (this pass or one before restart()).
+    [[nodiscard]] bool outputOnly(std::string_view name) const;
+    /// Starts another pass over the same members: drops the claims and declarations, keeps the uses (and the flow).
+    void restart();
 
     /// True the first time named type `name` is asked for: the caller then builds its declaration and define()s it.
     /// Later calls return false, also while the declaration is still being built (a type that contains itself).
@@ -38,10 +62,24 @@ public:
     [[nodiscard]] static bool isIdentifier(std::string_view text);
     /// `text` as a Lua string literal in double quotes.
     [[nodiscard]] static std::string quoted(std::string_view text);
+    /// `text` as LuaLS description lines, `---` and a line of it each (put right above what they describe: a
+    /// `---@class`, a `---@field`, a function's annotations); "" for no text. Empty lines at its start and end are
+    /// dropped, a `\r` and trailing spaces too, other control characters (a tab too) become spaces. A line whose text
+    /// starts with `@` or `|` gets a `\` before it (Markdown shows the character alone), so LuaLS doesn't read an
+    /// annotation or an alias value.
+    [[nodiscard]] static std::string docLines(std::string_view text);
 
 private:
+    /// The flows a named type was used in.
+    struct Uses {
+        bool input = false;
+        bool output = false;
+    };
+
     std::set<std::string, std::less<>> m_claimed;
     std::map<std::string, std::string, std::less<>> m_definitions;
+    std::map<std::string, Uses, std::less<>> m_uses;
+    Flow m_flow = Flow::Input;
 };
 
 } // namespace imlui
@@ -57,6 +95,28 @@ void LuaTypes::define(std::string_view name, std::string declaration) {
 }
 
 const std::map<std::string, std::string, std::less<>>& LuaTypes::definitions() const { return m_definitions; }
+
+LuaTypes::Flow LuaTypes::flow() const { return m_flow; }
+void LuaTypes::setFlow(Flow flow) { m_flow = flow; }
+
+bool LuaTypes::use(std::string_view name) {
+    auto it = m_uses.find(name);
+    if (it == m_uses.end()) it = m_uses.emplace(std::string{name}, Uses{}).first;
+    bool& seen = m_flow == Flow::Output ? it->second.output : it->second.input;
+    if (seen) return false;
+    seen = true;
+    return true;
+}
+
+bool LuaTypes::outputOnly(std::string_view name) const {
+    const auto it = m_uses.find(name);
+    return it != m_uses.end() && it->second.output && !it->second.input;
+}
+
+void LuaTypes::restart() {
+    m_claimed.clear();
+    m_definitions.clear();
+}
 
 std::string LuaTypes::fromName(std::string_view name) {
     static constexpr std::array<std::string_view, 8> builtin{"boolean", "integer",  "number", "string",
@@ -110,6 +170,29 @@ std::string LuaTypes::quoted(std::string_view text) {
         out += c;
     }
     out += '"';
+    return out;
+}
+
+std::string LuaTypes::docLines(std::string_view text) {
+    std::vector<std::string> lines{std::string{}};
+    for (const char c : text) {
+        if (c == '\n')
+            lines.emplace_back();
+        else if (c != '\r')
+            lines.back() += static_cast<unsigned char>(c) < 0x20 || c == 0x7f ? ' ' : c;
+    }
+    for (std::string& line : lines) {
+        while (line.ends_with(' '))
+            line.pop_back();
+        const std::size_t first = line.find_first_not_of(' ');
+        if (first != std::string::npos && (line[first] == '@' || line[first] == '|')) line.insert(first, "\\");
+    }
+    const auto nonEmpty = [](const std::string& line) { return !line.empty(); };
+    const auto begin = std::ranges::find_if(lines, nonEmpty);
+    const auto end = std::ranges::find_if(lines.rbegin(), lines.rend(), nonEmpty).base();
+    std::string out;
+    for (auto it = begin; it < end; ++it)
+        out += "---" + *it + "\n";
     return out;
 }
 

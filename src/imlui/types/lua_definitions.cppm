@@ -13,8 +13,10 @@
 //    `<Name>Signal` alias.
 //
 // Member types come from LuaConvert (luaTypeOf<V>, recorded by TypeBuilder in TypeInfo), the hover docs from
-// TypeBuilder::doc (`---` lines above the classes, the constructor and each field). Output is deterministic: types and
-// singletons sorted by name, members in declaration order.
+// TypeBuilder::doc (`---` lines above the classes, the constructor and each field). Each member is described in the
+// flow its values go (LuaTypes::Flow: results, signal arguments and property values Output; parameters, writable
+// properties and raw props Input), in two passes, so a named struct that only goes to Lua gets required fields.
+// Output is deterministic: types and singletons sorted by name, members in declaration order.
 export module imlui.types.lua_definitions;
 
 import std;
@@ -48,33 +50,12 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::string describe(LuaTypes::Describe d, LuaTypes& named) { return d ? d(named) : std::string{"any"}; }
+using Flow = LuaTypes::Flow;
 
-/// `text` as LuaLS description lines, `---` and a line of it each (put right above what they describe: a `---@class`,
-/// a `---@field`, a function's annotations); "" for no text. Empty lines at its start and end are dropped, a `\r` and
-/// trailing spaces too, other control characters (a tab too) become spaces. A line whose text starts with `@` or `|`
-/// gets a `\` before it (Markdown shows the character alone), so LuaLS doesn't read an annotation or an alias value.
-std::string docLines(std::string_view text) {
-    std::vector<std::string> lines{std::string{}};
-    for (const char c : text) {
-        if (c == '\n')
-            lines.emplace_back();
-        else if (c != '\r')
-            lines.back() += static_cast<unsigned char>(c) < 0x20 || c == 0x7f ? ' ' : c;
-    }
-    for (std::string& line : lines) {
-        while (line.ends_with(' '))
-            line.pop_back();
-        const std::size_t first = line.find_first_not_of(' ');
-        if (first != std::string::npos && (line[first] == '@' || line[first] == '|')) line.insert(first, "\\");
-    }
-    const auto nonEmpty = [](const std::string& line) { return !line.empty(); };
-    const auto begin = std::ranges::find_if(lines, nonEmpty);
-    const auto end = std::ranges::find_if(lines.rbegin(), lines.rend(), nonEmpty).base();
-    std::string out;
-    for (auto it = begin; it < end; ++it)
-        out += "---" + *it + "\n";
-    return out;
+/// `d`'s type expression, described in `flow` (which way the values go: see LuaTypes); `any` for none.
+std::string describe(LuaTypes::Describe d, LuaTypes& named, Flow flow) {
+    named.setFlow(flow);
+    return d ? d(named) : std::string{"any"};
 }
 
 /// "name: type" for a fun() parameter list; an optional type makes the parameter optional ("limit?: integer").
@@ -94,7 +75,7 @@ std::string handler(const std::string& self, const std::optional<std::vector<Typ
         parts.emplace_back("...: any");
     } else {
         for (const TypeInfo::Param& a : *args)
-            parts.push_back(param(a.name, describe(a.type, named)));
+            parts.push_back(param(a.name, describe(a.type, named, Flow::Output)));
     }
     std::string out = "fun(";
     for (std::size_t i = 0; i < parts.size(); ++i)
@@ -125,9 +106,9 @@ std::string returnType(std::string_view expr) {
 std::string methodType(const std::string& self, const TypeInfo::Method& m, LuaTypes& named) {
     std::string out = "fun(self: " + self;
     for (const TypeInfo::Param& p : m.params)
-        out += ", " + param(p.name, describe(p.type, named));
+        out += ", " + param(p.name, describe(p.type, named, Flow::Input));
     out += ")";
-    if (m.result) out += ": " + returnType(m.result(named));
+    if (m.result) out += ": " + returnType(describe(m.result, named, Flow::Output));
     return out;
 }
 
@@ -154,23 +135,26 @@ std::vector<Signal> signalsOf(const TypeInfo& info, const std::string& self, Lua
 
 /// A `---@field` line with its doc above it.
 std::string field(const std::string& doc, const std::string& declaration) {
-    return docLines(doc) + "---@field " + declaration + "\n";
+    return LuaTypes::docLines(doc) + "---@field " + declaration + "\n";
 }
 
-/// The LuaLS type of raw property `p`'s values.
+/// The LuaLS type of raw property `p`'s values: what the script gave it (in the element table too), so Input.
 std::string rawType(const TypeInfo::RawProperty& p, LuaTypes& named) {
-    return p.luaType ? p.luaType(named) : p.luaTypeText;
+    return p.luaType ? describe(p.luaType, named, Flow::Input) : p.luaTypeText;
 }
 
 /// The fields of an element's or singleton's class: properties, raw properties (optional: the table holds them only
 /// when the script set them), handlers, methods. Handler and method types are in
 /// parentheses (in the props class too): after a line that ends in a bare `fun(...)`, LuaLS (3.19) looks for its
-/// return type on the next line and loses the doc there.
+/// return type on the next line and loses the doc there. A property's type is that of what it holds (Output); a
+/// writable one is also what a script assigns to it (`gauge.series = {...}`), so its value types are Input too.
 std::string memberFields(const std::string& self, const TypeInfo& info, const std::vector<Signal>& signals,
                          LuaTypes& named) {
     std::string out;
-    for (const TypeInfo::Property& p : info.properties())
-        out += field(p.doc, p.name + " " + describe(p.luaType, named));
+    for (const TypeInfo::Property& p : info.properties()) {
+        if (p.assign) static_cast<void>(describe(p.luaType, named, Flow::Input));
+        out += field(p.doc, p.name + " " + describe(p.luaType, named, Flow::Output));
+    }
     for (const TypeInfo::RawProperty& p : info.rawProperties())
         out += field(p.doc, p.name + "? " + std::string{LuaTypes::required(rawType(p, named))});
     for (const Signal& s : signals)
@@ -222,11 +206,13 @@ std::string elementDefinitions(const std::string& name, const TypeInfo& info, Lu
         connectables.push_back({name, alias, "fun(self: " + name + ", ...: any)"});
     }
 
-    const std::string doc = docLines(info.doc());
+    const std::string doc = LuaTypes::docLines(info.doc());
     out += doc;
     out += "---@class " + name + "Props: ElementProps\n";
     for (const TypeInfo::Property& p : info.properties())
-        if (p.assign) out += field(p.doc, p.name + "? " + propType(name, p.takesFunction, describe(p.luaType, named)));
+        if (p.assign)
+            out +=
+                field(p.doc, p.name + "? " + propType(name, p.takesFunction, describe(p.luaType, named, Flow::Input)));
     for (const TypeInfo::RawProperty& p : info.rawProperties())
         out += field(p.doc, p.name + "? " + rawPropType(name, p, named));
     for (const Signal& s : signals)
@@ -240,7 +226,7 @@ std::string elementDefinitions(const std::string& name, const TypeInfo& info, Lu
 
     std::string props = name + "Props";
     if (const TypeInfo::Property* p = info.findProperty(info.defaultProperty()))
-        props += "|" + LuaTypes::grouped(LuaTypes::required(describe(p->luaType, named)));
+        props += "|" + LuaTypes::grouped(LuaTypes::required(describe(p->luaType, named, Flow::Input)));
     out += doc;
     out += "---@param props? " + props + "\n";
     out += "---@return " + name + "\n";
@@ -253,8 +239,8 @@ std::string singletonDefinitions(const std::string& name, const TypeInfo& info, 
                                  std::vector<Connectable>& connectables) {
     if (const LuaTypes::Describe value = info.valueType()) { // a value singleton (a ListModel): its global's type
         std::string out = "-- " + name + " (singleton)\n\n";
-        out += docLines(info.doc());
-        out += "---@type " + value(named) + "\n";
+        out += LuaTypes::docLines(info.doc());
+        out += "---@type " + describe(value, named, Flow::Output) + "\n";
         out += name + " = nil\n\n";
         return out;
     }
@@ -267,7 +253,7 @@ std::string singletonDefinitions(const std::string& name, const TypeInfo& info, 
         out += "\n";
         connectables.push_back({name, alias, "fun(...: any)"});
     }
-    out += docLines(info.doc());
+    out += LuaTypes::docLines(info.doc());
     out += "---@class " + name + "\n";
     out += memberFields(name, info, signals, named);
     out += name + " = {}\n\n";
@@ -315,10 +301,8 @@ std::string writeFile(const fs::path& file, std::string_view text) {
     return {};
 }
 
-} // namespace
-
-std::string luaTypeDefinitions(const TypeRegistry& registry) {
-    LuaTypes named;
+/// The text of types.lua, one pass (see luaTypeDefinitions).
+std::string typeDefinitions(const TypeRegistry& registry, LuaTypes& named) {
     std::vector<Connectable> connectables;
     std::string elements;
     std::string skipped;
@@ -357,6 +341,17 @@ std::string luaTypeDefinitions(const TypeRegistry& registry) {
     out += singletons;
     out += connectDefinitions(connectables);
     return out;
+}
+
+} // namespace
+
+std::string luaTypeDefinitions(const TypeRegistry& registry) {
+    // Twice: the first pass records which way every named type goes (LuaTypes::use), the second declares the structs
+    // with what it learned (required fields for output-only ones). Only the second pass's text is kept.
+    LuaTypes named;
+    static_cast<void>(typeDefinitions(registry, named));
+    named.restart();
+    return typeDefinitions(registry, named);
 }
 
 std::string writeLuaDefinitions(const TypeRegistry& registry, const fs::path& dir, std::string_view prelude) {

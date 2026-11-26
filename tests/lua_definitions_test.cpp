@@ -51,6 +51,7 @@ struct Series {
 template <>
 struct imlui::EnumNames<Quality> {
     static constexpr std::string_view name = "Quality";
+    static constexpr std::string_view doc = "How carefully it is drawn.";
     static constexpr std::pair<Quality, std::string_view> values[] = {{Quality::Low, "low"}, {Quality::High, "high"}};
 };
 template <>
@@ -66,6 +67,85 @@ struct imlui::LuaFields<Series> {
     static constexpr std::string_view name = "Series";
     static constexpr std::tuple fields{imlui::field("label", &Series::label), imlui::field("points", &Series::points),
                                        imlui::field("max", &Series::max), imlui::field("quality", &Series::quality)};
+};
+
+// Structs for the flows (FlowsDecideOptionalFields): Report goes only to Lua (a result, a signal argument, a read-only
+// property), with a Hit inside it (in a vector, a map and a std::optional) that is output only too; Options comes only
+// from Lua (a method parameter); Mixed goes both ways, and the Inner inside it with it; Pinned is `outputOnly` though
+// it is a parameter.
+namespace {
+
+struct Hit {
+    int row = 0;
+    std::string text;
+};
+struct Report {
+    int matched = 0;
+    std::optional<double> seconds;
+    std::vector<Hit> hits;
+    std::map<std::string, Hit> byName;
+    std::optional<Hit> best;
+    Quality quality = Quality::High;
+};
+struct Options {
+    std::string text;
+    int limit = 10;
+    std::optional<Quality> quality;
+};
+struct Inner {
+    double v = 0;
+};
+struct Mixed {
+    Inner inner;
+    std::optional<int> n;
+};
+struct Pinned {
+    int id = 0;
+};
+
+} // namespace
+
+template <>
+struct imlui::LuaFields<Hit> {
+    static constexpr std::string_view name = "Hit";
+    static constexpr std::tuple fields{imlui::field("row", &Hit::row).doc("The row, 1-based."),
+                                       imlui::field("text", &Hit::text)};
+};
+template <>
+struct imlui::LuaFields<Report> {
+    static constexpr std::string_view name = "Report";
+    static constexpr std::string_view doc = "What a query found.\n\n@see `Options`";
+    static constexpr std::tuple fields{
+        imlui::field("matched", &Report::matched).doc("Rows that passed the filter."),
+        imlui::field("seconds", &Report::seconds).doc("How long it took; nil when it was cancelled."),
+        imlui::field("hits", &Report::hits),
+        imlui::field("byName", &Report::byName),
+        imlui::field("best", &Report::best),
+        imlui::field("quality", &Report::quality)};
+};
+template <>
+struct imlui::LuaFields<Options> {
+    static constexpr std::string_view name = "Options";
+    static constexpr std::string_view doc = "How to query.";
+    static constexpr std::tuple fields{imlui::field("text", &Options::text).doc("What to look for."),
+                                       imlui::field("limit", &Options::limit).doc("At most this many hits."),
+                                       imlui::field("quality", &Options::quality)};
+};
+template <>
+struct imlui::LuaFields<Inner> {
+    static constexpr std::string_view name = "Inner";
+    static constexpr std::tuple fields{imlui::field("v", &Inner::v)};
+};
+template <>
+struct imlui::LuaFields<Mixed> {
+    static constexpr std::string_view name = "Mixed";
+    static constexpr std::tuple fields{imlui::field("inner", &Mixed::inner), imlui::field("n", &Mixed::n)};
+};
+template <>
+struct imlui::LuaFields<Pinned> {
+    static constexpr std::string_view name = "Pinned";
+    static constexpr bool outputOnly = true;
+    static constexpr std::tuple fields{imlui::field("id", &Pinned::id)};
 };
 
 namespace {
@@ -257,6 +337,7 @@ constexpr std::string_view goldenTypes = R"lua(---@meta _
 
 -- Value types
 
+---How carefully it is drawn.
 ---@alias Quality "low"|"high"
 
 ---@class Series
@@ -561,7 +642,7 @@ TEST(LuaTypes, NamedTypesAreDeclaredOnce) {
     EXPECT_EQ(luaTypeOf<std::vector<Series>>(types), "Series[]");
     EXPECT_EQ(luaTypeOf<Series>(types), "Series");
     ASSERT_EQ(types.definitions().size(), 2U); // Series and the Quality it uses
-    EXPECT_EQ(types.definitions().at("Quality"), "---@alias Quality \"low\"|\"high\"\n");
+    EXPECT_EQ(types.definitions().at("Quality"), "---How carefully it is drawn.\n---@alias Quality \"low\"|\"high\"\n");
     EXPECT_EQ(types.definitions().at("Series"), "---@class Series\n"
                                                 "---@field label? string\n"
                                                 "---@field points? { x: number, y: number }[]\n"
@@ -624,6 +705,100 @@ TEST(LuaDefinitions, GoldenTypesFile) {
     EXPECT_EQ(text, goldenTypes);
     EXPECT_EQ(compileError(text, "types.lua"), "");
     EXPECT_EQ(luaTypeDefinitions(registry), text); // deterministic
+}
+
+namespace {
+
+class Searcher final : public ScriptObject {
+public:
+    static void declare(TypeBuilder<Searcher>& type) {
+        type.property("last", &Searcher::last)
+            .property("mixed", &Searcher::mixed, &Searcher::setMixed)
+            .method("query", &Searcher::query, {"options"})
+            .method("pin", &Searcher::pin, {"p"})
+            .signal<Report>("onDone", {"report"});
+    }
+    [[nodiscard]] const Report& last() const { return m_last; }
+    [[nodiscard]] const Mixed& mixed() const { return m_mixed; }
+    void setMixed(Mixed m) { m_mixed = std::move(m); }
+    Future<Report> query(Options) { return {}; }
+    void pin(Pinned) {}
+
+private:
+    Report m_last;
+    Mixed m_mixed;
+};
+
+} // namespace
+
+TEST(LuaDefinitions, FlowsDecideOptionalFields) {
+    TypeRegistry registry;
+    registry.registerSingleton("searcher", std::make_shared<Searcher>());
+    const std::string text = luaTypeDefinitions(registry);
+    const std::string_view expected = R"lua(-- Value types
+
+---@class Hit
+---The row, 1-based.
+---@field row integer
+---@field text string
+
+---@class Inner
+---@field v? number
+
+---@class Mixed
+---@field inner? Inner
+---@field n? integer
+
+---How to query.
+---@class Options
+---What to look for.
+---@field text? string
+---At most this many hits.
+---@field limit? integer
+---@field quality? Quality
+
+---@class Pinned
+---@field id integer
+
+---How carefully it is drawn.
+---@alias Quality "low"|"high"
+
+---What a query found.
+---
+---\@see `Options`
+---@class Report
+---Rows that passed the filter.
+---@field matched integer
+---How long it took; nil when it was cancelled.
+---@field seconds? number
+---@field hits Hit[]
+---@field byName table<string, Hit>
+---@field best? Hit
+---@field quality Quality
+
+-- searcher (singleton)
+)lua";
+    EXPECT_NE(text.find(expected), std::string::npos) << text;
+    EXPECT_EQ(compileError(text, "types.lua"), "");
+
+    // Outside the generator (no flow set: Input), fields are optional; `outputOnly` holds anyway.
+    LuaTypes types;
+    EXPECT_EQ(luaTypeOf<Report>(types), "Report");
+    EXPECT_NE(types.definitions().at("Report").find("---@field matched? integer\n"), std::string::npos);
+    EXPECT_EQ(luaTypeOf<Pinned>(types), "Pinned");
+    EXPECT_EQ(types.definitions().at("Pinned"), "---@class Pinned\n---@field id integer\n");
+    // A use in the Output flow is recorded per type; restart() keeps the uses for the next pass.
+    LuaTypes flows;
+    flows.setFlow(LuaTypes::Flow::Output);
+    EXPECT_TRUE(flows.use("A"));
+    EXPECT_FALSE(flows.use("A"));
+    EXPECT_TRUE(flows.outputOnly("A"));
+    flows.setFlow(LuaTypes::Flow::Input);
+    EXPECT_TRUE(flows.use("A"));
+    EXPECT_FALSE(flows.outputOnly("A"));
+    EXPECT_FALSE(flows.outputOnly("B"));
+    flows.restart();
+    EXPECT_FALSE(flows.use("A"));
 }
 
 TEST(LuaDefinitions, TypeBuilderRecordsTheDocs) {

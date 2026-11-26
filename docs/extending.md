@@ -757,9 +757,35 @@ Plot { series = { label = "cpu", points = { { x = 0, y = 1 }, { x = 1, y = 3 } }
 ```
 
 - `EnumNames<E>::values` lists `{value, "name"}` pairs. An optional `name` replaces the default error name
-  (`'low'|'high'`).
+  (`'low'|'high'`) and makes the enum an `---@alias` in the [Lua definitions](#editor-support-lua-definitions);
+  an optional `doc` is its hover text there.
 - `LuaFields<T>::fields` is a tuple of `imlui::field("key", &T::member)` (an `imlui::LuaField<T, M>`). An optional
-  `name` replaces the default error name (`{x, y}`). `T` must be default-constructible.
+  `name` replaces the default error name (`{x, y}`) and makes the struct a `---@class` in the Lua definitions. `T`
+  must be default-constructible.
+- **Docs for the editor.** `imlui::field(...).doc("text")` documents a field (constexpr: it returns the field with
+  the doc), and `static constexpr std::string_view doc` in `LuaFields<T>` the struct (in `EnumNames<E>` the enum).
+  They're the hover text of the `---@class` / `---@field` / `---@alias` (formatted like [`doc(text)`](#docs-doctext)):
+
+  ```cpp
+  template <> struct imlui::LuaFields<QueryReport> {
+      static constexpr std::string_view name = "QueryReport";
+      static constexpr std::string_view doc = "What a query found.";
+      static constexpr std::tuple fields{
+          imlui::field("matched", &QueryReport::matched).doc("Rows that passed the filter."),
+          imlui::field("queryMs", &QueryReport::queryMs).doc("How long the query took (ms).")};
+  };
+  ```
+
+- **Required or optional fields** (in the Lua definitions only; reading always works as below). The generator
+  sees every place a named struct is used: one that only goes to Lua (a method's result, a signal argument, a
+  property's value but not a writable property, a model's rows, a value singleton, and the structs inside those)
+  gets required fields, `---@field matched integer`, so reading them needs no nil check. One that comes from Lua
+  anywhere (a method parameter, a writable property, a raw prop) keeps optional fields, `---@field matched? integer`,
+  so a script may leave fields out where it builds one; that includes a struct used both ways (LuaLS has no
+  "partial" form of a class to tell the two apart). A `std::optional` field is optional either way. `static
+  constexpr bool outputOnly = true;` in `LuaFields<T>` makes the fields required wherever the struct is used (and
+  counts the structs inside as output too): for one that reaches Lua some way the generator can't see, or one whose
+  input use always has every field.
 - **Missing fields.** Reading starts from `T{}`. A missing (`nil`) field keeps its default member value, like an
   element property that is `nil`; a missing `std::optional` field reads as `std::nullopt`. A field that is present
   but doesn't convert fails the check, which rejects the whole value like any other mismatch. Keys that aren't
@@ -1315,6 +1341,13 @@ client use the same server and the same file.
   trailing spaces and empty lines at the ends dropped, control characters made spaces); a line starting with `@` or
   `|` gets a `\` first, so it isn't read as an annotation. Handler and method types are in parentheses,
   `(fun(self: Gauge))`: LuaLS (3.19) drops the doc of the field after a line that ends in a bare `fun(...)`.
+- **Named structs and enums** are declared once, in the "Value types" section: the struct's or enum's `doc` above its
+  `---@class` / `---@alias`, a field's `.doc(...)` above its `---@field`. A struct's fields are required when every
+  use of it goes to Lua, optional when any comes from Lua (or `outputOnly` decides): see
+  [Enums and structs](#enums-and-structs). To know that, the generator describes every member twice: the first pass
+  records the way each named type's values go (`LuaTypes::Flow`: `Output` for property values, results, signal
+  arguments and value singletons, `Input` for writable properties in the props class, parameters and raw props; a
+  struct passes its flow on to the types of its fields), the second writes the declarations.
 - **`connect`** takes the signal names of the registered types (`ImluiSignal`), so a misspelled one is flagged.
 
 **Types of values.** Each `LuaConvert<T>` describes its values as a LuaLS type expression (`luaTypeOf<T>()`, module
@@ -1330,7 +1363,7 @@ client use the same server and the same file.
 | `std::pair<A, B>`, `std::tuple<Ts...>` | `[A, B]` (a LuaLS tuple) |
 | `std::variant<Ts...>` | `A\|B` (`nil` for `std::monostate`) |
 | an enum with `EnumNames<E>` | its names, `"low"\|"high"`; with a `name` that is a Lua identifier, an `---@alias` of that name |
-| a struct with `LuaFields<T>` | `{ x: number, y: number }`; with a `name` that is a Lua identifier, a `---@class` of that name with a field per `field()`, each optional (a missing one keeps its default) |
+| a struct with `LuaFields<T>` | `{ x: number, y: number }`; with a `name` that is a Lua identifier, a `---@class` of that name with a field per `field()`: required when the struct only goes to Lua, else optional (a missing one keeps its default); see [Enums and structs](#enums-and-structs) |
 | `imlui::LuaFunction` | `function` |
 | `imlui::Future<T>` | `Future<T>` (`Future<nil>` for `Future<void>`) |
 | a [list model](#list-models) (`VectorModel<T>`, a `ListModel` subclass with an `Item` type, a pointer or `shared_ptr` to one) | `ListModel<T>` (`ListModel<any>` without `Item`; `?` for a pointer): `model[i]` is a `T`, `#model` an integer |
