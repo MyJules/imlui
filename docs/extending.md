@@ -956,9 +956,20 @@ As a build step, with `cmake/ImluiLuaDefinitions.cmake` (included with imlui, li
 ```cmake
 imlui_add_lua_definitions(my_app)       # target my_app_lua_definitions -> <current binary dir>/lua-definitions/
 imlui_add_lua_definitions(my_app ALL OUTPUT ${PROJECT_SOURCE_DIR}/.lua-definitions) # with every build, elsewhere
+imlui_add_lua_definitions(my_app ALL LUARC ${PROJECT_SOURCE_DIR})   # and the editor's .luarc.json: it just works
 ```
 
 It runs the built app on the build machine, so not when cross-compiling.
+
+**`LUARC <dir>`** also writes `<dir>/.luarc.json` at configure time, so the editor needs no setup: `ALL LUARC
+${PROJECT_SOURCE_DIR}` and an editor opened on the project folder completes and checks the scripts after the first
+build. The file sets Lua 5.4, the definitions folder as `workspace.library`, and `workspace.ignoreDir`: the build
+tree and a copy of imlui when they're inside `<dir>` (a submodule: its own `imlui.lua` and tests would define the DSL a
+second time), plus `IGNORE <dir>...` (relative to `<dir>`). It holds build-tree paths, so don't commit it (add
+`.luarc.json` to `.gitignore`); with several build trees the last one configured wins. Its first line (a `//`
+comment, which the language server accepts) marks it as generated: it's rewritten at every configure while that line
+is there. Delete the line to keep your own edits; a `.luarc.json` without it is never touched, and configuring warns
+with the path to add.
 
 **The files.** Both are Lua files (stubs and `---@` comments) and deterministic: types sorted by name, members in
 declaration order, so they can be committed and diffed.
@@ -987,8 +998,9 @@ function Gauge(props) end
 ui.Gauge = Gauge
 ```
 
-**Using them.** In VS Code, install the **Lua** extension (by sumneko, `sumneko.lua`), generate the files and point
-the language server at the folder with a `.luarc.json` in the folder of the app's scripts:
+**Using them.** In VS Code, install the **Lua** extension (by sumneko, `sumneko.lua`). With `LUARC` (above) that's
+all. Without it, generate the files and point the language server at the folder with a `.luarc.json` in the folder
+the editor opens:
 
 ```json
 {
@@ -1052,14 +1064,16 @@ Without one, its `name` is used when it is a LuaLS built-in type (`number`, `str
 `any` otherwise.
 
 **What LuaLS isn't told.** Free names that are element ids (`nameField.text` at app level) aren't declared, so the
-language server reports them as undefined globals: reach them through `ui.ids` (typed `table<string, Element>`),
-annotate a local (`---@type TextField` above `local nameField = ui.ids.nameField`), or disable `undefined-global`
+language server reports them as undefined globals: reach them through `ui.ids` (an `Ids`: `table<string, any>`, like a component's
+and a delegate's `ids`, since an id can name any type), annotate a local (`---@type TextField` above `local nameField = ui.ids.nameField`), or disable `undefined-global`
 for UI scripts. Props an element reads raw from its table (`Table`'s `rows`, `menu`, a `Canvas`'s painter; sizes but
 the common `width`/`height`) aren't declared in C++, so they aren't in its classes (an unknown key in a constructor's
 table isn't flagged either). The built-in signals are declared without argument types (`...: any`):
 [Elements](elements.md) lists their arguments. `connect`'s overloads match the target's type loosely, so a signal of
 another type isn't always flagged. An element's class has what the C++ side holds (`nameField.text` is a `string`),
-though a field a script set to a binding function holds that function.
+though a field a script set to a binding function holds that function. `state(init)` returns a
+`table<string, any>` (a field initialized to `nil` would otherwise be typed `nil` for good), and `await(f)` unwraps a
+`Future<T>` to `T` (anything else passes through as `any`).
 
 ## Threading and frame requests
 

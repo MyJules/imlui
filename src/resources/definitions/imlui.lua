@@ -35,6 +35,9 @@ ui = {}
 
 ---An element table: what a constructor returns. Its fields are its props (the C++ ones in types.lua), its `on*`
 ---handlers and its methods (`element:method()`).
+---Element tables reached by id (`ids.name`, a component's `ids`): any element type, so any field.
+---@alias Ids table<string, any>
+
 ---@class Element
 ---@field id? string
 ---@field parent? Element The element that lays this one out (read-only; nil for the root).
@@ -75,7 +78,7 @@ function registerId(props) end
 function checkId(id) end
 
 ---App-level element ids (weak): `ids.nameField`, also as the free name `nameField`.
----@type table<string, Element>
+---@type Ids
 ids = {}
 
 ---The environment UI scripts run in.
@@ -86,12 +89,12 @@ env = {}
 
 ---@class RepeaterProps
 ---@field model any[]|integer|(fun(self: Element): any[]|integer)|Binding The items; a number n means 1..n.
----@field delegate fun(item: any, index: integer, ids: table<string, Element>): Element? Builds one item's element.
+---@field delegate fun(item: any, index: integer, ids: Ids): Element? Builds one item's element.
 ---@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index.
 
 ---@class ListViewProps
 ---@field model? any[]|integer|(fun(self: Element): any[]|integer)|Binding The items; a number n means 1..n.
----@field delegate? fun(item: any, index: integer, ids: table<string, Element>): Element? Builds one item's element.
+---@field delegate? fun(item: any, index: integer, ids: Ids): Element? Builds one item's element.
 ---@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index.
 ---@field itemHeight? number dp, for items that all have the same height.
 
@@ -114,9 +117,8 @@ env = {}
 -------------------------------------------------------------------------------
 
 ---An observable table: a write that changes a top-level value calls the watchers of its key, then the `"*"` ones.
----@generic T: table
----@param init? T
----@return T
+---@param init? table
+---@return table<string, any>
 function state(init) end
 
 ---Calls `fn(new, old, key)` whenever `state[key]` changes (`"*"`: any key). Returns a function that removes it.
@@ -133,15 +135,14 @@ function watch(state, key, fn) end
 function raw(state) end
 
 ---A two-way binding to `t[key]`, or to a getter and a setter.
----@param t table
----@param key any
+---@param t table|fun(): any A table, or a getter.
+---@param key any The key in `t`, or the setter `fun(value)`.
 ---@return Binding
----@overload fun(getter: fun(): any, setter: fun(value: any)): Binding
 function bind(t, key) end
 
 ---A reusable component: `fn(props, ids)` builds one instance; `ids` is the instance's own id scope.
 ---@generic P: table
----@param fn fun(props: P, ids: table<string, Element>): Element?
+---@param fn fun(props: P, ids: Ids): Element?
 ---@return fun(props?: P): Element
 function component(fn) end
 
@@ -346,8 +347,9 @@ function async(fn) end
 
 ---Inside an async function: waits for future `f` and returns its values, or raises its error.
 ---@generic T
----@param f Future<T>|T
+---@param f Future<T>
 ---@return T
+---@overload fun(v: any): any
 function await(f) end
 
 ---A future done after `ms` milliseconds.
