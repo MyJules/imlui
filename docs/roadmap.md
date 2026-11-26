@@ -19,12 +19,13 @@ Follow-ups not scheduled yet:
   steady frame. Intern the keys once per state (registry refs, or upvalues of the hot C functions).
 - The Lua call path: read `bind(t, k)` without a pcall when `t` has no metatable or a plain `__index` table; push a
   delegate's scope from C++ instead of Lua `inScope`; reuse the `__children` cache entry instead of a new table.
-- First frame of a big stack: every child still renders once (controls at 5000: ~200 ms; the second and third
-  frames no longer do). About half of it is Lua building the `Repeater`'s delegates (`ui.Text` ~1.2 µs each against
-  0.1 µs for a plain table: `types.attach` ~0.6 µs, mostly allocation, and `finishElement`), the rest rendering. Render
-  only the children in view on it (estimating the others, as `ListView` does) once a cheap walk can tell that a
-  subtree holds no non-visual element to pin; a pooled allocator for Lua (`lua_newstate` with a size-class free list)
-  for the allocation share.
+- First frame of a big stack: every child still renders once (controls at 5000: ~160 ms; the second and third
+  frames no longer do). Building the `Repeater`'s delegates is a good part of it (`ui.Text` ~0.6 µs against 0.06 µs
+  for a plain table, after the pooled allocator and the constructors' short path), the rest rendering. Render only
+  the children in view on it (estimating the others, as `ListView` does) once a cheap walk can tell that a subtree
+  holds no non-visual element to pin. What's left of building an element: the C++ instance's own heap allocation
+  (`operator new` through `TypeInfo::Factory`, ~5% of the first frame; an in-place construction in the userdata
+  would need a factory that knows the type's size), Lua's incremental GC steps (~10%) and the `Box` userdata.
 - Lua's generational GC made no measurable difference on the bench (tried; not switched).
 - `ListView`: a `positionViewAtIndex` method (a script can't scroll to an item that isn't built), and a prop for the
   delegate cache size.

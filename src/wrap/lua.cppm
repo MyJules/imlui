@@ -12,9 +12,18 @@
 module;
 
 #include "imlui_lua_error.h"
+#include "imlui_lua_state.h"
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
+
+// Under AddressSanitizer, newstate() keeps Lua's plain allocator: the pool would hide Lua's memory from ASan (a
+// block freed to a free list is still "valid" to it, a read past a small block lands in its neighbour).
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define IMLUI_LUA_PLAIN_ALLOC 1
+#endif
+#endif
 
 export module lua;
 
@@ -49,9 +58,13 @@ inline constexpr int maskCount = LUA_MASKCOUNT;
 enum class Type : int { None = -1, Nil, Boolean, LightUserData, Number, String, Table, Function, UserData, Thread };
 
 // ---------------------------------------------------------------- state
+/// A new state (luaL_newstate's panic and warning functions), nullptr when out of memory. Its memory comes from a pool
+/// of its own (small blocks from size-class free lists), which close() releases: the state is used by one thread at
+/// a time, like any Lua state.
 State* newstate();
 /// A state whose memory comes from `allocator` (called with `ud`), e.g. to cap a sandbox's memory.
 State* newstate(Alloc allocator, void* ud);
+/// Closes `state` (lua_close) and releases the pool newstate() gave it.
 void close(State* state);
 void openlibs(State* state);
 /// Opens only the base library (print, pairs, tostring, ...) into the globals; for sandboxes.
@@ -115,6 +128,9 @@ void* newuserdata(State* state, std::size_t size, int nuvalue = 0);
 // ---------------------------------------------------------------- tables
 void newtable(State* state);
 void createtable(State* state, int narr, int nrec);
+/// Makes room in the table at `idx` for `n` more non-integer keys, so adding them resizes it at most once (only a
+/// hint: nothing when they fit already).
+void reservehash(State* state, int idx, int n);
 Type getfield(State* state, int idx, const char* k);
 void setfield(State* state, int idx, const char* k);
 Type gettable(State* state, int idx);
@@ -181,12 +197,130 @@ static_assert(static_cast<int>(Type::Thread) == LUA_TTHREAD);
 
 namespace {
 Type toType(int t) { return static_cast<Type>(t); }
+
+/// The memory of a state made by newstate(): Lua allocates mostly small blocks (tables, strings, closures, userdata,
+/// a table's hash part), and building a UI allocates tens of thousands at once, each one a trip through the C heap's
+/// locks and bookkeeping. Blocks up to `smallMax` bytes come from size-class free lists instead, carved from large
+/// chunks that live as long as the state (a freed block goes back to its list, for the next block of its class);
+/// bigger ones go to the C heap. Not thread-safe: one per state, and a state runs on one thread at a time.
+class Pool {
+public:
+    Pool() = default;
+    Pool(const Pool&) = delete;
+    Pool& operator=(const Pool&) = delete;
+    ~Pool() {
+        while (m_chunks) {
+            Chunk* next = m_chunks->next;
+            std::free(m_chunks);
+            m_chunks = next;
+        }
+    }
+
+    /// The lua_Alloc: `ud` is the Pool. Follows its contract: nsize 0 frees (ptr may be null), a null ptr allocates
+    /// (osize is then a type tag, not a size), else resizes the osize-byte block; a failure returns null and leaves
+    /// the block as it was.
+    static void* alloc(void* ud, void* ptr, std::size_t osize, std::size_t nsize) noexcept {
+        auto* pool = static_cast<Pool*>(ud);
+        if (nsize == 0) {
+            if (ptr) pool->release(ptr, osize);
+            return nullptr;
+        }
+        if (!ptr) return pool->allocate(nsize);
+        if (osize > smallMax && nsize > smallMax) return std::realloc(ptr, nsize);
+        if (osize <= smallMax && nsize <= smallMax && sizeClass(osize) == sizeClass(nsize)) return ptr;
+        void* moved = pool->allocate(nsize);
+        if (!moved) return nullptr;
+        std::memcpy(moved, ptr, std::min(osize, nsize));
+        pool->release(ptr, osize);
+        return moved;
+    }
+
+private:
+    static constexpr std::size_t granule = 16; ///< block sizes are multiples of it (and so is their alignment)
+    static constexpr std::size_t smallMax = 512;
+    static constexpr std::size_t firstChunk = std::size_t{16} << 10; ///< chunks double up to lastChunk
+    static constexpr std::size_t lastChunk = std::size_t{1} << 20;
+
+    struct FreeBlock {
+        FreeBlock* next;
+    };
+    /// A chunk's header; its blocks follow it.
+    struct alignas(granule) Chunk {
+        Chunk* next;
+    };
+
+    /// The free list of blocks of `size` bytes (1..smallMax): size classes of `granule` bytes.
+    static std::size_t sizeClass(std::size_t size) { return (size - 1) / granule; }
+
+    void* allocate(std::size_t size) {
+        if (size > smallMax) return std::malloc(size);
+        const std::size_t c = sizeClass(size);
+        if (FreeBlock* b = m_free[c]) {
+            m_free[c] = b->next;
+            return b;
+        }
+        const std::size_t bytes = (c + 1) * granule;
+        if (static_cast<std::size_t>(m_end - m_cursor) < bytes && !grow()) return nullptr;
+        void* b = m_cursor;
+        m_cursor += bytes;
+        return b;
+    }
+
+    void release(void* ptr, std::size_t size) {
+        if (size > smallMax) {
+            std::free(ptr);
+            return;
+        }
+        push(ptr, sizeClass(size));
+    }
+
+    void push(void* ptr, std::size_t c) {
+        auto* b = static_cast<FreeBlock*>(ptr);
+        b->next = m_free[c];
+        m_free[c] = b;
+    }
+
+    /// A new chunk to carve from; what was left of the current one goes to the free list of its size.
+    bool grow() {
+        auto* chunk = static_cast<Chunk*>(std::malloc(m_nextChunk));
+        if (!chunk) return false;
+        if (const auto left = static_cast<std::size_t>(m_end - m_cursor); left >= granule)
+            push(m_cursor, sizeClass(left - left % granule));
+        chunk->next = m_chunks;
+        m_chunks = chunk;
+        m_cursor = reinterpret_cast<std::byte*>(chunk + 1);
+        m_end = reinterpret_cast<std::byte*>(chunk) + m_nextChunk;
+        m_nextChunk = std::min(m_nextChunk * 2, lastChunk);
+        return true;
+    }
+
+    std::array<FreeBlock*, smallMax / granule> m_free{};
+    std::byte* m_cursor = nullptr; ///< the unused rest of the newest chunk
+    std::byte* m_end = nullptr;
+    Chunk* m_chunks = nullptr;
+    std::size_t m_nextChunk = firstChunk;
+};
 } // namespace
 
 // ---------------------------------------------------------------- state
+#ifdef IMLUI_LUA_PLAIN_ALLOC
 State* newstate() { return luaL_newstate(); }
+#else
+State* newstate() {
+    auto* pool = new (std::nothrow) Pool;
+    if (!pool) return nullptr;
+    State* state = imlui_lua_newstate(&Pool::alloc, pool);
+    if (!state) delete pool;
+    return state;
+}
+#endif
 State* newstate(Alloc allocator, void* ud) { return lua_newstate(allocator, ud); }
-void close(State* state) { lua_close(state); }
+void close(State* state) {
+    void* ud = nullptr;
+    const bool pooled = lua_getallocf(state, &ud) == &Pool::alloc;
+    lua_close(state);
+    if (pooled) delete static_cast<Pool*>(ud); // after lua_close, which frees its blocks through it
+}
 void openlibs(State* state) { luaL_openlibs(state); }
 CFunction atpanic(State* state, CFunction panicf) { return lua_atpanic(state, panicf); }
 void sethook(State* state, Hook hook, int mask, int count) { lua_sethook(state, hook, mask, count); }
@@ -258,6 +392,7 @@ void* newuserdata(State* state, std::size_t size, int nuvalue) { return lua_newu
 // ---------------------------------------------------------------- tables
 void newtable(State* state) { lua_newtable(state); }
 void createtable(State* state, int narr, int nrec) { lua_createtable(state, narr, nrec); }
+void reservehash(State* state, int idx, int n) { imlui_lua_reservehash(state, idx, n); }
 Type getfield(State* state, int idx, const char* k) { return toType(lua_getfield(state, idx, k)); }
 void setfield(State* state, int idx, const char* k) { lua_setfield(state, idx, k); }
 Type gettable(State* state, int idx) { return toType(lua_gettable(state, idx)); }

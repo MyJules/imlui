@@ -766,8 +766,14 @@ bool constructionFailed(lua::State* state, int tbl) {
 Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     tbl = lua::absindex(state, tbl);
     lua::checkstack(state, 8);
-    if (Box* existing = selfBox(state, tbl)) return existing;
-    if (!info.factory() || constructionFailed(state, tbl)) return nullptr;
+    // One read of `__native` for both questions (selfBox, constructionFailed): this runs for every element built.
+    lua::pushcstring(state, "__native");
+    lua::rawget(state, tbl);
+    Box* existing = lua::isnil(state, -1) ? nullptr : boxAt(state, -1);
+    const bool failed = lua::isboolean(state, -1) && !lua::toboolean(state, -1);
+    lua::pop(state);
+    if (existing) return existing;
+    if (!info.factory() || failed) return nullptr;
 
     // The userdata first, so a Lua memory error can't leak a constructed instance.
     Box* b = new (lua::newuserdata(state, sizeof(Box))) Box{};
@@ -858,17 +864,36 @@ int libIsType(lua::State* state) {
     return 1;
 }
 
-/// attach(element): creates the C++ instance of a registered element table. Returns the table.
+/// attach(element [, name]): creates the C++ instance of a registered element table. Returns the table. With `name`,
+/// first sets `element.__type = name` (a raw set), the hash part sized once for it and `__native`: the DSL's
+/// constructors pass it for a table without a metatable, so building an element resizes its table once, not twice;
+/// the table then always gets the type's metatable.
 int libAttach(lua::State* state) {
     return luaui::catchCxx(
         state,
         [&] {
             if (lua::istable(state, 1)) {
+                if (lua::isstring(state, 2)) {
+                    lua::reservehash(state, 1, 2);
+                    lua::pushcstring(state, "__type");
+                    lua::pushvalue(state, 2);
+                    lua::rawset(state, 1);
+                }
                 lua::getfield(state, 1, "__type");
                 const TypeInfo* info =
                     lua::isstring(state, -1) ? upvalueRegistry(state)->find(lua::tostring(state, -1)) : nullptr;
                 lua::pop(state);
                 if (info) attachInstance(state, 1, *info);
+                // With `name`, the table gets the type's metatable even without an instance (no factory, a constructor
+                // that failed), as the DSL's shareMeta would give it.
+                if (info && lua::isstring(state, 2)) {
+                    if (lua::getmetatable(state, 1) == 0) {
+                        pushTypeMeta(state, *info);
+                        lua::setmetatable(state, 1);
+                    } else {
+                        lua::pop(state);
+                    }
+                }
             }
             lua::settop(state, 1);
             return 1;

@@ -301,6 +301,47 @@ TEST_F(LuaWrapperTest, TypeNameAndToStringAny) {
     EXPECT_EQ(lua::toStringAny(m_state, -1), "true");
 }
 
+// ------------------------------------------------------------------ state memory
+
+// newstate()'s pool: blocks of every size class and past it, grown, shrunk and moved between classes and the C heap
+// (strings, a table's array and hash parts, garbage collected and reused) keep their contents.
+TEST_F(LuaWrapperTest, StateMemoryKeepsValuesAcrossSizesAndReuse) {
+    run(R"(
+        for round = 1, 3 do
+            local strings, t = {}, {}
+            for n = 1, 700, 7 do strings[#strings + 1] = string.rep(string.char(65 + n % 26), n) end
+            for i = 1, 3000 do t[i] = i; t["k" .. i] = i end   -- both parts grow through every size
+            for i = 1, 3000, 2 do t[i] = nil; t["k" .. i] = nil end
+            collectgarbage()
+            for i = 2, 3000, 2 do assert(t[i] == i and t["k" .. i] == i, "table " .. i) end
+            for i, s in ipairs(strings) do
+                local n = 1 + (i - 1) * 7
+                assert(#s == n and s == string.rep(string.char(65 + n % 26), n), "string " .. n)
+            end
+        end
+        return true)");
+    EXPECT_TRUE(lua::toboolean(m_state, -1));
+}
+
+TEST_F(LuaWrapperTest, ReserveHashKeepsTheTable) {
+    run("return { 1, 2, a = 'x', b = 'y' }");
+    lua::reservehash(m_state, -1, 5);
+    lua::reservehash(m_state, -1, 0);
+    for (const char* k : {"c", "d", "e"}) {
+        lua::pushcstring(m_state, k);
+        lua::setfield(m_state, -2, k);
+    }
+    lua::setglobal(m_state, "t");
+    run(R"(
+        local keys = 0
+        for _ in pairs(t) do keys = keys + 1 end
+        return keys == 7 and t[1] == 1 and t[2] == 2 and t.a == "x" and t.b == "y" and t.c == "c" and t.e == "e")");
+    EXPECT_TRUE(lua::toboolean(m_state, -1));
+    lua::newtable(m_state); // an empty table (no hash part yet)
+    lua::reservehash(m_state, -1, 2);
+    EXPECT_EQ(lua::rawlen(m_state, -1), 0);
+}
+
 // ------------------------------------------------------------------ Value
 
 TEST_F(LuaWrapperTest, PushValueKinds) {

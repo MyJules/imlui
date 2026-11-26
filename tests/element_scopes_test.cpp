@@ -294,6 +294,25 @@ TEST_F(ElementScopesTest, ChildrenAfterANilHoleGetTheirParent) {
     EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
+// The constructors build most elements (a fresh table: no metatable, no element-valued props other than positional
+// children) on a shorter path than the others; both give the same element: type, instance, shared metatable, parent
+// links, id.
+TEST_F(ElementScopesTest, AFreshTableAndOneWithAMetatableBuildTheSameElement) {
+    run(R"(
+        local types = require("imlui.types")
+        local child1, child2 = Probe {}, Probe {}
+        plain = Column { id = "plainCol", spacing = 2, child1, "text", 7 }
+        other = Column(setmetatable({ id = "otherCol", spacing = 2, child2, "text", 7 }, {}))
+        for _, e in ipairs { plain, other } do
+            assert(e.__type == "Column" and type(rawget(e, "__native")) == "userdata", "an instance")
+            assert(e.spacing == 2 and e[2] == "text" and e[3] == 7, "the props")
+        end
+        assert(getmetatable(plain) == types.meta("Column"), "the type's shared metatable")
+        assert(child1.parent == plain and child2.parent == other, "positional children")
+        assert(ui.ids.plainCol == plain and ui.ids.otherCol == other, "ids"))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
 TEST_F(ElementScopesTest, AnInlineRootHoldsItsChildren) {
     run(R"(
         made = {}
