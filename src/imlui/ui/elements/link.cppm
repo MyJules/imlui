@@ -41,8 +41,12 @@ module :private;
 namespace imlui {
 
 void Link::declare(TypeBuilder<Link>& type) {
-    type.property("text", &Link::text, &Link::setText)
+    type.doc("A clickable text link (`bodyLarge`) that opens `url` in the browser.\n"
+             "`Link { \"https://example.com\" }` sets `text`. Natural size: the text's.")
+        .property("text", &Link::text, &Link::setText)
+        .doc("The label. The positional value: `Link { \"Docs\", url = \"https://...\" }`.")
         .property("url", &Link::url, &Link::setUrl)
+        .doc("The URL to open; unset: `text`.")
         .defaultProperty("text");
 }
 

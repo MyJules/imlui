@@ -39,8 +39,15 @@ module :private;
 namespace imlui {
 
 void Separator::declare(TypeBuilder<Separator>& type) {
-    type.extends<Divider>();
-    type.property("text", &Separator::text, &Separator::setText).defaultProperty("text");
+    type.doc("A `Divider` with an optional label: with `text`, the text in `titleSmall` `onSurfaceVariant` "
+             "followed by a rule.\n"
+             "`Separator { \"Advanced\" }` sets `text`. Without text, a plain `Divider`.")
+        .extends<Divider>()
+        .docMember("inset", "The start inset (dp) of the plain rule; not applied with `text`.")
+        .docMember("insetEnd", "The end inset (dp) of the plain rule; not applied with `text`.");
+    type.property("text", &Separator::text, &Separator::setText)
+        .doc("The label; `\"\"`: a plain rule. The positional value: `Separator { \"Advanced\" }`.")
+        .defaultProperty("text");
 }
 
 void Separator::render(Frame& frame) {

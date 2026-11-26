@@ -54,9 +54,18 @@ module :private;
 namespace imlui {
 
 void ModalNavigationDrawer::declare(TypeBuilder<ModalNavigationDrawer>& type) {
-    type.property("open", &ModalNavigationDrawer::open, &ModalNavigationDrawer::setOpen)
+    type.doc("A modal navigation drawer: a sheet sliding in from the left over a scrim, above the app content. Its "
+             "children (`NavigationItem`s as drawer items, ...) stack in a scrolling region; `spacing` and `align` "
+             "work as on a `Column`. Clicking the scrim or pressing Escape closes it.\n"
+             "Non-visual: put it anywhere, e.g. in the `ApplicationWindow`.")
+        .property("open", &ModalNavigationDrawer::open, &ModalNavigationDrawer::setOpen)
+        .doc("Shown while true. **Two-way**: closing writes `false` back to a plain value or a `bind(...)`. A "
+             "function binding owns the value: closing hides the sheet until the function has returned `false` "
+             "and then `true` again.")
         .property("width", &ModalNavigationDrawer::width, &ModalNavigationDrawer::setWidth)
-        .signal("onClosed")
+        .doc("The sheet's width (dp), at most 80% of the window.")
+        .signal<>("onClosed")
+        .doc("Called when the scrim or Escape closes the drawer, after `open` was updated.")
         .nonVisual();
 }
 
