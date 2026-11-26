@@ -163,6 +163,25 @@ TEST_F(SignalsTest, ElementListenersGetSelfLikeTheSlot) {
     expectNoErrors();
 }
 
+// A coroutine (an async function's body too) runs on a Lua thread of its own: connect compares the target's state
+// with the main thread's, not the running thread's.
+TEST_F(SignalsTest, ConnectWorksInsideCoroutines) {
+    run(R"(
+        log = {}
+        m = Meter {}
+        local ok, err = pcall(coroutine.wrap(function()
+            connect(sensor, "onPeak", function(n) log[#log + 1] = "co" .. n end)
+            connect(m, "onPeak", function(self, n) log[#log + 1] = "el" .. n end)
+        end))
+        assert(ok, err)
+        async(function() connect(sensor, "onPeak", function(n) log[#log + 1] = "async" .. n end) end)()
+        assert(sensor:peak(1))
+        assert(m:fire(2))
+        assert(table.concat(log, ",") == "co1,async1,el2", table.concat(log, ","))
+    )");
+    expectNoErrors();
+}
+
 TEST_F(SignalsTest, NotifyChangeSignalsReachListeners) {
     run(R"(
         log = {}

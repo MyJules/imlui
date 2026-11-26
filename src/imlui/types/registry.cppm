@@ -960,7 +960,7 @@ int libListen(lua::State* state) {
                 b = boxAt(state, 1);
             }
             ScriptObject* object = b ? liveObject(*b) : nullptr;
-            if (!object || !b->type || object->luaState() != state)
+            if (!object || !b->type || object->luaState() != lua::mainthread(state))
                 return fail("the target is not an element of a C++ type or a singleton");
             const std::string_view signal = lua::tostring(state, 2);
             if (!b->type->hasSignal(signal) && !isChangeSignal(*b->type, signal))
@@ -988,7 +988,7 @@ void tickElements(lua::State* state, double now) {
         // A handler that ran in this loop may have destroyed this element (or a GC step collected it), and created
         // another one at its address: the id finds only this element, alive and still ticking.
         Element* e = Element::findTicking(id);
-        if (!e || e->luaState() != state) continue;
+        if (!e || e->luaState() != lua::mainthread(state)) continue;
         const int top = lua::gettop(state);
         if (!e->pushSelf()) continue; // the element table is being collected
         // The table is on the stack now, so the element can't be collected while it syncs and ticks.
@@ -1013,7 +1013,7 @@ int libTick(lua::State* state) {
 int libTickingCount(lua::State* state) {
     lua::Integer n = 0;
     for (const std::uint64_t id : Element::tickingElements())
-        if (const Element* e = Element::findTicking(id); e && e->luaState() == state) ++n;
+        if (const Element* e = Element::findTicking(id); e && e->luaState() == lua::mainthread(state)) ++n;
     lua::pushinteger(state, n);
     return 1;
 }
