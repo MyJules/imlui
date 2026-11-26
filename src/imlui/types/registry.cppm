@@ -215,7 +215,12 @@ constexpr const char* typeMetaKey = "imlui.typemeta"; ///< { [TypeInfo*] = eleme
 constexpr const char* parentsKey = "imlui.parents";   ///< { [element] = parent }, weak keys and values
 constexpr const char* singletonsKey = "imlui.singletons";
 constexpr const char* sentinelKey = "imlui.types.sentinel";
-constexpr const char* markerKey = "__imlui";
+
+/// What a box userdata starts with: the address of this constant, ahead of the Box. boxAt() checks it, so no Lua code
+/// can make a foreign userdata pass for a box: it can't write raw bytes into a userdata, and `debug.setmetatable` can
+/// give one a box's metatable, but not this address. (A marker in the metatable, even under a light-userdata key,
+/// would not do: `pairs` reads it, and the metatable is reachable with getmetatable.)
+constexpr char boxTag = 0;
 
 /// The userdata behind `__native` and behind a singleton global. Its __gc destroys it (and, for an owned
 /// element, the instance).
@@ -270,6 +275,20 @@ struct Box {
         }
     } memo;
 };
+
+/// A box userdata: the tag (boxTag's address) in its first bytes, the Box at boxOffset.
+constexpr std::size_t boxOffset = std::max(sizeof(const void*), alignof(Box));
+constexpr std::size_t boxUserdataSize = boxOffset + sizeof(Box);
+// Lua aligns a userdata's memory for LUAI_MAXALIGN (a double, a pointer, a lua_Integer): 8 bytes.
+static_assert(alignof(Box) <= 8 && boxOffset % alignof(Box) == 0);
+
+/// Pushes a new box userdata (with `userValues` user values) and returns its Box.
+Box* newBox(lua::State* state, int userValues) {
+    auto* p = static_cast<std::byte*>(lua::newuserdata(state, boxUserdataSize, userValues));
+    const void* tag = &boxTag;
+    std::memcpy(p, &tag, sizeof tag);
+    return new (p + boxOffset) Box{};
+}
 
 /// The memo of `b`, emptied when it is from another frame or Lua that may have changed tables ran since
 /// (luaui::changes(), like the sync skip). A sync empties it too (syncInstance).
@@ -421,27 +440,18 @@ ScriptObject* liveObject(Box& b) {
     lua::error(state, b && b->type ? "singleton '" + b->type->name() + "' was destroyed" : std::string{"singleton is gone"});
 }
 
-/// The box metatables (instance and singleton) of the installed Lua states, by address: boxAt() recognizes a box by
-/// its metatable with no table read (it runs several times per element and frame). install() adds the ones it creates
-/// and hands them to its sentinel, whose finalizer removes them: when the state closes (lua_close runs finalizers
-/// before it frees any memory), or earlier if another install() replaced the sentinel. So an address here is never
-/// one a freed table's memory was reused at. A box whose metatable isn't here (a finalizer that runs after the
-/// sentinel's at close) is recognized by its metatable's marker field instead. A list (not a set): two installs
-/// never share a metatable, but each removes exactly what it added.
-std::vector<const void*> boxMetas; // main thread only, like all Lua code
-
-/// The Box at `idx`, or nullptr if the value isn't one of ours.
+/// The Box at `idx`, or nullptr if the value isn't one of ours. Recognized by its size and its tag, not by its
+/// metatable: Lua code can set a metatable's fields and (`debug.setmetatable`) give any userdata a box's metatable,
+/// and a box finalized at lua_close may outlive the state's bookkeeping. It runs several times per element and
+/// frame, and reads no table.
 Box* boxAt(lua::State* state, int idx) {
-    if (lua::type(state, idx) != lua::Type::UserData || lua::getmetatable(state, idx) == 0) return nullptr;
-    if (std::ranges::find(boxMetas, lua::topointer(state, -1)) != boxMetas.end()) {
-        lua::pop(state);
-        return static_cast<Box*>(lua::touserdata(state, idx));
-    }
-    static const lua::Key marker{markerKey};
-    lua::rawget(state, -1, marker);
-    const bool ours = lua::toboolean(state, -1);
-    lua::pop(state, 2);
-    return ours ? static_cast<Box*>(lua::touserdata(state, idx)) : nullptr;
+    if (lua::type(state, idx) != lua::Type::UserData ||
+        lua::rawlen(state, idx) != static_cast<lua::Integer>(boxUserdataSize))
+        return nullptr;
+    auto* p = static_cast<std::byte*>(lua::touserdata(state, idx));
+    const void* tag = nullptr;
+    std::memcpy(&tag, p, sizeof tag); // a foreign userdata of this size holds anything: read its first bytes as bytes
+    return tag == &boxTag ? std::launder(static_cast<Box*>(static_cast<void*>(p + boxOffset))) : nullptr;
 }
 
 /// The Box of an element table (`__native`) or of a singleton userdata.
@@ -725,10 +735,6 @@ int singletonToString(lua::State* state) {
 
 int sentinelGc(lua::State* state) {
     auto* registry = static_cast<TypeRegistry*>(lua::touserdata(state, lua::upvalueindex(1)));
-    for (const int i : {2, 3}) // the box metatables install() tracked, before lua_close frees them
-        if (const auto it = std::ranges::find(boxMetas, lua::touserdata(state, lua::upvalueindex(i)));
-            it != boxMetas.end())
-            boxMetas.erase(it);
     registry->detachState(state);
     return 0;
 }
@@ -822,7 +828,7 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     if (!info.factory() || failed) return nullptr;
 
     // The userdata first, so a Lua memory error can't leak a constructed instance.
-    Box* b = new (lua::newuserdata(state, sizeof(Box))) Box{};
+    Box* b = newBox(state, 0);
     const int ud = lua::gettop(state);
     lua::getfield(state, lua::registryIndex, instanceMetaKey);
     lua::setmetatable(state, ud);
@@ -1193,8 +1199,6 @@ void TypeRegistry::install(lua::State* state) {
     lua::setfield(state, -2, "__gc");
     lua::pushcfunction(state, &boxGet);
     lua::setfield(state, -2, "__get");
-    lua::pushboolean(state, true);
-    lua::setfield(state, -2, markerKey);
     lua::pushstring(state, "imlui.instance");
     lua::setfield(state, -2, "__name");
     lua::setfield(state, lua::registryIndex, instanceMetaKey);
@@ -1210,8 +1214,6 @@ void TypeRegistry::install(lua::State* state) {
     lua::setfield(state, -2, "__get");
     lua::pushcfunction(state, &singletonToString);
     lua::setfield(state, -2, "__tostring");
-    lua::pushboolean(state, true);
-    lua::setfield(state, -2, markerKey);
     lua::setfield(state, lua::registryIndex, singletonMetaKey);
 
     // Per-type methods tables, and element-table metatables that fall back to them. (A type registered later
@@ -1260,7 +1262,7 @@ void TypeRegistry::install(lua::State* state) {
             lua::setglobal(state, s.name.c_str());
             continue;
         }
-        Box* b = new (lua::newuserdata(state, sizeof(Box), 1)) Box{};
+        Box* b = newBox(state, 1);
         const bool alive = s.life.alive(); // a by-reference singleton destroyed already: its global raises on access
         b->object = alive ? s.object : nullptr;
         b->type = s.type;
@@ -1279,26 +1281,15 @@ void TypeRegistry::install(lua::State* state) {
     }
     lua::settop(state, top);
 
-    // Detach the singletons when this state closes, and stop recognizing its boxes by their metatables (boxMetas).
-    std::array<void*, 2> metas{};
-    for (std::size_t i = 0; i < metas.size(); ++i) {
-        lua::getfield(state, lua::registryIndex, i == 0 ? instanceMetaKey : singletonMetaKey);
-        metas[i] = const_cast<void*>(lua::topointer(state, -1));
-        lua::pop(state);
-    }
+    // Detach the singletons when this state closes.
     lua::newuserdata(state, 1);
     lua::createtable(state, 0, 1);
     lua::pushlightuserdata(state, this);
-    lua::pushlightuserdata(state, metas[0]);
-    lua::pushlightuserdata(state, metas[1]);
-    lua::pushcclosure(state, &sentinelGc, 3);
+    lua::pushcclosure(state, &sentinelGc, 1);
     lua::setfield(state, -2, "__gc");
     lua::setmetatable(state, -2);
     lua::setfield(state, lua::registryIndex, sentinelKey);
     lua::settop(state, top);
-    // Last: only metatables a sentinel will remove again are tracked.
-    for (void* meta : metas)
-        if (meta) boxMetas.push_back(meta);
 }
 
 void TypeRegistry::activate(lua::State* state) {
@@ -1308,7 +1299,7 @@ void TypeRegistry::activate(lua::State* state) {
 
 void TypeRegistry::detachState(lua::State* state) {
     for (const Singleton& s : m_singletons)
-        if (s.life.alive() && s.object->luaState() == state) s.object->detach();
+        if (s.life.alive() && s.object->luaState() == lua::mainthread(state)) s.object->detach();
 }
 
 } // namespace imlui

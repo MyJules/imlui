@@ -312,7 +312,7 @@ public:
     /// a stale id can't name a newer object that happens to live at a dead one's address.
     [[nodiscard]] std::uint64_t objectId() const;
 
-    /// The Lua state this object is linked to, or nullptr.
+    /// The Lua state this object is linked to (its main thread), or nullptr.
     [[nodiscard]] lua::State* luaState() const;
     [[nodiscard]] bool isSingleton() const;
 
@@ -322,7 +322,7 @@ public:
 
     // ---- linking, used by TypeRegistry
 
-    /// Links the object to the value at `idx` in `state`.
+    /// Links the object to the value at `idx` in `state` (any thread of it: the link keeps the main thread).
     void attach(lua::State* state, int idx, bool singleton);
     /// Points the link at `state` again, where attach() was already called (a reload that failed).
     void relink(lua::State* state);
@@ -588,7 +588,10 @@ bool ScriptObject::pushSelf() const {
 
 void ScriptObject::attach(lua::State* state, int idx, bool singleton) {
     idx = lua::absindex(state, idx);
-    m_state = state;
+    // The main thread, not `state`: an element built in a coroutine (an async function's body after an await) is
+    // attached on the coroutine's thread, which may be suspended or collected when notify()/emit() run. Every other
+    // link to a state (LuaFunction, Future, the ticking loops, listen) uses the main thread too.
+    m_state = lua::mainthread(state);
     m_singleton = singleton;
     m_connected = false; // a new state has no listeners yet
     pushLinks(state);
@@ -598,7 +601,7 @@ void ScriptObject::attach(lua::State* state, int idx, bool singleton) {
 }
 
 void ScriptObject::relink(lua::State* state) {
-    m_state = state;
+    m_state = lua::mainthread(state);
     m_connected = true; // the state may hold listeners from before the reload: let the dispatch look
 }
 

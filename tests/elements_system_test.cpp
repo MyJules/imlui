@@ -103,6 +103,27 @@ TEST_F(SystemTest, TimerOutsideTheTreeTicks) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A Timer built in an async function after an await is constructed on the coroutine's thread: it links to the main
+// thread, so the frame's tick (which runs only the main thread's elements) finds it, also once the finished coroutine
+// was collected.
+TEST_F(SystemTest, TimerBuiltInAnAsyncFunctionTicks) {
+    run(R"(
+        n = 0
+        gate = future()
+        async(function()
+            await(gate)
+            t = Timer { interval = 250, onTriggered = function(self) n = n + 1; assert(self == t) end }
+        end)()
+        gate:resolve()
+        gate = nil
+        collectgarbage()
+        collectgarbage()
+        root = Column { })");
+    m_h.renderFrames("root", 1 + 12);
+    EXPECT_EQ(number("n"), 3);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(SystemTest, TimerNotRenderedSeesItsPropertyChanges) {
     run(R"(
         n = 0

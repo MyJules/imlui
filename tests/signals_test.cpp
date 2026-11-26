@@ -182,6 +182,75 @@ TEST_F(SignalsTest, ConnectWorksInsideCoroutines) {
     expectNoErrors();
 }
 
+// An element built in an async function after an await is constructed on the coroutine's thread: it links to the main
+// thread anyway, so connect accepts it, its signals reach Lua after the coroutine finished and was collected, and
+// emit/notify from C++ (outside every Lua call) don't run on the dead coroutine.
+TEST_F(SignalsTest, ElementsBuiltInACoroutineLinkToTheMainThread) {
+    run(R"(
+        log = {}
+        gate = future()
+        done = async(function()
+            await(gate) -- resumed from the main thread's gate:resolve(): the rest runs on the coroutine's thread
+            m = Meter { onValueChanged = function(self, v) log[#log + 1] = "slot" .. v end }
+            connect(m, "onPeak", function(self, n) assert(self == m); log[#log + 1] = "peak" .. n end)
+            connect(m, "onValueChanged", function(self, v) log[#log + 1] = "value" .. v end)
+        end)()
+        gate:resolve()
+        assert(done.state == "done", done.state)
+        gate, done = nil, nil
+        collectgarbage()
+        collectgarbage() -- the finished coroutine is gone
+    )");
+    Meter* m = m_h.instance<Meter>("m");
+    ASSERT_NE(m, nullptr);
+    EXPECT_EQ(m->luaState(), lua::mainthread(m_h.state()));
+    EXPECT_TRUE(m->fire(1)); // from C++, outside every Lua call
+    m->bump();
+    run(R"(
+        assert(m:fire(2))
+        m:bump()
+        assert(table.concat(log, ",") == "peak1,slot1,value1,peak2,slot2,value2", table.concat(log, ","))
+    )");
+    expectNoErrors();
+}
+
+// A box is recognized by a tag Lua can't write, not by a field of its metatable: a foreign userdata with a forged
+// `__imlui` marker, or with a box's own metatable (debug.setmetatable), is rejected (listen says why, a method or a
+// singleton read raises), not read as a box.
+TEST_F(SignalsTest, AForeignUserdataIsNotABox) {
+    run(R"(
+        local types = require("imlui.types")
+        local stdoutMeta = getmetatable(io.stdout)
+        stdoutMeta.__imlui = true
+        m = Meter {}
+        local fake = setmetatable({ __native = io.stdout }, getmetatable(m))
+        local ok, err = types.listen(io.stdout, "onPeak") -- false, why
+        local callOk, callErr = pcall(m.fire, fake, 1) -- a method trampoline on a table with a forged __native
+        stdoutMeta.__imlui = nil
+        assert(not ok and err:find("not an element of a C++ type", 1, true), tostring(err))
+        assert(not callOk, "a method ran on a forged __native")
+
+        -- A box's own metatable on a foreign userdata: its methods and __gc see no box.
+        debug.setmetatable(io.stdout, getmetatable(rawget(m, "__native")))
+        ok, err = types.listen(io.stdout, "onPeak")
+        local get = getmetatable(io.stdout).__get
+        local gotOk, gotErr = pcall(get, io.stdout, "value")
+        getmetatable(io.stdout).__gc(io.stdout) -- does nothing to a foreign userdata
+        debug.setmetatable(io.stdout, stdoutMeta)
+        assert(not ok and err:find("not an element of a C++ type", 1, true), tostring(err))
+        assert(not gotOk and gotErr:find("not a live imlui object"), tostring(gotErr))
+        io.stdout:write("") -- still a working file
+
+        local sensorMeta = getmetatable(sensor)
+        debug.setmetatable(io.stdout, sensorMeta)
+        ok, err = pcall(function() return io.stdout.level end)
+        debug.setmetatable(io.stdout, stdoutMeta)
+        assert(not ok, "a foreign userdata read as a singleton")
+        assert(m:fire(1) == false and sensor:peak(1) == false) -- the real boxes still work
+    )");
+    expectNoErrors();
+}
+
 TEST_F(SignalsTest, NotifyChangeSignalsReachListeners) {
     run(R"(
         log = {}
