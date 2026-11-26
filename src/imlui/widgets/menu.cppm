@@ -26,6 +26,11 @@ bool menuItem(const char* id, std::string_view label, std::string_view leadingIc
 
 /// Full-width divider between menu rows.
 void menuDivider();
+/// Begins a menu-bar menu (`label` is its title) or, inside a menu, a submenu, with the menu styling; its content is
+/// in a menu box at least `minWidth` wide. The menu bar keeps its own item spacing. Returns true while open; then call
+/// endMenu().
+bool beginMenu(const char* label, float minWidth);
+void endMenu();
 
 /// Begins a dropdown-style popup anchored to [a, b] (below it, kept inside the main viewport), at least `minWidth`
 /// wide. Returns true while open; then call endAnchoredMenu(). Its content is in a shrink-to-fit layout box
@@ -101,6 +106,25 @@ void menuDivider() {
     const float w = layout::availableWidth();
     ImGui::Dummy({w, dp(17)});
     hLine(ImGui::GetWindowDrawList(), p.x, p.x + w, p.y + dp(8), s.outlineVariant, dp(1));
+}
+
+bool beginMenu(const char* label, float minWidth) {
+    pushMenuStyle();
+    ImGui::PopStyleVar(); // keep the menubar's own item spacing
+    const bool open = ImGui::BeginMenu(label);
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+    if (open) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
+        pushMenuBox(minWidth);
+    }
+    return open;
+}
+
+void endMenu() {
+    popMenuBox();
+    ImGui::PopStyleVar();
+    ImGui::EndMenu();
 }
 
 bool beginAnchoredMenu(const char* popupId, ImVec2 a, ImVec2 b, float minWidth) {

@@ -1,14 +1,16 @@
 # Theming
 
-The theme is plain data, decided in Lua. `theme{...}` builds an `imlui::Theme`, which holds a Material 3 color
-scheme generated from one seed color, a shape scale, spacing, font scale and the text fonts. It can also override
+The theme is plain data, decided in Lua. `theme{...}` builds an `imlui::Theme`, which holds the design (the skin
+that draws the controls), a Material 3 color scheme generated from one seed color, a shape scale, spacing, font scale
+and the text fonts. It can also override
 any color role, any raw `ImGuiCol_*` color and many `ImGuiStyle` fields. The engine applies it **between frames**. Scripts start
-from the default theme on every (re)load: seed `#6750A4`, dark, `preset = "material"`.
+from the default theme on every (re)load: `design = "material"`, seed `#6750A4`, dark, `preset = "material"`.
 
 ## The theme table
 
 ```lua
 theme {
+    design    = "material",   -- the skin that draws the controls; see Designs
     preset    = "material",   -- or "imgui-dark" | "imgui-light" | "imgui-classic"
     seed      = "#6750A4",    -- any color spec; the scheme is generated from it
     dark      = true,
@@ -24,6 +26,7 @@ theme {
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
+| `design` | string | `"material"` | The skin that draws and measures the controls: `"material"`, or a skin the app registered in C++. An unknown name (or a value that isn't a string) reports an error (`theme.design: unknown design 'x' (registered: 'material')`) and keeps `"material"`. See [Designs](#designs). |
 | `preset` | string | `"material"` | `"material"` maps the scheme onto `ImGuiStyle`. `"imgui-dark"`, `"imgui-light"` and `"imgui-classic"` use ImGui's stock styles instead. Material widgets always draw with the scheme. |
 | `seed` | color | `"#6750A4"` | Seed color: hex, `{r,g,b,a}`, or a role (`"primary"`, `"tertiary/1"`) of the theme currently in effect. An invalid value reports an error and keeps the default. |
 | `dark` | bool | `true` | Dark or light scheme. |
@@ -62,6 +65,22 @@ After the preset and the overrides, every style size is scaled by the DPI factor
 
 `theme()` returns the generated scheme. Related functions: `scheme()`, `schemeFor(t)`, `themeState{}` and
 `color.*`. See [Lua API](lua-api.md#theme).
+
+## Designs
+
+`design` picks the **skin**: the C++ object that draws every control (buttons, toggles, fields, menus, cards,
+dialogs, tooltips, ...) and reports its natural size. imlui has one, `"material"` (Material 3), the default. An app
+adds its own in C++ with `registerSkin(name, factory)` (see [Writing a skin](extending.md#skins)), and a script picks
+it by name:
+
+```lua
+theme { design = "material" }
+```
+
+A skin decides how controls look and how big they are; the rest of the theme stays what it is under every design:
+the color scheme and its roles (a skin draws with them), `shape`, `spacing`, `fontScale`, the fonts and the ImGui
+`preset`. The design switches with the theme, at the start of the next frame, and layouts follow the new sizes on
+that frame. `themeState` works too (`themeState { design = "material" }`).
 
 ## Scheme generation
 

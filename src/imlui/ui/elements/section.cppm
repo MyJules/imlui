@@ -6,6 +6,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -70,7 +71,7 @@ void Section::declare(TypeBuilder<Section>& type) {
 
 void Section::render(Frame& frame) {
     bool open = m_expanded;
-    if (md::expander("##exp", m_title ? *m_title : m_text, m_supportingText, &open, frame.size("width"))) {
+    if (skin().expander("##exp", m_title ? *m_title : m_text, m_supportingText, &open, frame.size("width"))) {
         m_expanded = open;
         notify("expanded");
         emit("onToggled", open);
@@ -83,7 +84,7 @@ void Section::render(Frame& frame) {
 }
 
 std::optional<ImVec2> Section::intrinsicSize(const Frame& frame, float maxWidth) {
-    const ImVec2 header = md::expanderSize(m_supportingText, frame.widthIn(maxWidth));
+    const ImVec2 header = skin().expanderSize(m_supportingText, frame.widthIn(maxWidth));
     if (!m_expanded) return header;
     const float indent = frame.dp(16);
     const std::optional<ImVec2> stack = frame.stackSize(std::max(0.0f, maxWidth - indent));

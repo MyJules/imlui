@@ -10,7 +10,8 @@ flowchart TD
     R -->|"every element, by __type"| TY["C++ type system<br/>imlui.types.*: TypeRegistry, Element, Frame, TypeBuilder, LuaConvert"]
     TY --> EL["Built-in elements<br/>imlui.ui.elements.*: one Element class each"]
     C["App C++ types and singletons<br/>registerType / registerSingleton"] --> TY
-    EL --> W["Material widgets<br/>imlui.widgets.* (namespace imlui::md)"]
+    EL --> SK["Skin<br/>imlui.skin: the active look (theme design)"]
+    SK --> W["Material widgets<br/>imlui.widgets.* (namespace imlui::md)"]
     TY --> N["Lua bridge<br/>imlui.lua.node / value / errors / painter / native"]
     C --> W
     W --> TH["Theme<br/>imlui.theme.*, imlui.color.*"]
@@ -29,7 +30,8 @@ flowchart TD
 | **Element tree** | Ordinary Lua tables. Props are fields, children are the array part, and signals are `on*` functions. An element's identity is its C++ instance's id (`ScriptObject::objectId()`, see [Element identity](#element-identity)), from which its ImGui ID scope is made, so elements keep per-widget state such as animations and focus across frames, and an element never inherits a dead one's. |
 | **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type" and takes no layout space, like a non-visual element. |
 | **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
-| **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They call Material widgets, write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
+| **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They draw and measure their controls through the active skin (`skin().button(...)`), write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
+| **Skin** | `imlui.skin`. The look of the controls: a `Skin` draws and measures each one; the theme's `design` picks it by name. The base class is Material and calls the Material widgets; another skin overrides some controls. See [Skins](#skins). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
 | **Resources** | `imlui.resources`. Every file the engine and the scripts load (Lua, fonts, data) is a resource named `prefix:/path` and served by stacked mounts. See [Resources](#resources). |
 | **ImGui / platform** | Dear ImGui with the GLFW and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. |
@@ -933,6 +935,54 @@ to the same names. Groups with different prefixes, or two groups putting a file 
 one manifest per prefix. A version 2 with a mount point per entry wasn't worth it, since a prefix-wide archive
 already covers every folder of that prefix.
 
+## Skins
+
+The elements don't call the Material widgets for their controls; they call the **active skin**:
+`skin().button(...)` draws a `Button`, `skin().buttonSize(...)` is its intrinsic size. `Skin` (`imlui.skin`) has one
+virtual draw function and one virtual size function per control (begin/end pairs for containers), with the `md::`
+widgets' parameters. Its default bodies call those widgets, so the base class *is* the Material skin, and another
+skin subclasses it and overrides only what it draws differently: a control it doesn't override falls back to
+Material. Apps add skins with `registerSkin(name, factory)` ([Skins](extending.md#skins)).
+
+**What goes through the skin** is every call that decides a look (shape, colors, metrics, natural size):
+
+| Group | Skin functions |
+|---|---|
+| Buttons | `button`/`buttonSize`, `iconButton`/`iconButtonSize` |
+| Selection | `checkbox`/`checkboxSize`, `radio`/`radioSize`, `switchToggle`/`switchSize`, `chip`/`chipSize`, `segmented`/`segmentedSize` |
+| Ranges | `slider`/`sliderSize`, `progress`/`progressSize`, `circularProgress`/`circularProgressSize` |
+| Inputs | `textField`/`textFieldSize`, `spinBox`/`spinBoxSize`, `dropdown`/`dropdownSize`, `colorField`/`colorFieldSize` |
+| Lists and menus | `listItem`/`listItemSize`, `expander`/`expanderSize`, `menuItem`, `beginMenu`/`endMenu` (menu-bar menus and submenus), `beginAnchoredMenu`/`endAnchoredMenu` (a `menu` prop's dropdown) |
+| Navigation | `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `beginModalDrawer`/`endModalDrawer` |
+| Containers, messages | `beginCard`/`endCard`/`cardSize`, `beginDialog`/`endDialog`, `snackbar`, `tooltip` (the renderer's `tooltip` prop) |
+| Others | `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize` |
+
+The engine's error overlay draws its buttons through the skin too. **What stays a direct `md::` call** decides no
+look: the drawing helpers (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `strokeCircle`, `hLine`, `vLine`,
+`drawIcon`; the Canvas painter uses them), the `Text` and `Icon` items (`md::text`/`textSize`, `md::icon`/`iconSize`),
+`itemWidth`, `scopedWindowName`, the constants (`hugeExtent`, `maxIconPixels`), the vocabulary parsers
+(`buttonVariant`, `chipVariant`, `cardVariant`, `iconButtonVariant`) and the widgets' own stacks: the surface stack
+(`pushSurface`/`popSurface`/`surfaceColor`) carries the color an element chose, and `cardDepth`/`surfaceDepth` with
+their restores undo what a render pass an error cut short left open. The vocabulary types (`md::ButtonVariant`,
+`md::TextFieldOptions`, ...) are the skin functions' parameter types. Inside, the Material widgets keep calling each
+other (`md::snackbar` draws its action with `md::button`).
+
+**The active skin.** The theme holds only the design's name (`Theme::design`, `theme { design = ... }`):
+`imlui.theme` can't import `imlui.skin`, since the widgets import the theme and the skin imports the widgets. So
+`skin()` resolves the name itself: it keeps the `themeGeneration()` it resolved for, and on the first call after the
+generation moved it looks `theme().design` up in the registry (an unknown name, possible from C++, logs a warning
+and uses `"material"`) and makes the skin from its factory when the name or its registration changed; otherwise it is
+a compare and a pointer read. The generation moves only in `applyPendingTheme()`, between frames, so a design
+switches at a frame's start and never in the middle of one; and nothing that applies a theme (the engine, a test)
+has to tell the skin. `theme_table` checks a Lua `design` against `hasSkin()` and reports an unknown one, keeping
+`"material"`. Main thread only, like the theme.
+
+**Sizes after a switch.** A design change is a theme change, so what follows a theme change follows the design:
+static properties are synced again (`themeGeneration()` in the property sync), intrinsic sizes are asked per frame
+(`TypeRegistry`'s memo lasts a frame) and now come from the new skin, and sizes a layout took from the layout cache
+are corrected by convergence (the recorded size differs from the assumed one: another frame). A `Row` that places
+its children by their intrinsic sizes lays out at the new sizes on the first frame after the switch.
+
 ## Repository layout
 
 imlui is a library repository; apps live in their own repositories and add it with `add_subdirectory` (a git
@@ -1038,7 +1088,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
-| `imlui.theme.theme` | `Theme` (+ `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `resolveColor`, `imguiColorIndex`, `isStyleField` |
+| `imlui.theme.theme` | `Theme` (+ `design`, `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `resolveColor`, `imguiColorIndex`, `isStyleField` |
 | `imlui.theme.font_scope` | `FontScope`: RAII push/pop of a text style's font |
 
 ### Lua bridge (`src/imlui/lua/`, namespace `imlui::luaui`)
@@ -1068,7 +1118,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.progress` | `progress` (linear), `circularProgress` |
 | `imlui.widgets.field` | Shared text-field plumbing (`FieldFrame`, decoration, background, supporting text) |
 | `imlui.widgets.text_field` | `textField` (+ `TextFieldOptions`, `TextFieldResult`) |
-| `imlui.widgets.menu` | Menu styling, `menuItem`, `menuDivider`, `beginAnchoredMenu`/`endAnchoredMenu` |
+| `imlui.widgets.menu` | Menu styling, `menuItem`, `menuDivider`, `beginMenu`/`endMenu` (menu-bar menus, submenus), `beginAnchoredMenu`/`endAnchoredMenu` |
 | `imlui.widgets.dropdown` | `dropdown` (+ `DropdownOptions`) |
 | `imlui.widgets.spin_box` | `spinBox` |
 | `imlui.widgets.color_field` | `colorField` (swatch and picker popup) |
@@ -1082,6 +1132,12 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.chart` | `chart` (+ `ChartOptions`) |
 | `imlui.widgets.table` | `tableHeaderCell`, `tableCell` |
 | `imlui.widgets` | Umbrella: `export import` of all widget modules |
+
+### Skin (`src/imlui/skin/`)
+
+| Module | Purpose |
+|---|---|
+| `imlui.skin` | `Skin` (one virtual draw and size function per control; the base class is Material, calling the `md::` widgets), `skin()` (the active skin: the one registered under `theme().design`, resolved again after a theme change), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames`. See [Skins](#skins) |
 
 ### UI (`src/imlui/ui/`)
 

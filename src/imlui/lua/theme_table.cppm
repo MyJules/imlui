@@ -14,6 +14,7 @@ import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.value;
 import imlui.resources.name;
+import imlui.skin;
 
 export namespace imlui::luaui {
 
@@ -76,6 +77,19 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         return std::nullopt;
     };
 
+    // A design names a registered skin; another one would draw Material while the theme claims something else.
+    if (lua::getfield(state, idx, "design") != lua::Type::Nil) {
+        if (lua::type(state, -1) == lua::Type::String && hasSkin(lua::tostring(state, -1))) {
+            t.design = std::string{lua::tostring(state, -1)};
+        } else {
+            std::string known;
+            for (const auto& name : skinNames())
+                known += (known.empty() ? "'" : ", '") + name + "'";
+            reportError("theme.design: unknown design '" + toDisplayString(state, -1) + "' (registered: " + known +
+                        ")");
+        }
+    }
+    lua::pop(state);
     if (auto p = str("preset")) t.preset = *p;
     // The seed has no scheme of its own yet, so its roles come from the current theme.
     if (lua::getfield(state, idx, "seed") != lua::Type::Nil) {

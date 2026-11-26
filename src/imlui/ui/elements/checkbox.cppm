@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -56,7 +57,7 @@ void Checkbox::declare(TypeBuilder<Checkbox>& type) {
 void Checkbox::render(Frame&) {
     const std::string label = Frame::labelId(m_text, "cb");
     bool v = m_checked;
-    if (md::checkbox(label.c_str(), &v)) {
+    if (skin().checkbox(label.c_str(), &v)) {
         m_checked = v;
         notify("checked");
         emit("onToggled", v);
@@ -69,7 +70,7 @@ bool Checkbox::checked() const { return m_checked; }
 void Checkbox::setChecked(bool checked) { m_checked = checked; }
 
 std::optional<ImVec2> Checkbox::intrinsicSize(const Frame&, float) {
-    return md::checkboxSize(Frame::labelId(m_text, "cb").c_str());
+    return skin().checkboxSize(Frame::labelId(m_text, "cb").c_str());
 }
 
 } // namespace imlui

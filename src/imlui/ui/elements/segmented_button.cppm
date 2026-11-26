@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -63,7 +64,7 @@ void SegmentedButton::declare(TypeBuilder<SegmentedButton>& type) {
 
 void SegmentedButton::render(Frame& frame) {
     int cur = indexValue(m_currentIndex) - 1; // NaN, infinities and huge values are safe
-    if (md::segmented("##seg", m_model, &cur, frame.size("width"), m_icons)) {
+    if (skin().segmented("##seg", m_model, &cur, frame.size("width"), m_icons)) {
         m_currentIndex = static_cast<double>(cur + 1);
         // Copied before notify(): its handler (onCurrentIndexChanged, a bound setter) may replace the model, and a
         // method call on the element syncs the new one into m_model.
@@ -82,7 +83,7 @@ void SegmentedButton::setCurrentIndex(double index) { m_currentIndex = index; }
 
 std::optional<ImVec2> SegmentedButton::intrinsicSize(const Frame& frame, float maxWidth) {
     if (m_model.empty()) return std::nullopt; // draws nothing: no item to measure
-    return md::segmentedSize(m_model, frame.widthIn(maxWidth));
+    return skin().segmentedSize(m_model, frame.widthIn(maxWidth));
 }
 
 } // namespace imlui

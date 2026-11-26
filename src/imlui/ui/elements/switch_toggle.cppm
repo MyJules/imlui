@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -62,7 +63,7 @@ void Switch::declare(TypeBuilder<Switch>& type) {
 void Switch::render(Frame&) {
     const std::string label = Frame::labelId(m_text, "sw");
     bool v = m_checked;
-    if (md::switchToggle(label.c_str(), &v, m_icons)) {
+    if (skin().switchToggle(label.c_str(), &v, m_icons)) {
         m_checked = v;
         notify("checked");
         emit("onToggled", v);
@@ -77,7 +78,7 @@ bool Switch::icons() const { return m_icons; }
 void Switch::setIcons(bool icons) { m_icons = icons; }
 
 std::optional<ImVec2> Switch::intrinsicSize(const Frame&, float) {
-    return md::switchSize(Frame::labelId(m_text, "sw").c_str());
+    return skin().switchSize(Frame::labelId(m_text, "sw").c_str());
 }
 
 } // namespace imlui

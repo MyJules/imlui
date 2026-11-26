@@ -4,7 +4,7 @@ export module imlui.ui.elements.spin_box;
 import std;
 
 import imgui;
-import imlui.widgets.spin_box;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -90,8 +90,8 @@ void SpinBox::render(Frame& frame) {
     // Clamped here: the widget builds a "%.<decimals>f" format, and a double has no more than 15 significant
     // decimal digits anyway.
     const int decimals = std::clamp(m_decimals, 0, maxDecimals);
-    if (md::spinBox("##spin", &v, m_from, m_to, m_stepSize, decimals, m_label, frame.size("width"),
-                    m_variant == "outlined")) {
+    if (skin().spinBox("##spin", &v, m_from, m_to, m_stepSize, decimals, m_label, frame.size("width"),
+                       m_variant == "outlined")) {
         m_value = v;
         notify("value");
         emit("onValueModified", m_value);
@@ -114,7 +114,7 @@ const std::string& SpinBox::variant() const { return m_variant; }
 void SpinBox::setVariant(std::string variant) { m_variant = std::move(variant); }
 
 std::optional<ImVec2> SpinBox::intrinsicSize(const Frame& frame, float maxWidth) {
-    return md::spinBoxSize(m_label, frame.widthIn(maxWidth), m_variant == "outlined");
+    return skin().spinBoxSize(m_label, frame.widthIn(maxWidth), m_variant == "outlined");
 }
 
 } // namespace imlui

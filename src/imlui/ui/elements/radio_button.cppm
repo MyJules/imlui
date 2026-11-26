@@ -8,6 +8,7 @@ import std;
 import imgui;
 import lua;
 import imlui.widgets;
+import imlui.skin;
 import imlui.lua.node;
 import imlui.types.element;
 import imlui.types.frame;
@@ -91,7 +92,7 @@ void RadioButton::declare(TypeBuilder<RadioButton>& type) {
 
 void RadioButton::render(Frame& frame) {
     const std::string label = Frame::labelId(m_text, "rb");
-    if (md::radio(label.c_str(), m_checked)) {
+    if (skin().radio(label.c_str(), m_checked)) {
         m_checked = true;
         notify("checked");
         uncheckRadioPeers(frame.node());
@@ -105,7 +106,7 @@ bool RadioButton::checked() const { return m_checked; }
 void RadioButton::setChecked(bool checked) { m_checked = checked; }
 
 std::optional<ImVec2> RadioButton::intrinsicSize(const Frame&, float) {
-    return md::radioSize(Frame::labelId(m_text, "rb").c_str());
+    return skin().radioSize(Frame::labelId(m_text, "rb").c_str());
 }
 
 } // namespace imlui

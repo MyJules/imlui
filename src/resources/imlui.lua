@@ -1045,6 +1045,7 @@ end
 
 --[[
   ui.theme {
+      design    = "material",   -- the skin that draws the controls: "material", or one the app registered (registerSkin)
       preset    = "material",   -- or "imgui-dark" | "imgui-light" | "imgui-classic"
       seed      = "#6750A4",    -- Material 3 scheme is generated from this color
       dark      = true,

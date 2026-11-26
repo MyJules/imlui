@@ -8,6 +8,7 @@ import imlui.color;
 import imlui.theme.scheme;
 import imlui.theme.typography;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -87,7 +88,8 @@ void TopAppBar::render(Frame& frame) {
     float titleX = p.x + frame.dp(16);
     if (!m_navigationIcon.empty()) {
         ImGui::SetCursorScreenPos({p.x + frame.dp(4), p.y + (barH - frame.dp(48)) * 0.5f});
-        if (md::iconButton("##nav", m_navigationIcon)) emit("onNavigation");
+        if (skin().iconButton("##nav", m_navigationIcon, md::IconButtonVariant::Standard, false, false, std::nullopt))
+            emit("onNavigation");
         titleX = p.x + frame.dp(56);
     }
     // Actions, right-aligned by their total width, each centered in the 64dp row (intrinsic sizes, else last

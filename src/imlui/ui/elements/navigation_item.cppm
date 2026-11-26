@@ -7,6 +7,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.ui.navigation_scope;
 import imlui.types.element;
 import imlui.types.frame;
@@ -78,13 +79,13 @@ void NavigationItem::render(Frame& frame) {
     const NavigationScope::Context& context = NavigationScope::current();
     switch (context.style) {
     case NavigationScope::Style::Bar:
-        clicked = md::navigationBarItem("##nav", m_icon, m_text, m_selected, m_badge, context.itemWidth);
+        clicked = skin().navigationBarItem("##nav", m_icon, m_text, m_selected, m_badge, context.itemWidth);
         break;
     case NavigationScope::Style::Rail:
-        clicked = md::navigationRailItem("##nav", m_icon, m_text, m_selected, m_badge, context.itemWidth);
+        clicked = skin().navigationRailItem("##nav", m_icon, m_text, m_selected, m_badge, context.itemWidth);
         break;
     case NavigationScope::Style::Drawer:
-        clicked = md::navigationItem("##nav", m_icon, m_text, m_selected, m_badge, frame.size("width"));
+        clicked = skin().navigationItem("##nav", m_icon, m_text, m_selected, m_badge, frame.size("width"));
         break;
     }
     if (clicked) emit("onClicked");
@@ -103,11 +104,11 @@ std::optional<ImVec2> NavigationItem::intrinsicSize(const Frame& frame, float ma
     // The style of the scope it is asked in, which is the one it renders in: its container asks inside its scope.
     const NavigationScope::Context& context = NavigationScope::current();
     switch (context.style) {
-    case NavigationScope::Style::Bar: return md::navigationBarItemSize(context.itemWidth);
-    case NavigationScope::Style::Rail: return md::navigationRailItemSize(context.itemWidth);
+    case NavigationScope::Style::Bar: return skin().navigationBarItemSize(context.itemWidth);
+    case NavigationScope::Style::Rail: return skin().navigationRailItemSize(context.itemWidth);
     case NavigationScope::Style::Drawer: break;
     }
-    return md::navigationItemSize(frame.widthIn(maxWidth));
+    return skin().navigationItemSize(frame.widthIn(maxWidth));
 }
 
 } // namespace imlui

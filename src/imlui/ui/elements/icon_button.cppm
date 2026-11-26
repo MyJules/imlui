@@ -6,6 +6,7 @@ import std;
 import imgui;
 import imlui.color;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -86,7 +87,7 @@ void IconButton::render(Frame& frame) {
     const bool checked = m_checked;
     std::string icon = m_icon.value_or(m_text);
     if (checkable && checked && m_checkedIcon) icon = *m_checkedIcon;
-    const bool clicked = md::iconButton("##ib", icon, md::iconButtonVariant(m_variant), checkable, checked, m_color);
+    const bool clicked = skin().iconButton("##ib", icon, md::iconButtonVariant(m_variant), checkable, checked, m_color);
     if (clicked) {
         if (checkable) {
             m_checked = !checked;
@@ -97,7 +98,7 @@ void IconButton::render(Frame& frame) {
     frame.attachMenu(clicked);
 }
 
-std::optional<ImVec2> IconButton::intrinsicSize(const Frame&, float) { return md::iconButtonSize(); }
+std::optional<ImVec2> IconButton::intrinsicSize(const Frame&, float) { return skin().iconButtonSize(); }
 
 const std::string& IconButton::text() const { return m_text; }
 void IconButton::setText(std::string text) { m_text = std::move(text); }

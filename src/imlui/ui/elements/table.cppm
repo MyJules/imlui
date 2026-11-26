@@ -10,6 +10,7 @@ import imlui.color;
 import imlui.theme.scheme;
 import imlui.widgets.card;
 import imlui.widgets.table;
+import imlui.skin;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.element;
@@ -91,7 +92,9 @@ void Table::render(Frame& frame) {
     const int columnCount = static_cast<int>(std::min(m_columns.size(), maxColumns));
     const Scheme& s = frame.scheme();
     const float rowH = frame.dp(static_cast<float>(m_rowHeight)), headH = frame.dp(56);
-    if (m_outlined) md::beginCard("##tablecard", md::CardVariant::Outlined, frame.size("width"), 0.0f);
+    if (m_outlined)
+        skin().beginCard("##tablecard", md::CardVariant::Outlined, frame.size("width"), 0.0f, 0.0f, std::nullopt,
+                         -1.0f);
     ImGui::PushStyleColor(ImGuiCol_TableBorderLight, s.outlineVariant.vec4());
     ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, s.outlineVariant.vec4());
     ImGui::PushStyleColor(ImGuiCol_Header, s.secondaryContainer.vec4());
@@ -107,14 +110,14 @@ void Table::render(Frame& frame) {
         ImGui::TableNextRow(0, headH);
         for (int c = 0; c < columnCount; ++c) {
             ImGui::TableNextColumn();
-            md::tableHeaderCell(m_columns[static_cast<std::size_t>(c)], headH);
+            skin().tableHeaderCell(m_columns[static_cast<std::size_t>(c)], headH);
         }
         renderRows(frame, rowH, columnCount);
         ImGui::EndTable();
     }
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
-    if (m_outlined) md::endCard();
+    if (m_outlined) skin().endCard();
 }
 
 void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
@@ -157,8 +160,8 @@ void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
                         ImGui::SetCursorScreenPos(p);
                         ImGui::PopID();
                     }
-                    md::tableCell(cell, rowH,
-                                  selected == i ? std::optional<Color>{s.onSecondaryContainer} : std::nullopt);
+                    skin().tableCell(cell, rowH,
+                                     selected == i ? std::optional<Color>{s.onSecondaryContainer} : std::nullopt);
                 }
                 lua::pop(state);
             }

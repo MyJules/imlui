@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets.dropdown;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -96,7 +97,7 @@ void ComboBox::render(Frame& frame) {
     o.error = m_error;
     o.width = frame.size("width");
     int cur = indexValue(m_currentIndex) - 1; // no overflow on INT_MIN
-    if (md::dropdown("##dd", m_model, &cur, o, m_icons)) {
+    if (skin().dropdown("##dd", m_model, &cur, o, m_icons)) {
         m_currentIndex = cur + 1;
         // Copied before notify(): its handler may replace the model (a method call on the element syncs it).
         const std::string text = m_model[static_cast<std::size_t>(cur)];
@@ -126,7 +127,7 @@ std::optional<ImVec2> ComboBox::intrinsicSize(const Frame& frame, float maxWidth
     md::DropdownOptions o;
     o.supporting = m_supportingText;
     o.width = frame.widthIn(maxWidth);
-    return md::dropdownSize(o);
+    return skin().dropdownSize(o);
 }
 
 } // namespace imlui

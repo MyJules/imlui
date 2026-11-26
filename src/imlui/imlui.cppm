@@ -13,6 +13,7 @@ export import imlui.theme.font_scope;
 export import imlui.theme.font_library;
 export import imlui.theme.font_face_scope;
 export import imlui.widgets;
+export import imlui.skin;
 export import imlui.lua.errors;
 export import imlui.lua.value;
 export import imlui.lua.node;

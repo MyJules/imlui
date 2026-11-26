@@ -5,7 +5,7 @@ export module imlui.ui.elements.menu;
 import std;
 
 import imgui;
-import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -49,18 +49,9 @@ void Menu::declare(TypeBuilder<Menu>& type) {
 
 void Menu::render(Frame& frame) {
     const std::string label = Frame::labelId(m_title, "menu");
-    md::pushMenuStyle();
-    ImGui::PopStyleVar(); // keep the menubar's own item spacing
-    const bool open = ImGui::BeginMenu(label.c_str());
-    ImGui::PopStyleVar(3);
-    ImGui::PopStyleColor(2);
-    if (open) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
-        md::pushMenuBox(frame.dp(minWidth));
+    if (skin().beginMenu(label.c_str(), frame.dp(minWidth))) {
         frame.renderChildren();
-        md::popMenuBox();
-        ImGui::PopStyleVar();
-        ImGui::EndMenu();
+        skin().endMenu();
     }
 }
 

@@ -6,6 +6,7 @@ export module imlui.ui.elements.modal_navigation_drawer;
 import lua;
 import imlui.lua.node;
 import imlui.widgets;
+import imlui.skin;
 import imlui.ui.navigation_scope;
 import imlui.types.element;
 import imlui.types.frame;
@@ -73,10 +74,10 @@ void ModalNavigationDrawer::declare(TypeBuilder<ModalNavigationDrawer>& type) {
 
 void ModalNavigationDrawer::render(Frame& frame) {
     bool open = shown();
-    if (md::beginModalDrawer("##drawer", &open, m_width)) {
+    if (skin().beginModalDrawer("##drawer", &open, m_width)) {
         const NavigationScope scope{{}};
         frame.renderStack();
-        md::endModalDrawer();
+        skin().endModalDrawer();
     }
     if (open || !shown()) return; // the widget only ever closes the drawer
 

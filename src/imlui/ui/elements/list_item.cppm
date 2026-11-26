@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -85,7 +86,7 @@ void ListItem::render(Frame& frame) {
     o.trailingIcon = m_trailingIcon;
     o.selected = m_selected;
     o.width = frame.size("width");
-    if (md::listItem("##li", o)) emit("onClicked");
+    if (skin().listItem("##li", o)) emit("onClicked");
 }
 
 const std::string& ListItem::text() const { return m_text; }
@@ -105,7 +106,7 @@ std::optional<ImVec2> ListItem::intrinsicSize(const Frame& frame, float maxWidth
     md::ListItemOptions o;
     o.supporting = m_supportingText;
     o.width = frame.widthIn(maxWidth);
-    return md::listItemSize(o);
+    return skin().listItemSize(o);
 }
 
 } // namespace imlui

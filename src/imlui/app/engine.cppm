@@ -28,6 +28,7 @@ import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.theme.theme;
 import imlui.widgets;
+import imlui.skin;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.native;
@@ -475,9 +476,9 @@ void Engine::drawErrors() {
         ImGui::Spacing();
     }
     ImGui::EndChild();
-    if (md::button("Dismiss", md::ButtonVariant::Text)) luaui::clearErrors();
+    if (skin().button("Dismiss", md::ButtonVariant::Text, {0, 0}, {})) luaui::clearErrors();
     ImGui::SameLine();
-    if (md::button("Reload", md::ButtonVariant::Text)) m_reload = true;
+    if (skin().button("Reload", md::ButtonVariant::Text, {0, 0}, {})) m_reload = true;
     layout::popBox();
     ImGui::End();
     ImGui::PopStyleVar(2);

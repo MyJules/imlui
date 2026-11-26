@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.ui.frame_request;
 import imlui.types.element;
 import imlui.types.frame;
@@ -104,9 +105,9 @@ void Dialog::render(Frame& frame) {
             return;
         }
     }
-    if (md::beginDialog(title.c_str(), &open, frame.size("width"), m_icon)) {
-        frame.renderStack(); // in the dialog's shrink-to-fit box (md::beginDialog)
-        md::endDialog();
+    if (skin().beginDialog(title.c_str(), &open, frame.size("width"), m_icon)) {
+        frame.renderStack(); // in the dialog's shrink-to-fit box (Skin::beginDialog)
+        skin().endDialog();
     }
     if (open != m_open) {
         m_open = open;

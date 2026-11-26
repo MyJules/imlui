@@ -6,6 +6,7 @@ import std;
 
 import imgui;
 import imlui.widgets.text_field;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -127,7 +128,7 @@ void TextField::render(Frame& frame) {
     o.width = frame.size("width");
     o.height = frame.resolvedHeight(0.0f);
     std::string text = m_text;
-    const md::TextFieldResult res = md::textField("##tf", text, o);
+    const md::TextFieldResult res = skin().textField("##tf", text, o);
     if (res.changed) {
         m_text = std::move(text);
         notify("text"); // writes the text back and emits onTextChanged(text)
@@ -172,7 +173,7 @@ std::optional<ImVec2> TextField::intrinsicSize(const Frame& frame, float maxWidt
     o.multiline = m_multiline;
     o.width = frame.widthIn(maxWidth);
     o.height = height;
-    return md::textFieldSize(o);
+    return skin().textFieldSize(o);
 }
 
 } // namespace imlui

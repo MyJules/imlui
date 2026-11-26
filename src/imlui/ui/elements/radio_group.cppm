@@ -6,6 +6,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -71,7 +72,7 @@ void RadioGroup::render(Frame& frame) {
         ImGui::PushID(i);
         const auto idx = static_cast<std::size_t>(i);
         const std::string label = Frame::labelId(m_model[idx], "r");
-        if (md::radio(label.c_str(), cur == i + 1) && cur != i + 1) {
+        if (skin().radio(label.c_str(), cur == i + 1) && cur != i + 1) {
             const std::string item = m_model[idx];
             m_currentIndex = static_cast<double>(i + 1);
             notify("currentIndex");
@@ -96,7 +97,7 @@ std::optional<ImVec2> RadioGroup::intrinsicSize(const Frame& frame, float) {
     ImVec2 size{0.0f, 0.0f};
     float y = 0.0f;
     for (std::size_t i = 0; i < m_model.size(); ++i) {
-        const ImVec2 radio = md::radioSize(Frame::labelId(m_model[i], "r").c_str());
+        const ImVec2 radio = skin().radioSize(Frame::labelId(m_model[i], "r").c_str());
         if (m_horizontal) {
             size.x += (i > 0 ? frame.dp(16) : 0.0f) + radio.x;
             size.y = std::max(size.y, radio.y);

@@ -104,13 +104,19 @@ using `imlui.widgets.common`:
 
 Return what happened (`bool` changed/clicked, or a result struct).
 
+**Then route it through the skin.** Add a virtual pair to `Skin` (`src/imlui/skin/skin.cppm`), `rating` and
+`ratingSize`, with the widget's parameters and no default arguments, whose bodies call `md::rating` and
+`md::ratingSize`. The element calls `skin().rating(...)`, so another design can draw the control its own way
+([Skins](architecture.md#skins)). A helper that decides no look (a shape, text or icon drawing helper) stays a direct
+`md::` call.
+
 **2. Element (C++).** One class per module, `src/imlui/ui/elements/<snake_name>.cppm`
 (`export module imlui.ui.elements.<snake_name>;`), added to the `imlui.ui.elements` umbrella (`elements.cppm`) and
 registered in `registerBuiltinTypes` (`builtin.cppm`). See [Writing a built-in element](#writing-a-built-in-element)
 for the conventions.
 
 ```cpp
-// Example: a hypothetical "Rating" element backed by a new md::rating() widget.
+// Example: a hypothetical "Rating" element backed by a new md::rating() widget, drawn through Skin::rating().
 
 /// A row of stars.
 ///
@@ -140,7 +146,7 @@ void Rating::declare(TypeBuilder<Rating>& type) {
 }
 
 void Rating::render(Frame&) {
-    if (md::rating("##rating", &m_value, m_count)) {
+    if (skin().rating("##rating", &m_value, m_count)) {
         notify("value"); // two-way write-back (honours bind/binding), then onValueChanged
         emit("onChanged", m_value);
     }
@@ -220,7 +226,7 @@ conventions they share, and new built-ins follow them:
    (see [Trying changes in an app](#trying-changes-in-an-app)) with screenshots from before the change, at desktop and
    phone size. The tag `full-gallery` of imlui-example has a page for every built-in element. Animated content (progress, canvas,
    chart) and timer texts differ by nature.
-9. **Sizes** go through one rule: pass `frame.size("width")` to an `md::` widget (it resolves it with
+9. **Sizes** go through one rule: pass `frame.size("width")` to a skin control (the `md::` widget resolves it with
    `md::itemWidth`), or resolve it yourself with `frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`
    when the element sizes itself. Both use `resolveSize` (`imlui.ui.item_size`), so `-1` is exactly the available
    space and `< -1` exactly that minus `|v|` dp everywhere. Don't compute `avail + w` by hand, and don't read

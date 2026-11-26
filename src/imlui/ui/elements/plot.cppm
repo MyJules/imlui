@@ -6,6 +6,7 @@ import std;
 import imgui;
 import imlui.color;
 import imlui.widgets.chart;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -98,7 +99,7 @@ void Plot::render(Frame& frame) {
         o.min = static_cast<float>(m_min.value_or(0.0));
         o.max = static_cast<float>(m_max.value_or(1.0));
     }
-    md::chart("##chart", m_values, o);
+    skin().chart("##chart", m_values, o);
 }
 
 const std::vector<float>& Plot::values() const { return m_values; }
@@ -124,7 +125,7 @@ std::optional<ImVec2> Plot::intrinsicSize(const Frame& frame, float maxWidth) {
     md::ChartOptions o;
     o.width = frame.widthIn(maxWidth);
     o.height = height;
-    return md::chartSize(o);
+    return skin().chartSize(o);
 }
 
 } // namespace imlui
