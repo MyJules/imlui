@@ -43,6 +43,7 @@ import imlui.ui.clock;
 import imlui.ui.frame_request;
 import imlui.ui.layout_box;
 import imlui.ui.main_thread;
+import imlui.ui.main_timers;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
 import imlui.types.script_object;
@@ -286,7 +287,7 @@ int Engine::run() {
     m_lastCheck = std::chrono::steady_clock::now();
 
     // On-demand rendering: sleep in waitEvents() until input arrives or the next
-    // requested frame, Lua timer or file check is due, and render only then.
+    // requested frame, Lua timer, C++ main timer or file check is due, and render only then.
     setFrameWakeHandler([] { platform::Window::postEmptyEvent(); });
     setMinFrameInterval(wc.vsync ? 0.0 : 1.0 / maxUnsyncedFrameRate);
     requestFramesFor(settleSeconds);
@@ -294,6 +295,7 @@ int Engine::run() {
     setPostWakeHandler([] { platform::Window::postEmptyEvent(); });
     while (!m_window.shouldClose() && !m_quit) {
         runPosted();
+        runDueMainTimers();
         checkForChanges();
         if (m_reload) {
             m_reload = false;
@@ -302,17 +304,20 @@ int Engine::run() {
         }
         double wait = std::min(secondsUntilFrame(), secondsUntilFileCheck());
         if (m_window.minimized()) wait = std::max(wait, minimizedSeconds);
+        wait = std::min(wait, secondsUntilMainTimer()); // C++ timers fire on time, minimized too: they don't render
         setLoopAwake(false);
         const bool input = m_window.waitEvents(wait);
         setLoopAwake(true);
         if (input) requestFramesFor(settleSeconds);
         runPosted(); // may notify() and so request a frame
+        runDueMainTimers(); // likewise (a delay() settling)
         if (secondsUntilFrame() <= 0.0) {
             renderFrame();
             if (m_config.exitAfterFrames > 0 && ++m_framesRendered >= m_config.exitAfterFrames) m_quit = true;
         }
     }
     setPostWakeHandler({}); // before the window goes: a worker may be inside the handler until this returns
+    clearMainTimers();      // still waiting: dropped, like the posts (a capture may post)
     clearPosted();          // still queued: dropped (they may refer to the Lua state closed below)
     setFrameWakeHandler({});
     clearFrameRequests();

@@ -389,6 +389,19 @@ function sleep(ms) end
 ---@return Future<any[]>
 function all(list) end
 
+---A future that settles like `f`, or fails with "timed out after <ms> ms" (releasing `f`) if `f` is still pending
+---after `ms` milliseconds.
+---@generic T
+---@param f Future<T>
+---@param ms number
+---@return Future<T>
+function timeout(f, ms) end
+
+---A future that settles like the first of `list` to settle (done, failed or cancelled); the others are released.
+---@param list any[]
+---@return Future<any>
+function race(list) end
+
 ---A pending future the script settles with `f:resolve(...)` / `f:reject(err)`.
 ---@return Future<any>
 function future() end
@@ -571,6 +584,8 @@ ui.async = async
 ui.await = await
 ui.sleep = sleep
 ui.all = all
+ui.timeout = timeout
+ui.race = race
 ui.future = future
 ui.snackbar = snackbar
 ui.log = log

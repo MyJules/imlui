@@ -86,7 +86,8 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
   registered types, `--lua-defs <dir>`, hover docs, the `luaType` hook
 - [Testing elements](#testing-elements): the headless frame harness
 - [Threading and frame requests](#threading-and-frame-requests): `runAsync` (and its `Task`), [futures](#futures)
-  (`Future<T>`, `Promise<T>`, `runAsyncThen`, progress, Lua futures as arguments), `Live<T>`, the background pool;
+  (`Future<T>`, `Promise<T>`, `runAsyncThen`, guarantees, combinators: `delay`, `withTimeout`, `race`, `all`;
+  progress, Lua futures as arguments), `Live<T>`, the background pool;
   [ticking elements](#ticking-elements)
 - [The built-ins as examples](#the-built-ins-as-examples)
 - [The example app](#the-example-app)
@@ -1407,7 +1408,7 @@ highest level down:
 | Tool | For |
 |---|---|
 | `runAsync(work, done[, fail]) -> Task` (on every `ScriptObject`) | Work an element or singleton starts: `work` on the background pool, its result to `done` on the main thread, only while the object lives. The [`Task`](#cancelling-a-job-task) cancels it. |
-| `runAsync(work) -> Future<R>`, `imlui::Promise<T>` (module `imlui.types.future`) | A result a method returns to Lua, which the script [awaits](lua-api.md#async), with optional [progress](#progress); a method can also take a Lua future as a `Future<T>` argument. |
+| `runAsync(work) -> Future<R>`, `imlui::Promise<T>` (module `imlui.types.future`) | A result a method returns to Lua, which the script [awaits](lua-api.md#async), with optional [progress](#progress); a method can also take a Lua future as a `Future<T>` argument. [Combinators](#combinators): `delay`, `withTimeout`, `race`, `all`. |
 | `imlui::Live<T>` (module `imlui.types.live`) | A property a worker updates at any rate (telemetry, progress, status text): the UI applies the latest value at most once per loop iteration. |
 | `VectorModel<T>::appender()` (module `imlui.types.vector_model`) | Rows a worker produces at any rate (a log tail): they reach the [list model](#list-models) in one batch per loop iteration. |
 | `ScriptObject::Handle`, `imlui::post`, `runInBackground` | The lower level both are built on: your own threads, objects the host keeps alive. |
@@ -1578,6 +1579,77 @@ arrives later is dropped. `runAsync` passes its object's `handle().stopToken()`.
 - `Future`, `onSettled` and `cancel` are main-thread only; a worker gets a `Promise` (or `runAsync`'s token and
   `Progress`).
 
+#### Guarantees
+
+What code that combines futures (the [combinators](#combinators), your own) may rely on, on the main thread:
+
+- **The first settlement wins.** A future settles once; whatever comes later (`resolve`, `reject`, `cancel`, the
+  owner stopping) does nothing. A promise's `resolve()`/`reject()` from any thread may race a `cancel()`: the first
+  to reach the main thread wins, and a value that lost is dropped (`resolve` only posts; `cancel` settles at once, so
+  a cancel made before the posted settlement ran wins). `cancel()` returning `true` means no value or error follows.
+- **Handlers run in order.** The `onSettled` handlers run once each, in the order they were added, right after the
+  status changed (inside a handler the future is settled: `status()` says how, `cancel()` returns `false`), and
+  before the Lua future hears, so Lua's awaiters and `next` handlers run after the C++ ones. A handler added to a
+  settled future runs at once, inside `onSettled`, also from inside another handler. The `onProgress` handlers run
+  in the order added, until one of them settles the future.
+- **Handlers are released on settle.** Once the settled handlers ran, they and the progress handlers are destroyed,
+  with what they captured. So a handler may capture futures and promises that lead back to its own future (a
+  result's promise, the future it waits on): the cycle ends when the future settles. A future that never settles
+  keeps its handlers as long as its state lives; that's what a promise that is never dropped, or an adopted Lua
+  future that stays pending, does.
+
+#### Combinators
+
+Module `imlui.types.future_combinators` (in `import imlui`) builds futures from futures, on the main thread:
+
+```cpp
+imlui::Future<Report> Backend::fetchWithin(std::string url, int ms) {
+    return imlui::withTimeout(fetch(std::move(url)), std::chrono::milliseconds{ms}); // "timed out after 800 ms"
+}
+imlui::Future<Report> Backend::fastest(std::string a, std::string b) {
+    return imlui::race(fetch(std::move(a)), fetch(std::move(b))); // the slower one is cancelled
+}
+imlui::Future<std::vector<Report>> Backend::fetchAll(const std::vector<std::string>& urls) {
+    std::vector<imlui::Future<Report>> each;
+    for (const auto& url : urls) each.push_back(fetch(url));
+    return imlui::all(std::move(each));
+}
+imlui::Future<void> Backend::pause(int ms) { return imlui::delay(std::chrono::milliseconds{ms}); }
+```
+
+| Function | Result |
+|---|---|
+| `delay(ms) -> Future<void>` | Done after `ms` (`std::chrono::milliseconds`; `<= 0`: at the next loop iteration) on the app clock. Cancelling it removes its timer. |
+| `withTimeout(f, ms) -> Future<T>` | Settles like `f` (its value, error or cancellation) and reports `f`'s progress, unless `f` is still pending after `ms`: then it **fails** with `"timed out after <ms> ms"` and `f` is cancelled. |
+| `race(f1, f2, ...)`, `race(std::vector<Future<T>>) -> Future<T>` | Settles like the first input to settle, **whichever way**: done, failed or cancelled. An input settled already wins at once (the first in order). The losers are cancelled. No inputs: cancelled. |
+| `all(std::vector<Future<T>>) -> Future<std::vector<T>>` (`Future<void>` for `void` inputs) | Done with the values in order once all are done (at once for none). Fails or is cancelled like the first input that fails or is cancelled, and **the other inputs are cancelled** then (Lua's [`all`](lua-api.md#async) leaves them running). |
+
+Shared rules:
+
+- **Synchronous.** The result settles inside the settlement of the input that decides it, so a chain of
+  combinators adds no loop iteration. `withTimeout` and `race` of a settled input settle at once.
+- **Cancellation both ways.** Cancelling the result cancels every input still pending; so does the result settling
+  any other way (a timeout, a race won, an `all` failed): nothing keeps running for a result nobody can get. An
+  input cancelled from elsewhere makes `race`/`all`/`withTimeout` cancelled (it decides the race; `all` and
+  `withTimeout` can't finish without it). The inputs are cancelled with `Future::cancel()`: a C++ future's work sees
+  its token stop, an [adopted Lua future](#lua-futures-as-arguments) is cancelled outright.
+- **Rejections.** Watching an input counts as handling its rejection. The result's own isn't marked handled: pushed
+  to Lua and failed with nothing taking it (a timeout nobody awaits), it is reported like any
+  [unhandled rejection](lua-api.md#async).
+- **Lifetime.** A pending input keeps the result alive (its handler holds it, like a promise), so `onSettled`
+  handlers on the result run although the method dropped it; the result keeps its inputs. Every such link is a
+  handler, released on settle, and every input is settled by the time the result is, so all of it is freed then.
+  An empty (default-constructed) input counts as cancelled. Values are copied out of the inputs (`T` must be
+  copyable). `race` and `all` report no progress.
+- **The timer.** `delay` (and `withTimeout`'s clock) is a main-thread timer of `imlui.ui.main_timers`
+  (`addMainTimer(seconds, fn) -> MainTimerId`, `removeMainTimer`), on the app clock. The engine runs the due timers
+  at every loop iteration, after the posted functions and outside any frame, and sleeps no longer than until the
+  next one, so it fires on time while the app idles, without rendering a frame or needing a Lua state (a delay
+  outlives a hot reload, like any C++ future). The timer holds the future like a promise; dropped without ringing
+  (the engine's shutdown, `clearMainTimers()`), it cancels it, and so a `withTimeout` waiting on it. Tests drive the
+  timers on the simulated clock: `test::HeadlessFrame` runs them in `renderFrame` and `advanceTime`; without it,
+  call `runDueMainTimers()` after `setClockSource`.
+
 #### Progress
 
 A future may report how far it got before it settles: a `double`, by convention 0..1 (not clamped; NaN is dropped).
@@ -1622,6 +1694,26 @@ void Lab::after(imlui::Future<Report> f) { // lab:after(f), lab:after(async(fn)(
   handlers run even when the method kept no `Future`. If the Lua state closes first (hot reload, shutdown), the C++
   future is cancelled (at the next loop iteration).
 - A non-future argument raises `bad argument #1 to 'lab:after' (future expected, got number)`.
+
+**Any future: `Future<void>`.** `T` decides which Lua futures a parameter takes. `Future<void>` takes **every** Lua
+future and ignores its values (`sleep(ms)`, an async function, `future()`, a C++ future of another type, which is
+adopted rather than read back). `Future<std::optional<T>>` takes one with a `T` or with no value (`nil`:
+`std::nullopt`). Any other `T` fails the C++ future (`bad future value (integer expected, got nil)`) when the Lua
+future settles with no value or a wrong one. So a combinator over Lua futures is written for the values it needs:
+
+```cpp
+// Any future; the script gets a Future<nil> back (the values are lost).
+imlui::Future<void> Lab::timeout(imlui::Future<void> f, int ms) {
+    return imlui::withTimeout(std::move(f), std::chrono::milliseconds{ms});
+}
+// A typed one keeps the value: lab:fetchWithin(backend:fetch(url), 800).
+imlui::Future<Report> Lab::fetchWithin(imlui::Future<Report> f, int ms) {
+    return imlui::withTimeout(std::move(f), std::chrono::milliseconds{ms});
+}
+```
+
+A script that wants a timeout or a race that keeps whatever values the futures have uses the prelude's
+[`timeout(f, ms)` and `race{...}`](lua-api.md#async), which need no C++.
 
 ### Live properties
 
@@ -1844,6 +1936,7 @@ skeleton.
 | `imlui.types.lua_function` | `LuaFunction`: a handle to a Lua function (`call(args...)`, `call<R>(args...)`, `expired()`, `push`), expired once its state closes; its `LuaConvert` |
 | `imlui.types.progress` | `Progress`: `report(double)`; thread-safe, copyable |
 | `imlui.types.future` | `Future<T>` (`status`, `value`, `error`, `cancel`, `onSettled`, `progress`, `onProgress`; `LuaConvert`: pushes a Lua future, reads one back or adopts it), `Promise<T>` (`resolve`, `reject`, `stopToken`, `progress`, `reporter`; thread-safe), `makePromise<T>(owner)`, `FutureStatus` |
+| `imlui.types.future_combinators` | `delay(ms)`, `withTimeout(f, ms)`, `race(f1, f2, ...)` / `race(vector)`, `all(vector)`: futures made from futures, on the main thread ([Combinators](#combinators)) |
 | `imlui.types.task` | `Task`: `cancel`, `running`, `cancelled` (thread-safe); what `runAsync(work, done[, fail])` returns |
 | `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `runAsync(work, done[, fail]) -> Task`, `runAsync(work) -> Future<R>`, `handle()` (`ScriptObject::Handle`: `alive()`, `stopToken()`, `post(fn)`, for worker threads), `cancelHandles()`, `scriptReloading()` (virtual, singletons' reload hook), the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, `noteConnection`, used by the registry) |
 | `imlui.types.list_model` | `ListModel`: rows for Lua (`count`, `pushItem`, `hasKeys`/`key`), the notifications (`rowsInserted`, `rowsRemoved`, `rowsChanged`, `rowsMoved`, `rowsRemapped`, `reset`), `revision`, its Lua value (`pushLua`, `pushShared`, `fromLua`); `LuaConvert` of a model, a pointer to one and a `shared_ptr` |
@@ -1851,6 +1944,7 @@ skeleton.
 | `imlui.types.live` | `Live<T>`: a property any thread `set()`s, applied on the main thread at most once per loop iteration (latest wins); `Live<T>::Writer` |
 | `imlui.ui.background` | `runInBackground(work)`: the process-wide worker pool; `shutdownBackground(wait)` (the engine calls it), `backgroundThreadLimit`, `backgroundTaskCount` |
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
+| `imlui.ui.main_timers` | `addMainTimer(seconds, fn) -> MainTimerId`, `removeMainTimer(id)`: a function run once on the main thread after a delay on the app clock, without Lua (what `delay` uses); `runDueMainTimers`, `secondsUntilMainTimer`, `clearMainTimers`, `mainTimerCount` (used by the engine and tests) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
 | `imlui.types.element` | `Element`: `render`, `intrinsicSize`, `contentFillsWidth`, `componentComplete`, `destroyed`, `tick` / `setTicking` |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in, with the members' Lua types; `RawRead` |

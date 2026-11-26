@@ -611,6 +611,8 @@ Text { text = function() return s.status end }
 | `await(f) -> values...` | Only inside an async function (raises otherwise, also in a plain coroutine inside one). Waits until future `f` settles and returns its values, or raises its error: a Lua error, catchable with `pcall(await, f)`, `"cancelled"` for a cancelled future. A value that isn't a future is returned as it is. |
 | `sleep(ms) -> future` | Done after `ms` milliseconds, a timer like `setTimeout` (same check on `ms`). Cancelling it clears the timer. |
 | `all({f1, f2, ...}) -> future` | Done with the list of their values (the first value of each, in order, `n` = the count) once all are; failed or cancelled like the first input that fails or is cancelled. Values that aren't futures are taken as they are. Cancelling it cancels the inputs. |
+| `timeout(f, ms) -> future` | Settles like future `f` (all its values, its error, its cancellation; its progress is forwarded), unless `f` is still pending after `ms` milliseconds (a timer like `sleep`'s, same check on `ms`): then it fails with `"timed out after <ms> ms"` and **releases** `f` (cancelled unless something else consumes it). Cancelling it clears the timer and releases `f`. |
+| `race({f1, f2, ...}) -> future` | Settles like the first of them to settle, **whichever way** (done with all its values, failed or cancelled). An input settled already, or a value that isn't a future, wins at once (the first in order). The others are then released, as they are when the race is cancelled. An empty list gives a cancelled future. |
 | `future() -> f` | A pending future the script settles: `f:resolve(values...)`, `f:reject(err)` (each returns whether it settled it; only futures made by `future()` take them); `f:report(p)` reports its progress. |
 
 A future `f`:
@@ -633,6 +635,8 @@ backend:fetch(url)
     :catch(function(err) return "unavailable: " .. tostring(err) end)
     :next(function(title) s.title = title end)
 
+local report = timeout(backend:fetch(url), 5000) -- fails "timed out after 5000 ms"; the fetch is cancelled
+local first = race({ backend:fetch(a), backend:fetch(b) }) -- the slower one is cancelled
 local loading = all({ backend:fetch(a), backend:fetch(b) })
 Text { text = function() return loading.state == "pending" and "Loading..." or "" end }
 ```
@@ -649,11 +653,14 @@ Text { text = function() return loading.state == "pending" and "Loading..." or "
 - **Cancellation.** Cancelling flows down a chain and, where nothing else waits, up: a cancelled future cancels what
   `next`/`catch` made from it, makes `all` over it cancelled, and raises `"cancelled"` in an `await` on it (catchable
   with `pcall`). Cancelling a future that consumes others releases them: a source with one consumer (a `next`, an
-  `await`, an `all`, a C++ method that took it) is cancelled with it; with two, once both let go. A C++ method that
-  took the future and cancels it cancels it outright. Cancelled futures are never reported.
+  `await`, an `all`, a `timeout`, a `race`, a C++ method that took it) is cancelled with it; with two, once both let
+  go. A `timeout` that fires and a `race` that is decided release their inputs the same way. A C++ method that took
+  the future and cancels it (a C++ `withTimeout` or `race` does) cancels it outright. Cancelled futures are never
+  reported.
 - **Futures as C++ arguments.** A method declared with an `imlui::Future<T>` parameter takes any future (`lab:after(f)`);
   it settles from this one (its first value converted to `T`; one that doesn't convert fails the C++ side with
-  the field path). Passing a future counts as handling its rejection. See [Extending](extending.md#lua-futures-as-arguments).
+  the field path). Passing a future counts as handling its rejection. A `Future<void>` parameter takes every future
+  and ignores its values. See [Extending](extending.md#lua-futures-as-arguments).
 - **Hot reload.** Futures and coroutines belong to the Lua state and die with it. A C++ future that settles after a
   reload settles only on the C++ side; a C++ future that was waiting on a Lua future is cancelled.
 - `await` yields, so it works where a coroutine can yield: through `pcall`, `xpcall` and metamethods, not inside a
