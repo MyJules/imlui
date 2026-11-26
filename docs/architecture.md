@@ -51,8 +51,16 @@ flowchart TD
    - `window.waitEvents(timeout)` (`glfwWaitEventsTimeout`). Input or window events start a **settle period** of
      0.3 s, during which every iteration renders, so transitions and hover layers finish.
    - Runs the functions other threads queued with `imlui::post()` / `Engine::post()` (`imlui.ui.main_thread`;
-     one that throws is reported like a script error). They may `notify()` and so request a frame.
+     one that throws is reported like a script error). They may `notify()` and so request a frame. C++ futures
+     settle here, so Lua coroutines awaiting them resume here, outside a frame (and request one); `sleep` and
+     timers resume theirs in `ui.__tick`, at the start of a frame, which also reports the future rejections left
+     unhandled since the last one ([Async](lua-api.md#async)).
    - `renderFrame()`, but only if a frame is due. Otherwise the loop goes back to sleep without rendering.
+4. When the loop ends (window closed, `quit()`): the wake handler is removed and the queued posts dropped, the Lua
+   state closes (every element dies, so the work its `runAsync` started sees its stop token stop), the window and
+   the fonts go, then `shutdownBackground()` (`imlui.ui.background`): every pool task's token stops, queued tasks are
+   dropped, and the workers are joined if their tasks return within 1 s, else detached. What they posted meanwhile is
+   dropped.
 
 ### On-demand rendering
 
@@ -966,7 +974,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, `reservehash`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes); `newstate()` gives each state a memory pool of its own (blocks up to 512 bytes from size-class free lists carved from chunks of 16 KiB to 1 MiB, larger ones from the C heap; released by `close()`; the plain allocator under AddressSanitizer, so ASan still sees Lua's memory); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
+| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, `reservehash`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes, `mainthread`); `newstate()` gives each state a memory pool of its own (blocks up to 512 bytes from size-class free lists carved from chunks of 16 KiB to 1 MiB, larger ones from the C heap; released by `close()`; the plain allocator under AddressSanitizer, so ASan still sees Lua's memory); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on a normal scope exit (not while a Lua error unwinds it) |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
@@ -1044,7 +1052,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, wake handler |
-| `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs) |
+| `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
+| `imlui.ui.background` | The background pool: `runInBackground(work)` (any thread; `work(std::stop_token)` on up to `backgroundThreadLimit()` workers, `hardware_concurrency() - 1` clamped to [2, 8], started lazily; a throw reported on the main thread), `shutdownBackground(wait)` (tokens stopped, queue dropped, workers joined within `wait` or detached; a later task starts a new pool; `Engine::run()` calls it), `backgroundTaskCount` |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
@@ -1063,8 +1072,11 @@ See [Registering C++ types](extending.md).
 
 | Module | Purpose |
 |---|---|
-| `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`; user-extensible) |
-| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives), `cancelHandles()` |
+| `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`, string-keyed `map`/`unordered_map`, `pair`/`tuple`, `variant`/`monostate`; enums through `EnumNames<E>`, structs through `LuaFields<T>` + `field()`; names for error messages built at compile time; user-extensible); `takesLuaFunction<T>()` |
+| `imlui.types.lua_function` | `LuaFunction`: a copyable, main-thread handle to a Lua function (a registry reference); `call(args...)` / `call<R>(args...)` convert through `LuaConvert` and report errors; expires when its state closes (a per-state liveness token: a registry userdata whose finalizer clears it), so a stale handle is a no-op; its `LuaConvert` (`takesFunction`: an element property of the type gets the function, not a binding's value) |
+| `imlui.types.future` | `Future<T>` / `Promise<T>` / `makePromise<T>(owner)`: a result settled once on the main thread (done, failed, cancelled). Promises are thread-safe (settling is posted; the last copy dropped unsettled cancels; an owner token that stops cancels). Pushed to Lua as a prelude future (`ui.__futureLink`), linked through a `LuaFunction`, so settling after the state closed is a no-op; Lua's `cancel()` reaches C++ through a C closure holding a weak reference and stops the promise's token |
+| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives; `stopToken()` stops when it dies), `cancelHandles()`, `runAsync(work, done[, fail])` (work on the background pool with a token stopped by the object's death or a pool shutdown; `done`/`fail` on the main thread through the handle), `runAsync(work) -> Future<R>` (also stopped by the future's cancel; the object's death cancels the future) |
+| `imlui.types.live` | `Live<T>`: a property any thread `set()`s; one apply per loop iteration through the owner's handle (latest value, then `notify`); `writer()` for workers that may outlive the owner |
 | `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `pushId`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), `stackSize`, element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `widthIn`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
 | `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `contentFillsWidth(frame)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)`; the ticking list by id (`tickingElements()`, `findTicking(id)`) |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag, fills-width policy) |

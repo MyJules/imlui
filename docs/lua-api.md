@@ -161,6 +161,12 @@ their own constructors ([below](#dynamic-children)). Props and signals are in [E
 | binding | `text = function(self) return ... end` | Called on every read, every frame. Widget edits are ignored, because the function owns the value. |
 | two-way | `value = bind(s, "volume")` | Reads `s.volume`. Widget edits write `s.volume`. |
 
+A registered C++ type may declare a property that takes a function (a callback, `LuaFunction` in C++): there a
+function is the value itself, not a binding, and isn't called on reads. The same holds for method arguments:
+`backend:forEach(function(item) ... end)`. Tables passed to C++ (structs, maps, sequences) are read raw, without
+their metatables, and enums are passed as their names (`quality = "high"`). See
+[Value conversion](extending.md#value-conversion).
+
 ### Signals
 
 Signals are `on*` handlers called as `handler(self, ...)`, for example `onClicked(self)`,
@@ -492,6 +498,74 @@ setTimeout(function() clearTimer(id) end, 10000)
 ```
 
 For a timer declared as an element, see the [`Timer` element](elements.md#timer).
+
+## Async
+
+A **future** is a value that arrives later: a C++ method's result ([`imlui::Future<T>`](extending.md#futures)),
+`sleep(ms)`, an async function's result, `future()`. An **async function** runs in a coroutine and waits for futures
+with `await` without blocking the UI: the coroutine yields, frames keep rendering, and it resumes on the main thread
+when the future settles.
+
+```lua
+local s = state { status = "idle" }
+
+local refresh = async(function()
+    s.status = "loading"
+    local ok, err = pcall(function()
+        local report = await(backend:fetch("https://example.com/report")) -- a C++ Future<Report>
+        s.title = report.title
+        await(sleep(500))
+    end)
+    s.status = ok and "done" or ("failed: " .. tostring(err))
+end)
+
+Button { text = "Refresh", onClicked = refresh } -- the handler returns a future; nobody needs to keep it
+Text { text = function() return s.status end }
+```
+
+| Function | Description |
+|---|---|
+| `async(fn) -> function` | Calling the result runs `fn(...)` in a new coroutine and returns a future of `fn`'s results (as soon as `fn` first awaits, or returns). An error `fn` raises fails the future. The coroutine runs in the [scope](#element-ids) the function was called in, like a timer. |
+| `await(f) -> values...` | Only inside an async function (raises otherwise, also in a plain coroutine inside one). Waits until future `f` settles and returns its values, or raises its error: a Lua error, catchable with `pcall(await, f)`, `"cancelled"` for a cancelled future. A value that isn't a future is returned as it is. |
+| `sleep(ms) -> future` | Done after `ms` milliseconds, a timer like `setTimeout` (same check on `ms`). Cancelling it clears the timer. |
+| `all({f1, f2, ...}) -> future` | Done with the list of their values (the first value of each, in order, `n` = the count) once all are; failed or cancelled like the first input that fails or is cancelled. Values that aren't futures are taken as they are. Cancelling it cancels the inputs. |
+| `future() -> f` | A pending future the script settles: `f:resolve(values...)`, `f:reject(err)` (each returns whether it settled it; only futures made by `future()` take them). |
+
+A future `f`:
+
+| Field / method | Description |
+|---|---|
+| `f.state` | `"pending"`, `"done"`, `"failed"` or `"cancelled"`. Bindings read it like any field; settling a future requests a frame, so they update. |
+| `f.value` | The first value, once done. |
+| `f.error` | The error, once failed; `"cancelled"` once cancelled. |
+| `f:next(onValue, onError) -> future` | When `f` is done, `onValue(values...)`; when it failed or was cancelled, `onError(err)`. The new future settles with what the handler returns (a future it returns is followed) or fails with what it raises. A missing handler passes the outcome on. Handlers run in the scope `next` was called in. |
+| `f:catch(onError) -> future` | `f:next(nil, onError)`. |
+| `f:cancel() -> boolean` | Settles a pending `f` as cancelled and stops what it waits on: the C++ work behind it (its stop token), a `sleep`'s timer, an async function (it never resumes; its to-be-closed variables are closed; the future it awaits is cancelled), `all`'s inputs. A future from `next` doesn't cancel its source. `false` when `f` already settled. |
+
+```lua
+backend:fetch(url)
+    :next(function(report) return report.title end)
+    :catch(function(err) return "unavailable: " .. tostring(err) end)
+    :next(function(title) s.title = title end)
+
+local loading = all({ backend:fetch(a), backend:fetch(b) })
+Text { text = function() return loading.state == "pending" and "Loading..." or "" end }
+```
+
+- **When code runs.** Handlers and resumed coroutines run synchronously when a future settles, on the main thread:
+  a C++ future settles in a function posted to the main loop (outside a frame), `sleep` in its timer (at the start of
+  a frame, in `ui.__tick`), a `future()` inside `resolve`/`reject`. `await` on a future that already settled returns
+  at once, without yielding. Settling requests a frame, so what the resumed code changed is shown.
+- **Unhandled rejections.** A future that fails while nothing takes its outcome (no `await`, `next`, `catch` or
+  `all`, and no C++ `onSettled`) is reported in the error overlay at the start of the next frame, unless a handler was
+  attached by then: `unhandled future rejection: <error>` (with the traceback of a Lua error). So an async function
+  used as a handler (`onClicked = async(...)`) reports its errors like a plain handler. Cancelled futures are never
+  reported.
+- **Hot reload.** Futures and coroutines belong to the Lua state and die with it. A C++ future that settles after a
+  reload settles only on the C++ side.
+- `await` yields, so it works where a coroutine can yield: through `pcall`, `xpcall` and metamethods, not inside a
+  C function such as a `table.sort` comparator (that raises `attempt to yield across a C-call boundary`). An async
+  function's body must not call `coroutine.yield` itself (its future fails).
 
 ## Scaling and zoom
 

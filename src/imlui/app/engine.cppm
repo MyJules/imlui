@@ -36,6 +36,7 @@ import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.name;
 import imlui.image.image_cache;
+import imlui.ui.background;
 import imlui.ui.clock;
 import imlui.ui.frame_request;
 import imlui.ui.layout_box;
@@ -293,6 +294,11 @@ int Engine::run() {
     m_state = nullptr;
     m_window.destroy();
     clearFontLibrary();
+    // The background pool: tokens stopped, queued tasks dropped, workers joined (or detached after a second). After
+    // the window went, so a slow task doesn't keep it on screen; after the state closed, so the elements' own tasks
+    // were already stopped by their deaths. What they posted meanwhile is dropped (their objects are dead or unused).
+    shutdownBackground();
+    clearPosted();
     // A smoke run (exitAfterFrames) fails when the script reported an error.
     if (m_config.exitAfterFrames > 0 && !luaui::errors().empty()) {
         log::error("exiting after {} frames with script errors", m_framesRendered);

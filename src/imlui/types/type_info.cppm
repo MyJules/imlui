@@ -25,8 +25,15 @@ public:
         /// Converts the value at `idx` and calls the setter if it differs from the getter's value.
         /// Empty for read-only properties.
         std::function<Assign(lua::State*, int, ScriptObject&)> assign;
+        /// Why the value at `idx` doesn't convert, after assign() returned TypeMismatch (luaMismatch<V>: "number
+        /// expected, got string", or with a path into the value "[2].x: number expected, got string"). Set with
+        /// `assign`.
+        std::string (*mismatch)(lua::State*, int) = nullptr;
         /// True when nil is a value of the property (std::optional): nil is then synced as std::nullopt.
         bool nullable = false;
+        /// True when a Lua function is a value of the property (LuaFunction): the sync then passes a function field on
+        /// as the value instead of calling it as a binding.
+        bool takesFunction = false;
         /// The value nil resets the property to, captured for an object right after its construction:
         /// the declared default (TypeBuilder::property(name, get, set, defaultValue)), or else a copy of
         /// the getter's value. Empty for read-only and nullable properties, and for value types that

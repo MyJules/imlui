@@ -49,6 +49,7 @@ import imlui.ui.renderer;
 import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_info;
 import imlui.types.type_builder;
 
@@ -335,8 +336,9 @@ std::uint64_t fingerprint(lua::State* state, int tbl, const TypeInfo& info) {
 /// something else while the table itself doesn't change, so that a sync must read them again although the fingerprint
 /// matches: a binding (a function, called every sync), a bind or any other table (a nested table changed in place: a
 /// bind's source, a color, a model), a userdata (its contents), and, when the table has a metatable of its own, any
-/// field the table doesn't hold (its __index answers). A nil, boolean, number or string is static: its property
-/// converts the same way until the table's field is written, which the fingerprint sees.
+/// field the table doesn't hold (its __index answers). A nil, boolean, number or string, and a function a property
+/// takes as its value (LuaFunction), is static: its property converts the same way until the table's field is
+/// written, which the fingerprint sees.
 void collectDynamicFields(lua::State* state, int tbl, const TypeInfo& info, std::vector<std::uint32_t>& out) {
     out.clear();
     lua::checkstack(state, 2);
@@ -354,7 +356,10 @@ void collectDynamicFields(lua::State* state, int tbl, const TypeInfo& info, std:
         case lua::Type::String: break;
         // (The default property's positional [1] is passed on unresolved, by identity: in the fingerprint.)
         case lua::Type::Nil: dynamic = ownMeta; break;
-        default: dynamic = true; break; // functions, tables (binds), userdata, threads
+        // A function is a binding, called every sync, unless the property takes functions: then it is the value itself,
+        // as static as a string.
+        case lua::Type::Function: dynamic = !p.takesFunction; break;
+        default: dynamic = true; break; // tables (binds), userdata, threads
         }
         if (dynamic) out.push_back(static_cast<std::uint32_t>(i));
     }
@@ -466,11 +471,27 @@ void resetProperty(const Box& b, std::size_t index) {
         p.reset((*b.defaults)[index].get(), *b.object);
 }
 
+/// "Gauge.value: number expected, got string", "Plot.points[2].x: number expected, got string": why the value at `idx`
+/// didn't convert to property `p` of `info`.
+std::string mismatchMessage(lua::State* state, int idx, const TypeInfo& info, const TypeInfo::Property& p) {
+    std::string why;
+    if (p.mismatch) {
+        why = p.mismatch(state, idx);
+    } else {
+        why = std::string{p.typeName} + " expected, got " + lua::typeName(state, idx);
+    }
+    return luaMismatchAt(info.name() + "." + p.name, why);
+}
+
 /// Writes declared property `index` of the element table `node` into b's object.
 void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index) {
     const TypeInfo& info = *b.type;
     const TypeInfo::Property& p = info.properties()[index];
-    node.push(*p.key);
+    // A property that takes functions (LuaFunction) gets a function field as its value: not called as a binding.
+    if (!p.takesFunction || node.pushRaw(*p.key) != lua::Type::Function) {
+        if (p.takesFunction) lua::pop(state);
+        node.push(*p.key);
+    }
     if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
         lua::pop(state);
         lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child
@@ -485,8 +506,7 @@ void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index
         return;
     }
     if (p.assign(state, -1, *b.object) == TypeInfo::Assign::TypeMismatch)
-        luaui::reportError(info.name() + "." + p.name + ": " + std::string{p.typeName} + " expected, got " +
-                           lua::typeName(state, -1));
+        luaui::reportError(mismatchMessage(state, -1, info, p));
     lua::pop(state);
 }
 
@@ -652,8 +672,7 @@ int singletonNewIndex(lua::State* state) {
         if (lua::isnil(state, 3) && !p->nullable)
             resetProperty(*b, static_cast<std::size_t>(p - b->type->properties().data()));
         else if (p->assign(state, 3, *b->object) == TypeInfo::Assign::TypeMismatch)
-            lua::error(state, b->type->name() + "." + key + ": " + std::string{p->typeName} + " expected, got " +
-                                  lua::typeName(state, 3));
+            lua::error(state, mismatchMessage(state, 3, *b->type, *p));
         return 0;
     }
     if (!key.starts_with("on") || !(lua::isfunction(state, 3) || lua::isnil(state, 3)))

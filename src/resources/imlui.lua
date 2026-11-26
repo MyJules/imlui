@@ -982,11 +982,337 @@ local function protectedCall(fn, ...)
     if not ok then ui.reportError(tostring(err)) end
 end
 
+-------------------------------------------------------------------------------
+-- Async: futures, async/await
+-------------------------------------------------------------------------------
+
+-- A future is a value that arrives later. Its table holds `state` ("pending", "done", "failed", "cancelled"), `value`
+-- (the first value, once done) and `error` (once failed; "cancelled" once cancelled), which bindings read like any
+-- field. Internal fields: __values (table.pack of every value), __handlers (functions called with the future when it
+-- settles), __cancel (what cancel() also stops: a C++ job, a timer, an async function), __handled (something takes its
+-- outcome: an awaiter, next/catch, all, a C++ handler), __resolvable (made by future()), __trace (a Lua error's
+-- traceback, for the report).
+--
+-- Handlers run synchronously when a future settles: an awaiting coroutine resumes inside the resolve(), the timer or
+-- the posted C++ function that settled it, inside a frame or outside one. Settling requests a frame.
+local FUTURE_METHODS = {}
+local FUTURE = { __index = FUTURE_METHODS, __name = "future" }
+
+local function isFuture(v) return getmetatable(v) == FUTURE end
+local function newFuture() return setmetatable({ state = "pending" }, FUTURE) end
+
+-- Rejections that nothing handled when they happened. ui.__tick reports those still unhandled at the next frame, so
+-- code that attaches a handler right after (in the same posted function or handler) isn't reported.
+local unhandled = {}
+
+local function display(err)
+    local ok, s = pcall(tostring, err)
+    return ok and s or "(error object)"
+end
+
+local function reportUnhandled()
+    local list = unhandled
+    unhandled = {}
+    for _, f in ipairs(list) do
+        if not f.__handled then ui.reportError("unhandled future rejection: " .. (f.__trace or display(f.error))) end
+    end
+end
+
+-- Settles `f` as `state` with the values (done) or the error (failed, cancelled) in `...`, once. Returns whether it did.
+local function settle(f, state, ...)
+    if f.state ~= "pending" then return false end
+    f.state = state
+    if state == "done" then
+        f.__values = table.pack(...)
+        f.value = (...)
+    else
+        f.error = (...)
+        if state == "failed" and not f.__handled then unhandled[#unhandled + 1] = f end
+    end
+    f.__cancel = nil
+    local handlers = f.__handlers
+    f.__handlers = nil
+    native.requestFrame(0)
+    if handlers then
+        for _, fn in ipairs(handlers) do protectedCall(fn, f) end
+    end
+    return true
+end
+
+-- Calls fn(f) once `f` settled: now when it is. Marks the outcome handled.
+local function onSettle(f, fn)
+    f.__handled = true
+    if f.state ~= "pending" then return fn(f) end
+    local handlers = f.__handlers
+    if handlers == nil then
+        handlers = {}
+        f.__handlers = handlers
+    end
+    handlers[#handlers + 1] = fn
+end
+
+-- Settles `g` the way `f` settles.
+local function follow(g, f)
+    onSettle(f, function()
+        if f.state == "done" then
+            settle(g, "done", table.unpack(f.__values, 1, f.__values.n))
+        else
+            g.__trace = f.__trace
+            settle(g, f.state, f.error)
+        end
+    end)
+end
+
+-- The traceback of the last error a handler raised (xpcall's message handler keeps the error value itself).
+local lastTrace
+local function keepTrace(err)
+    lastTrace = type(err) == "string" and debug.traceback(err, 2) or nil
+    return err
+end
+
+-- Settles `g` with the outcome of xpcall(handler, keepTrace, ...): its results, the future it returned (followed), or
+-- its error.
+local function settleWith(g, ok, ...)
+    if not ok then
+        g.__trace = lastTrace
+        settle(g, "failed", (...))
+    elseif select("#", ...) == 1 and isFuture((...)) then
+        follow(g, (...))
+    else
+        settle(g, "done", ...)
+    end
+end
+
+local function checkFuture(f, method)
+    if not isFuture(f) then error(("%s: call it on a future (f:%s(...)), got %s"):format(method, method, type(f)), 3) end
+end
+local function checkHandler(fn, method, what)
+    if fn ~= nil and type(fn) ~= "function" then
+        error(("%s: %s must be a function or nil, got %s"):format(method, what, type(fn)), 3)
+    end
+end
+
+--- f:next(onValue, onError) -> future. When `f` is done, onValue(values...); when it failed or was cancelled,
+--- onError(error). The new future settles with what the handler returns (a future it returns is followed), or fails
+--- with what it raises. A missing handler passes the outcome on. Handlers run in the scope they were set in.
+function FUTURE_METHODS:next(onValue, onError)
+    checkFuture(self, "next")
+    checkHandler(onValue, "next", "onValue")
+    checkHandler(onError, "next", "onError")
+    if onValue then onValue = inCurrentScope(onValue) end
+    if onError then onError = inCurrentScope(onError) end
+    local g = newFuture()
+    onSettle(self, function(f)
+        if f.state == "done" then
+            if onValue then
+                settleWith(g, xpcall(onValue, keepTrace, table.unpack(f.__values, 1, f.__values.n)))
+            else
+                follow(g, f)
+            end
+        elseif onError then
+            settleWith(g, xpcall(onError, keepTrace, f.error))
+        else
+            follow(g, f)
+        end
+    end)
+    return g
+end
+
+--- f:catch(onError) -> future: f:next(nil, onError).
+function FUTURE_METHODS:catch(onError)
+    checkFuture(self, "catch")
+    checkHandler(onError, "catch", "onError")
+    return self:next(nil, onError)
+end
+
+--- f:cancel() -> boolean. Settles a pending future as cancelled (error "cancelled") and stops what it waits on: the C++
+--- work behind it, a sleep's timer, an async function (and the future it awaits), all()'s inputs. A future from next()
+--- doesn't cancel its source. False when `f` already settled.
+function FUTURE_METHODS:cancel()
+    checkFuture(self, "cancel")
+    if self.state ~= "pending" then return false end
+    local stop = self.__cancel
+    settle(self, "cancelled", "cancelled")
+    if stop then protectedCall(stop) end
+    return true
+end
+
+--- f:resolve(values...) / f:reject(error) -> boolean: settle a future made by future(). False when it already settled.
+function FUTURE_METHODS:resolve(...)
+    checkFuture(self, "resolve")
+    if not rawget(self, "__resolvable") then error("resolve: only a future made by future() can be resolved", 2) end
+    return settle(self, "done", ...)
+end
+function FUTURE_METHODS:reject(err)
+    checkFuture(self, "reject")
+    if not rawget(self, "__resolvable") then error("reject: only a future made by future() can be rejected", 2) end
+    return settle(self, "failed", err)
+end
+
+--- A pending future that the script settles with f:resolve(...) or f:reject(err).
+function ui.future()
+    local f = newFuture()
+    f.__resolvable = true
+    return f
+end
+
+-- Async functions. tasks[coroutine] = { co, future, scope, waiting = the future it awaits, cancelled }.
+local tasks = setmetatable({}, { __mode = "k" })
+
+-- After a resume of `task`: settles its future when the body returned or raised. A body that yielded without await
+-- (coroutine.yield) fails: nothing would ever resume it.
+local function finish(task, ok, ...)
+    local co = task.co
+    if coroutine.status(co) == "dead" then
+        tasks[co] = nil
+        if ok then
+            settle(task.future, "done", ...)
+        else
+            local err = (...)
+            if type(err) == "string" then task.future.__trace = debug.traceback(co, err) end
+            coroutine.close(co) -- closes its pending to-be-closed variables
+            settle(task.future, "failed", err)
+        end
+    elseif task.waiting == nil and not task.cancelled then
+        tasks[co] = nil
+        coroutine.close(co)
+        settle(task.future, "failed", "async: the function yielded with coroutine.yield; use await")
+    end
+end
+
+-- Resumes `task` with `...`, in the scope it was started in.
+local function step(task, ...)
+    task.waiting = nil
+    if task.scope then
+        return finish(task, inScope(task.scope, coroutine.resume, task.co, ...))
+    end
+    return finish(task, coroutine.resume(task.co, ...))
+end
+
+--- async(fn) -> function. Calling the result runs fn(...) in a new coroutine, which may `await`, and returns a future
+--- of fn's results right away (when fn first awaits). An error fn raises fails the future. Cancelling the future
+--- stops the coroutine where it waits (its to-be-closed variables are closed) and cancels the future it awaits.
+--- The coroutine runs in the scope async's result was called in, like a timer.
+function ui.async(fn)
+    if type(fn) ~= "function" then error("async: a function expected, got " .. type(fn), 2) end
+    return function(...)
+        local f = newFuture()
+        local task = { co = coroutine.create(fn), future = f, scope = scopes[#scopes] }
+        tasks[task.co] = task
+        f.__cancel = function()
+            task.cancelled = true
+            tasks[task.co] = nil
+            local waiting = task.waiting
+            task.waiting = nil
+            if waiting then waiting:cancel() end
+            if coroutine.status(task.co) == "suspended" then coroutine.close(task.co) end
+        end
+        step(task, ...)
+        return f
+    end
+end
+
+--- await(f) -> values... Inside an async function: waits until future `f` settles (the coroutine yields; the UI keeps
+--- running), then returns its values, or raises its error (catchable with pcall; "cancelled" for a cancelled one). A
+--- value that isn't a future is returned as is. Raises outside an async function.
+function ui.await(f)
+    local task = tasks[coroutine.running()]
+    if task == nil then error("await: not inside an async function (wrap the caller in async(fn))", 2) end
+    if not isFuture(f) then return f end
+    if f.state == "pending" then
+        task.waiting = f
+        onSettle(f, function()
+            if not task.cancelled then step(task) end
+        end)
+        coroutine.yield()
+    else
+        f.__handled = true
+    end
+    if f.state == "done" then return table.unpack(f.__values, 1, f.__values.n) end
+    error(f.error, 0)
+end
+
+--- sleep(ms) -> future, done after `ms` milliseconds (a timer, like setTimeout). Cancelling it clears the timer.
+function ui.sleep(ms)
+    if ms == nil then ms = 0 end
+    if type(ms) ~= "number" or not (ms >= 0 and ms < math.huge) then
+        error("sleep: the delay must be a finite number of milliseconds >= 0, got " .. describe(ms), 2)
+    end
+    local f = newFuture()
+    local id = addTimer(function() settle(f, "done") end, ms, false)
+    f.__cancel = function() ui.clearTimer(id) end
+    return f
+end
+
+--- all({f1, f2, ...}) -> future of the list of their values (the first value of each), in order. Fails or is cancelled
+--- like the first input that fails or is cancelled. Values that aren't futures are taken as they are. Cancelling it
+--- cancels the inputs.
+function ui.all(list)
+    if type(list) ~= "table" then error("all: a list of futures expected, got " .. type(list), 2) end
+    local n = list.n or #list
+    local f = newFuture()
+    local results, left = { n = n }, n
+    for i = 1, n do
+        local item = list[i]
+        if isFuture(item) then
+            onSettle(item, function()
+                if item.state == "done" then
+                    results[i] = item.value
+                    left = left - 1
+                    if left == 0 then settle(f, "done", results) end
+                else
+                    f.__trace = item.__trace
+                    settle(f, item.state, item.error)
+                end
+            end)
+        else
+            results[i] = item
+            left = left - 1
+        end
+    end
+    if f.state == "pending" then
+        if left == 0 then
+            settle(f, "done", results)
+        else
+            f.__cancel = function()
+                for i = 1, n do
+                    if isFuture(list[i]) then list[i]:cancel() end
+                end
+            end
+        end
+    end
+    return f
+end
+
+-- C++ futures (imlui::Future<T>, module imlui.types.future) push through this: a new future and its link, which C++
+-- keeps (a LuaFunction) and calls on the main thread to settle it: link("done", value), link("failed", message,
+-- handled), link("cancelled"); link() returns the future. `canceller` (a C function) cancels the C++ side when the
+-- script cancels. A settlement passed after it applies at once.
+function ui.__futureLink(canceller, ...)
+    local f = newFuture()
+    f.__cancel = canceller
+    local function link(kind, ...)
+        if kind == nil then return f end
+        if kind == "failed" then
+            local err, handled = ...
+            if handled then f.__handled = true end
+            settle(f, "failed", err)
+        elseif kind == "cancelled" then
+            settle(f, "cancelled", "cancelled")
+        else
+            settle(f, "done", ...)
+        end
+    end
+    if select("#", ...) > 0 then link(...) end
+    return f, link
+end
+
 --- Called by the engine at the start of every frame. Returns the seconds until
 --- the next timer is due (nil when there are no timers), so the engine wakes up for it.
 function ui.__tick(now)
     -- The tree holds what it shows now; ids no longer keep their elements (see `pinned`).
     if pinned[1] ~= nil then pinned = {} end
+    if unhandled[1] ~= nil then reportUnhandled() end
     -- Collect first: callbacks may add or clear timers.
     local due = {}
     for id, t in pairs(timers) do

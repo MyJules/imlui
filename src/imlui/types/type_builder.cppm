@@ -46,27 +46,23 @@ inline constexpr bool isOptional = false;
 template <class V>
 inline constexpr bool isOptional<std::optional<V>> = true;
 
-/// Raises "bad argument #2 to 'Gauge:setRange' (number expected, got string)".
-[[noreturn]] inline void argError(lua::State* s, const std::string& where, int arg, std::string_view expected,
-                                  int idx) {
+/// Raises "bad argument #2 to 'Gauge:setRange' (number expected, got string)", or with the path to what failed inside
+/// the value: "bad argument #1 to 'lab:crunch' (CrunchOptions.method: 'trial'|'wheel' expected, got string "fast")".
+template <class A>
+[[noreturn]] void argError(lua::State* s, const std::string& where, int arg, int idx) {
     std::string msg = "bad argument #" + std::to_string(arg) + " to '" + where + "' (";
-    msg += expected;
-    msg += " expected, got ";
-    msg += lua::typeName(s, idx);
+    msg += luaMismatchOf(LuaConvert<A>::name, luaMismatch<A>(s, idx));
     msg += ")";
     lua::error(s, msg);
 }
 
 template <class T, class Fn, class... A, std::size_t... I>
-int invokeMethod(const Fn& fn, T& self, lua::State* s, int first, const std::string& where, std::tuple<A...>*,
-                 std::index_sequence<I...>) {
-    const bool ok[] = {LuaConvert<A>::check(s, first + static_cast<int>(I))..., true};
-    for (std::size_t i = 0; i < sizeof...(A); ++i) {
-        if (!ok[i]) {
-            constexpr std::string_view names[] = {LuaConvert<A>::name..., {}};
-            argError(s, where, static_cast<int>(i) + 1, names[i], first + static_cast<int>(i));
-        }
-    }
+int invokeMethod(const Fn& fn, T& self, lua::State* s, int first, [[maybe_unused]] const std::string& where,
+                 std::tuple<A...>*, std::index_sequence<I...>) {
+    // The first argument that doesn't convert raises (`&&` stops there).
+    static_cast<void>(((LuaConvert<A>::check(s, first + static_cast<int>(I)) ||
+                        (argError<A>(s, where, static_cast<int>(I) + 1, first + static_cast<int>(I)), false)) &&
+                       ...));
     std::tuple<A...> args{LuaConvert<A>::get(s, first + static_cast<int>(I))...};
     using R = typename MethodTraits<Fn>::Result;
     if constexpr (std::is_void_v<R>) {
@@ -230,6 +226,8 @@ private:
         static_assert(std::is_invocable_v<const Setter&, T&, V&&>, "the setter must accept the getter's type");
         TypeInfo::Property p = readOnly<Getter>(std::move(name), getter);
         p.nullable = detail::isOptional<V>;
+        p.mismatch = &luaMismatch<V>;
+        p.takesFunction = takesLuaFunction<V>();
         std::string where = m_info.name() + "." + p.name;
         p.assign = [getter, setter, where](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
             if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
