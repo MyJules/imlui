@@ -25,6 +25,7 @@
   Signals are on* handlers called as handler(self, ...):
     onClicked(self)  onToggled(self, checked)  onMoved(self, value)
     onTextChanged(self, text)  onAccepted(self, text)  onActivated(self, index, text)
+  connect(element, "onClicked", fn) adds more listeners (see ui.connect).
 
   Indices (currentIndex, currentRow, ...) are 1-based, like everything in Lua.
 ]]
@@ -431,6 +432,101 @@ function ui.component(fn)
         return root
     end
 end
+
+-------------------------------------------------------------------------------
+-- Signals: several listeners
+-------------------------------------------------------------------------------
+
+-- connections[target] = { [signal] = { record... } }, in connect order. Weak keys: a connection never keeps its
+-- target (an element table, a singleton global) alive, also when its function refers to the target. A record is
+-- { fn } for a connection made at app level. One made in a component instance or delegate scope belongs to the scope:
+-- its record is weak-valued, { [2] = scope }, and its function (which runs in the scope, so holds it) is
+-- ownedFns[scope][record], an ephemeron: once nothing else holds the scope (its elements are gone), the connection
+-- goes with it. Disconnecting empties the record, so a dispatch that took it already skips it.
+local connections = setmetatable({}, { __mode = "k" })
+local ownedFns = setmetatable({}, { __mode = "k" })
+local WEAK_VALUES = { __mode = "v" }
+
+-- The function of a connection record; nil once it was disconnected or its scope was collected.
+local function listenerOf(rec)
+    local fn = rec[1]
+    if fn ~= nil then return fn end
+    local scope = rec[2]
+    local fns = scope ~= nil and ownedFns[scope] or nil
+    return fns and fns[rec]
+end
+
+--- Calls fn with the arguments of `signal` whenever `target` emits it: a C++ element (typed or built-in) as
+--- fn(self, ...), a singleton as fn(...), like its `on*` handler. The signal is one the type declares or a property's
+--- `on<Name>Changed`. After the handler, in connect order; each listener's error is reported, and the others still
+--- run. A listener connected during a dispatch runs from the next one on; one disconnected during it doesn't run.
+--- Returns a function that disconnects it (calling it again does nothing). Made inside a component instance or
+--- delegate, the listener runs in its scope and is dropped with it (when its elements are collected).
+function ui.connect(target, signal, fn)
+    if type(signal) ~= "string" then error("connect: signal name expected, got " .. type(signal), 2) end
+    if type(fn) ~= "function" then error("connect: function expected, got " .. type(fn), 2) end
+    if types == nil then error("connect: no C++ types (the library runs without an engine)", 2) end
+    local ok, why = types.listen(target, signal)
+    if not ok then error("connect: " .. why, 2) end
+    local scope = scopes[#scopes]
+    local rec
+    if scope == nil then
+        rec = { fn }
+    else
+        rec = setmetatable({ [2] = scope }, WEAK_VALUES)
+        local fns = ownedFns[scope]
+        if fns == nil then
+            fns = {}
+            ownedFns[scope] = fns
+        end
+        fns[rec] = function(...) return inScope(scope, fn, ...) end
+    end
+    local signals = connections[target]
+    if signals == nil then
+        signals = {}
+        connections[target] = signals
+    end
+    local list = signals[signal]
+    if list == nil then
+        list = {}
+        signals[signal] = list
+    end
+    for i = #list, 1, -1 do -- the records of collected scopes
+        if listenerOf(list[i]) == nil then table.remove(list, i) end
+    end
+    list[#list + 1] = rec
+    return function()
+        rec[1] = nil
+        local owner = rec[2]
+        if owner ~= nil then
+            rec[2] = nil
+            local fns = ownedFns[owner]
+            if fns ~= nil then fns[rec] = nil end
+        end
+        removeFrom(list, rec)
+    end
+end
+
+-- dispatch(target, signal, ...): ScriptObject::emit and notify call it after the handler, once the object has had a
+-- listener (imlui.lua.listeners). Calls the listeners connected when it starts. Returns whether one ran without an
+-- error.
+local function dispatch(target, signal, ...)
+    local signals = connections[target]
+    local list = signals and signals[signal]
+    local n = list and #list or 0
+    if n == 0 then return false end
+    local taken = n == 1 and list or table.move(list, 1, n, 1, {}) -- one listener: its record is read before it runs
+    local ran = false
+    for i = 1, n do
+        local fn = listenerOf(taken[i])
+        if fn ~= nil then
+            local ok, err = xpcall(fn, debug.traceback, ...)
+            if ok then ran = true else ui.reportError(tostring(err)) end
+        end
+    end
+    return ran
+end
+if types ~= nil then types.setDispatch(dispatch) end
 
 -------------------------------------------------------------------------------
 -- Dynamic children: Repeater, ListView, If, Loader

@@ -9,6 +9,9 @@
 //    the element table (honouring two-way binds, like a widget edit), `onValueChanged` is emitted, and
 //    a frame is requested.
 //  * emit("onPeak", args...) calls the `onPeak` handler.
+//  * Both call the signal's listeners after the handler (`connect(obj, "onPeak", fn)` in Lua; imlui.lua.listeners),
+//    once one was connected to the object (noteConnection()).
+//  * scriptReloading() tells a singleton that a new script is about to replace the one it served.
 //
 // Every object has an id (objectId()): a number no other object of the process has had or will have, so unlike its
 // address it is never reused after the object dies. It is the identity of an element (its ImGui ID scope, its key in
@@ -28,6 +31,7 @@ import std;
 import lua;
 import imlui.lua.element_scope;
 import imlui.lua.errors;
+import imlui.lua.listeners;
 import imlui.lua.node;
 import imlui.types.future;
 import imlui.types.lua_convert;
@@ -79,12 +83,13 @@ public:
 
     /// Property `property` changed in C++: writes it back to Lua (through Node::set, so a two-way bind
     /// writes its source and a function binding is left alone), emits `on<Property>Changed` with the new
-    /// value, and requests a frame. Without a Lua link it only requests a frame.
+    /// value (the handler, then the listeners), and requests a frame. Without a Lua link it only requests a frame.
     void notify(std::string_view property);
 
-    /// Calls the handler `signal` (e.g. "onPeak"). Element handlers get `(self, args...)`, singleton
-    /// handlers `(args...)`. Errors go to the error overlay. Requests a frame (a handler usually changes
-    /// state). Returns false when there is no handler, no Lua link, or the handler raised an error.
+    /// Calls the handler `signal` (e.g. "onPeak"), then the listeners connected to it, in connect order. Element
+    /// handlers and listeners get `(self, args...)`, singleton ones `(args...)`. Errors go to the error overlay (one
+    /// listener's error doesn't stop the others). Requests a frame (a handler usually changes state). Returns true
+    /// when the handler or a listener ran without an error: false without either, or without a Lua link.
     template <class... Args>
     bool emit(std::string_view signal, const Args&... args) {
         if (!m_state) return false;
@@ -95,6 +100,15 @@ public:
         requestFrame();
         return called;
     }
+
+    /// Main thread: a new script is about to replace the one this singleton served (a hot reload). Called by
+    /// TypeRegistry::install() for every singleton an earlier state had, before the new state links it and before the
+    /// new script runs; the object is still linked to the old script's state (if it is still open), so notify() and
+    /// emit() reach the old script. Override it to stop work started for the old script, so that the new one starts
+    /// fresh. A reload whose script then fails keeps the old script running, and the hook isn't called again: the work
+    /// stays stopped until the next successful reload starts it. An exception is reported. Elements never get it
+    /// (they die with their state). The default does nothing.
+    virtual void scriptReloading();
 
     /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
     [[nodiscard]] Handle handle();
@@ -181,6 +195,9 @@ public:
     void attach(lua::State* state, int idx, bool singleton);
     /// Points the link at `state` again, where attach() was already called (a reload that failed).
     void relink(lua::State* state);
+    /// A listener was connected to one of this object's signals in its linked state: emit() and notify() call the
+    /// listeners from now on (until attach() links it to a new state).
+    void noteConnection();
     /// Drops the link (the state is closing or the instance is being destroyed).
     void detach();
 
@@ -244,7 +261,7 @@ private:
     /// " (<dynamic type>)": the context of a runAsync() error report.
     [[nodiscard]] std::string asyncContext() const;
 
-    /// emit()'s body, inside its protected call. Returns whether the handler ran without an error.
+    /// emit()'s body, inside its protected call. Returns whether the handler or a listener ran without an error.
     template <class... Args>
     bool callHandler(std::string_view signal, const Args&... args) {
         lua::State* state = m_state;
@@ -253,26 +270,23 @@ private:
         if (!pushSelf()) return false;
         const std::string key{signal};
         // A singleton's handlers are behind its userdata's __index; an element's are fields of its table.
-        if (m_singleton)
-            lua::getfield(state, top + 1, key.c_str());
-        else
-            luaui::Node{state, top + 1}.pushRaw(key.c_str());
-        if (!lua::isfunction(state, -1)) {
+        const lua::Type handler =
+            m_singleton ? lua::getfield(state, top + 1, key.c_str()) : luaui::Node{state, top + 1}.pushRaw(key.c_str());
+        if (handler != lua::Type::Function && !m_connected) {
             lua::settop(state, top);
             return false;
         }
-        int nargs = 0;
-        if (!m_singleton) {
-            lua::pushvalue(state, top + 1);
-            nargs = 1;
-        }
+        if (!m_singleton) lua::pushvalue(state, top + 1);
         (LuaConvert<LuaArgType<Args>>::push(state, args), ...);
-        nargs += static_cast<int>(sizeof...(Args));
-        if (!m_singleton) nargs = luaui::scopedArgs(state, top + 1, nargs);
-        const bool ok = luaui::safeCall(state, nargs, 0);
+        const bool ok = callSignal(top + 1, top + 2, key.c_str());
         lua::settop(state, top);
         return ok;
     }
+
+    /// Calls a signal of the linked value at `self`: the handler slot's value is at `handler`, the arguments above it
+    /// to the top (`self` first for an element). Calls the handler (when it is a function), then the listeners (once
+    /// connected). Returns whether one of them ran without an error. Leaves the stack above `handler` undefined.
+    bool callSignal(int self, int handler, const char* signal);
 
     /// notify()'s Lua part, inside its protected call.
     void writeBack(std::string_view property);
@@ -280,6 +294,7 @@ private:
     std::uint64_t m_objectId;
     lua::State* m_state = nullptr;
     bool m_singleton = false;
+    bool m_connected = false; ///< noteConnection() ran for the linked state: signals call the listeners too
     /// Shared with every Handle, created by the first handle(). Stopped by cancelHandles() or the destructor.
     std::stop_source m_handles{std::nostopstate};
     bool m_cancelled = false; ///< cancelHandles() ran: a handle taken later starts dead
@@ -315,15 +330,6 @@ std::atomic<std::uint64_t> lastObjectId{0};
 
 /// The links table key of an object id (Lua integers are 64-bit; ids stay far below 2^63).
 lua::Integer linkKey(std::uint64_t id) { return static_cast<lua::Integer>(id); }
-
-/// "value" -> "onValueChanged"
-std::string changedSignal(std::string_view property) {
-    std::string s = "on";
-    s += property;
-    if (s.size() > 2 && s[2] >= 'a' && s[2] <= 'z') s[2] = static_cast<char>(s[2] - 'a' + 'A');
-    s += "Changed";
-    return s;
-}
 
 } // namespace
 
@@ -410,13 +416,40 @@ void ScriptObject::attach(lua::State* state, int idx, bool singleton) {
     idx = lua::absindex(state, idx);
     m_state = state;
     m_singleton = singleton;
+    m_connected = false; // a new state has no listeners yet
     pushLinks(state);
     lua::pushvalue(state, idx);
     lua::rawseti(state, -2, linkKey(m_objectId));
     lua::pop(state);
 }
 
-void ScriptObject::relink(lua::State* state) { m_state = state; }
+void ScriptObject::relink(lua::State* state) {
+    m_state = state;
+    m_connected = true; // the state may hold listeners from before the reload: let the dispatch look
+}
+
+void ScriptObject::noteConnection() { m_connected = true; }
+
+void ScriptObject::scriptReloading() {}
+
+bool ScriptObject::callSignal(int self, int handler, const char* signal) {
+    lua::State* state = m_state;
+    const int fn = handler;
+    const int nargs = lua::gettop(state) - fn;
+    const bool connected = m_connected; // a listener the handler connects doesn't run in this emit
+    bool ok = false;
+    if (lua::isfunction(state, fn)) {
+        if (connected) { // the listeners need the arguments too: the handler gets copies
+            lua::checkstack(state, nargs + 3);
+            for (int i = 0; i <= nargs; ++i)
+                lua::pushvalue(state, fn + i);
+        }
+        const int n = m_singleton ? nargs : luaui::scopedArgs(state, self, nargs);
+        ok = luaui::safeCall(state, n, 0);
+    }
+    if (connected) ok = luaui::callListeners(state, self, signal, fn + 1, nargs) || ok;
+    return ok;
+}
 
 void ScriptObject::detach() { m_state = nullptr; }
 
@@ -465,18 +498,13 @@ void ScriptObject::writeBack(std::string_view property) {
         luaui::Node{state, self}.setTop(name.c_str());
     }
 
-    const std::string signal = changedSignal(property);
+    const std::string signal = luaui::changedSignal(property);
     const lua::Type handler =
         m_singleton ? lua::getfield(state, self, signal.c_str()) : luaui::Node{state, self}.pushRaw(signal.c_str());
-    if (handler == lua::Type::Function) {
-        int nargs = 1;
-        if (!m_singleton) {
-            lua::pushvalue(state, self);
-            ++nargs;
-        }
+    if (handler == lua::Type::Function || m_connected) {
+        if (!m_singleton) lua::pushvalue(state, self);
         lua::pushvalue(state, value);
-        if (!m_singleton) nargs = luaui::scopedArgs(state, self, nargs);
-        luaui::safeCall(state, nargs, 0);
+        callSignal(self, value + 1, signal.c_str());
     }
     lua::settop(state, top);
 }

@@ -270,6 +270,14 @@ Declares a signal name for documentation and validation (it reserves the name). 
 `emit("onPeak", args...)`. Handlers are ordinary `on*` fields of the element table. Every property also has a
 change signal `on<Name>Changed`, emitted by `notify(name)`, without declaring it.
 
+A signal has one handler slot (`onPeak = fn`) and any number of **listeners**, which scripts add with
+[`connect(obj, "onPeak", fn)`](lua-api.md#connecttarget-signal-fn---disconnect). `emit` and `notify` call the slot
+first, then the listeners in connect order, with the same arguments. `connect` takes only the declared signals and
+the `on<Name>Changed` signals of declared properties (a typo raises `Gauge has no signal 'onPaek'`): an undeclared
+name you `emit` still reaches the slot, but can't be connected. This holds for every type, the built-ins too
+(`Button`'s `onClicked`, `Slider`'s `onValueChanged`): all of them emit through `ScriptObject`. Listeners live in
+the Lua state: there is no C++ `connect` (yet); C++ that wants to observe an object calls into it directly.
+
 ### Methods
 
 ```cpp
@@ -510,8 +518,10 @@ void Gauge::reset() {
 
 Calls the `signal` handler with the arguments converted by `LuaConvert`. Element handlers are called as
 `handler(self, args...)`, singleton handlers as `handler(args...)`. A string literal argument is fine. A
-handler error goes to the error overlay and doesn't propagate. `emit` returns `false` when there's no handler,
-and requests a frame, since handlers usually change state.
+handler error goes to the error overlay and doesn't propagate. Then the [listeners](#signals) run, in connect
+order; each one's error is reported and the others still run. `emit` returns `true` when the handler or a listener
+ran without an error (`false` with neither, or without a Lua link), and requests a frame, since handlers usually
+change state. An object nobody connected to pays one flag check for listeners: the slot is all it reads.
 
 ```cpp
 emit("onPeak", m_value);
@@ -552,6 +562,7 @@ Scripts see a global userdata:
 | `backend:tick()` | the `tick` method |
 | `backend.onTick = function(n) ... end` | stores a handler for `emit("onTick", n)`. Any `on*` name accepts a function or `nil`. |
 | `backend.onLoadChanged = function(v) ... end` | called by `notify("load")` |
+| `connect(backend, "onTick", function(n) ... end)` | adds a listener, after the handler; any number of them (returns a disconnect function) |
 
 Singleton handlers get no `self` (the singleton is a global anyway). `notify` on a singleton doesn't write
 anything back (Lua always reads it through the getter), but it does call the `on<Name>Changed` handler and
@@ -569,15 +580,28 @@ Switch { text = "Paused", checked = bind(function() return backend.paused end,
 `runAsync`, the `Live<T>` writers it handed out, a `runAsync(work) -> Future` job keep running after the script that
 asked for them is gone. Their results still arrive (`done` runs, `Live` values apply and reach the new script's
 bindings), but nothing in the new script asked for them, and a script that starts the work again on load starts a
-second copy. There is no C++ hook for a reload; make the work's lifetime explicit instead:
+second copy. Override **`scriptReloading()`** to stop it:
+
+```cpp
+void Lab::scriptReloading() { stopTelemetry(); } // the new script starts it again if it wants it
+```
+
+`TypeRegistry::install()` calls it on the main thread for every singleton an earlier state had (not on the first
+load), before the new state links the singleton and before the new script runs. The singleton is still linked to
+the old script's state then (if it is still open), so a `notify`/`emit` in the hook reaches the old script, one
+last time. An exception is reported and the reload goes on. The default does nothing; elements never get it (they
+die with their state).
+
+Whether the new script loads can't be known before it runs, and running the hook after it loaded would stop what
+the new script just started. So a reload whose script **fails** has already stopped the work: the old UI keeps
+running without it (behind the error overlay) until the next successful reload starts it again. The hook isn't
+called on the way back to the old state. Also useful:
 
 - **Starting again replaces the old run.** Keep the run's `std::stop_source` (and a run counter) in the singleton;
-  `start` stops the previous run before it starts a new one, and a `done` from an older run is ignored. Then a
-  reloaded script that calls `backend:startSampling()` on load gets one sampler, not two.
-- **Give the script a stop method** (`backend:stopSampling()`) and let the script stop it when it no longer wants it
-  (or at the top of the script, to start each load from a clean slate).
+  `start` stops the previous run before it starts a new one, and a `done` from an older run is ignored. Then
+  calling `backend:startSampling()` twice gets one sampler, not two.
 - A future the old script awaited is settled on the C++ side only (a no-op for Lua). Its job runs to the end unless
-  it is cancelled first: cancel long jobs with `fut:cancel()` when the script moves on.
+  it is cancelled first: cancel long jobs with `fut:cancel()` when the script moves on, or in `scriptReloading()`.
 
 ## Value conversion
 
@@ -784,7 +808,8 @@ Chart { formatter = function(v) return ("%.1f"):format(v) end } -- a LuaFunction
 - Nothing else holds the instance: its link back to the table is weak. When Lua collects the element table, the
   userdata goes with it, `destroyed()` runs and the instance is deleted. Elements that the UI keeps (the tree
   returned by the script, captured locals, tables) live as long as the Lua state. Ids don't count: they are
-  [weak](lua-api.md#element-ids).
+  [weak](lua-api.md#element-ids). Nor do [connections](lua-api.md#connecttarget-signal-fn---disconnect): a
+  listener connected to an element never keeps it alive, even one that refers to it.
 - Properties are synced at the first render, the first method call or a parent's `as<T>()`, whichever comes
   first, not in the constructor, so the constructor sees no Lua values. Defaults for `nil` are captured right
   after the constructor. `componentComplete()` runs once after the first sync.
@@ -840,10 +865,11 @@ On reload the engine creates a new Lua state and calls `TypeRegistry::install(st
 types, methods tables and singleton globals are set up again, so registered types keep working after every
 reload. When the old state closes, every element instance in it is destroyed (`destroyed()` first), and the
 singletons are re-linked to the new state. `LuaFunction` handles taken from the old state expire (calls become
-no-ops; see [Lua functions](#lua-functions-luafunction)). Singleton handlers (`backend.onTick = ...`) belong to a state, so the
-reloaded script sets them again. If the new script fails to load, the engine keeps the old state and points
-the singletons back at it. Singletons themselves live on, and so does the background work they started: see
-[work a singleton started](#singletons) for how to keep a reload from leaving it running twice.
+no-ops; see [Lua functions](#lua-functions-luafunction)). Singleton handlers (`backend.onTick = ...`) and listeners
+(`connect(backend, ...)`) belong to a state, so the reloaded script sets them again. If the new script fails to load,
+the engine keeps the old state and points the singletons back at it, with that state's handlers and listeners.
+Singletons themselves live on, and so does the background work they started: `install()` first calls each
+singleton's `scriptReloading()`, which stops it (see [work a singleton started](#singletons)).
 
 ## Resources and the host config
 
@@ -1253,7 +1279,7 @@ skeleton.
 | `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations (scalars, strings, `Color`, `optional`, `vector`, string-keyed maps, `pair`/`tuple`, `variant`/`monostate`); `EnumNames<E>`, `LuaFields<T>` with `field(key, &T::member)`; the `LuaPushable` / `LuaReadable` concepts, `takesLuaFunction<T>()` |
 | `imlui.types.lua_function` | `LuaFunction`: a handle to a Lua function (`call(args...)`, `call<R>(args...)`, `expired()`, `push`), expired once its state closes; its `LuaConvert` |
 | `imlui.types.future` | `Future<T>` (`status`, `value`, `error`, `cancel`, `onSettled`; push-only `LuaConvert`: a Lua future), `Promise<T>` (`resolve`, `reject`, `stopToken`; thread-safe), `makePromise<T>(owner)`, `FutureStatus` |
-| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `runAsync(work, done[, fail])`, `runAsync(work) -> Future<R>`, `handle()` (`ScriptObject::Handle`: `alive()`, `stopToken()`, `post(fn)`, for worker threads), `cancelHandles()`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
+| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `runAsync(work, done[, fail])`, `runAsync(work) -> Future<R>`, `handle()` (`ScriptObject::Handle`: `alive()`, `stopToken()`, `post(fn)`, for worker threads), `cancelHandles()`, `scriptReloading()` (virtual, singletons' reload hook), the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, `noteConnection`, used by the registry) |
 | `imlui.types.live` | `Live<T>`: a property any thread `set()`s, applied on the main thread at most once per loop iteration (latest wins); `Live<T>::Writer` |
 | `imlui.ui.background` | `runInBackground(work)`: the process-wide worker pool; `shutdownBackground(wait)` (the engine calls it), `backgroundThreadLimit`, `backgroundTaskCount` |
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
