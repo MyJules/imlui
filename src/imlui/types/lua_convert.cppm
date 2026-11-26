@@ -8,6 +8,7 @@
 //   static bool check(lua::State*, int idx);       // can the value at idx become a T?
 //   static T get(lua::State*, int idx);            // Lua -> C++ (only called after check())
 //   static std::string mismatch(lua::State*, int idx); // optional: why check() failed (see below)
+//   static std::string luaType(LuaTypes&);         // optional: the LuaLS type expression (see below)
 //
 // Push-only types (std::string_view, const char*) leave out check/get. Built in: bool, integers, floats, strings,
 // Color, std::optional, std::vector, std::map / std::unordered_map with string keys, std::pair, std::tuple,
@@ -35,6 +36,14 @@
 // to where the value was ("Plot.points" + "[3].x: ..."). A specialization of your own may implement mismatch() the
 // same way (it is only called after check() returned false, and must not raise), or leave it out.
 //
+// Editor definitions. luaTypeOf<T>() is the LuaLS type expression of T's values, for the generated Lua definitions
+// (imlui.types.lua_definitions): LuaConvert<T>::luaType(LuaTypes&) or luaType() when the specialization has one, else
+// one derived from `name` (LuaTypes::fromName: the Lua built-in type names stay, anything else is `any`). The built-in
+// ones compose: "integer[]", "table<string, Vec2>", "[number, string]", "integer|string", "Future<Report>". A struct
+// whose LuaFields has a `name` that is a Lua identifier is declared once as a `---@class` in the LuaTypes, and an enum
+// whose EnumNames has one as an `---@alias`; unnamed ones are written inline ("{ x: number, y: number }",
+// "\"low\"|\"high\"").
+//
 // Templates, so everything lives in the interface (CODE_STYLE: templates are the exception).
 export module imlui.types.lua_convert;
 
@@ -45,6 +54,7 @@ import imlui.color;
 import imlui.theme.theme;
 import imlui.lua.node;
 import imlui.lua.value;
+import imlui.types.lua_types;
 
 export namespace imlui {
 
@@ -96,6 +106,28 @@ std::string luaMismatch(lua::State* s, int idx) {
         out += lua::typeName(s, idx);
         return out;
     }
+}
+
+/// The LuaLS type expression of T's values (see the module comment): LuaConvert<T>::luaType(types) or luaType() when
+/// the specialization has one, else LuaTypes::fromName(LuaConvert<T>::name).
+template <class T>
+std::string luaTypeOf(LuaTypes& types) {
+    if constexpr (requires {
+                      { LuaConvert<T>::luaType(types) } -> std::convertible_to<std::string>;
+                  })
+        return LuaConvert<T>::luaType(types);
+    else if constexpr (requires {
+                           { LuaConvert<T>::luaType() } -> std::convertible_to<std::string>;
+                       })
+        return LuaConvert<T>::luaType();
+    else
+        return LuaTypes::fromName(LuaConvert<T>::name);
+}
+
+/// luaTypeOf<T> as a LuaTypes::Describe, which TypeInfo stores.
+template <class T>
+constexpr LuaTypes::Describe luaTypeDescriber() {
+    return [](LuaTypes& types) { return luaTypeOf<T>(types); };
 }
 
 /// `why` (a luaMismatch() text) at `where`: "Gauge.value: number expected, got string", or with a path in `why`
@@ -160,6 +192,7 @@ concept LuaStruct = std::is_class_v<T> && std::default_initializable<T> && requi
 template <>
 struct LuaConvert<bool> {
     static constexpr std::string_view name = "boolean";
+    static std::string luaType() { return "boolean"; }
     static void push(lua::State* s, bool v) { lua::pushboolean(s, v); }
     /// Lua truthiness: every value converts (nil and false are false).
     static bool check(lua::State*, int) { return true; }
@@ -170,6 +203,7 @@ template <class T>
     requires(std::is_integral_v<T> && !std::is_same_v<T, bool>)
 struct LuaConvert<T> {
     static constexpr std::string_view name = "integer";
+    static std::string luaType() { return "integer"; }
     static void push(lua::State* s, T v) { lua::pushinteger(s, static_cast<lua::Integer>(v)); }
     /// Numbers and numeric strings, like Node::number().
     static bool check(lua::State* s, int idx) { return lua::isnumber(s, idx); }
@@ -199,6 +233,7 @@ struct LuaConvert<T> {
 template <std::floating_point T>
 struct LuaConvert<T> {
     static constexpr std::string_view name = "number";
+    static std::string luaType() { return "number"; }
     /// Whole numbers push as Lua integers, like luaui::pushValue (what Node::set and Node::emit use), so a
     /// value written back reads the same in Lua (`tostring(5)` is "5", not "5.0").
     static void push(lua::State* s, T v) {
@@ -222,6 +257,7 @@ struct LuaConvert<T> {
 template <>
 struct LuaConvert<std::string> {
     static constexpr std::string_view name = "string";
+    static std::string luaType() { return "string"; }
     static void push(lua::State* s, const std::string& v) { lua::pushstring(s, v); }
     /// Strings and numbers (numbers convert, like Node::string()).
     static bool check(lua::State* s, int idx) { return lua::isstring(s, idx); }
@@ -235,6 +271,7 @@ struct LuaConvert<std::string> {
 template <>
 struct LuaConvert<std::string_view> {
     static constexpr std::string_view name = "string";
+    static std::string luaType() { return "string"; }
     static void push(lua::State* s, std::string_view v) { lua::pushstring(s, v); }
 };
 
@@ -242,6 +279,7 @@ struct LuaConvert<std::string_view> {
 template <>
 struct LuaConvert<const char*> {
     static constexpr std::string_view name = "string";
+    static std::string luaType() { return "string"; }
     static void push(lua::State* s, const char* v) {
         if (v) lua::pushstring(s, v);
         else lua::pushnil(s);
@@ -252,6 +290,8 @@ struct LuaConvert<const char*> {
 template <>
 struct LuaConvert<Color> {
     static constexpr std::string_view name = "color";
+    /// The `Color` alias of the prelude definitions (a role, "role/alpha", hex or {r, g, b, a}).
+    static std::string luaType() { return "Color"; }
     static void push(lua::State* s, const Color& v) { lua::pushstring(s, toHex(v)); }
     static bool check(lua::State* s, int idx) {
         if (lua::type(s, idx) == lua::Type::String) return resolveColor(lua::tostring(s, idx)).has_value();
@@ -268,6 +308,7 @@ template <class T>
 struct LuaConvert<std::optional<T>> {
     static constexpr std::string_view name = LuaConvert<T>::name;
     static constexpr bool takesFunction = takesLuaFunction<T>();
+    static std::string luaType(LuaTypes& types) { return LuaTypes::optional(luaTypeOf<T>(types)); }
     static void push(lua::State* s, const std::optional<T>& v) {
         if (v) LuaConvert<T>::push(s, *v);
         else lua::pushnil(s);
@@ -438,6 +479,7 @@ template <class Map>
 struct MapConvert {
     using Value = typename Map::mapped_type;
     static constexpr std::string_view name = builtName<MapName<Value>>;
+    static std::string luaType(LuaTypes& types) { return "table<string, " + luaTypeOf<Value>(types) + ">"; }
     static void push(lua::State* s, const Map& m) {
         lua::checkstack(s, 3);
         lua::createtable(s, 0, static_cast<int>(m.size()));
@@ -498,6 +540,13 @@ struct MapConvert {
 template <class Tuple, class... Ts>
 struct TupleConvert {
     static constexpr std::string_view name = builtName<TupleName<Ts...>>;
+    /// A LuaLS tuple: "[integer, string]".
+    static std::string luaType(LuaTypes& types) {
+        std::string out = "[";
+        bool first = true;
+        ((out += (first ? "" : ", ") + luaTypeOf<Ts>(types), first = false), ...);
+        return out + "]";
+    }
     static void push(lua::State* s, const Tuple& v) {
         lua::checkstack(s, 2);
         lua::createtable(s, static_cast<int>(sizeof...(Ts)), 0);
@@ -547,6 +596,7 @@ export namespace imlui {
 template <class T>
 struct LuaConvert<std::vector<T>> {
     static constexpr std::string_view name = lua_convert_detail::builtName<lua_convert_detail::SequenceName<T>>;
+    static std::string luaType(LuaTypes& types) { return LuaTypes::grouped(luaTypeOf<T>(types)) + "[]"; }
     static void push(lua::State* s, const std::vector<T>& v) {
         lua::checkstack(s, 2);
         lua::createtable(s, static_cast<int>(v.size()), 0);
@@ -599,6 +649,21 @@ struct LuaConvert<E> {
         else
             return lua_convert_detail::builtName<lua_convert_detail::EnumName<E>>;
     }();
+    /// A union of string literals, declared as an `---@alias` when EnumNames<E> has a `name` that is an identifier.
+    static std::string luaType(LuaTypes& types) {
+        std::string names;
+        for (const auto& [value, text] : EnumNames<E>::values)
+            names += (names.empty() ? "" : "|") + LuaTypes::quoted(text);
+        if (names.empty()) names = "string";
+        if constexpr (requires { std::string_view{EnumNames<E>::name}; }) {
+            const std::string_view alias = EnumNames<E>::name;
+            if (LuaTypes::isIdentifier(alias)) {
+                if (types.claim(alias)) types.define(alias, "---@alias " + std::string{alias} + " " + names + "\n");
+                return std::string{alias};
+            }
+        }
+        return names;
+    }
     static void push(lua::State* s, E v) {
         for (const auto& [value, text] : EnumNames<E>::values) {
             if (value == v) {
@@ -637,6 +702,36 @@ struct LuaConvert<T> {
         else
             return lua_convert_detail::builtName<lua_convert_detail::StructName<T>>;
     }();
+    /// A `---@class` with a field per LuaField when LuaFields<T> has a `name` that is an identifier, else an inline
+    /// table type ("{ x: number, y: number }"). The class's fields are optional: a missing one keeps its default.
+    static std::string luaType(LuaTypes& types) {
+        if constexpr (requires { std::string_view{LuaFields<T>::name}; }) {
+            const std::string_view cls = LuaFields<T>::name;
+            if (LuaTypes::isIdentifier(cls)) {
+                if (types.claim(cls)) {
+                    std::string decl = "---@class " + std::string{cls} + "\n";
+                    std::apply(
+                        [&](const auto&... f) {
+                            ((decl += "---@field " + std::string{f.name} + "? " +
+                                      std::string{LuaTypes::required(fieldLuaType(f, types))} + "\n"),
+                             ...);
+                        },
+                        LuaFields<T>::fields);
+                    types.define(cls, std::move(decl));
+                }
+                return std::string{cls};
+            }
+        }
+        std::string out = "{ ";
+        bool first = true;
+        std::apply(
+            [&](const auto&... f) {
+                ((out += (first ? "" : ", ") + std::string{f.name} + ": " + fieldLuaType(f, types), first = false),
+                 ...);
+            },
+            LuaFields<T>::fields);
+        return out + " }";
+    }
     static void push(lua::State* s, const T& v) {
         lua::checkstack(s, 2);
         constexpr auto count = std::tuple_size_v<std::remove_cvref_t<decltype(LuaFields<T>::fields)>>;
@@ -667,6 +762,10 @@ struct LuaConvert<T> {
     }
 
 private:
+    template <class C, class M>
+    static std::string fieldLuaType(const LuaField<C, M>&, LuaTypes& types) {
+        return luaTypeOf<M>(types);
+    }
     template <class M>
     static void pushField(lua::State* s, const M& v, const char* key) {
         LuaConvert<M>::push(s, v);
@@ -719,6 +818,7 @@ struct LuaConvert<std::tuple<Ts...>> : lua_convert_detail::TupleConvert<std::tup
 template <>
 struct LuaConvert<std::monostate> {
     static constexpr std::string_view name = "nil";
+    static std::string luaType() { return "nil"; }
     static void push(lua::State* s, std::monostate) { lua::pushnil(s); }
     static bool check(lua::State* s, int idx) { return lua::isnoneornil(s, idx); }
     static std::monostate get(lua::State*, int) { return {}; }
@@ -731,6 +831,12 @@ template <class... Ts>
 struct LuaConvert<std::variant<Ts...>> {
     static constexpr std::string_view name = lua_convert_detail::builtName<lua_convert_detail::VariantName<Ts...>>;
     static constexpr bool takesFunction = (takesLuaFunction<Ts>() || ...);
+    /// "integer|string"; with std::monostate, "nil" is one of the alternatives.
+    static std::string luaType(LuaTypes& types) {
+        std::string out;
+        ((out += (out.empty() ? "" : "|") + LuaTypes::grouped(luaTypeOf<Ts>(types))), ...);
+        return out;
+    }
     static void push(lua::State* s, const std::variant<Ts...>& v) {
         std::visit([&]<class A>(const A& a) { LuaConvert<A>::push(s, a); }, v);
     }

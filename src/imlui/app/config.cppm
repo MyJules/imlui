@@ -21,6 +21,11 @@ struct EngineConfig {
     /// When > 0, quit after this many rendered frames and exit with 1 if a script error was reported (smoke
     /// tests). defaultConfig() reads it from the environment variable IMLUI_EXIT_AFTER_FRAMES.
     int exitAfterFrames = 0;
+    /// When set, run() writes the Lua language-server definitions of the registered types into this folder
+    /// (Engine::writeLuaDefinitions) and returns, without opening a window: 0 when written, 1 when not. defaultConfig()
+    /// takes it from the command-line option `--lua-defs <dir>` (or `--lua-defs=<dir>`) or the environment variable
+    /// IMLUI_LUA_DEFS.
+    std::filesystem::path luaDefinitions;
 };
 
 /// Mounts every `*.pak` archive in `folder`, in file name order, each at the mount point stored in it. Archives
@@ -54,11 +59,13 @@ int mountPaks(Resources& resources, const std::filesystem::path& folder, std::st
 ///     packages without embedded files, whose folder is their only copy; when such a folder doesn't exist (the
 ///     executable runs on another machine), an error names it.
 ///
-/// The entry is `app:/main.lua`. A script given as argv[1] replaces the app: nothing above is mounted at `app:/`,
-/// the script's folder is mounted there instead, and the entry is `app:/<file name>`. A relative argv[1] is resolved
-/// against the current folder, or the executable's folder when it doesn't exist there (so scripts shipped next to
-/// the executable, `my_app scripts/tool.lua`, run from anywhere). On Windows it's read from the UTF-16 command line,
-/// so a file name outside the ANSI code page works.
+/// The entry is `app:/main.lua`. `--lua-defs <dir>` (or `--lua-defs=<dir>`) anywhere after argv[0] sets
+/// EngineConfig::luaDefinitions and is taken out of the arguments; without it the environment variable
+/// IMLUI_LUA_DEFS=<dir> sets it. A script given as the first other argument replaces the app: nothing above is mounted
+/// at `app:/`, the script's folder is mounted there instead, and the entry is `app:/<file name>`. A relative script is
+/// resolved against the current folder, or the executable's folder when it doesn't exist there (so scripts shipped
+/// next to the executable, `my_app scripts/tool.lua`, run from anywhere). On Windows it's read from the UTF-16 command
+/// line, so a file name outside the ANSI code page works.
 ///
 /// Defined in default_config.cpp, not here, like the overload below: see defaultConfigWith().
 [[nodiscard]] EngineConfig defaultConfig(int argc, char** argv, std::vector<ResourcePackage> app = {});

@@ -117,6 +117,8 @@ public:
     [[nodiscard]] const TypeInfo* find(std::string_view name) const;
     /// Registered element type names, sorted (what `ui.types()` returns).
     [[nodiscard]] std::vector<std::string> typeNames() const;
+    /// The singletons: their global names and types, sorted by name (for the Lua definitions).
+    [[nodiscard]] std::vector<std::pair<std::string, const TypeInfo*>> singletonTypes() const;
 
     // Renderer::Types: the Renderer renders every element through these.
     [[nodiscard]] Kind kind(const luaui::Node& node) const override;
@@ -1075,6 +1077,15 @@ std::vector<std::string> TypeRegistry::typeNames() const {
     out.reserve(m_types.size());
     for (const auto& [name, info] : m_types)
         out.push_back(name);
+    return out;
+}
+
+std::vector<std::pair<std::string, const TypeInfo*>> TypeRegistry::singletonTypes() const {
+    std::vector<std::pair<std::string, const TypeInfo*>> out;
+    out.reserve(m_singletons.size());
+    for (const Singleton& s : m_singletons)
+        out.emplace_back(s.name, s.type);
+    std::ranges::sort(out, {}, &std::pair<std::string, const TypeInfo*>::first);
     return out;
 }
 

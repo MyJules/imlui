@@ -10,6 +10,8 @@
 //  * exposes `imlui.native` to Lua (theme, colors, time, quit, ...)
 //  * owns the TypeRegistry: C++ element types and singletons registered with registerType<T>() and
 //    registerSingleton(), installed into every new Lua state
+//  * writes the Lua language-server definitions of those types instead of running, when EngineConfig::luaDefinitions
+//    is set (`--lua-defs <dir>`)
 export module imlui.app.engine;
 
 import std;
@@ -47,6 +49,7 @@ import imlui.types.script_object;
 import imlui.types.element;
 import imlui.types.type_info;
 import imlui.types.registry;
+import imlui.types.lua_definitions;
 import imlui.app.config;
 
 export namespace imlui {
@@ -98,7 +101,14 @@ public:
     void requestReload();
     platform::Window& window();
 
-    /// Creates the window, loads the script and runs the frame loop until quit.
+    /// Writes the Lua language-server definitions (LuaLS `---@meta` files) of the registered types and singletons into
+    /// `dir`, created when missing: `imlui.lua` (the DSL, from luaPreludeDefinitions in the resources) and
+    /// `types.lua` (luaTypeDefinitions). Logs and returns false when it fails. Call after registering everything.
+    bool writeLuaDefinitions(const std::filesystem::path& dir);
+
+    /// Creates the window, loads the script and runs the frame loop until quit. With EngineConfig::luaDefinitions set,
+    /// writes the Lua definitions there instead (writeLuaDefinitions) and returns 0, or 1 when that failed, without
+    /// creating a window.
     int run();
 
 private:
@@ -222,7 +232,25 @@ void Engine::requestQuit() { m_quit = true; }
 void Engine::requestReload() { m_reload = true; }
 platform::Window& Engine::window() { return m_window; }
 
+bool Engine::writeLuaDefinitions(const std::filesystem::path& dir) {
+    const std::optional<std::string> prelude = m_config.resources.readText(luaPreludeDefinitions);
+    if (!prelude) {
+        log::error("Lua definitions: {} isn't in the resources", luaPreludeDefinitions);
+        return false;
+    }
+    if (const std::string error = imlui::writeLuaDefinitions(m_types, dir, *prelude); !error.empty()) {
+        log::error("Lua definitions: {}", error);
+        return false;
+    }
+    std::error_code ec;
+    const std::u8string where = std::filesystem::absolute(dir, ec).generic_u8string();
+    log::info("Lua definitions written to {}", std::string{where.begin(), where.end()});
+    return true;
+}
+
 int Engine::run() {
+    // A build step or CI job asked for the editor definitions: nothing to show.
+    if (!m_config.luaDefinitions.empty()) return writeLuaDefinitions(m_config.luaDefinitions) ? 0 : 1;
     // The window starts hidden: its title and size come from the script.
     platform::Window::Config wc = m_config.window;
     wc.visible = false;

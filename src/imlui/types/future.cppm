@@ -48,6 +48,7 @@ import lua;
 import imlui.lua.errors;
 import imlui.types.lua_convert;
 import imlui.types.lua_function;
+import imlui.types.lua_types;
 import imlui.types.progress;
 import imlui.ui.frame_request;
 import imlui.ui.main_thread;
@@ -375,6 +376,13 @@ std::pair<Promise<T>, Future<T>> makePromise(std::stop_token owner) {
 template <class T>
 struct LuaConvert<Future<T>> {
     static constexpr std::string_view name = "future";
+    /// The generic `Future<T>` class of the prelude definitions; `Future<nil>` for Future<void>.
+    static std::string luaType(LuaTypes& types) {
+        if constexpr (std::is_void_v<T>)
+            return "Future<nil>";
+        else
+            return "Future<" + luaTypeOf<T>(types) + ">";
+    }
     static bool check(lua::State* s, int idx)
         requires(std::is_void_v<T> || LuaReadable<T>)
     {

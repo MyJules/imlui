@@ -1,7 +1,8 @@
 # Lua API
 
 Everything here is defined in `src/resources/imlui.lua` (the DSL prelude) or in the native `imlui.native` library it
-wraps.
+wraps. For completion and type checks in an editor, an app writes Lua language-server definitions of all of it and of
+its registered types with `--lua-defs <dir>` ([Editor support](extending.md#editor-support-lua-definitions)).
 
 ## The script environment
 

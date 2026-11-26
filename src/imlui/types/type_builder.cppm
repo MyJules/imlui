@@ -4,8 +4,9 @@
 //       type.property("value", &Gauge::value, &Gauge::setValue)   // read/write; nil resets to the initial value
 //           .property("max", &Gauge::max, &Gauge::setMax, 1.0)     // read/write; nil resets to 1.0
 //           .property("peak", &Gauge::peak)                       // read-only
-//           .signal("onPeak")
-//           .method("reset", &Gauge::reset);
+//           .signal("onPeak")                                    // or typed: .signal<double>("onPeak", {"value"})
+//           .method("reset", &Gauge::reset)
+//           .method("setRange", &Gauge::setRange, {"min", "max"}); // parameter names for the Lua definitions
 //   }
 //
 // Getters are anything std::invoke can call with a `const T&` (usually `V (T::*)() const`), setters
@@ -21,6 +22,7 @@ import std;
 import lua;
 import imlui.lua.errors;
 import imlui.types.lua_convert;
+import imlui.types.lua_types;
 import imlui.types.script_object;
 import imlui.types.type_info;
 
@@ -40,6 +42,24 @@ template <class C, class R, class... A>
 struct MethodTraits<R (C::*)(A...) noexcept> : MethodTraits<R (C::*)(A...)> {};
 template <class C, class R, class... A>
 struct MethodTraits<R (C::*)(A...) const noexcept> : MethodTraits<R (C::*)(A...)> {};
+
+/// The parameters of a method or signal with argument types `A...`, named `names` (`argN` where left out).
+template <class... A>
+std::vector<TypeInfo::Param> params(const std::string& where, const std::vector<std::string>& names) {
+    if (!names.empty() && names.size() != sizeof...(A))
+        throw std::invalid_argument{where + ": " + std::to_string(names.size()) + " parameter names for " +
+                                    std::to_string(sizeof...(A)) + " parameters"};
+    std::vector<TypeInfo::Param> out;
+    [[maybe_unused]] std::size_t i = 0;
+    ((out.push_back({names.empty() ? "arg" + std::to_string(i + 1) : names[i], luaTypeDescriber<A>()}), ++i), ...);
+    return out;
+}
+
+template <class... A>
+std::vector<TypeInfo::Param> tupleParams(const std::string& where, const std::vector<std::string>& names,
+                                         std::tuple<A...>*) {
+    return params<A...>(where, names);
+}
 
 template <class V>
 inline constexpr bool isOptional = false;
@@ -146,29 +166,46 @@ public:
         return *this;
     }
 
-    /// Declares a signal (an `on*` handler name), emitted with ScriptObject::emit(name, args...).
+    /// Declares a signal (an `on*` handler name), emitted with ScriptObject::emit(name, args...). Its arguments are
+    /// unknown to the Lua definitions (`fun(self, ...: any)`).
     TypeBuilder& signal(std::string name) {
         m_info.addSignal(std::move(name));
         return *this;
     }
 
-    /// A method callable from Lua as `element:name(args...)` (or `singleton:name(...)`).
+    /// A signal emitted with arguments of types `Args...` (after `self`), named `argNames` (or arg1, arg2, ...) in the
+    /// Lua definitions: `.signal<double>("onPeak", {"value"})`. The types only document: emit() isn't checked against
+    /// them. `signal<>("onReset")` declares one without arguments.
+    template <class... Args>
+    TypeBuilder& signal(std::string name, std::vector<std::string> argNames = {}) {
+        auto args = detail::params<std::remove_cvref_t<Args>...>(m_info.name() + "." + name, argNames);
+        m_info.addSignal(std::move(name), std::move(args));
+        return *this;
+    }
+
+    /// A method callable from Lua as `element:name(args...)` (or `singleton:name(...)`). `paramNames` names its
+    /// parameters in the Lua definitions (arg1, arg2, ... where left out; else one name per parameter).
     template <class Fn>
         requires std::is_member_function_pointer_v<Fn>
-    TypeBuilder& method(std::string name, Fn fn) {
+    TypeBuilder& method(std::string name, Fn fn, std::vector<std::string> paramNames = {}) {
         using Args = typename detail::MethodTraits<Fn>::Args;
+        using R = std::remove_cvref_t<typename detail::MethodTraits<Fn>::Result>;
         std::string where = m_info.name() + ":" + name;
+        TypeInfo::Method m;
+        m.name = std::move(name);
+        m.params = detail::tupleParams(where, paramNames, static_cast<Args*>(nullptr));
+        if constexpr (!std::is_void_v<R>) m.result = luaTypeDescriber<R>();
         // A C++ exception becomes the Lua error "Gauge:reset: what".
-        m_info.addMethod({std::move(name), [fn, where](lua::State* s, ScriptObject& o, int first) -> int {
-                              return luaui::catchCxx(
-                                  s,
-                                  [&] {
-                                      return detail::invokeMethod(
-                                          fn, static_cast<T&>(o), s, first, where, static_cast<Args*>(nullptr),
-                                          std::make_index_sequence<std::tuple_size_v<Args>>{});
-                                  },
-                                  where);
-                          }});
+        m.call = [fn, where](lua::State* s, ScriptObject& o, int first) -> int {
+            return luaui::catchCxx(
+                s,
+                [&] {
+                    return detail::invokeMethod(fn, static_cast<T&>(o), s, first, where, static_cast<Args*>(nullptr),
+                                                std::make_index_sequence<std::tuple_size_v<Args>>{});
+                },
+                where);
+        };
+        m_info.addMethod(std::move(m));
         return *this;
     }
 
@@ -262,6 +299,7 @@ private:
         TypeInfo::Property p;
         p.name = std::move(name);
         p.typeName = LuaConvert<V>::name;
+        p.luaType = luaTypeDescriber<V>();
         p.push = [getter, where = m_info.name() + "." + p.name](lua::State* s, const ScriptObject& o) {
             const int top = lua::gettop(s);
             const bool pushed = detail::guarded(where, false, [&] {
