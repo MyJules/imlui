@@ -24,6 +24,9 @@ constexpr bool requireEveryBuiltin = false;
 /// The built-ins documented completely, by Lua name (an alias is a type of its own: list it too).
 const std::set<std::string, std::less<>> documentedTypes{
     "Button",
+    // family C: buttons, selection controls, value inputs
+    "Checkbox", "Chip", "ColorPicker", "ComboBox", "IconButton", "ListItem", "RadioButton", "RadioGroup",
+    "SegmentedButton", "Slider", "SpinBox", "Switch", "TextArea", "TextField",
 };
 
 /// What `info` leaves undocumented: "the type", ".prop", ".onSignal", ":method".

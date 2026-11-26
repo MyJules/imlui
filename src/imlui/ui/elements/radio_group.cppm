@@ -47,10 +47,18 @@ module :private;
 namespace imlui {
 
 void RadioGroup::declare(TypeBuilder<RadioGroup>& type) {
-    type.property("model", &RadioGroup::model, &RadioGroup::setModel)
+    type.doc("A list of Material 3 radio buttons from a `model` of labels; the selected one is `currentIndex` "
+             "(1-based, two-way).\n"
+             "Natural size: the buttons stacked (40dp each), or side by side 16dp apart when `horizontal`.")
+        .property("model", &RadioGroup::model, &RadioGroup::setModel)
+        .doc("The option labels.")
         .property("currentIndex", &RadioGroup::currentIndex, &RadioGroup::setCurrentIndex)
+        .doc("**Two-way.** The selected option, 1-based (default 1).")
         .property("horizontal", &RadioGroup::horizontal, &RadioGroup::setHorizontal)
-        .signal("onActivated");
+        .doc("Lays the options out in a row, 16dp apart, instead of a column.")
+        .signal<int, std::string>("onActivated", {"index", "text"})
+        .doc("Called when another option is picked, with its 1-based index and label (after `currentIndex` was "
+             "written back).");
 }
 
 void RadioGroup::render(Frame& frame) {

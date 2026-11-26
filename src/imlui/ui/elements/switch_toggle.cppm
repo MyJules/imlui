@@ -45,11 +45,18 @@ module :private;
 namespace imlui {
 
 void Switch::declare(TypeBuilder<Switch>& type) {
-    type.property("text", &Switch::text, &Switch::setText)
+    type.doc("A Material 3 switch with an optional label. A click toggles `checked` (two-way).\n"
+             "`Switch { \"Wi-Fi\" }` sets `text`.\n"
+             "Natural size: the 52dp track and its label, 40dp high.")
+        .property("text", &Switch::text, &Switch::setText)
+        .doc("The label. The positional value: `Switch { \"Wi-Fi\" }`.")
         .property("checked", &Switch::checked, &Switch::setChecked)
+        .doc("**Two-way.** Whether the switch is on.")
         .property("icons", &Switch::icons, &Switch::setIcons)
+        .doc("Shows the check / close icons in the handle (default `true`).")
         .defaultProperty("text")
-        .signal("onToggled");
+        .signal<bool>("onToggled", {"checked"})
+        .doc("Called when a click toggles the switch, with the new `checked`.");
 }
 
 void Switch::render(Frame&) {

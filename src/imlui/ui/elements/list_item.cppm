@@ -54,15 +54,26 @@ module :private;
 namespace imlui {
 
 void ListItem::declare(TypeBuilder<ListItem>& type) {
+    type.doc("A clickable Material 3 list item: a headline with optional supporting text, leading icon and "
+             "trailing text or icon.\n"
+             "`ListItem { \"Inbox\" }` sets `text`. Natural size: fills the width (`width`, raw); 56dp high, 72dp "
+             "with `supportingText`.");
     type.fillsWidth(); // an unset width fills
     type.property("text", &ListItem::text, &ListItem::setText)
+        .doc("The headline (`bodyLarge`). The positional value: `ListItem { \"Inbox\" }`.")
         .property("supportingText", &ListItem::supportingText, &ListItem::setSupportingText)
+        .doc("A second line; makes the item two-line (72dp).")
         .property("icon", &ListItem::icon, &ListItem::setIcon)
+        .doc("A leading Material icon name; `\"\"` for none.")
         .property("trailingText", &ListItem::trailingText, &ListItem::setTrailingText)
+        .doc("A trailing label (`labelSmall`).")
         .property("trailingIcon", &ListItem::trailingIcon, &ListItem::setTrailingIcon)
+        .doc("A trailing Material icon name; `\"\"` for none.")
         .property("selected", &ListItem::selected, &ListItem::setSelected)
+        .doc("The selected look.")
         .defaultProperty("text")
-        .signal("onClicked");
+        .signal<>("onClicked")
+        .doc("Called when the item is clicked.");
 }
 
 void ListItem::render(Frame& frame) {
