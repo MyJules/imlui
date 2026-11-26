@@ -28,6 +28,7 @@ export import imlui.ui.main_thread;
 export import imlui.ui.background;
 export import imlui.types.lua_convert;
 export import imlui.types.lua_function;
+export import imlui.types.future;
 export import imlui.types.script_object;
 export import imlui.types.live;
 export import imlui.types.frame;

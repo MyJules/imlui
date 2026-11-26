@@ -20,6 +20,7 @@
 //
 // runAsync(work, done[, fail]) is the usual way to use one: `work` runs on the background pool (imlui.ui.background)
 // with a stop token that stops when the object dies, and `done(result)` runs on the main thread while it lives.
+// runAsync(work) returns a Future of the result instead (imlui.types.future), which a method can return to Lua.
 export module imlui.types.script_object;
 
 import std;
@@ -28,6 +29,7 @@ import lua;
 import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.types.future;
 import imlui.types.lua_convert;
 import imlui.ui.background;
 import imlui.ui.frame_request;
@@ -116,6 +118,43 @@ public:
         requires std::invocable<Fail&, std::string>
     void runAsync(Work work, Done done, Fail fail) {
         startJob(std::move(work), std::move(done), std::move(fail));
+    }
+
+    /// Main thread: runs `work` on the background pool, like runAsync(work, done), and returns a Future of its result
+    /// (Future<void> for work returning void), which a method may return to Lua to be awaited:
+    ///  * the future is done with what `work` returned, or failed with the message of what it threw;
+    ///  * cancelling it (Future::cancel(), fut:cancel() in Lua) stops the token `work` gets, like this object's death;
+    ///  * this object's death cancels it (makePromise with handle().stopToken()): a result that arrives later is
+    ///    dropped. Work stopped before it started is skipped, and its future cancelled.
+    /// Settling runs on the main thread (imlui::post). `work` may be move-only; it is destroyed on a worker or the main
+    /// thread, so its captures must not need the main thread.
+    template <class Work>
+    auto runAsync(Work work) {
+        using Result =
+            std::remove_cvref_t<decltype(invokeWork(std::declval<Work&>(), std::declval<std::stop_token>()))>;
+        auto made = makePromise<Result>(handle().stopToken());
+        startAsync([work = std::make_shared<Work>(std::move(work)),
+                    promise = made.first](std::stop_token stop) -> std::function<void()> {
+            // One token for the work: stopped by this object's death or the pool's shutdown (`stop`), or a cancel.
+            std::stop_source both;
+            const std::stop_callback onStop{std::move(stop), [&both] { both.request_stop(); }};
+            const std::stop_callback onCancel{promise.stopToken(), [&both] { both.request_stop(); }};
+            if (both.stop_requested()) return {}; // the promise is dropped unsettled: the future is cancelled
+            try {
+                if constexpr (std::is_void_v<Result>) {
+                    invokeWork(*work, both.get_token());
+                    promise.resolve();
+                } else {
+                    promise.resolve(invokeWork(*work, both.get_token()));
+                }
+            } catch (const std::exception& e) {
+                promise.reject(e.what());
+            } catch (...) {
+                promise.reject("unknown C++ exception");
+            }
+            return {}; // settled through the promise: nothing to run here
+        });
+        return std::move(made.second);
     }
 
     /// Main thread: makes every handle of this object dead now (alive() false, posts dropped), before the destructor

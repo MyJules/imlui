@@ -81,7 +81,8 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
 - [Resources and the host config](#resources-and-the-host-config): mounts, the entry script
 - [Testing elements](#testing-elements): the headless frame harness
-- [Threading and frame requests](#threading-and-frame-requests), [ticking elements](#ticking-elements)
+- [Threading and frame requests](#threading-and-frame-requests): `runAsync`, [futures](#futures) (`Future<T>`,
+  `Promise<T>`), `Live<T>`, the background pool; [ticking elements](#ticking-elements)
 - [The built-ins as examples](#the-built-ins-as-examples)
 - [The example app](#the-example-app)
 - [Reference](#reference): modules and classes
@@ -290,6 +291,9 @@ Arguments are checked with `LuaConvert<A>::check`. A wrong argument raises a nor
 a Lua error too. One thrown by a property getter or setter is reported as a script error (`Gauge.value: ...`)
 instead: a setter that threw leaves the property unchanged, a getter that threw reads as `nil`. Before a method runs on an element, the element's properties are [synced](#property-sync), so it
 sees the current Lua values even if the element never rendered.
+
+A method whose result arrives later returns an [`imlui::Future<T>`](#futures): the script gets a future it can
+`await`.
 
 **Overloads.** `&T::fn` of an overloaded member doesn't name one function. Pick one by its parameter types with
 `imlui::overload<Args...>` (non-`const` members) or `imlui::constOverload<Args...>` (`const` members), from module
@@ -858,6 +862,7 @@ highest level down:
 | Tool | For |
 |---|---|
 | `runAsync(work, done[, fail])` (on every `ScriptObject`) | Work an element or singleton starts: `work` on the background pool, its result to `done` on the main thread, only while the object lives. |
+| `runAsync(work) -> Future<R>`, `imlui::Promise<T>` (module `imlui.types.future`) | A result a method returns to Lua, which the script [awaits](lua-api.md#async). |
 | `imlui::Live<T>` (module `imlui.types.live`) | A property a worker updates at any rate (telemetry, progress, status text): the UI applies the latest value at most once per loop iteration. |
 | `ScriptObject::Handle`, `imlui::post`, `runInBackground` | The lower level both are built on: your own threads, objects the host keeps alive. |
 
@@ -910,6 +915,81 @@ The object's death is the cancellation: every way an element dies goes through t
 shutdown closing the Lua state). A singleton the host destroys keeps its handles alive until `ScriptObject`'s
 destructor, after your own: call `cancelHandles()` first in your destructor if its work must see the stop while your
 members still live.
+
+### Futures
+
+`imlui::Future<T>` (module `imlui.types.future`) is a result that arrives later. A method returns it like any value;
+the script gets a [Lua future](lua-api.md#async) to `await` or chain:
+
+```cpp
+struct Report { std::string title; int pages = 0; };
+template <> struct imlui::LuaFields<Report> {
+    static constexpr std::tuple fields{imlui::field("title", &Report::title), imlui::field("pages", &Report::pages)};
+};
+
+imlui::Future<Report> Backend::fetch(std::string url) {
+    return runAsync([url](std::stop_token stop) { return download(url, stop); }); // a worker: copies only
+}
+type.method("fetch", &Backend::fetch);
+```
+
+```lua
+local load = async(function()
+    local ok, report = pcall(await, backend:fetch(url))
+    s.text = ok and report.title or ("failed: " .. report)
+end)
+```
+
+**`runAsync(work) -> Future<R>`** runs `work` like the [two-argument form](#background-work-owned-by-an-element)
+(`work(std::stop_token)` or `work()`, on the pool; it may be move-only) and returns a future of its result
+(`Future<void>` for `void` work):
+
+- done with what `work` returned; failed with the message of what it threw (`what()`, or `unknown C++ exception`);
+- `work`'s token also stops when the future is cancelled (`fut:cancel()` in Lua, `Future::cancel()`);
+- **the object's death cancels the future** (on the main thread, at the next loop iteration), and a result that
+  arrives after that is dropped: the script's `await` raises `"cancelled"` (when its state is still alive), and
+  nothing the object would have been needed for runs. Work stopped before it started is skipped, its future
+  cancelled.
+
+**Promises.** A result that comes from elsewhere (a callback API, another thread, a dialog) goes through a promise:
+
+```cpp
+imlui::Future<int> Backend::ask(std::string question) {
+    auto [promise, future] = imlui::makePromise<int>(handle().stopToken()); // owner token: optional
+    m_api.ask(question, [promise](int answer) { promise.resolve(answer); }, // any thread
+              [promise](std::string error) { promise.reject(std::move(error)); });
+    return future;
+}
+```
+
+| `Promise<T>` member | What |
+|---|---|
+| `resolve(value)` (`resolve()` for `void`), `reject(message)` | Thread-safe. Settles the future on the main thread (posted with `imlui::post`, so at the next loop iteration). The first call wins; later ones do nothing. |
+| `stopToken()` | Thread-safe. Stopped when the future is cancelled (by the script, C++ or the owner). |
+| destructor | When the last copy goes without settling, the future is **cancelled**: a dropped job never leaves a script waiting. |
+
+`makePromise<T>(owner)` takes an optional `std::stop_token`: once it stops, the future is cancelled and a value that
+arrives later is dropped. `runAsync` passes its object's `handle().stopToken()`.
+
+| `Future<T>` member (main thread) | What |
+|---|---|
+| `status()`, `pending()` | `FutureStatus::Pending`, `Done`, `Failed` or `Cancelled`. A default-constructed future is cancelled. |
+| `value()` | `const T*`: the value once done, else `nullptr` (not for `Future<void>`). |
+| `error()` | The message once failed; `"cancelled"` once cancelled. |
+| `cancel()` | Settles it as cancelled and stops the promise's token. `false` once settled. |
+| `onSettled(fn)` | Calls `fn(const Future&)` once settled (now if it is). An exception it throws is reported. |
+
+- **Conversion.** `LuaConvert<Future<T>>` is push only and needs `LuaConvert<T>::push` (a C++-only future of any
+  `T` works without it). The value is converted when the future settles, into the Lua state it was pushed to.
+  Pushing the same future again into that state pushes the same Lua object; a future that settled before it was
+  pushed arrives settled.
+- **Lifetime.** The Lua side is linked through a [`LuaFunction`](#lua-functions-luafunction), so a future whose
+  state closed (hot reload, shutdown) settles only on the C++ side: a safe no-op for Lua. The shared state is
+  released on the main thread (a promise's destructor hands it there), so promises may die on any thread.
+- **Errors.** A rejection reaches the script as the error of `await` (or `catch`). One nothing handles is reported
+  in the error overlay at the next frame ([unhandled rejections](lua-api.md#async)); a C++ `onSettled` handler counts
+  as handling it. C++ itself reports nothing.
+- `Future`, `onSettled` and `cancel` are main-thread only; a worker gets a `Promise` (or `runAsync`'s token).
 
 ### Live properties
 
@@ -1130,7 +1210,8 @@ skeleton.
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations (scalars, strings, `Color`, `optional`, `vector`, string-keyed maps, `pair`/`tuple`, `variant`/`monostate`); `EnumNames<E>`, `LuaFields<T>` with `field(key, &T::member)`; the `LuaPushable` / `LuaReadable` concepts, `takesLuaFunction<T>()` |
 | `imlui.types.lua_function` | `LuaFunction`: a handle to a Lua function (`call(args...)`, `call<R>(args...)`, `expired()`, `push`), expired once its state closes; its `LuaConvert` |
-| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `runAsync(work, done[, fail])`, `handle()` (`ScriptObject::Handle`: `alive()`, `stopToken()`, `post(fn)`, for worker threads), `cancelHandles()`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
+| `imlui.types.future` | `Future<T>` (`status`, `value`, `error`, `cancel`, `onSettled`; push-only `LuaConvert`: a Lua future), `Promise<T>` (`resolve`, `reject`, `stopToken`; thread-safe), `makePromise<T>(owner)`, `FutureStatus` |
+| `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `runAsync(work, done[, fail])`, `runAsync(work) -> Future<R>`, `handle()` (`ScriptObject::Handle`: `alive()`, `stopToken()`, `post(fn)`, for worker threads), `cancelHandles()`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
 | `imlui.types.live` | `Live<T>`: a property any thread `set()`s, applied on the main thread at most once per loop iteration (latest wins); `Live<T>::Writer` |
 | `imlui.ui.background` | `runInBackground(work)`: the process-wide worker pool; `shutdownBackground(wait)` (the engine calls it), `backgroundThreadLimit`, `backgroundTaskCount` |
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
