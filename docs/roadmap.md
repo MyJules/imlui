@@ -10,13 +10,22 @@ Follow-ups not scheduled yet:
 - **Run `tidy` (and the sanitizer preset) in CI**, and extend the naming check to `tests/`.
 - The default test presets skip the slow `package` tests; label the GL smoke tests so CI can skip them.
 - Lua language-server definitions (`---@meta`) generated from the type registry.
-- Per-child cost in big containers: `Frame::Child` is built up to three times per child in a `Row`, and
-  `Node::type()` (a `std::string`) plus a map lookup runs 2–3 times per element per frame; answer the kind from the
-  `__native` box (`renderer.cppm`, `frame.cppm`, `registry.cppm`).
+- Per-child cost in big containers: a `Row` builds a `Frame::Child` per pass (fills, sizes, render, and its parent's
+  `contentFillsWidth` / size questions), each an instance lookup and an ImGui ID; in the `nested` bench an element's
+  props are read ~18 times a frame (`visible` 3, `width`/`fillWidth` 3, `__children` 2.5). Keep a container's
+  children (table, kind, id, `visible`, size props) for the frame while `luaui::changes()` stands still. The kind is
+  answered from the `__native` box already.
+- Property reads still push their key through `lua_pushstring` (Lua's address cache, then a `strcmp`): ~6% of a
+  steady frame. Intern the keys once per state (registry refs, or upvalues of the hot C functions).
 - The Lua call path: read `bind(t, k)` without a pcall when `t` has no metatable or a plain `__index` table; push a
   delegate's scope from C++ instead of Lua `inScope`; reuse the `__children` cache entry instead of a new table.
-- First frame of a big stack: every child renders once to learn its size before culling applies (controls at 5000:
-  ~430 ms). Estimate unknown sizes from settled siblings, as `ListView` does.
+- First frame of a big stack: every child still renders once (controls at 5000: ~200 ms; the second and third
+  frames no longer do). About half of it is Lua building the `Repeater`'s delegates (`ui.Text` ~1.2 µs each against
+  0.1 µs for a plain table: `types.attach` ~0.6 µs, mostly allocation, and `finishElement`), the rest rendering. Render
+  only the children in view on it (estimating the others, as `ListView` does) once a cheap walk can tell that a
+  subtree holds no non-visual element to pin; a pooled allocator for Lua (`lua_newstate` with a size-class free list)
+  for the allocation share.
+- Lua's generational GC made no measurable difference on the bench (tried; not switched).
 - `ListView`: a `positionViewAtIndex` method (a script can't scroll to an item that isn't built), and a prop for the
   delegate cache size.
 - `font_check` assumes glyphs up to ~128 px; `fontScale` is capped at 4, but zoom × DPI can still exceed it: cap the

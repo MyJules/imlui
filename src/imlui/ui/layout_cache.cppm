@@ -49,6 +49,10 @@ inline constexpr int maxSettleFrames = 8;
 /// Retention: an entry not used for keepFrames frames and keepSeconds seconds (ImGui time) is dropped.
 inline constexpr int keepFrames = 600;
 inline constexpr double keepSeconds = 60.0;
+/// How often (in frames) the entries old in frames and in time are looked for: a walk over the whole cache, which a
+/// big page holds thousands of entries in, so not every frame. It delays a drop by up to as many frames. The cap
+/// (maxEntries) is checked every frame.
+inline constexpr int ageSweepFrames = 64;
 /// Above this many entries, the least recently used ones are dropped (never those used on this frame or the last).
 inline constexpr std::size_t maxEntries = 16384;
 
@@ -82,17 +86,21 @@ struct Entry {
 struct Cache {
     ImGuiContext* context = nullptr;
     int sweptFrame = -1;
+    int ageSweptFrame = -1;
     std::unordered_map<ImGuiID, Entry> entries;
 };
 
 Cache cache; // main thread only, like all ImGui code
 
-/// Drops the entries that are old in frames and in time, then, above maxEntries, the least recently used ones that
-/// aren't live.
+/// Drops the entries that are old in frames and in time (every ageSweepFrames), then, above maxEntries, the least
+/// recently used ones that aren't live.
 void sweep(std::unordered_map<ImGuiID, Entry>& map, int frame, double now) {
-    std::erase_if(map, [&](const auto& e) {
-        return frame - e.second.touched >= keepFrames && now - e.second.touchedTime >= keepSeconds;
-    });
+    if (cache.ageSweptFrame < 0 || frame - cache.ageSweptFrame >= ageSweepFrames || frame < cache.ageSweptFrame) {
+        cache.ageSweptFrame = frame;
+        std::erase_if(map, [&](const auto& e) {
+            return frame - e.second.touched >= keepFrames && now - e.second.touchedTime >= keepSeconds;
+        });
+    }
     if (map.size() <= maxEntries) return;
     std::vector<std::pair<int, ImGuiID>> old; // (last frame used, id) of the entries that may go
     old.reserve(map.size());
@@ -111,6 +119,7 @@ std::unordered_map<ImGuiID, Entry>& entries() {
         cache.entries.clear();
         cache.context = context;
         cache.sweptFrame = -1;
+        cache.ageSweptFrame = -1;
     }
     const int frame = ImGui::GetFrameCount();
     if (cache.sweptFrame != frame) {

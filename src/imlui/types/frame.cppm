@@ -247,7 +247,9 @@ Frame::Child::Child(const Frame& frame, const luaui::Node& node)
     : m_frame{frame}, m_node{node}, m_id{frame.m_renderer.elementImGuiId(node)},
       m_visual{frame.m_renderer.isVisual(node.state(), node.index())} {}
 
-bool Frame::Child::render() { return m_frame.m_renderer.render(m_node.state(), m_node.index()); }
+// Every Child is made right after its `visible` was read as true (forEachChild, withElementProp, ListView), so the
+// render doesn't read it again.
+bool Frame::Child::render() { return m_frame.m_renderer.renderShown(m_node.state(), m_node.index()); }
 
 bool Frame::Child::render(float right) {
     const layout::BoxScope box{layout::boxTo(right)};

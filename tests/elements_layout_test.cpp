@@ -1411,7 +1411,8 @@ TEST_F(LayoutTest, TheLayoutCacheDropsElementsThatAreGone) {
 
     // Unused for keepFrames frames and keepSeconds seconds: dropped, down to what is still shown.
     run("refill(-1, 3)");
-    const int idle = std::max(layout::keepFrames, static_cast<int>(layout::keepSeconds * 60.0)) + 2;
+    const int idle =
+        std::max(layout::keepFrames, static_cast<int>(layout::keepSeconds * 60.0)) + layout::ageSweepFrames + 2;
     m_h.renderFrames("root", idle);
     EXPECT_LE(layout::cacheEntries(), 10u);
     EXPECT_TRUE(luaui::errors().empty());

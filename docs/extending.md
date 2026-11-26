@@ -252,7 +252,9 @@ type.property("value", &Gauge::value, &Gauge::setValue)       // read/write
   the element table.
 - **Defaults.** When a property's Lua value is `nil` (never set, set back to `nil`, or a binding that returns
   `nil`), the property is reset to its default. The default is the getter's value **right after construction**
-  (so C++ member initializers are the defaults), or the value given as the fourth argument,
+  (so C++ member initializers are the defaults; captured once per type, from its first instance, and shared by all:
+  a constructor that gives each instance a different value resets them all to the first one's), or the value given
+  as the fourth argument,
   `property(name, getter, setter, defaultValue)`. An `std::optional<T>` property takes no default: `nil` is
   `std::nullopt`. A value type that can't be copied keeps its current value on `nil`.
 

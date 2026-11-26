@@ -53,7 +53,7 @@ float toFloat(double v) {
 bool isBind(lua::State* state, int idx) {
     if (!lua::istable(state, idx)) return false;
     idx = lua::absindex(state, idx);
-    lua::pushstring(state, "__bind");
+    lua::pushcstring(state, "__bind");
     lua::rawget(state, idx);
     bool b = lua::toboolean(state, -1);
     lua::pop(state);

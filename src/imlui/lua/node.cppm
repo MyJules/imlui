@@ -112,7 +112,7 @@ int bindSet(lua::State* state) {
 /// an __index (one that raises, too) isn't taken for a bind object.
 lua::Type pushRawField(lua::State* state, int idx, const char* key) {
     idx = lua::absindex(state, idx);
-    lua::pushstring(state, key);
+    lua::pushcstring(state, key);
     return lua::rawget(state, idx);
 }
 

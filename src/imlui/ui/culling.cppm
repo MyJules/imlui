@@ -32,6 +32,11 @@ inline constexpr float margin = 32.0f;
 
 /// The same for the rows `top`..`bottom` (screen y) at any x: a whole table row.
 [[nodiscard]] bool outOfView(float top, float bottom);
+/// Whether something that starts at screen y `top` is entirely below the view of the current window, a window that
+/// scrolls (its content is taller than it), past its clip rect widened like outOfView(): nothing in view is placed
+/// after it, and its size only adds to the scroll range. False in a window that doesn't scroll (a Card, an
+/// auto-sized window): what is past its clip rect may be what it grows to fit on the next frame.
+[[nodiscard]] bool belowView(float top);
 
 /// Starts the next row of the current table (ImGui::TableNextRow) and returns its top (screen y).
 float nextTableRow();
@@ -108,6 +113,16 @@ bool outOfView(ImVec2 min, ImVec2 max) {
     // the one it picked: the items up to a page away must be there.
     if (g.NavMoveScoringItems) m += std::max(0.0f, clipMax.y - clipMin.y);
     return max.y < clipMin.y - m || min.y > clipMax.y + m || max.x < clipMin.x - m || min.x > clipMax.x + m;
+}
+
+bool belowView(float top) {
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    const ImGuiWindow* window = g.CurrentWindow;
+    if (!window || window->ScrollMax.y <= 0.0f) return false;
+    const float clipMin = window->ClipRect.Min.y, clipMax = window->ClipRect.Max.y;
+    float m = dp(margin);
+    if (g.NavMoveScoringItems) m += std::max(0.0f, clipMax - clipMin);
+    return top > clipMax + m;
 }
 
 bool outOfView(float top, float bottom) {

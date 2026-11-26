@@ -84,6 +84,11 @@ public:
 
     /// Captures the nil-reset values of every property from `object`, just constructed.
     [[nodiscard]] Defaults captureDefaults(const ScriptObject& object) const;
+    /// The nil-reset values of the type's elements: captured (captureDefaults) from `first`, the first instance
+    /// constructed, and shared by every instance after it. A property's default is its value right after
+    /// construction, which member initializers and a constructor's assignments make the same for every instance;
+    /// one capture per instance cost an allocation per property for every element built. Main thread only.
+    [[nodiscard]] std::shared_ptr<const Defaults> sharedDefaults(const ScriptObject& first) const;
 
 private:
     void checkUnique(std::string_view name) const;
@@ -97,6 +102,7 @@ private:
     std::vector<Method> m_methods;
     std::vector<std::string> m_signals;
     Factory m_factory;
+    mutable std::shared_ptr<const Defaults> m_sharedDefaults; ///< sharedDefaults(), once captured
 };
 
 } // namespace imlui
@@ -181,6 +187,11 @@ TypeInfo::Defaults TypeInfo::captureDefaults(const ScriptObject& object) const {
     for (const auto& p : m_properties)
         out.push_back(p.captureDefault ? p.captureDefault(object) : nullptr);
     return out;
+}
+
+std::shared_ptr<const TypeInfo::Defaults> TypeInfo::sharedDefaults(const ScriptObject& first) const {
+    if (!m_sharedDefaults) m_sharedDefaults = std::make_shared<const Defaults>(captureDefaults(first));
+    return m_sharedDefaults;
 }
 
 } // namespace imlui

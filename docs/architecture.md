@@ -91,8 +91,11 @@ Who requests frames:
 | `ui.requestFrame(ms?)`, `ui.setZoom`, `native.injectMouse` | a frame (or the settle period) |
 | A reload | the settle period |
 
-`md::animate` caps the frame time it advances by at 1/30 s, so a transition that starts on the first frame after
-a long sleep doesn't jump to its end.
+`md::animate` keeps its values in a hash map of imlui's by ImGui ID (per context; a value unused for
+`md::animateKeepFrames` 600 frames is dropped, and its widget starts at rest again), not in the window's
+`ImGuiStorage`: that is a sorted vector, and a page showing thousands of widgets for the first time inserted into it
+in quadratic time (18% of such a first frame). It caps the frame time it advances by at 1/30 s, so a transition that
+starts on the first frame after a long sleep doesn't jump to its end.
 
 ### Scaling
 
@@ -309,7 +312,8 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   (logged once at debug level), so a layout that can't settle doesn't render forever.
 - **Retention.** A hidden page (another `TabBar` tab, an `If` branch, a collapsed `Section`) keeps its sizes, so it
   is in place, and seen, on the frame it comes back. An entry is dropped only when it is old both in frames and in
-  time (`layout::keepFrames` 600 frames and `layout::keepSeconds` 60s: on-demand rendering renders few frames while
+  time (`layout::keepFrames` 600 frames and `layout::keepSeconds` 60s, looked for every `layout::ageSweepFrames` 64
+  frames, as a walk over the whole cache costs ~1 µs per hundred entries: on-demand rendering renders few frames while
   idle, an animation many a second), and above `layout::maxEntries` (16384, about 2 MB) the least recently used go
   first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
   the element's ImGui ID in the parent's ID scope, made from its identity (see [Element identity](#element-identity)),
@@ -421,8 +425,19 @@ until it settles again. Turn it off with `ui.setCulling(false)` (every container
 
 Not culled:
 
-- **A child without a settled size**: its first two frames, or while its size changes (a `Card` whose window fits
-  its content a frame later, text that wraps at a new width), so the size the stack lays out is right.
+- **A child without a settled size** in view or above it: its first two frames, or while its size changes (a `Card`
+  whose window fits its content a frame later, text that wraps at a new width), so the size the stack lays out is
+  right. **Below the view** of a window that scrolls (`cull::belowView`), such a child renders only while the frame's
+  `Renderer::convergeRenders` (256) last, so its size settles; past them it is laid out at its last size and another
+  frame is requested (`Renderer::requestConvergeFrame`, at most `maxConvergeFrames` 120 in a row). Nothing in view is
+  placed after it, so a size still converging only moves what is out of view, and the scroll range becomes exact over
+  a few cheap frames. Without this, every child of a long page rendered on its second and third frames too (the
+  scrollbar appears on the second and changes the width the children get, so they settle only on the third): about
+  90 ms each for 5000 `Row`s of controls. The same holds on a frame the stack's width changed (a resize), where only
+  the children below the view are culled. The very first frame still renders every child, so each is measured and
+  pins what it holds (a `Dialog`) at least once. In a window that doesn't scroll (a `Card`, an auto-sized window), what
+  is past the clip rect is what the window grows to fit, so it isn't culled this way. `Grid` rows follow the same
+  rules.
 - **Pinned children.** Around each child it renders, the stack watches ImGui's state (`cull::watch` / `cull::held`):
   whether the child's render held the active item (`ActiveIdIsAlive`: a `TextField` being edited, a `Slider` being
   dragged), the nav focus (`NavIdIsAlive`), began an open popup (a menu, a combo box's list), or rendered a

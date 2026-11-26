@@ -109,9 +109,20 @@ void Grid::render(Frame& frame) {
                     rowKey = ImGui::GetID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
                         culling.key(c, false)))); // not the child's own ID: GetID hashes it again
                     rowCulled = false;
-                    if (culling.culls() && !cull::pinned(rowKey)) {
-                        if (const auto size = layout::settledSize(rowKey);
-                            size && cull::outOfView(rowTop, rowTop + size->y)) {
+                    if (culling.cullsBelow() && !cull::pinned(rowKey)) {
+                        // Its settled height (only on a frame the grid culls in view too), else, for a row below
+                        // the view, its last one once the frame's converging renders are taken: nothing in view is
+                        // placed after it (Renderer::skipOutOfView).
+                        std::optional<ImVec2> size;
+                        if (culling.culls()) size = layout::settledSize(rowKey);
+                        if (!size && cull::belowView(rowTop)) {
+                            size = layout::lastSize(rowKey);
+                            if (size && r.takeConvergeRenders(cols))
+                                size.reset(); // rendered: its height settles
+                            else if (size)
+                                r.requestConvergeFrame(); // the rest settle on the next frames
+                        }
+                        if (size && cull::outOfView(rowTop, rowTop + size->y)) {
                             cull::reserveTableRow(size->y);
                             rowCulled = true;
                         }
