@@ -173,9 +173,9 @@ C++ instances too.
 (see [Trying changes in an app](#trying-changes-in-an-app)). Document it in `declare()` for the editor's hover text
 ([`doc(text)`](extending.md#docs-doctext)): the type and every property, signal and method, condensed from its
 Elements section (the common props are documented already), with typed signals (`signal<Args...>(name, {"names"})`)
-and named method parameters. Add its name (and its aliases') to `documentedTypes` in `tests/element_docs_test.cpp`,
-which then requires it to stay complete; `imlui_tests --gtest_filter=ElementDocs.*` prints what every built-in still
-leaves undocumented.
+and named method parameters. `tests/element_docs_test.cpp` requires every built-in to be documented completely, so
+a new element (or a new member of one) fails `ElementDocs.BuiltinsAreDocumented` until it has its docs; the failure
+lists what's missing.
 
 **5. Tests.** A test file `tests/elements_<family>_test.cpp` renders it through the
 [headless frame harness](#the-headless-frame-harness): defaults, props reaching the instance, `nil` resets, two-way
