@@ -160,6 +160,9 @@ TEST_F(RunAsyncTest, WorkOfAnObjectThatDiedBeforeItStartedIsSkipped) {
     owner.reset();
     release.count_down();
     jobGone.wait(); // the job was taken from the queue and dropped
+    // Joins the workers before `release` goes: one woken by the count_down may still be inside release.wait(), reading
+    // the latch (ASan's stack-use-after-return, found by a repeated run).
+    shutdownBackground(std::chrono::seconds{10});
     EXPECT_FALSE(ran);
 }
 
@@ -393,7 +396,12 @@ TEST_F(RunAsyncTest, TaskCancelFromAnotherThreadDecidesOnce) {
         bool done = false;
         const Task task = owner.runAsync([] { return 1; }, [&](int) { done = true; });
         std::atomic<bool> cancelled = false;
-        std::thread canceller{[&] { cancelled = task.cancel(); }};
+        // The post wakes runUntil: a cancel that wins before the work starts posts nothing (the job is skipped), so
+        // the waiter would otherwise sit out its whole 10 s timeout.
+        std::thread canceller{[&] {
+            cancelled = task.cancel();
+            post([] {});
+        }};
         ASSERT_TRUE(posts.runUntil([&] { return !task.running(); }));
         canceller.join();
         shutdownBackground(std::chrono::seconds{10});

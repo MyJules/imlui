@@ -27,7 +27,9 @@ void text(std::string_view s, TextStyle style, std::optional<Color> color = std:
 
 /// A standalone icon item (size in dp).
 void icon(std::string_view name, float size = 24.0f, std::optional<Color> color = std::nullopt);
-/// The size of icon(): `size` dp square.
+/// The size of icon(): `size` dp square, as drawIcon() draws it: at most maxIconPixels, and 0 for a size that isn't
+/// positive (or NaN). Always finite, so a script's `size = 1/0` never reaches ImGui's layout (which converts the
+/// cursor position to int).
 [[nodiscard]] ImVec2 iconSize(float size = 24.0f);
 
 /// Plain tooltip (inverseSurface) for the last item.
@@ -76,12 +78,17 @@ std::optional<ImVec2> textSize(std::string_view s, TextStyle style, bool wrap, f
     return size;
 }
 
-ImVec2 iconSize(float size) { return {dp(size), dp(size)}; }
+ImVec2 iconSize(float size) {
+    const float px = dp(size);
+    const float side = px > 0.0f ? std::min(px, maxIconPixels) : 0.0f; // also NaN
+    return {side, side};
+}
 
 void icon(std::string_view name, float size, std::optional<Color> color) {
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::Dummy(iconSize(size));
-    drawIcon(ImGui::GetWindowDrawList(), name, {p.x + dp(size) * 0.5f, p.y + dp(size) * 0.5f}, size,
+    const ImVec2 box = iconSize(size);
+    ImGui::Dummy(box);
+    drawIcon(ImGui::GetWindowDrawList(), name, {p.x + box.x * 0.5f, p.y + box.y * 0.5f}, size,
              itemDisabled() ? disabledContent() : color.value_or(scheme().onSurfaceVariant));
 }
 

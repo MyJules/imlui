@@ -261,7 +261,13 @@ frames at its place even out of range, up to 16 per list.
 A tree is walked at most `Renderer::maxDepth` (256) levels deep: each element rendered or asked for its intrinsic
 size or fill, and each inline container spliced in, is a level. Deeper is almost surely a cycle (`a[1] = b; b[1] = a`,
 a `Loader` that shows its own ancestor), which would overflow the native stack; the levels past it are skipped and
-"element tree nested deeper than 256 levels" is reported as a script error.
+"element tree nested deeper than 256 levels" is reported as a script error. A level is also cut when less than
+`Renderer::stackReserve` (256 KiB) of the thread's native stack is left (`imlui.platform.stack`, `stackRemaining()`):
+"element tree nested deeper than the native stack holds (N levels; ...)". A level takes about 2 KiB of stack in a
+Debug build, 1.6 KiB in Release and 8 KiB under AddressSanitizer, so with a 1 MiB main-thread stack (the Windows
+default) only a sanitized build would run out before 256 levels; sanitized programs on Windows get an 8 MiB stack (see
+[Development](development.md#building-and-testing)), so they nest as deep as the others, and a host that renders on
+a thread with a small stack gets the error instead of a crash.
 
 Layout notes. ImGui lays items out as they are submitted, so a container must decide where a child goes, and how
 much width it gets, before the child draws. imlui's layout is built on that: **constraints go down** (layout boxes),
@@ -984,6 +990,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink), `setLevel` |
 | `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
 | `imlui.platform.process` | `executablePath()` (from the OS: `GetModuleFileNameW`, `/proc/self/exe`), `processArguments(argc, argv)` (`ProcessArguments`: the arguments as paths, from the UTF-16 command line on Windows when `argv` is the process's own, and whether it is) |
+| `imlui.platform.stack` | `stackRemaining()`: the bytes of the calling thread's stack left below the caller (`GetCurrentThreadStackLimits` on Windows, `pthread_getattr_np` on Linux; nullopt elsewhere), which the renderer checks per level (`Renderer::stackReserve`) |
 | `zstd` | The zstd decompressor: `zstd::contentSize(frame)`, `zstd::decompress(frame, out)`. The tools wrap the compressor themselves (`zstd.compress`, in `tools/lib/`). |
 
 ### Color (`src/imlui/color/`)

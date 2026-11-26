@@ -11,6 +11,8 @@
 #   - LeakSanitizer is not available on Windows.
 #   - ASan is built without stack-use-after-return instrumentation (-fsanitize-address-use-after-return=never): it
 #     breaks throwing from a catch block, which Lua errors (C++ exceptions, external/lua_cxx) do.
+#   - Executables link with an 8 MiB stack (/STACK, a link option of the usage requirements too): ASan's frames are
+#     several times larger, and the renderer's stack check (Renderer::stackReserve) would cut a tree early on 1 MiB.
 #   - The ASan runtime DLL (named after the target's architecture, which the compiler reports) is copied next to the
 #     executables (CMAKE_RUNTIME_OUTPUT_DIRECTORY, or its folder per configuration with a multi-config generator) so
 #     tests and apps run without PATH edits.
@@ -100,6 +102,10 @@ if(_imlui_sanitizers)
         # throwing from a catch block on Windows: `throw;` or a new throw in a handler crashes ("stack-overflow").
         # Lua is compiled as C++, so a Lua error raised in a handler, or rethrown past one, is such a throw.
         list(APPEND IMLUI_SANITIZER_COMPILE_OPTIONS -fsanitize-address-use-after-return=never)
+        # ASan's redzones make every frame several times larger (a level of the element tree: ~2 KiB in a Debug build,
+        # ~8 KiB with ASan), and Windows gives a program's main thread 1 MiB of stack. 8 MiB lets a sanitized program
+        # nest as deep as an unsanitized one (Renderer::maxDepth) before the renderer's stack check cuts the tree.
+        list(APPEND IMLUI_SANITIZER_LINK_OPTIONS "LINKER:/STACK:8388608")
     endif()
     add_compile_options(${IMLUI_SANITIZER_COMPILE_OPTIONS})
     add_link_options(${IMLUI_SANITIZER_LINK_OPTIONS})

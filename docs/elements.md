@@ -683,7 +683,7 @@ A Material icon glyph.
 | `name` | icon | — | The glyph. |
 | `icon` | icon | — | The glyph, when `name` isn't set. |
 | `text` | string | `""` | Positional. The glyph, when neither `name` nor `icon` is set. |
-| `size` | number | `24` | Size (dp). Below a pixel nothing is drawn; the glyph is drawn at most 1024 pixels tall. |
+| `size` | number | `24` | Size (dp). Below a pixel nothing is drawn; the glyph is drawn at most 1024 pixels tall. The item is the square drawn: at most 1024 pixels, and empty for a size that isn't positive (or NaN). |
 | `color` | color | — | Tint. Unset: `onSurfaceVariant`. |
 
 ### Image

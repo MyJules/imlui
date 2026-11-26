@@ -54,7 +54,8 @@ value, `spacing`, `fontScale` or a radius out of its range, or one that isn't a 
 (`theme.style.Alpha: must be in 0..1`) and is ignored: the field keeps its default. A `Theme` built in C++ is held to the same limits by `setTheme`, which
 clamps `fontScale`, `spacing` and the radii and drops style overrides it can't apply (`styleValueProblem`). Sizes are
 scaled by the DPI scale and zoom like the defaults (ImGui truncates them to whole pixels); `WindowMinSize` stays at
-least 1 pixel at any zoom.
+least 1 pixel at any zoom, and `ItemSpacing.x` is applied as at least 0 (ImGui's menus store it as an unsigned
+width; a negative `ItemSpacing.y` is kept).
 
 After the preset and the overrides, every style size is scaled by the DPI factor
 (`ImGuiStyle::ScaleAllSizes`).

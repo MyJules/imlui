@@ -21,6 +21,7 @@ import imlui.widgets;
 import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.platform.stack;
 import imlui.ui.culling;
 import imlui.ui.layout_box;
 import imlui.ui.layout_cache;
@@ -68,6 +69,10 @@ public:
     /// Loader that shows its own ancestor), which would overflow the native stack: the levels past it are skipped
     /// and reported as a script error.
     static constexpr int maxDepth = 256;
+    /// The native stack a level needs left (platform::stackRemaining()): a level entered with less is skipped and
+    /// reported like one past maxDepth, so a tree too deep for the thread's stack is cut instead of overflowing it.
+    /// What runs below the deepest level (a leaf's widgets, a Lua handler, a thrown error's unwinding) has this much.
+    static constexpr std::size_t stackReserve = std::size_t{256} * 1024;
 
     /// Native window title: the root ApplicationWindow's `title` prop, else the
     /// last ui.setTitle(), else "imlui".
@@ -260,12 +265,11 @@ public:
     void attachMenu(const luaui::Node& node, bool clicked);
 
 private:
-    /// Counts a level of nesting while it lives; false past maxDepth (reportTooDeep()).
+    /// Counts a level of nesting while it lives; false past maxDepth or with less than stackReserve of the native stack
+    /// left (reported).
     class Nesting {
     public:
-        explicit Nesting(Renderer& renderer) : m_depth{renderer.m_depth}, m_ok{++m_depth <= maxDepth} {
-            if (!m_ok) reportTooDeep();
-        }
+        explicit Nesting(Renderer& renderer);
         ~Nesting() { --m_depth; }
         Nesting(const Nesting&) = delete;
         Nesting& operator=(const Nesting&) = delete;
@@ -277,8 +281,9 @@ private:
         int& m_depth;
         bool m_ok;
     };
-    /// Reports a tree nested deeper than maxDepth (luaui::reportError, which reports a message once).
-    static void reportTooDeep();
+    /// Reports a tree nested deeper than maxDepth, or than the native stack holds (`stack`) at `depth` levels
+    /// (luaui::reportError, which reports a message once).
+    static void reportTooDeep(int depth, bool stack);
 
     /// Pushes the table that holds the children of `node`: the node itself, or what its `__children(self)` returned.
     /// That call (a read: the model function, the delegates it builds) runs once a frame per element while
@@ -390,9 +395,25 @@ bool Renderer::renderShown(lua::State* state, int idx) {
     return renderElement(n, kind);
 }
 
-void Renderer::reportTooDeep() {
-    luaui::reportError("element tree nested deeper than " + std::to_string(maxDepth) +
-                       " levels (does an element contain itself?); the deeper levels are skipped");
+Renderer::Nesting::Nesting(Renderer& renderer) : m_depth{renderer.m_depth}, m_ok{++m_depth <= maxDepth} {
+    if (!m_ok) {
+        reportTooDeep(m_depth, false);
+        return;
+    }
+    const std::optional<std::size_t> left = platform::stackRemaining();
+    if (left && *left < stackReserve) {
+        m_ok = false;
+        reportTooDeep(m_depth, true);
+    }
+}
+
+void Renderer::reportTooDeep(int depth, bool stack) {
+    if (stack)
+        luaui::reportError("element tree nested deeper than the native stack holds (" + std::to_string(depth) +
+                           " levels; does an element contain itself?); the deeper levels are skipped");
+    else
+        luaui::reportError("element tree nested deeper than " + std::to_string(maxDepth) +
+                           " levels (does an element contain itself?); the deeper levels are skipped");
 }
 
 bool Renderer::renderElement(const Node& n, Types::Kind kind) {

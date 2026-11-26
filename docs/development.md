@@ -361,8 +361,19 @@ On this target:
   `function`, and more). UB aborts the process, so a test with UB fails.
 - Vendored Lua is compiled with `-fwrapv`: it relies on signed integer arithmetic wrapping (a hex float's exponent
   in `lua_strx2number`, found by the `manifest` fuzz target), which UBSan would otherwise abort on.
+- Executables get an 8 MiB stack (`/STACK:8388608`, also a usage requirement): ASan's redzones make a level of the
+  element tree about 8 KiB of stack instead of 2, and the default 1 MiB would stop the renderer's stack check
+  (`Renderer::stackReserve`, see [Architecture](architecture.md)) well before `Renderer::maxDepth`.
 - Not covered: LeakSanitizer (not available on Windows), UBSan `vptr` (not supported for the MSVC ABI), and
-  ThreadSanitizer/MemorySanitizer (not available for this target).
+  ThreadSanitizer/MemorySanitizer (not available for this target). Data races are looked for with stress tests
+  instead (`async_stress_test.cpp`, see [Testing](#testing)), which turn a race into the use-after-free or double
+  free ASan reports. To stress the threading suites, repeat them, in `clang-asan` and in `clang-release` (other
+  timings):
+
+  ```sh
+  build/clang-asan/bin/imlui_tests --gtest_brief=1 --gtest_shuffle --gtest_repeat=200 \
+      --gtest_filter='AsyncStress*:BackgroundTest*:RunAsyncTest*:LiveTest*:FutureTest*:LuaFutureTest*:Signal*:LuaFunctionTest*:LuaValues*:MainThreadTest*:ScriptObjectHandleTest*'
+  ```
 
 ## Testing
 
@@ -539,7 +550,12 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 Tests of worker threads (`background_test.cpp`, `run_async_test.cpp`, `live_test.cpp`, `future_test.cpp`) wait with
 `test::PostWaiter` (`imlui.test.post_waiter`): it installs the post wake handler, and `runUntil(pred)` runs the
 main-thread queue until `pred()` holds, woken by each post; `waitForPosts(n)` waits without running. No sleeps or
-busy loops: workers signal with latches, condition variables and stop tokens.
+busy loops: workers signal with latches, condition variables and stop tokens. `async_stress_test.cpp` races them for
+the sanitizers: objects dying while their `runAsync` jobs spin, report progress and hold stop callbacks; `Task::cancel`
+from two threads against the jobs' ends (each task ends exactly once); the pool shut down while other threads queue
+work (every task destroyed once); promise copies settling and reporting from several threads; main-thread cancels
+against settling futures; `Live` writers against their owner's death. Their outcomes vary; the checks hold for every
+interleaving.
 
 `frame_test.cpp` (Frame, child handles, re-registration, unknown types), `element_test.cpp`
 (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a `Dialog` and a
