@@ -958,6 +958,10 @@ end
 --- delegates in view (see listCount). Without a delegate it shows its own children.
 function ui.ListView(p)
     p.__type = "ListView"
+    -- Read-only, written back by the C++ element when it changes: 0 until then.
+    if rawget(p, "firstVisibleIndex") == nil then rawset(p, "firstVisibleIndex", 0) end
+    -- The C++ instance now, like ui.element's: its methods (positionViewAtIndex) work before the first render.
+    if types ~= nil then types.attach(p) end
     if p.delegate then
         p.__count = listCount
         p.__range = listRange
