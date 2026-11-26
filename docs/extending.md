@@ -80,6 +80,8 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
   (`LuaFunction`)
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
 - [Resources and the host config](#resources-and-the-host-config): mounts, the entry script
+- [Editor support: Lua definitions](#editor-support-lua-definitions): LuaLS `---@meta` files of the DSL and the
+  registered types, `--lua-defs <dir>`, the `luaType` hook
 - [Testing elements](#testing-elements): the headless frame harness
 - [Threading and frame requests](#threading-and-frame-requests): `runAsync` (and its `Task`), [futures](#futures)
   (`Future<T>`, `Promise<T>`, progress, Lua futures as arguments), `Live<T>`, the background pool;
@@ -268,7 +270,8 @@ type.signal("onPeak");
 ```
 
 Declares a signal name for documentation and validation (it reserves the name). Emit it from C++ with
-`emit("onPeak", args...)`. Handlers are ordinary `on*` fields of the element table. Every property also has a
+`emit("onPeak", args...)`. `type.signal<double>("onPeak", {"value"})` also gives its argument types (after `self`) and
+names, for the [Lua definitions](#editor-support-lua-definitions) (only there: `emit` isn't checked against them). Handlers are ordinary `on*` fields of the element table. Every property also has a
 change signal `on<Name>Changed`, emitted by `notify(name)`, without declaring it.
 
 A signal has one handler slot (`onPeak = fn`) and any number of **listeners**, which scripts add with
@@ -286,7 +289,8 @@ type.method("reset", &Gauge::reset)
     .method("setRange", &Gauge::setRange); // void setRange(double min, double max)
 ```
 
-Methods are member function pointers, `const` and `noexcept` ones included. Lua calls them with `:` on the element
+Methods are member function pointers, `const` and `noexcept` ones included. A third argument names the parameters for
+the [Lua definitions](#editor-support-lua-definitions): `.method("setRange", &Gauge::setRange, {"min", "max"})`. Lua calls them with `:` on the element
 (through its id or `self`) or on the singleton:
 
 ```lua
@@ -732,6 +736,9 @@ called after `check` returned false, and like `check` must not raise or leave an
 string"` (`imlui::luaMismatch<M>(s, idx)` gives a member type's text to build on). Without it, errors say
 `{x, y} expected, got table` (`luaMismatch<T>` falls back to `name`), also inside a vector or struct of your type.
 
+For the editor's [Lua definitions](#editor-support-lua-definitions), add `static std::string luaType()`, the LuaLS type
+of its values (`"{ x: number, y: number }"`); without it the type is `any` unless `name` is a Lua type name.
+
 ### Lua functions: `LuaFunction`
 
 `imlui::LuaFunction` (module `imlui.types.lua_function`) is a C++ handle to a Lua function. A property, method
@@ -921,6 +928,138 @@ plus an optional shared owner. The bytes must stay valid while that handle (or a
 atlas points into them without copying and keeps the handle as long as it does. Memory the mount owns for its whole
 lifetime needs no owner (`ResourceData{bytes}`); bytes that can be replaced (a changed file) go with a
 `shared_ptr` to their buffer (`ResourceData{bytes, buffer}`), so they're freed once nothing holds them.
+
+## Editor support: Lua definitions
+
+An app can write [LuaLS](https://luals.github.io/) (lua-language-server, "sumneko") `---@meta` definitions of
+everything its scripts see: the DSL and every element type and singleton it registered from C++, built-in or its own.
+An editor with the language server then completes props, signals and methods, shows their types and flags mistakes
+(a prop of the wrong type, a misspelled method, a signal name `connect` doesn't know).
+
+**Generating.** Run the app with `--lua-defs <dir>` (or `--lua-defs=<dir>`), or with the environment variable
+`IMLUI_LUA_DEFS=<dir>`:
+
+```sh
+build/clang-debug/bin/my_app --lua-defs build/lua-definitions
+```
+
+`defaultConfig()` takes the option out of the arguments (so it's never taken for a script) and sets
+`EngineConfig::luaDefinitions`; `Engine::run()` then writes the files and returns 0 (1 when that failed) without
+opening a window, after `main()` registered its types. So it works from CI and from a build step, and the host
+writes no paths. A relative `<dir>` is relative to the current folder; it is created when missing. A file whose
+content didn't change isn't written again. The C++ side, for tests and hosts of their own:
+`engine.writeLuaDefinitions(dir)`, or from module `imlui.types.lua_definitions`, `luaTypeDefinitions(registry)` (the
+text of `types.lua`) and `writeLuaDefinitions(registry, dir, prelude)`.
+
+As a build step, with `cmake/ImluiLuaDefinitions.cmake` (included with imlui, like `ImluiResources.cmake`):
+
+```cmake
+imlui_add_lua_definitions(my_app)       # target my_app_lua_definitions -> <current binary dir>/lua-definitions/
+imlui_add_lua_definitions(my_app ALL OUTPUT ${PROJECT_SOURCE_DIR}/.lua-definitions) # with every build, elsewhere
+```
+
+It runs the built app on the build machine, so not when cross-compiling.
+
+**The files.** Both are Lua files (stubs and `---@` comments) and deterministic: types sorted by name, members in
+declaration order, so they can be committed and diffed.
+
+| File | What |
+|---|---|
+| `imlui.lua` | The DSL (`---@meta imlui`, so `require "imlui"` is typed too): `state`, `watch`, `bind`, `component`, the theme, timers, `async`/`await`/`sleep`/`all`/`future`, `snackbar`, `log`, `ui.resource`, the misc functions, `native`, all also as `ui.*`; the classes `Element` (the common props), `ElementProps` (what every constructor takes: the common props and the children), `Binding`, `Future<T>`, the aliases `Color`, `SizeClass`, `Scheme`, `TextStyle`, and the Lua-side props of `Repeater`, `ListView`, `If`, `Loader`, `Responsive`. Hand-written, shipped with the library's files as `imlui:/definitions/imlui.lua` (`src/resources/definitions/imlui.lua`) and copied as it is. |
+| `types.lua` | Generated from the `TypeRegistry`. Per element type `Gauge`: `GaugeProps: ElementProps` (each writable property as its value, a binding function or a `bind`; the `on*` handlers), `Gauge: Element` (the element table: properties, handlers, methods), the constructor `Gauge(props)` and `ui.Gauge`, and the alias `GaugeSignal` (its signal names). Per singleton `backend`: a class `backend` and the global. The named structs and enums the members use. `connect`, with an overload per type and the alias `ImluiSignal` of every signal name. |
+
+```lua
+-- types.lua (excerpt)
+---@class GaugeProps: ElementProps
+---@field value? number|(fun(self: Gauge): number?)|Binding
+---@field onPeak? fun(self: Gauge, value: number)
+---@field onValueChanged? fun(self: Gauge, value: number)
+
+---@class Gauge: Element
+---@field value number
+---@field onPeak? fun(self: Gauge, value: number)
+---@field onValueChanged? fun(self: Gauge, value: number)
+---@field setRange fun(self: Gauge, min: number, max: number)
+
+---@param props? GaugeProps|number
+---@return Gauge
+function Gauge(props) end
+ui.Gauge = Gauge
+```
+
+**Using them.** In VS Code, install the **Lua** extension (by sumneko, `sumneko.lua`), generate the files and point
+the language server at the folder with a `.luarc.json` in the folder of the app's scripts:
+
+```json
+{
+    "runtime.version": "Lua 5.4",
+    "workspace.library": ["../build/lua-definitions"]
+}
+```
+
+`workspace.library` takes paths relative to the `.luarc.json`'s folder, or absolute ones. Other editors with an LSP
+client use the same server and the same file.
+
+**How C++ declarations appear.**
+
+- **Properties**: their `LuaConvert` type (below). A read-only one is in the element class only, not in the props.
+  An `std::optional<T>` is `T?`; a binding may always return `nil` (that resets the prop). A property that takes
+  functions (`LuaFunction`) takes a function as its value, not as a binding.
+- **Signals**: `on*` fields of both classes, and of the singleton's class. `type.signal("onPeak")` doesn't say its
+  arguments, so the handler is `fun(self: Gauge, ...: any)`; declare them with
+  `type.signal<double>("onPeak", {"value"})` (the types after `self`, and optionally their names) to get
+  `fun(self: Gauge, value: number)`. They only document: `emit` isn't checked against them. The change signal of
+  every property is `fun(self: Gauge, value: T)`. Singleton handlers have no `self`.
+- **Methods**: `fun(self: Gauge, ...)` fields with the parameter and result types; a `Future<T>` result is
+  `Future<T>`. Parameters are `arg1`, `arg2`, ... unless named:
+  `type.method("setRange", &Gauge::setRange, {"min", "max"})` (one name per parameter; another count throws at
+  registration). An `std::optional` parameter is optional (`max?: number`).
+- **Constructors** take `<Name>Props`, or a value of the
+  [default property](#nonvisual-defaultpropertyname-and-fillswidth) (`Gauge(0.5)`).
+- **`connect`** takes the signal names of the registered types (`ImluiSignal`), so a misspelled one is flagged.
+
+**Types of values.** Each `LuaConvert<T>` describes its values as a LuaLS type expression (`luaTypeOf<T>()`, module
+`imlui.types.lua_convert`):
+
+| C++ | LuaLS |
+|---|---|
+| `bool`, integers, floats, strings | `boolean`, `integer`, `number`, `string` |
+| `imlui::Color` | `Color` (a role, `"role/alpha"`, hex or `{r, g, b, a}`) |
+| `std::optional<T>` | `T?` |
+| `std::vector<T>` | `T[]` |
+| string-keyed maps | `table<string, T>` |
+| `std::pair<A, B>`, `std::tuple<Ts...>` | `[A, B]` (a LuaLS tuple) |
+| `std::variant<Ts...>` | `A\|B` (`nil` for `std::monostate`) |
+| an enum with `EnumNames<E>` | its names, `"low"\|"high"`; with a `name` that is a Lua identifier, an `---@alias` of that name |
+| a struct with `LuaFields<T>` | `{ x: number, y: number }`; with a `name` that is a Lua identifier, a `---@class` of that name with a field per `field()`, each optional (a missing one keeps its default) |
+| `imlui::LuaFunction` | `function` |
+| `imlui::Future<T>` | `Future<T>` (`Future<nil>` for `Future<void>`) |
+
+Named structs and enums are declared once in `types.lua`, wherever they're used. A `LuaConvert` of your own may add
+the hook `static std::string luaType()`, or `static std::string luaType(imlui::LuaTypes& types)` when it's built from
+other types (`luaTypeOf<M>(types)`) or declares named ones (`if (types.claim(name)) types.define(name, "---@class
+...\n");`, module `imlui.types.lua_types`):
+
+```cpp
+template <> struct imlui::LuaConvert<Vec2> {
+    static constexpr std::string_view name = "{x, y}";
+    static std::string luaType() { return "{ x: number, y: number }"; }
+    // push, check, get as before
+};
+```
+
+Without one, its `name` is used when it is a LuaLS built-in type (`number`, `string`, `table`, `function`, ...), and
+`any` otherwise.
+
+**What LuaLS isn't told.** Free names that are element ids (`nameField.text` at app level) aren't declared, so the
+language server reports them as undefined globals: reach them through `ui.ids` (typed `table<string, Element>`),
+annotate a local (`---@type TextField` above `local nameField = ui.ids.nameField`), or disable `undefined-global`
+for UI scripts. Props an element reads raw from its table (`Table`'s `rows`, `menu`, a `Canvas`'s painter; sizes but
+the common `width`/`height`) aren't declared in C++, so they aren't in its classes (an unknown key in a constructor's
+table isn't flagged either). The built-in signals are declared without argument types (`...: any`):
+[Elements](elements.md) lists their arguments. `connect`'s overloads match the target's type loosely, so a signal of
+another type isn't always flagged. An element's class has what the C++ side holds (`nameField.text` is a `string`),
+though a field a script set to a binding function holds that function.
 
 ## Threading and frame requests
 
@@ -1360,12 +1499,14 @@ skeleton.
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
 | `imlui.types.element` | `Element`: `render`, `intrinsicSize`, `contentFillsWidth`, `componentComplete`, `destroyed`, `tick` / `setTicking` |
-| `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in |
-| `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal`, `method`, `nonVisual`, `defaultProperty`, `fillsWidth` / `fillsWidthWhen`, `extends` |
+| `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in, with the members' Lua types |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal` (optionally typed: `signal<Args...>(name, argNames)`), `method` (optionally with parameter names), `nonVisual`, `defaultProperty`, `fillsWidth` / `fillsWidthWhen`, `extends` |
+| `imlui.types.lua_types` | `LuaTypes`: the named types (`claim`, `define`) the Lua definitions declare, and helpers for type expressions (`fromName`, `grouped`, `optional`, `required`, `isIdentifier`, `quoted`) |
+| `imlui.types.lua_definitions` | `luaTypeDefinitions(registry)`, `writeLuaDefinitions(registry, dir, prelude)`, `luaPreludeDefinitions`: the LuaLS definitions |
 | `imlui.ui.layout_box` | Layout boxes (`imlui::layout`): `BoxScope`, `boxTo`, `regionBox`, `shrinkToFitBox`, `insetBox`, `pushBox`/`popBox`, `availableWidth`, `claimWidth`: the space a container gives its children |
 | `imlui.ui.layout_cache` | The layout cache (`imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`: last frame's sizes by ImGui ID and convergence (another frame when a layout placed something by a stale size) |
 | `imlui.types.overload` | `overload<Args...>(&T::fn)`, `constOverload<Args...>(&T::fn)`: pick one of overloaded members |
-| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`), `install`, `activate`, `sync`, `typeNames`; it is the `Renderer::Types` the renderer dispatches every element to |
+| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`), `install`, `activate`, `sync`, `typeNames`, `singletonTypes`; it is the `Renderer::Types` the renderer dispatches every element to |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: every built-in element |
 
 `Engine` forwards `registerType<T>(name)` and both `registerSingleton(name, obj)` overloads to its registry, which

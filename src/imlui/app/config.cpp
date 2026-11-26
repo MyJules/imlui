@@ -49,6 +49,26 @@ std::string utf8(const fs::path& p) {
 
 fs::path pathFromUtf8(std::string_view s) { return fs::path{std::u8string{s.begin(), s.end()}}; }
 
+/// Takes `--lua-defs <dir>` / `--lua-defs=<dir>` out of `args` (after args[0]) and returns its folder ("" without it).
+fs::path takeLuaDefsOption(std::vector<fs::path>& args) {
+    static constexpr std::u8string_view option = u8"--lua-defs";
+    fs::path dir;
+    for (std::size_t i = 1; i < args.size();) {
+        const std::u8string arg = args[i].u8string();
+        if (arg == option && i + 1 < args.size()) {
+            dir = args[i + 1];
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i),
+                       args.begin() + static_cast<std::ptrdiff_t>(i + 2));
+        } else if (arg.size() > option.size() && arg.starts_with(option) && arg[option.size()] == u8'=') {
+            dir = fs::path{arg.substr(option.size() + 1)};
+            args.erase(args.begin() + static_cast<std::ptrdiff_t>(i));
+        } else {
+            ++i;
+        }
+    }
+    return dir;
+}
+
 /// The prefix of mount point `point` (`app` for `app:/x/`).
 std::string_view prefixOf(std::string_view point) { return point.substr(0, point.find(':')); }
 
@@ -79,7 +99,10 @@ EngineConfig defaultConfigWith(int argc, char** argv, std::vector<ResourcePackag
                                std::vector<ResourcePackage> app) {
     // The executable's folder from the OS when argv is the process's own (a bare name found through PATH or a path
     // relative to another folder would point elsewhere), else from argv[0] (a host or a test passing its own list).
-    const platform::ProcessArguments args = platform::processArguments(argc, argv);
+    platform::ProcessArguments args = platform::processArguments(argc, argv);
+    // Dev options first, so that they're never taken for the script.
+    fs::path luaDefinitions = takeLuaDefsOption(args.args);
+    if (luaDefinitions.empty()) luaDefinitions = pathFromUtf8(environment("IMLUI_LUA_DEFS"));
     fs::path exe = args.args.empty() ? fs::path{} : args.args[0];
     if (args.ofThisProcess)
         if (auto real = platform::executablePath()) exe = std::move(*real);
@@ -131,6 +154,7 @@ EngineConfig defaultConfigWith(int argc, char** argv, std::vector<ResourcePackag
 
     if (const std::string frames = environment("IMLUI_EXIT_AFTER_FRAMES"); !frames.empty())
         cfg.exitAfterFrames = std::max(0, std::atoi(frames.c_str()));
+    cfg.luaDefinitions = std::move(luaDefinitions);
     return cfg;
 }
 

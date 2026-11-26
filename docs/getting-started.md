@@ -249,6 +249,10 @@ and it becomes the entry script. A relative path is taken relative to the curren
 exists there, relative to the executable's folder. Any imlui app can so run another script, which is handy for
 trying one out: `build/clang-debug/bin/imlui_example path/to/hello.lua`.
 
+`my_app --lua-defs <dir>` (or `IMLUI_LUA_DEFS=<dir>`) writes the editor definitions of the DSL and of every type the
+app registered into `<dir>` and exits, without a window. Point the Lua language server at that folder for completion
+and type checks in your scripts: see [Editor support: Lua definitions](extending.md#editor-support-lua-definitions).
+
 ## Hot reload
 
 While the app runs, the engine checks every 400 ms for changed `.lua` files: those in the app's folders (`app:/`,

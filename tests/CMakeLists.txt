@@ -81,6 +81,16 @@ add_test(NAME smoke.modes
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/smoke_modes.cmake)
 set_tests_properties(smoke.modes PROPERTIES TIMEOUT 300 RUN_SERIAL ON)
 
+# The editor definitions of the test host (imlui_add_lua_definitions: `cmake --build <build> --target
+# imlui_smoke_host_lua_definitions` writes them to <build>/tests/lua-definitions/), and a test that runs the host alone
+# with --lua-defs and IMLUI_LUA_DEFS (lua_definitions_run.cmake).
+imlui_add_lua_definitions(imlui_smoke_host)
+add_test(NAME lua_definitions.imlui_smoke_host
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:imlui_smoke_host>
+                 -DWORK=${CMAKE_CURRENT_BINARY_DIR}/smoke/lua_definitions
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/lua_definitions_run.cmake)
+set_tests_properties(lua_definitions.imlui_smoke_host PROPERTIES TIMEOUT 120)
+
 # The fuzz targets and their corpus replay tests (fuzz/CMakeLists.txt, label `fuzz`).
 add_subdirectory(fuzz)
 

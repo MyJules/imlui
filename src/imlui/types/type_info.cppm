@@ -1,5 +1,6 @@
 // TypeInfo: the type-erased description of a registered C++ type, filled in by TypeBuilder<T>
-// (properties, signals, methods, visual flag, factory) and used by TypeRegistry to bind it to Lua.
+// (properties, signals, methods, visual flag, factory) and used by TypeRegistry to bind it to Lua. The LuaLS types of
+// the members (LuaTypes::Describe) are kept for the generated Lua definitions (imlui.types.lua_definitions).
 export module imlui.types.type_info;
 
 import std;
@@ -7,6 +8,7 @@ import std;
 import lua;
 import imlui.types.script_object;
 import imlui.types.element;
+import imlui.types.lua_types;
 
 export namespace imlui {
 
@@ -20,6 +22,8 @@ public:
         /// `name` as a lua::Key: the sync reads the property's field through it. Set by addProperty().
         std::optional<lua::Key> key;
         std::string_view typeName; ///< LuaConvert<V>::name, for error messages
+        /// luaTypeOf<V>, for the Lua definitions.
+        LuaTypes::Describe luaType = nullptr;
         /// Pushes the getter's value.
         std::function<void(lua::State*, const ScriptObject&)> push;
         /// Converts the value at `idx` and calls the setter if it differs from the getter's value.
@@ -46,11 +50,27 @@ public:
     /// Per-object defaults, one entry per property (nullptr where captureDefault is empty).
     using Defaults = std::vector<std::shared_ptr<const void>>;
 
+    /// A method parameter or signal argument, for the Lua definitions: its name and luaTypeOf<A>.
+    struct Param {
+        std::string name;
+        LuaTypes::Describe type = nullptr;
+    };
+
     struct Method {
         std::string name;
         /// Calls the method with the Lua arguments starting at `firstArg`. Returns the number of results
         /// pushed; raises a Lua error for a bad argument or a C++ exception.
         std::function<int(lua::State*, ScriptObject&, int firstArg)> call;
+        /// For the Lua definitions: the parameters, and luaTypeOf<R> of the result (nullptr: none, `void`).
+        std::vector<Param> params;
+        LuaTypes::Describe result = nullptr;
+    };
+
+    struct Signal {
+        std::string name;
+        /// The arguments after `self`, when declared with types (TypeBuilder::signal<Args...>); for the Lua
+        /// definitions only (emit() isn't checked against them). std::nullopt: not declared.
+        std::optional<std::vector<Param>> args;
     };
 
     using Factory = std::function<std::unique_ptr<Element>()>;
@@ -78,6 +98,8 @@ public:
     [[nodiscard]] const std::vector<Property>& properties() const;
     [[nodiscard]] const std::vector<Method>& methods() const;
     [[nodiscard]] const std::vector<std::string>& signals() const;
+    /// The signals with their declared argument types, in declaration order (the same names as signals()).
+    [[nodiscard]] const std::vector<Signal>& signalDeclarations() const;
     [[nodiscard]] const Property* findProperty(std::string_view name) const;
     [[nodiscard]] const Method* findMethod(std::string_view name) const;
     [[nodiscard]] bool hasSignal(std::string_view name) const;
@@ -85,7 +107,7 @@ public:
     /// Adds a member. A name may only be used once across properties, methods and signals.
     void addProperty(Property property);
     void addMethod(Method method);
-    void addSignal(std::string name);
+    void addSignal(std::string name, std::optional<std::vector<Param>> args = std::nullopt);
 
     /// Element types have a factory; singleton types don't.
     [[nodiscard]] const Factory& factory() const;
@@ -110,6 +132,7 @@ private:
     std::vector<Property> m_properties;
     std::vector<Method> m_methods;
     std::vector<std::string> m_signals;
+    std::vector<Signal> m_signalDeclarations;
     Factory m_factory;
     mutable std::shared_ptr<const Defaults> m_sharedDefaults; ///< sharedDefaults(), once captured
 };
@@ -146,6 +169,7 @@ void TypeInfo::setDefaultProperty(std::string name) { m_defaultProperty = std::m
 const std::vector<TypeInfo::Property>& TypeInfo::properties() const { return m_properties; }
 const std::vector<TypeInfo::Method>& TypeInfo::methods() const { return m_methods; }
 const std::vector<std::string>& TypeInfo::signals() const { return m_signals; }
+const std::vector<TypeInfo::Signal>& TypeInfo::signalDeclarations() const { return m_signalDeclarations; }
 
 const TypeInfo::Property* TypeInfo::findProperty(std::string_view name) const {
     for (const auto& p : m_properties)
@@ -183,9 +207,10 @@ void TypeInfo::addMethod(Method method) {
     m_methods.push_back(std::move(method));
 }
 
-void TypeInfo::addSignal(std::string name) {
+void TypeInfo::addSignal(std::string name, std::optional<std::vector<Param>> args) {
     checkUnique(name);
-    m_signals.push_back(std::move(name));
+    m_signals.push_back(name);
+    m_signalDeclarations.push_back({std::move(name), std::move(args)});
 }
 
 const TypeInfo::Factory& TypeInfo::factory() const { return m_factory; }

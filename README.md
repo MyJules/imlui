@@ -110,7 +110,7 @@ resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded
 | `src/imlui/imlui.cppm` | `import imlui;` umbrella |
 | `tests/` | GoogleTest unit tests and the smoke test (`ctest --preset clang-debug`); `smoke_host/` is a tiny test app host, `data/` the fixtures (`smoke_app/`, test images), `package/` the package tests (a consumer app built with add_subdirectory, FetchContent and find_package) |
 | `src/CMakeLists.txt` | the library targets `imlui_lua` and `imlui` (`imlui::imlui`; module globs), the embedding of `src/resources/` and their install rules |
-| `src/resources/` | the library's resources: `resources.lua` (manifest: this folder at `imlui:/`, the fonts from `external/fonts/` at `imlui:/fonts/`) and `imlui.lua`, the DSL (elements, `state`, `bind`, `Repeater`, `theme`, timers) |
+| `src/resources/` | the library's resources: `resources.lua` (manifest: this folder at `imlui:/`, the fonts from `external/fonts/` at `imlui:/fonts/`) and `imlui.lua`, the DSL (elements, `state`, `bind`, `Repeater`, `theme`, timers); `definitions/imlui.lua`, its Lua language-server definitions |
 
 ## Concepts
 

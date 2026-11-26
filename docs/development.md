@@ -407,6 +407,14 @@ On this target:
   `app:/` mount, relative paths falling back to the executable's folder; a package without files mounting its source
   folder even with `IMLUI_DEV_PATHS=0`, and nothing but a logged error when that folder is missing), and the harness
   on the library's packages (`Options::embedded`: embedded data, or the source folders in a build that doesn't embed). `test::ScopedEnv` (`imlui.test.scoped_env`) sets an environment variable for one test. The tests link `imlui_pack_lib` for the writer.
+- `lua_definitions_test.cpp` covers the [Lua definitions](extending.md#editor-support-lua-definitions): the LuaLS type
+  of every built-in `LuaConvert` (and of one without the hook), named structs and enums declared once, a golden
+  `types.lua` of a small registry (struct, enums, map, pair, variant, `Future`, `LuaFunction`, typed and untyped
+  signals, parameter names, a default property, a singleton, a type name that isn't a Lua name), that the built-ins'
+  `types.lua` and `src/resources/definitions/imlui.lua` compile as Lua, that the hand-written file defines every `ui`
+  member the prelude has (and nothing else), `writeLuaDefinitions` (unchanged files aren't rewritten) and the
+  `--lua-defs` / `IMLUI_LUA_DEFS` options of `defaultConfig`. The ctest `lua_definitions.imlui_smoke_host`
+  (`tests/lua_definitions_run.cmake`) runs the test host alone with both and checks the files.
 - `log_test.cpp` covers `log::addFileSink`: a log file whose name is outside the ANSI code page, and a file that
   can't be opened reported as `false` without an exception.
 - `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns (their corners, and pathological ones
@@ -459,6 +467,7 @@ that can't be queried, linked files named by their own path, `replaceFile`, `man
 |---|---|
 | `IMLUI_EXIT_AFTER_FRAMES=n` | Quit after `n` rendered frames, with exit code 1 when a script error was reported (`EngineConfig::exitAfterFrames`, read by `defaultConfig`). For smoke runs. |
 | `IMLUI_DEV_PATHS=0` | Ignore the source folders compiled into a dev build's embedded packages (`ResourcePackage::sourceDir`): run from the embedded data and the files next to the executable, like a release build. Packages that aren't embedded (`IMLUI_EMBED_RESOURCES=OFF`) still mount their folder, their only copy. |
+| `IMLUI_LUA_DEFS=<dir>` | Write the Lua language-server definitions into `<dir>` and exit instead of running (`EngineConfig::luaDefinitions`, read by `defaultConfig`, like the option `--lua-defs <dir>`, which wins). See [Editor support](extending.md#editor-support-lua-definitions). |
 | `IMLUI_SMOKE_NO_EMBEDDED_APP=1` | Test host only (`imlui_smoke_host`, read by `tests/smoke_host/main.cpp`, not the library): leave the embedded smoke app out, so `app:/` comes from the archives next to the executable. For the `pak` run of `smoke.modes`. |
 
 ### Resource tools

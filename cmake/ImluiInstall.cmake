@@ -8,8 +8,8 @@
 #     lib/                       imlui, imlui_core, imlui_lua, imlui_glob (imlui::imlui, imlui::imlui_core, ...)
 #     lib/imlui/                 the vendored static libraries         (imlui::ext_lua, ext_imgui, ext_glfw, ...)
 #     lib/cmake/imlui/           imluiConfig.cmake, imluiConfigVersion.cmake, imluiTargets*.cmake, the helpers
-#                                (ImluiResources.cmake, ImluiWarnings.cmake, ImluiStd.cmake: the config builds the
-#                                module `std` in the app) and cxx-modules/ (module metadata)
+#                                (ImluiResources.cmake, ImluiLuaDefinitions.cmake, ImluiWarnings.cmake, ImluiStd.cmake:
+#                                the config builds the module `std` in the app) and cxx-modules/ (module metadata)
 #     include/imlui/modules/     the module interface units (src/ as it is laid out, embedded/imlui.cppm + .bin)
 #     include/imlui/ext/<name>/  the vendored headers the modules include: lua, imgui, glfw, spdlog, stb, zstd
 #     share/imlui/licenses/      the vendored code's and the fonts' licenses
@@ -72,5 +72,5 @@ configure_package_config_file(${PROJECT_SOURCE_DIR}/cmake/imluiConfig.cmake.in
 write_basic_package_version_file(${PROJECT_BINARY_DIR}/imluiConfigVersion.cmake COMPATIBILITY SameMinorVersion)
 install(FILES ${PROJECT_BINARY_DIR}/imluiConfig.cmake ${PROJECT_BINARY_DIR}/imluiConfigVersion.cmake
               ${PROJECT_SOURCE_DIR}/cmake/ImluiResources.cmake ${PROJECT_SOURCE_DIR}/cmake/ImluiWarnings.cmake
-              ${PROJECT_SOURCE_DIR}/cmake/ImluiStd.cmake
+              ${PROJECT_SOURCE_DIR}/cmake/ImluiStd.cmake ${PROJECT_SOURCE_DIR}/cmake/ImluiLuaDefinitions.cmake
         DESTINATION ${IMLUI_INSTALL_CMAKEDIR})
