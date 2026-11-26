@@ -10,6 +10,8 @@ module;
 
 export module imlui.ui.elements.inline_container;
 
+import std;
+
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -33,7 +35,23 @@ module :private;
 
 namespace imlui {
 
-void InlineContainer::declare(TypeBuilder<InlineContainer>&) {}
+void InlineContainer::declare(TypeBuilder<InlineContainer>& type) {
+    // One class for four Lua-side containers: the doc of the name being registered.
+    const std::string& name = type.info().name();
+    std::string doc;
+    if (name == "Repeater")
+        doc = "Builds one child per item of `model` with `delegate(item, index, ids)` (`ids`: the delegate's own id "
+              "scope); an optional `key(item, index)` keeps delegates by key instead of by index.";
+    else if (name == "If")
+        doc = "Shows its children while `condition` is truthy, else the `otherwise` element (if any).";
+    else if (name == "Loader")
+        doc = "Shows `item`: an element, or a function returning one.";
+    else if (name == "Responsive")
+        doc = "Shows the element given for the window's size class (`compact`, `medium`, `expanded`, `large`, "
+              "`extraLarge`): an element, a function returning one, or `false`.";
+    type.doc(doc + "\nAn inline container: its parent lays its children out as its own (a `Repeater` in a `Row` "
+                   "flows horizontally). `visible = false` hides all of them.");
+}
 
 void InlineContainer::render(Frame& frame) { frame.renderChildren(); }
 

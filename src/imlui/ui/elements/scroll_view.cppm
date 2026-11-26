@@ -88,13 +88,22 @@ bool near(float a, float b) { return a - b < 0.5f && b - a < 0.5f; }
 } // namespace
 
 void ScrollView::declare(TypeBuilder<ScrollView>& type) {
+    type.doc("A scrolling child region that stacks its children. It keeps its scroll position when it is rendered "
+             "somewhere else (after a `Responsive` switch, say).\n"
+             "Natural size: fills the available width and the remaining height (raw `width`, `height`).");
     type.fillsWidth(); // an unset width fills
     type.property("padding", &ScrollView::padding, &ScrollView::setPadding)
+        .doc("The inner padding (dp), 0 by default.")
         .property("color", &ScrollView::color, &ScrollView::setColor)
+        .doc("The background, also the surface color the children draw on. Unset: transparent.")
         .property("rounding", &ScrollView::rounding, &ScrollView::setRounding)
+        .doc("The corner radius (dp). Unset: the theme's `shape.medium`.")
         .property("border", &ScrollView::border, &ScrollView::setBorder)
+        .doc("Draws a border (`false`).")
         .property("spacing", &ScrollView::spacing, &ScrollView::setSpacing)
-        .property("align", &ScrollView::align, &ScrollView::setAlign);
+        .doc("The gap between visible children (dp). Unset: ImGui's item spacing.")
+        .property("align", &ScrollView::align, &ScrollView::setAlign)
+        .doc("Each child's horizontal position by its width: `\"start\"` (default), `\"center\"` or `\"end\"`.");
 }
 
 void ScrollView::render(Frame& frame) {

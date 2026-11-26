@@ -657,6 +657,11 @@ TEST(LuaDefinitions, BuiltInsAndPreludeAreValidLua) {
                          "---@field onTextChanged? (fun(self: Button, value: string))\n"),
               std::string::npos);
     EXPECT_NE(types.find("---@field restart (fun(self: Timer))\n"), std::string::npos);
+    EXPECT_NE(types.find("---Called every `interval` ms while running.\n---@field onTriggered? (fun(self: Timer))\n"),
+              std::string::npos);
+    // A signal argument of a class of its own: Canvas.onPaint's painter.
+    EXPECT_NE(types.find("---@field onPaint? (fun(self: Canvas, p: CanvasPainter))\n"), std::string::npos);
+    EXPECT_NE(types.find("---@class CanvasPainter\n"), std::string::npos);
 }
 
 // The hand-written prelude definitions keep up with the prelude: every member of `ui` (but the internal `__*` ones)

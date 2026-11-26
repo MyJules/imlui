@@ -1133,7 +1133,7 @@ fired it, so it doesn't drift; a frame that comes more than a period late fires 
 |---|---|---|---|
 | `interval` | number | `1000` | Period in ms, > 0. Another value (0, negative, NaN, infinite) is reported as a script error, and the timer doesn't fire until it gets a valid one. |
 | `running` | bool | `true` | **two-way.** Starting it (again) restarts the period. A one-shot writes `false` back when it fires. Props sync once per frame, so `running = false` then `true` before the next frame is no change: use `restart()`. Under a function binding (`running = function() ... end`), which the timer can't write, a one-shot stays stopped until the function has returned `false` and then `true` again. |
-| `repeat` | bool | `true` | `false` fires once. |
+| `repeat` | bool | `true` | `false` fires once. `repeat` is a Lua keyword: write `["repeat"] = false` (and `t["repeat"]`). |
 | `triggeredOnStart` | bool | `false` | Also fires when it starts running. |
 
 **Methods:** `timer:restart()` starts the period over now (and fires `triggeredOnStart`), running or not; a
@@ -1144,7 +1144,7 @@ stopped timer gets `running = true`.
 ```lua
 local fb = state { seconds = 0 }
 Timer { interval = 1000, onTriggered = function() fb.seconds = fb.seconds + 1 end }
-Timer { interval = 3000, repeat = false, running = bind(s, "toast"), onTriggered = hideToast }
+Timer { interval = 3000, ["repeat"] = false, running = bind(s, "toast"), onTriggered = hideToast }
 ```
 
 For timers without an element, see [`setInterval` / `setTimeout`](lua-api.md#timers-and-frames).

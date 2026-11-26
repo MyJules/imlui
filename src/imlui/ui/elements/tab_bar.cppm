@@ -44,10 +44,18 @@ module :private;
 namespace imlui {
 
 void TabBar::declare(TypeBuilder<TabBar>& type) {
+    type.doc("Material tabs: the visible children are the tabs (normally `Tab`s; another element gives its header "
+             "through raw `title` and `icon`), and only the selected one's content renders.\n"
+             "Non-visual children (`Timer`, `Dialog`, ...) aren't tabs: they render whichever tab is shown. Natural "
+             "size: fills the available width (raw `width`).");
     type.fillsWidth(); // an unset width fills
     type.property("currentIndex", &TabBar::currentIndex, &TabBar::setCurrentIndex)
+        .doc("Two-way. The selected tab among the visible ones, 1-based (1). Out of range: the nearest tab.")
         .property("variant", &TabBar::variant, &TabBar::setVariant)
-        .signal("onCurrentChanged");
+        .doc("`\"primary\"` (default: with icons, the icon over the label, 64dp) or `\"secondary\"` (a full-width "
+             "indicator).")
+        .signal<int>("onCurrentChanged", {"index"})
+        .doc("Called when the user picks a tab, with its 1-based index.");
 }
 
 void TabBar::render(Frame& frame) {

@@ -52,9 +52,17 @@ module :private;
 namespace imlui {
 
 void Column::declare(TypeBuilder<Column>& type) {
-    type.property("padding", &Column::padding, &Column::setPadding)
+    type.doc("A vertical stack (`Item` is an alias of `Column`).\n"
+             "Raw `width`: the column's own width, padding included (its children get it less the padding); unset, a "
+             "column holding a child that fills fills the available width itself. Natural size: its children's, "
+             "stacked, plus the padding.")
+        .property("padding", &Column::padding, &Column::setPadding)
+        .doc("The inset on every side (dp), 0 by default; the column's size includes it on both sides.")
         .property("spacing", &Column::spacing, &Column::setSpacing)
-        .property("align", &Column::align, &Column::setAlign);
+        .doc("The gap between visible children (dp). Unset: ImGui's item spacing.")
+        .property("align", &Column::align, &Column::setAlign)
+        .doc("Each child's horizontal position by its width: `\"start\"` (default), `\"center\"` or `\"end\"`. A "
+             "child that fills isn't moved.");
 }
 
 void Column::render(Frame& frame) {

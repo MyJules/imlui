@@ -59,9 +59,19 @@ module :private;
 namespace imlui {
 
 void Row::declare(TypeBuilder<Row>& type) {
-    type.property("spacing", &Row::spacing, &Row::setSpacing)
+    type.doc("Children side by side, as a flex row: the children that fill (`fillWidth`, a fill-minus `width`, an "
+             "element that fills by default, wrapping text, `Spacer { fill = true }`) share in equal parts the width "
+             "the others leave.\n"
+             "`Row { Spacer { fill = true }, Button { \"OK\" } }` right-aligns the button. Raw `width`: the row's "
+             "width (unset: the available width).")
+        .property("spacing", &Row::spacing, &Row::setSpacing)
+        .doc("The horizontal gap between children (dp). Unset: ImGui's item spacing.")
         .property("align", &Row::align, &Row::setAlign)
-        .property("justify", &Row::justify, &Row::setJustify);
+        .doc("The children's vertical alignment against the tallest: `\"center\"` (default), `\"top\"` or "
+             "`\"bottom\"`.")
+        .property("justify", &Row::justify, &Row::setJustify)
+        .doc("The horizontal distribution: `\"start\"` (default), `\"center\"`, `\"end\"` or `\"spaceBetween\"`. "
+             "Ignored while the row has fills.");
 }
 
 namespace {

@@ -39,8 +39,13 @@ module :private;
 namespace imlui {
 
 void TreeNode::declare(TypeBuilder<TreeNode>& type) {
-    type.property("text", &TreeNode::text, &TreeNode::setText)
+    type.doc("An ImGui tree node (`bodyLarge`) whose children render inside it while open (not stacked: no "
+             "`spacing` / `align`). `TreeNode { \"Files\" }` sets `text`.")
+        .property("text", &TreeNode::text, &TreeNode::setText)
+        .doc("The label. The positional value: `TreeNode { \"Files\" }`.")
         .property("expanded", &TreeNode::expanded, &TreeNode::setExpanded)
+        .doc("Open when the node first appears (`false`). ImGui keeps the open state afterwards; it isn't written "
+             "back.")
         .defaultProperty("text");
 }
 

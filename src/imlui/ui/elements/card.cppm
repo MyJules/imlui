@@ -58,13 +58,23 @@ module :private;
 namespace imlui {
 
 void Card::declare(TypeBuilder<Card>& type) {
+    type.doc("A Material card that stacks its children.\n"
+             "Natural size: fills the available width (raw `width`) and fits its content's height (raw `height`: a "
+             "fixed height).");
     type.fillsWidth(); // an unset width fills
     type.property("variant", &Card::variant, &Card::setVariant)
+        .doc("`\"elevated\"` (default: `surfaceContainerLow` with a shadow), `\"filled\"` (`surfaceContainerHighest`) "
+             "or `\"outlined\"` (`surface` with an `outlineVariant` border).")
         .property("padding", &Card::padding, &Card::setPadding)
+        .doc("The inner padding (dp), 16 by default.")
         .property("color", &Card::color, &Card::setColor)
+        .doc("The container color. Unset: the variant's.")
         .property("rounding", &Card::rounding, &Card::setRounding)
+        .doc("The corner radius (dp). Unset: the card shape (`shape.medium`).")
         .property("spacing", &Card::spacing, &Card::setSpacing)
-        .property("align", &Card::align, &Card::setAlign);
+        .doc("The gap between visible children (dp). Unset: ImGui's item spacing.")
+        .property("align", &Card::align, &Card::setAlign)
+        .doc("Each child's horizontal position by its width: `\"start\"` (default), `\"center\"` or `\"end\"`.");
 }
 
 void Card::render(Frame& frame) {

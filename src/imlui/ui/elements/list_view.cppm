@@ -130,8 +130,15 @@ bool pushRange(const luaui::Node& node, std::size_t first, std::size_t last) {
 } // namespace
 
 void ListView::declare(TypeBuilder<ListView>& type) {
+    type.doc("A virtualized `ScrollView` (it takes every `ScrollView` prop) whose children come from `model` / "
+             "`delegate`: only the items in view, and half a view's height above and below, are built and rendered.\n"
+             "Built delegates are cached (by index, or by `key`); without `delegate` its own children are used, like a "
+             "`ScrollView`'s.");
     type.extends<ScrollView>();
-    type.property("itemHeight", &ListView::itemHeight, &ListView::setItemHeight);
+    type.property("itemHeight", &ListView::itemHeight, &ListView::setItemHeight)
+        .doc("Every item's height (dp). Unset (or not > 0): each item is measured as it renders, and the measured "
+             "ones' average stands in for the others.")
+        .docMember("spacing", "The gap between items (dp). Unset: ImGui's item spacing.");
 }
 
 std::optional<float> ListView::itemHeight() const { return m_itemHeight; }

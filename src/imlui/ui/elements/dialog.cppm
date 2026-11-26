@@ -54,10 +54,18 @@ module :private;
 namespace imlui {
 
 void Dialog::declare(TypeBuilder<Dialog>& type) {
-    type.property("open", &Dialog::open, &Dialog::setOpen)
+    type.doc("A Material basic dialog: modal, centered over a scrim, with `extraLarge` corners and a `headlineSmall` "
+             "title; Escape closes it. It stacks its children (raw `spacing`, `align`). Non-visual.\n"
+             "Raw `width`: a fixed width; unset, 280-560dp fitting the content. A dialog opened from another's content "
+             "shows above it; of sibling dialogs one shows at a time (the others wait, still `open`).")
+        .property("open", &Dialog::open, &Dialog::setOpen)
+        .doc("Two-way. Shows the dialog (`false` by default). Closing it (Escape) writes `false`.")
         .property("title", &Dialog::title, &Dialog::setTitle)
+        .doc("The headline; `\"\"` for none.")
         .property("icon", &Dialog::icon, &Dialog::setIcon)
-        .signal("onClosed")
+        .doc("A Material icon name shown above the title, which is then centered; `\"\"` for none.")
+        .signal<>("onClosed")
+        .doc("Called when the dialog closes (after `open = false` is written back).")
         .nonVisual();
 }
 

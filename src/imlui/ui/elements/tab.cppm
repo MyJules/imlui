@@ -38,7 +38,12 @@ module :private;
 namespace imlui {
 
 void Tab::declare(TypeBuilder<Tab>& type) {
-    type.property("title", &Tab::title, &Tab::setTitle).property("icon", &Tab::icon, &Tab::setIcon);
+    type.doc("One tab of a `TabBar`: its header and its content, stacked with raw `spacing` / `align`. "
+             "`visible = false` hides the tab and its header; outside a `TabBar` it renders its content inline.")
+        .property("title", &Tab::title, &Tab::setTitle)
+        .doc("The header's label, `\"Tab\"` by default.")
+        .property("icon", &Tab::icon, &Tab::setIcon)
+        .doc("The header's Material icon name; `\"\"` for none.");
 }
 
 void Tab::render(Frame& frame) { frame.renderStack(); }

@@ -61,12 +61,23 @@ constexpr double fadeOutSeconds = 0.15;
 } // namespace
 
 void Snackbar::declare(TypeBuilder<Snackbar>& type) {
-    type.property("text", &Snackbar::text, &Snackbar::setText)
+    type.doc("The Material snackbar: one app-wide instance, made by the prelude and drawn by the engine above "
+             "everything. Show it with `ui.snackbar(text, opts)`; you don't normally create one. Non-visual.\n"
+             "The bar is as wide as its content, 344-672dp (at most the viewport less 16dp on each side); a long "
+             "message wraps.")
+        .property("text", &Snackbar::text, &Snackbar::setText)
+        .doc("The message.")
         .property("actionText", &Snackbar::actionText, &Snackbar::setActionText)
+        .doc("The action button's label; `\"\"` for none.")
         .property("shownAt", &Snackbar::shownAt, &Snackbar::setShownAt)
+        .doc("Two-way. When it was shown (`ui.time()`, seconds); < 0 hides it (-1 by default). Written back as -1 "
+             "once it has faded out; the action and the close icon move it back to start the fade.")
         .property("duration", &Snackbar::duration, &Snackbar::setDuration)
+        .doc("The visible time in ms (4000), after a 0.18s slide-in and before a 0.15s fade.")
         .property("closable", &Snackbar::closable, &Snackbar::setClosable)
-        .signal("onAction")
+        .doc("Shows a close icon (`false`).")
+        .signal<>("onAction")
+        .doc("Called when the action is clicked (the snackbar then fades out).")
         .nonVisual();
 }
 
