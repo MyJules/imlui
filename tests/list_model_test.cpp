@@ -4,7 +4,9 @@
 // the rows that changed (ListView and Repeater, with and without keys: inserts at the top, removals, moves, sorts,
 // replace), the model as a singleton property, a method result (shared and borrowed) and a singleton global, a model
 // whose owner (an element) is destroyed and a model that outlives its Lua state (a hot reload), a model edited inside
-// a delegate, frame requests from notifications, the thread-safe appender and the Lua definitions.
+// a delegate, frame requests from notifications, the thread-safe appender and the Lua definitions. The row cap
+// (setMaxRows: erasing the oldest rows in the same step as the append), appender(onApplied), and filling a model
+// with runAsyncThen, whose future carries only a report to Lua.
 #include <gtest/gtest.h>
 
 import std;
@@ -14,6 +16,7 @@ import imgui;
 import imlui.lua.errors;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.future;
 import imlui.types.list_model;
 import imlui.types.lua_convert;
 import imlui.types.lua_definitions;
@@ -34,7 +37,20 @@ struct LogLine {
     bool operator==(const LogLine&) const = default;
 };
 
+/// What Backend::fill reports to Lua (the rows stay in C++).
+struct FillReport {
+    int rows = 0;
+    bool onMainThread = false;
+};
+
 } // namespace lmtest
+
+template <>
+struct imlui::LuaFields<lmtest::FillReport> {
+    static constexpr std::string_view name = "FillReport";
+    static constexpr std::tuple fields{imlui::field("rows", &lmtest::FillReport::rows),
+                                       imlui::field("onMainThread", &lmtest::FillReport::onMainThread)};
+};
 
 template <>
 struct imlui::LuaFields<lmtest::LogLine> {
@@ -44,6 +60,7 @@ struct imlui::LuaFields<lmtest::LogLine> {
 };
 
 using namespace imlui;
+using lmtest::FillReport;
 using lmtest::LogLine;
 
 namespace {
@@ -93,8 +110,20 @@ public:
             .method("add", &Backend::add, {"text"})
             .doc("Appends a line to `logs`.")
             .method("dropFirst", &Backend::dropFirst)
-            .doc("Removes the first line of `logs`.");
+            .doc("Removes the first line of `logs`.")
+            .method("fill", &Backend::fill, {"n"})
+            .doc("Fills `plain` with `n` lines on the pool; the future gets a report.");
     }
+    /// The recipe of the docs: the rows are built on the pool and applied on the main thread, the future gets a report.
+    Future<FillReport> fill(int n) {
+        return runAsyncThen([n] { return lines(1, n); },
+                            [this, mainThread = std::this_thread::get_id()](std::vector<LogLine> rows) {
+                                plainModel.replace(std::move(rows));
+                                return FillReport{static_cast<int>(plainModel.size()),
+                                                  std::this_thread::get_id() == mainThread};
+                            });
+    }
+
     [[nodiscard]] const Logs& logs() const { return logsModel; }
     [[nodiscard]] const Logs& plain() const { return plainModel; }
     [[nodiscard]] std::shared_ptr<VectorModel<LogLine>> query(int n) {
@@ -272,6 +301,42 @@ TEST(ListModelRows, NotificationsRequestAFrame) {
     m.set(0, 2);
     EXPECT_EQ(secondsUntilFrame(), 0.0);
     clearFrameRequests();
+}
+
+TEST(ListModelRows, ACapErasesTheOldestRowsInTheSameEdit) {
+    VectorModel<int> m;
+    m.appendRows({1, 2, 3, 4, 5});
+    const std::uint64_t secondId = m.rowId(1);
+    m.setMaxRows(5);
+    EXPECT_EQ(m.maxRows(), 5u);
+    std::uint64_t rev = m.revision();
+    EXPECT_EQ(m.size(), 5u); // at the cap: nothing erased
+
+    m.append(6); // the first row goes first (rowsRemoved), then the new one comes (rowsInserted)
+    EXPECT_EQ(m.rows(), (std::vector<int>{2, 3, 4, 5, 6}));
+    EXPECT_EQ(m.revision(), rev + 2);
+    EXPECT_EQ(m.rowId(0), secondId); // the rows that stay keep their identity
+    rev = m.revision();
+    m.appendRows({7, 8});
+    EXPECT_EQ(m.rows(), (std::vector<int>{4, 5, 6, 7, 8}));
+    EXPECT_EQ(m.revision(), rev + 2); // one rowsRemoved for both
+    m.appendRows({10, 11, 12, 13, 14, 15, 16}); // alone over the cap: its last 5
+    EXPECT_EQ(m.rows(), (std::vector<int>{12, 13, 14, 15, 16}));
+
+    m.insert(5, 100); // inserted, then the oldest erased
+    EXPECT_EQ(m.rows(), (std::vector<int>{13, 14, 15, 16, 100}));
+    m.insertRows(1, {101, 102});
+    EXPECT_EQ(m.rows(), (std::vector<int>{102, 14, 15, 16, 100}));
+    m.replace({1, 2, 3, 4, 5, 6, 7, 8}); // the last 5
+    EXPECT_EQ(m.rows(), (std::vector<int>{4, 5, 6, 7, 8}));
+
+    rev = m.revision();
+    m.setMaxRows(3); // lowering it erases now
+    EXPECT_EQ(m.rows(), (std::vector<int>{6, 7, 8}));
+    EXPECT_EQ(m.revision(), rev + 1);
+    m.setMaxRows(0); // no cap
+    m.appendRows({9, 10, 11});
+    EXPECT_EQ(m.size(), 6u);
 }
 
 // ------------------------------------------------------------ Lua access
@@ -540,6 +605,44 @@ TEST_F(ListModelTest, ARepeaterRebuildsOnlyTheChangedRows) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A capped tail: the oldest rows go in the same step as the new ones arrive, so a frame never shows more than the cap.
+// With keys, the rows that stay keep their delegates and only the new ones are built; without keys, every index whose
+// row changed is rebuilt.
+TEST_F(ListModelTest, ACappedAppenderKeepsTheDelegatesOfTheRowsThatStay) {
+    run(R"(built, plainBuilt = 0, 0
+        made = {}
+        keyed = ListView { height = 600, spacing = 0, model = function() return backend.logs end,
+                           delegate = function(l) built = built + 1; made[l.id] = Box { h = 20 }; return made[l.id] end }
+        plain = ListView { height = 600, spacing = 0, model = function() return backend.plain end,
+                           delegate = function(l) plainBuilt = plainBuilt + 1; return Box { h = 20 } end })");
+    m_h->renderFrames("keyed", 3);
+    m_h->renderFrames("plain", 3);
+    check("built == 20 and plainBuilt == 20");
+    run("kept = made[4]");
+    m_backend.logsModel.setMaxRows(20);
+    m_backend.plainModel.setMaxRows(20);
+    std::vector<std::pair<std::size_t, std::size_t>> applied;
+    const auto keyed = m_backend.logsModel.appender([&](std::size_t appended, std::size_t erased) {
+        applied.emplace_back(appended, erased);
+        EXPECT_EQ(m_backend.logsModel.size(), 20u); // already capped when the stats run
+    });
+    const auto plain = m_backend.plainModel.appender();
+    std::thread{[keyed, plain] {
+        for (const LogLine& line : lines(21, 23)) {
+            keyed.append(line);
+            plain.append(line);
+        }
+    }}.join();
+    EXPECT_EQ(runPosted(), 2u); // one apply per batch
+    EXPECT_EQ(applied, (std::vector<std::pair<std::size_t, std::size_t>>{{3, 3}}));
+    m_h->renderFrame("keyed");
+    m_h->renderFrame("plain");
+    check("#backend.logs == 20 and backend.logs[1].id == 4 and backend.logs[20].id == 23");
+    check("built == 23 and made[4] == kept"); // three new delegates, the 17 that stay kept
+    check("#backend.plain == 20 and plainBuilt == 40"); // by index: every index's row changed
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // ------------------------------------------------------------ safety
 
 // A delegate (or a handler) may edit the model it shows: no error, no stale row, and the next frame catches up.
@@ -607,6 +710,97 @@ TEST_F(ListModelTest, AnAppenderBatchesRowsFromWorkerThreads) {
         ASSERT_EQ(m.at(i), static_cast<int>(i - 1002 + 2000));
 }
 
+TEST(ListModelThreads, AnAppenderWithOnAppliedHonorsTheCapAndReportsEachApply) {
+    clearPosted();
+    VectorModel<int> m;
+    m.setMaxRows(10);
+    m.appendRows({0, 1, 2, 3, 4, 5, 6, 7});
+    std::vector<std::pair<std::size_t, std::size_t>> applied;
+    std::vector<std::size_t> sizes;
+    const VectorModel<int>::Appender out = m.appender([&](std::size_t appended, std::size_t erased) {
+        applied.emplace_back(appended, erased);
+        sizes.push_back(m.size());
+    });
+    const std::uint64_t rev = m.revision();
+    std::thread{[out] {
+        for (int i = 100; i < 105; ++i)
+            out.append(i);
+    }}.join();
+    EXPECT_EQ(runPosted(), 1u);
+    EXPECT_EQ(applied, (std::vector<std::pair<std::size_t, std::size_t>>{{5, 3}}));
+    EXPECT_EQ(sizes, std::vector<std::size_t>{10});
+    EXPECT_EQ(m.rows(), (std::vector<int>{3, 4, 5, 6, 7, 100, 101, 102, 103, 104}));
+    EXPECT_EQ(m.revision(), rev + 2); // one rowsRemoved, one rowsInserted
+
+    // A batch alone over the cap: its last 10 rows land, all the old rows and its first 15 count as erased.
+    std::vector<int> many(25);
+    std::iota(many.begin(), many.end(), 200);
+    std::thread{[out, many] { out.appendRows(many); }}.join();
+    EXPECT_EQ(runPosted(), 1u);
+    EXPECT_EQ(applied.back(), (std::pair<std::size_t, std::size_t>{25, 25}));
+    EXPECT_EQ(m.at(0), 215);
+
+    // The shared appender() has a batch of its own, without the callback.
+    const auto shared = m.appender();
+    shared.append(1);
+    out.append(2);
+    EXPECT_EQ(runPosted(), 2u);
+    EXPECT_EQ(applied.size(), 3u);
+    EXPECT_EQ(m.size(), 10u);
+}
+
+// A worker appends as fast as it can while the main loop applies: after every apply (and in its callback) the model
+// is within the cap, nothing is lost, and the counts add up.
+TEST(ListModelThreads, ACappedTailNeverExceedsItsCap) {
+    test::PostWaiter posts;
+    VectorModel<int> m;
+    m.setMaxRows(100);
+    std::size_t total = 0;
+    std::size_t erased = 0;
+    std::size_t largest = 0;
+    const auto out = m.appender([&](std::size_t appended, std::size_t gone) {
+        total += appended;
+        erased += gone;
+        largest = std::max(largest, m.size());
+        EXPECT_EQ(m.size(), total - erased);
+    });
+    constexpr int rows = 20'000;
+    std::thread worker{[out] {
+        for (int i = 0; i < rows; ++i)
+            out.append(i);
+    }};
+    ASSERT_TRUE(posts.runUntil([&] {
+        largest = std::max(largest, m.size());
+        return total == static_cast<std::size_t>(rows);
+    }));
+    worker.join();
+    EXPECT_LE(largest, 100u);
+    ASSERT_EQ(m.size(), 100u);
+    EXPECT_EQ(total - erased, 100u);
+    for (std::size_t i = 0; i < 100; ++i)
+        ASSERT_EQ(m.at(i), static_cast<int>(rows - 100 + static_cast<int>(i)));
+}
+
+TEST(ListModelThreads, AnAppenderWithOnAppliedOutlivesItsModel) {
+    clearPosted();
+    auto token = std::make_shared<int>(0);
+    const std::weak_ptr<int> captured = token;
+    int calls = 0;
+    std::optional<VectorModel<int>::Appender> appender;
+    {
+        auto m = std::make_unique<VectorModel<int>>();
+        appender = m->appender([&calls, token = std::move(token)](std::size_t, std::size_t) { ++calls; });
+        appender->append(1); // queued
+    }
+    appender->append(2); // the model is gone: dropped
+    runPosted();         // the queued apply doesn't run
+    EXPECT_EQ(calls, 0);
+    EXPECT_FALSE(captured.expired()); // held by the appender's batch
+    appender.reset();
+    clearPosted();
+    EXPECT_TRUE(captured.expired());
+}
+
 TEST(ListModelThreads, AnAppenderOutlivesItsModel) {
     clearPosted();
     VectorModel<int>::Appender appender;
@@ -635,6 +829,22 @@ TEST_F(ListModelTest, ASingletonFillsItsModelFromRunAsync) {
     run("assert(#backend.plain == 500 and backend.plain[500].text == 'line 500')");
     shutdownBackground(std::chrono::seconds{10});
 }
+
+// The fill recipe: runAsyncThen builds the rows on the pool, applies them on the main thread and resolves the future
+// with a report, so Lua converts the report, never the rows.
+TEST_F(ListModelTest, AFillResolvesWithAReportAndLeavesTheRowsInCxx) {
+    test::PostWaiter posts;
+    m_backend.plainModel.clear();
+    const int converted = m_backend.plainModel.converted();
+    run("task = async(function() return await(backend:fill(500)) end)()");
+    ASSERT_TRUE(posts.runUntil([&] { return m_h->run("assert(task.state ~= 'pending')").empty(); }));
+    check("task.state == 'done' and task.value.rows == 500 and task.value.onMainThread");
+    check("#backend.plain == 500 and backend.plain[500].text == 'line 500'");
+    EXPECT_EQ(m_backend.plainModel.converted(), converted + 1); // only the row the check read
+    EXPECT_TRUE(luaui::errors().empty());
+    shutdownBackground(std::chrono::seconds{10});
+}
+
 
 // ------------------------------------------------------------ Lua definitions
 

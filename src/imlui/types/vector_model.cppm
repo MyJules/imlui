@@ -9,9 +9,11 @@
 //   logs.append({1, "started"});
 //   logs.set(0, {1, "started (2 s)"});      // rowsChanged(0, 1), only when the value differs
 //   logs.replace(std::move(fresh));          // keeps the rows (and delegates) whose key and value are the same
+//   logs.setMaxRows(1000);                   // a cap: edits that add rows erase the oldest (first) rows beyond it
 //
 // Main thread only, like every ListModel. appender() gives worker threads a thread-safe appender whose rows reach the
-// model in one batch per main-loop iteration (one rowsInserted), like Live<T>. A template, so it lives in the interface
+// model in one batch per main-loop iteration (one rowsInserted), like Live<T>; appender(onApplied) one whose applies
+// also call onApplied(appended, erased) in the same main-thread step. A template, so it lives in the interface
 // (CODE_STYLE).
 export module imlui.types.vector_model;
 
@@ -33,9 +35,14 @@ public:
     /// The rows' type (LuaConvert<ListModel>: `ListModel<T>` in the Lua definitions).
     using Item = T;
 
+    /// What appender(onApplied) calls on the main thread after each apply: `appended` rows arrived in the batch, and
+    /// `erased` rows went to honor maxRows() (the oldest rows, and the batch's own first rows when it alone is over the
+    /// cap), so the model's size grew by appended - erased.
+    using OnApplied = std::function<void(std::size_t appended, std::size_t erased)>;
+
     /// A thread-safe, copyable way to append rows from a worker. Its rows reach the model on the main thread, all that
-    /// were appended since the last apply in one append (one rowsInserted), while the model lives; afterwards they are
-    /// dropped. An empty appender (default-constructed) drops them too.
+    /// were appended since the last apply in one appendRows (honoring maxRows()), while the model lives; afterwards
+    /// they are dropped. An empty appender (default-constructed) drops them too.
     class Appender {
     public:
         Appender() = default;
@@ -102,12 +109,24 @@ public:
 
     // ---- editing (each calls its notification). Indices are 0-based; one past the end throws std::out_of_range.
 
-    void append(T row) { insert(m_rows.size(), std::move(row)); }
-    void appendRows(std::vector<T> rows) { insertRows(m_rows.size(), std::move(rows)); }
+    // With maxRows() set, the edits that add rows keep the model within the cap by erasing its oldest (first) rows:
+    // append and appendRows erase them first (one rowsRemoved, then rowsInserted, so count() never exceeds the cap,
+    // even between the two), insert and insertRows after inserting; replace keeps the last maxRows() rows.
+
+    /// Appends `row` (erasing the first row first when the model is at maxRows()).
+    void append(T row) {
+        if (m_maxRows > 0 && m_rows.size() >= m_maxRows) erase(0, m_rows.size() - m_maxRows + 1);
+        m_rows.push_back(std::move(row));
+        rowsInserted(m_rows.size() - 1, 1);
+    }
+    /// Appends `rows`, erasing the oldest rows first (one rowsRemoved) to stay within maxRows(); when `rows` alone is
+    /// over the cap, only its last maxRows() rows are appended.
+    void appendRows(std::vector<T> rows) { appendCapped(std::move(rows)); }
     void insert(std::size_t row, T value) {
         checkIndex(row, m_rows.size());
         m_rows.insert(m_rows.begin() + static_cast<std::ptrdiff_t>(row), std::move(value));
         rowsInserted(row, 1);
+        trim();
     }
     void insertRows(std::size_t row, std::vector<T> rows) {
         checkIndex(row, m_rows.size());
@@ -116,6 +135,7 @@ public:
         m_rows.insert(m_rows.begin() + static_cast<std::ptrdiff_t>(row), std::make_move_iterator(rows.begin()),
                       std::make_move_iterator(rows.end()));
         rowsInserted(row, n);
+        trim();
     }
     /// Removes `count` rows from `row` (fewer at the end).
     void erase(std::size_t row, std::size_t count = 1) {
@@ -175,6 +195,8 @@ public:
     /// that row's identity, so its item and delegate are kept: matched by key when the model has keys (the first old
     /// row with that key), else at the same index.
     void replace(std::vector<T> rows) {
+        if (m_maxRows > 0 && rows.size() > m_maxRows)
+            rows.erase(rows.begin(), rows.begin() + static_cast<std::ptrdiff_t>(rows.size() - m_maxRows));
         std::vector<std::optional<std::size_t>> previous(rows.size());
         if constexpr (std::equality_comparable<T>) {
             if (m_keyOf) {
@@ -203,17 +225,37 @@ public:
         rowsRemoved(0, n);
     }
 
-    /// Main thread: an appender for worker threads (see Appender). All appenders of a model share one batch.
+    /// The most rows the model keeps (0, the default: no cap). See the editing members.
+    [[nodiscard]] std::size_t maxRows() const { return m_maxRows; }
+    /// Sets the cap (0: none). Lowering it below size() erases the oldest rows now (one rowsRemoved).
+    void setMaxRows(std::size_t maxRows) {
+        m_maxRows = maxRows;
+        trim();
+    }
+
+    /// Main thread: an appender for worker threads (see Appender). The appenders it returns share one batch: one apply
+    /// per main-loop iteration for all of them.
     [[nodiscard]] Appender appender() {
-        if (!m_batch) m_batch = std::make_shared<Batch>(*this, handle());
+        if (!m_batch) m_batch = std::make_shared<Batch>(*this, handle(), OnApplied{});
         return Appender{m_batch};
+    }
+    /// Main thread: an appender with a batch of its own (shared by its copies), whose every apply calls
+    /// `onApplied(appended, erased)` on the main thread right after the append, in the same step (no frame comes
+    /// between them), while the model lives: count the applies, keep stats, notify(). An exception it throws is
+    /// reported as a script error. `onApplied` is destroyed with the appender's last copy, on any thread, so its
+    /// captures must not need the main thread to be destroyed (no Lua references). It may use the model's owner
+    /// (`this`) when the owner outlives the model: it runs only while the model lives.
+    [[nodiscard]] Appender appender(OnApplied onApplied) {
+        return Appender{std::make_shared<Batch>(*this, handle(), std::move(onApplied))};
     }
 
 private:
     struct Batch {
-        Batch(VectorModel& m, ScriptObject::Handle h) : model{&m}, handle{std::move(h)} {}
+        Batch(VectorModel& m, ScriptObject::Handle h, OnApplied applied)
+            : model{&m}, handle{std::move(h)}, onApplied{std::move(applied)} {}
         VectorModel* model;          ///< used only by the apply, which runs only while it lives
         ScriptObject::Handle handle; ///< the model's
+        OnApplied onApplied;         ///< called by the apply (main thread); may be empty
         std::mutex mutex;
         std::vector<T> pending; ///< guarded by `mutex`
         bool queued = false;    ///< guarded by `mutex`: an apply is posted and hasn't run yet
@@ -222,6 +264,7 @@ private:
     /// Any thread: adds to the batch with `add(pending)` and posts its apply unless one is queued already.
     template <class Add>
     static void store(const std::shared_ptr<Batch>& batch, const Add& add) {
+        if (!batch->handle.alive()) return; // the model is gone: nothing would apply the rows
         {
             const std::scoped_lock lock{batch->mutex};
             add(batch->pending);
@@ -237,8 +280,43 @@ private:
                 rows = std::move(batch->pending);
                 batch->pending.clear();
             }
-            batch->model->appendRows(std::move(rows));
+            const std::size_t appended = rows.size();
+            const std::size_t erased = batch->model->appendCapped(std::move(rows));
+            if (batch->onApplied) batch->onApplied(appended, erased);
         });
+    }
+
+    /// Appends `rows`, first erasing what maxRows() needs gone: the oldest rows (one rowsRemoved), and the first rows of
+    /// `rows` when it alone is over the cap. Returns how many rows that dropped (old and new).
+    std::size_t appendCapped(std::vector<T> rows) {
+        if (rows.empty()) return 0;
+        std::size_t dropped = 0;
+        if (m_maxRows > 0) {
+            if (rows.size() > m_maxRows) {
+                dropped = rows.size() - m_maxRows;
+                rows.erase(rows.begin(), rows.begin() + static_cast<std::ptrdiff_t>(dropped));
+            }
+            const std::size_t room = m_maxRows - rows.size();
+            if (m_rows.size() > room) {
+                const std::size_t old = m_rows.size() - room;
+                m_rows.erase(m_rows.begin(), m_rows.begin() + static_cast<std::ptrdiff_t>(old));
+                rowsRemoved(0, old);
+                dropped += old;
+            }
+        }
+        const std::size_t first = m_rows.size();
+        const std::size_t n = rows.size();
+        if (m_rows.empty())
+            m_rows = std::move(rows);
+        else
+            m_rows.insert(m_rows.end(), std::make_move_iterator(rows.begin()), std::make_move_iterator(rows.end()));
+        rowsInserted(first, n);
+        return dropped;
+    }
+
+    /// Erases the oldest rows beyond maxRows() (one rowsRemoved).
+    void trim() {
+        if (m_maxRows > 0 && m_rows.size() > m_maxRows) erase(0, m_rows.size() - m_maxRows);
     }
 
     /// Throws std::out_of_range unless row <= last (and the model isn't `empty` for a row that must exist).
@@ -248,7 +326,8 @@ private:
 
     std::vector<T> m_rows;
     std::function<Key(const T&)> m_keyOf;
-    std::shared_ptr<Batch> m_batch;
+    std::size_t m_maxRows = 0;      ///< 0: no cap
+    std::shared_ptr<Batch> m_batch; ///< appender()'s shared batch
 };
 
 } // namespace imlui

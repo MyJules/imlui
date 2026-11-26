@@ -1,7 +1,8 @@
 // Future<T>, Promise<T> and runAsync(work) (imlui.types.future, imlui.types.script_object), and the Lua side (the
 // Async section of src/resources/imlui.lua): async/await, next/catch, cancel, sleep, all, future(), unhandled
 // rejections, and what happens when the object or the Lua state dies before a future settles. Progress, Lua futures
-// read back into C++ (method arguments), and cancellation through next/catch chains and all.
+// read back into C++ (method arguments), and cancellation through next/catch chains and all. runAsyncThen(work, then):
+// the main-thread step, its value, errors, cancels and progress.
 #include <gtest/gtest.h>
 
 import std;
@@ -333,6 +334,142 @@ TEST_F(FutureTest, OwnerDeathCancelsARunAsyncFuture) {
     Future<int> never = cancelled.runAsync([] { return 1; });
     runPosted();
     EXPECT_EQ(never.status(), FutureStatus::Cancelled);
+}
+
+// ---- runAsyncThen
+
+TEST_F(FutureTest, RunAsyncThenTransformsTheResultOnTheMainThread) {
+    test::PostWaiter posts;
+    Owner owner;
+    const std::thread::id mainThread = std::this_thread::get_id();
+    std::thread::id workedOn;
+    std::thread::id appliedOn;
+    std::vector<int> kept; // what `then` keeps in C++: the future only gets its size
+    Future<std::size_t> size = owner.runAsyncThen(
+        [&workedOn] {
+            workedOn = std::this_thread::get_id();
+            return std::vector<int>(10'000, 7);
+        },
+        [&](std::vector<int> rows) {
+            appliedOn = std::this_thread::get_id();
+            kept = std::move(rows);
+            return kept.size();
+        });
+    int applies = 0;
+    Future<void> voidWork = owner.runAsyncThen([](std::stop_token) {}, [&applies] { ++applies; });
+    Future<void> voidThen = owner.runAsyncThen([] { return 3; }, [&applies](int n) { applies += n; });
+    Future<std::unique_ptr<int>> moveOnly = owner.runAsyncThen(
+        [p = std::make_unique<int>(4)]() mutable { return std::move(p); },
+        [q = std::make_unique<int>(1)](std::unique_ptr<int> p) { return std::make_unique<int>(*p + *q); });
+    ASSERT_TRUE(posts.runUntil(
+        [&] { return !size.pending() && !voidWork.pending() && !voidThen.pending() && !moveOnly.pending(); }));
+    ASSERT_EQ(size.status(), FutureStatus::Done);
+    EXPECT_EQ(*size.value(), 10'000u);
+    EXPECT_EQ(kept.size(), 10'000u);
+    EXPECT_NE(workedOn, mainThread);
+    EXPECT_EQ(appliedOn, mainThread);
+    EXPECT_EQ(voidWork.status(), FutureStatus::Done);
+    EXPECT_EQ(voidThen.status(), FutureStatus::Done);
+    EXPECT_EQ(applies, 4);
+    EXPECT_EQ(**moveOnly.value(), 5);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+TEST_F(FutureTest, RunAsyncThenFailsWithWhatWorkOrThenThrew) {
+    test::PostWaiter posts;
+    Owner owner;
+    bool applied = false;
+    Future<int> workFailed = owner.runAsyncThen([]() -> int { throw std::runtime_error("bad input"); },
+                                                [&applied](int n) {
+                                                    applied = true;
+                                                    return n;
+                                                });
+    Future<int> thenFailed =
+        owner.runAsyncThen([] { return 1; }, [](int) -> int { throw std::runtime_error("bad apply"); });
+    Future<void> unknown = owner.runAsyncThen([] { return 1; }, [](int) { throw 5; });
+    ASSERT_TRUE(posts.runUntil([&] { return !workFailed.pending() && !thenFailed.pending() && !unknown.pending(); }));
+    EXPECT_EQ(workFailed.status(), FutureStatus::Failed);
+    EXPECT_EQ(workFailed.error(), "bad input");
+    EXPECT_FALSE(applied); // `then` isn't called after work threw
+    EXPECT_EQ(thenFailed.status(), FutureStatus::Failed);
+    EXPECT_EQ(thenFailed.error(), "bad apply");
+    EXPECT_EQ(unknown.error(), "unknown C++ exception");
+    EXPECT_TRUE(luaui::errors().empty()); // a rejection, not a script error
+}
+
+TEST_F(FutureTest, CancellingARunAsyncThenFutureStopsTheWorkAndSkipsThen) {
+    Owner owner;
+    std::latch started{1};
+    std::atomic<bool> sawStop = false;
+    bool applied = false;
+    Future<int> running = owner.runAsyncThen(
+        [&](std::stop_token stop) {
+            started.count_down();
+            sawStop = waitForStop(stop);
+            return 1;
+        },
+        [&applied](int n) {
+            applied = true;
+            return n;
+        });
+    started.wait();
+    EXPECT_TRUE(running.cancel());
+    shutdownBackground(std::chrono::seconds{10}); // joins: the work returned
+    EXPECT_TRUE(sawStop);
+
+    runPosted();
+    EXPECT_EQ(running.status(), FutureStatus::Cancelled);
+
+    // The work finished and its main-thread step is queued (its only post): a cancel now still skips `then`.
+    test::PostWaiter posts;
+    Future<int> finished = owner.runAsyncThen([] { return 2; }, [&applied](int n) {
+        applied = true;
+        return n;
+    });
+    ASSERT_TRUE(posts.waitForPosts(1));
+    EXPECT_TRUE(finished.cancel());
+    ASSERT_TRUE(posts.runUntil([&] { return postedCount() == 0; }));
+    EXPECT_FALSE(applied);
+    EXPECT_EQ(finished.status(), FutureStatus::Cancelled);
+}
+
+TEST_F(FutureTest, OwnerDeathCancelsARunAsyncThenFutureBeforeThen) {
+    test::PostWaiter posts;
+    auto owner = std::make_unique<Owner>();
+    bool applied = false;
+    Future<int> future = owner->runAsyncThen([] { return 1; }, [&applied](int n) {
+        applied = true;
+        return n;
+    });
+    ASSERT_TRUE(posts.waitForPosts(1)); // the work ran; its main-thread step is queued
+    owner.reset();
+    ASSERT_TRUE(posts.runUntil([&] { return !future.pending(); }));
+    EXPECT_FALSE(applied);
+    EXPECT_EQ(future.status(), FutureStatus::Cancelled);
+}
+
+TEST_F(FutureTest, RunAsyncThenWorkReportsProgress) {
+    test::PostWaiter posts;
+    Owner owner;
+    std::vector<double> applied;
+    std::optional<double> progressAtThen;
+    Future<int> future;
+    future = owner.runAsyncThen(
+        [](std::stop_token, Progress progress) {
+            for (int i = 1; i <= 10; ++i)
+                progress.report(i / 10.0);
+            return 5;
+        },
+        [&](int n) {
+            progressAtThen = future.progress();
+            return n * 2;
+        });
+    future.onProgress([&](double p) { applied.push_back(p); });
+    ASSERT_TRUE(posts.runUntil([&] { return !future.pending(); }));
+    EXPECT_EQ(*future.value(), 10);
+    ASSERT_FALSE(applied.empty());
+    EXPECT_EQ(applied.back(), 1.0);
+    EXPECT_EQ(progressAtThen, 1.0); // reports made by the work are applied before its main-thread step
 }
 
 // ---- Lua

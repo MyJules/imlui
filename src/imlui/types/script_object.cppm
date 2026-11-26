@@ -25,6 +25,8 @@
 // with a stop token that stops when the object dies, and `done(result)` runs on the main thread while it lives; the
 // Task it returns (imlui.types.task) cancels it. runAsync(work) returns a Future of the result instead
 // (imlui.types.future), which a method can return to Lua; work taking an imlui::Progress reports progress to it.
+// runAsyncThen(work, then) hands the result to `then` on the main thread first, and the future gets what `then`
+// returns: big data (rows for a model) stays in C++, and Lua gets a small report.
 export module imlui.types.script_object;
 
 import std;
@@ -178,6 +180,71 @@ public:
         return std::move(made.second);
     }
 
+    /// Main thread: runAsync(work) with a main-thread step between the work and the future: `then` gets what `work`
+    /// returned, on the main thread, and the future is done with what `then` returns. So `work` may build something big
+    /// (the rows of a model) and `then` apply it (replace()) and return a small report, which is all Lua converts:
+    ///  * `work` is called as in runAsync(work): work(std::stop_token, imlui::Progress), work(std::stop_token) or
+    ///    work(), on the pool; its token stops when the future is cancelled or this object dies;
+    ///  * `then` is called as then(W&&) (then() for work returning void) on the main thread, only while this object
+    ///    lives and the future isn't cancelled, so it may use `this`, edit models, notify() and emit(); it returns the
+    ///    future's value R (Future<void> for void);
+    ///  * the future fails with the message of what `work` or `then` threw (`then` isn't called when `work` threw);
+    ///  * cancelling it, or this object's death, before `then` ran: `then` never runs, the future is cancelled. The
+    ///    future settles at the loop iteration after `then` (Promise::resolve posts), so a cancel in between leaves
+    ///    `then`'s effects and cancels the future.
+    /// `work` and `then` may be move-only; they are destroyed on a worker or the main thread, so their captures must
+    /// not need the main thread to be destroyed (no Lua references).
+    template <class Work, class Then>
+    auto runAsyncThen(Work work, Then then) {
+        using Produced = std::remove_cvref_t<decltype(invokeWithProgress(
+            std::declval<Work&>(), std::declval<std::stop_token>(), std::declval<Progress>()))>;
+        using Result = std::remove_cvref_t<decltype(invokeThen<Produced>(std::declval<Then&>(), nullptr))>;
+        struct Job {
+            Work work;
+            Then then;
+        };
+        auto made = makePromise<Result>(handle().stopToken());
+        startAsync([job = std::make_shared<Job>(std::move(work), std::move(then)),
+                    promise = made.first](std::stop_token stop) -> std::function<void()> {
+            // One token for the work: stopped by this object's death or the pool's shutdown (`stop`), or a cancel.
+            std::stop_source both;
+            const std::stop_callback onStop{std::move(stop), [&both] { both.request_stop(); }};
+            const std::stop_callback onCancel{promise.stopToken(), [&both] { both.request_stop(); }};
+            if (both.stop_requested()) return {}; // the promise is dropped unsettled: the future is cancelled
+            std::shared_ptr<Produced> produced; // stays empty for work returning void
+            try {
+                if constexpr (std::is_void_v<Produced>)
+                    invokeWithProgress(job->work, both.get_token(), promise.reporter());
+                else
+                    produced = std::make_shared<Produced>(
+                        invokeWithProgress(job->work, both.get_token(), promise.reporter()));
+            } catch (const std::exception& e) {
+                promise.reject(e.what());
+                return {};
+            } catch (...) {
+                promise.reject("unknown C++ exception");
+                return {};
+            }
+            // Posted through the handle: runs only while this object lives (else the promise goes: cancelled).
+            return [job, promise, produced] {
+                if (promise.stopToken().stop_requested()) return; // cancelled meanwhile: nothing is applied
+                try {
+                    if constexpr (std::is_void_v<Result>) {
+                        invokeThen<Produced>(job->then, produced.get());
+                        promise.resolve();
+                    } else {
+                        promise.resolve(invokeThen<Produced>(job->then, produced.get()));
+                    }
+                } catch (const std::exception& e) {
+                    promise.reject(e.what());
+                } catch (...) {
+                    promise.reject("unknown C++ exception");
+                }
+            };
+        });
+        return std::move(made.second);
+    }
+
     /// Main thread: makes every handle of this object dead now (alive() false, posts dropped), before the destructor
     /// gets to it. The registry calls it before an element's destroyed(); a derived class's destructor that waits
     /// for its workers, or a host destroying a singleton, calls it first, so the workers see the cancellation while
@@ -227,6 +294,17 @@ private:
             return std::invoke(work, std::move(stop), std::move(progress));
         else
             return invokeWork(work, std::move(stop));
+    }
+    /// runAsyncThen()'s main-thread step: then(std::move(*produced)), or then() for work returning void.
+    template <class Produced, class Then>
+    static decltype(auto) invokeThen(Then& then, [[maybe_unused]] Produced* produced) {
+        if constexpr (std::is_void_v<Produced>) {
+            static_assert(std::invocable<Then&>, "runAsyncThen: then must be callable as then() for work returning void");
+            return std::invoke(then);
+        } else {
+            static_assert(std::invocable<Then&, Produced&&>, "runAsyncThen: then must be callable as then(result)");
+            return std::invoke(then, std::move(*produced));
+        }
     }
 
     /// runAsync()'s typed part: wraps work, done and fail into a job that runs `work` on a worker and returns the

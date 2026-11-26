@@ -79,14 +79,14 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 - [Value conversion](#value-conversion): `LuaConvert<T>`, enums and structs, your own types, Lua callbacks
   (`LuaFunction`)
 - [List models](#list-models): `ListModel`, `VectorModel<T>`: C++ rows for a `Repeater` or `ListView`, row-level
-  notifications, keys, threads
+  notifications, keys, a row cap, threads (`appender`, `onApplied`), filling one for a script
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
 - [Resources and the host config](#resources-and-the-host-config): mounts, the entry script
 - [Editor support: Lua definitions](#editor-support-lua-definitions): LuaLS `---@meta` files of the DSL and the
   registered types, `--lua-defs <dir>`, hover docs, the `luaType` hook
 - [Testing elements](#testing-elements): the headless frame harness
 - [Threading and frame requests](#threading-and-frame-requests): `runAsync` (and its `Task`), [futures](#futures)
-  (`Future<T>`, `Promise<T>`, progress, Lua futures as arguments), `Live<T>`, the background pool;
+  (`Future<T>`, `Promise<T>`, `runAsyncThen`, progress, Lua futures as arguments), `Live<T>`, the background pool;
   [ticking elements](#ticking-elements)
 - [The built-ins as examples](#the-built-ins-as-examples)
 - [The example app](#the-example-app)
@@ -958,10 +958,19 @@ notifications itself:
 | `move(from, n, to)` | `rowsMoved` |
 | `sort(less = {})` | A stable sort, `rowsRemapped`: every row keeps its identity |
 | `replace(vector)` | `rowsRemapped`: a new row equal to an old one keeps that row's identity, matched by key when the model has keys (else at the same index) |
-| `appender()` | A thread-safe `Appender` (below) |
+| `setMaxRows(n)`, `maxRows()` | A cap (0, the default: none). See below |
+| `appender()`, `appender(onApplied)` | A thread-safe `Appender` (below) |
 
 An index past the end throws `std::out_of_range`. Like a `std::vector`, inserting near the front moves the rows after
 it (and so does the model's per-row bookkeeping, 8 bytes a row).
+
+**A cap.** `setMaxRows(n)` keeps the model at `n` rows at most, for a tail or a log: the edits that add rows erase the
+**oldest** (first) rows in the same call, so no frame or binding ever sees more than `n`. `append` and `appendRows`
+(and so the appenders) erase first, as one `rowsRemoved(0, k)`, then insert (`rowsInserted`), so `count()` stays
+within the cap even between the two notifications; a batch that is alone over the cap keeps only its last `n` rows.
+`insert`/`insertRows` trim the front after inserting, `replace` keeps the last `n` rows of the new list, and lowering
+the cap erases right away. The rows that stay keep their identity: with keys, their delegates are kept and only the
+new rows are built; without keys, every index whose row changed is rebuilt (all of them, in a full view).
 
 **What Lua sees.** A model is a value anywhere a `LuaConvert` is: a property (a getter returning
 `const VectorModel<T>&`), a method result (`VectorModel<T>&` or `ListModel*`, which don't keep it alive, or
@@ -989,19 +998,67 @@ A kept delegate keeps the `index` it was built with, as with any `key` (see
 [Repeater](lua-api.md#repeater--model-delegate-)).
 
 **Threads.** A model, its notifications and its Lua value are **main-thread only**. Fill one from a worker the usual
-ways: `runAsync(work, done)` with the rows as the result (`done` calls `replace` or `appendRows`, as above), or
-`handle().post` batches. `VectorModel::appender()` returns a thread-safe, copyable `Appender` (`append(row)`,
-`appendRows(vector)`): its rows reach the model on the main thread in one `appendRows` (one `rowsInserted`) per
-main-loop iteration, however many arrive, like a [`Live<T>`](#live-properties); once the model is destroyed they're
-dropped.
+ways: `runAsync(work, done)` with the rows as the result (`done` calls `replace` or `appendRows`, as above),
+[`runAsyncThen`](#filling-a-model-and-reporting-to-lua) when a script awaits the fill, or `handle().post` batches.
+`VectorModel::appender()` returns a thread-safe, copyable `Appender` (`append(row)`, `appendRows(vector)`): its rows
+reach the model on the main thread in one `appendRows` (honoring the cap) per main-loop iteration, however many
+arrive, like a [`Live<T>`](#live-properties); once the model is destroyed they're dropped. Every `appender()` of a model
+shares one batch.
+
+**`appender(onApplied)`** returns an appender with a batch of its own (shared by its copies) whose every apply calls
+`onApplied(std::size_t appended, std::size_t erased)` on the main thread right after the append, in the same step:
+`appended` rows arrived, `erased` went to the cap (old rows, and a batch's own first rows when it alone is over the cap),
+so the model grew by `appended - erased`. Count applies, keep stats, `notify()` there: no frame comes between the
+append and the callback. It runs only while the model lives (so it may use the model's owner, which outlives it); an
+exception it throws is reported. It is destroyed with the appender's last copy, on any thread, so it must not capture
+Lua references.
 
 ```cpp
-void Backend::tail(std::string path) {
-    runAsync([path, out = m_logs.appender()](std::stop_token stop) {
+// A capped live tail with stats: the cap and the counting happen in the same step as each append.
+void Backend::startTail(std::string path) {
+    m_tail.setMaxRows(1000);
+    auto out = m_tail.appender([this](std::size_t appended, std::size_t erased) {
+        m_applies += 1;
+        m_erased += static_cast<std::int64_t>(erased);
+        notify("tailStats");
+    });
+    m_tailTask = runAsync([path, out](std::stop_token stop) {
         for (LogLine line : followFile(path, stop)) out.append(std::move(line)); // any rate
     }, [] {});
 }
 ```
+
+#### Filling a model and reporting to Lua
+
+A script that awaits a fill wants a small report (how many rows, how long it took), not the rows: `runAsync(work)`
+would resolve its future with the whole vector, converted into Lua. **`runAsyncThen(work, then)`** (see
+[Futures](#futures)) runs `work` on the pool, hands its result to `then` on the main thread, and resolves the future
+with what `then` returns, so the rows go into the model in C++ and only the report crosses into Lua:
+
+```cpp
+struct FillReport { int rows = 0; double ms = 0.0; }; // a LuaFields struct
+
+imlui::Future<FillReport> Backend::fill(std::string path) {
+    m_fill.cancel(); // a fill still running: its `then` never runs, its future is cancelled
+    m_fill = runAsyncThen(
+        [path](std::stop_token stop, imlui::Progress progress) { // a worker: copies only
+            return readLogFile(path, stop, progress);             // a std::vector<LogLine>, any size
+        },
+        [this, start = Clock::now()](std::vector<LogLine> rows) { // the main thread, while `this` lives
+            m_logs.replace(std::move(rows));
+            notify("filling");
+            return FillReport{static_cast<int>(m_logs.size()), msSince(start)};
+        });
+    return m_fill;
+}
+```
+
+```lua
+local report = await(backend:fill("app.log")) -- a FillReport; f.progress meanwhile
+```
+
+The work's token stops when the future is cancelled (`fut:cancel()`) or `this` dies, and `then` then never runs;
+`Progress` reports and errors behave as with `runAsync(work)`; what `then` throws fails the future.
 
 **Lifetime.** Nothing in C++ points into a Lua state, and the Lua value doesn't keep a model alive (unless it was
 pushed from a `std::shared_ptr`): it tracks the model's life through its [handle](#lower-level-handles-and-posts).
@@ -1430,6 +1487,19 @@ and returns a future of its result (`Future<void>` for `void` work):
   arrives after that is dropped: the script's `await` raises `"cancelled"` (when its state is still alive), and
   nothing the object would have been needed for runs. Work stopped before it started is skipped, its future
   cancelled.
+
+**`runAsyncThen(work, then) -> Future<R>`** puts a main-thread step between the work and the future: `work` runs
+exactly as for `runAsync(work)` (same signatures, token, `Progress`), then `then(result)` (`then()` for `void` work)
+runs on the main thread, while the object lives, and the future is done with what it returns (`Future<void>` for
+`void`). Use it when the work's result is big or C++-only (rows for a [model](#filling-a-model-and-reporting-to-lua),
+a decoded image) and the script only needs a summary. Details:
+
+- `then` may use `this`, edit models, `notify()` and `emit()`; it isn't called when `work` threw (the future fails with
+  that message) or when the future was cancelled or the object died first (the future is cancelled);
+- what `then` throws fails the future with its message (not a script error);
+- the future settles at the loop iteration after `then` (promises post), so a cancel in that gap keeps `then`'s
+  effects and cancels the future;
+- `work` and `then` may be move-only, and are destroyed on a worker or the main thread (no Lua references).
 
 **Promises.** A result that comes from elsewhere (a callback API, another thread, a dialog) goes through a promise:
 
