@@ -536,6 +536,11 @@ Two test elements in `tests/support/` are shared by the element tests; register 
 | `imlui.test.last_item_probe` | `test::LastItemProbe` | Renders its children and remembers the rect of the last visual one (`min()`, `max()`, `size()`, `center()`), so a test knows where to click. |
 | `imlui.test.render_counter` | `test::RenderCounter` | A 10 x 10 dp box that counts its renders (`renders()`) and remembers the draw list of the ImGui window it last rendered into (`drawList()`). |
 
+Tests of worker threads (`background_test.cpp`, `run_async_test.cpp`, `live_test.cpp`) wait with
+`test::PostWaiter` (`imlui.test.post_waiter`): it installs the post wake handler, and `runUntil(pred)` runs the
+main-thread queue until `pred()` holds, woken by each post; `waitForPosts(n)` waits without running. No sleeps or
+busy loops: workers signal with latches, condition variables and stop tokens.
+
 `frame_test.cpp` (Frame, child handles, re-registration, unknown types), `element_test.cpp`
 (`componentComplete`/`render` lifecycle, lazy sync, built-in defaults, Escape closing a `Dialog` and a
 `ModalNavigationDrawer` through `native.injectKey`) and one `elements_<family>_test.cpp` per element family

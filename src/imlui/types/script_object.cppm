@@ -17,6 +17,9 @@
 // Main thread only, like everything that touches Lua or ImGui. The exception is a Handle (handle()): a weak,
 // copyable token a worker thread holds to post work back to the object, which runs only if the object is still
 // alive by then (Lua may collect an element, or close its state on hot reload, at any time).
+//
+// runAsync(work, done[, fail]) is the usual way to use one: `work` runs on the background pool (imlui.ui.background)
+// with a stop token that stops when the object dies, and `done(result)` runs on the main thread while it lives.
 export module imlui.types.script_object;
 
 import std;
@@ -26,6 +29,7 @@ import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.lua_convert;
+import imlui.ui.background;
 import imlui.ui.frame_request;
 import imlui.ui.main_thread;
 
@@ -51,10 +55,16 @@ public:
         /// `this` and call notify()/emit(). Returns false (and drops `fn`) when the object is already gone.
         bool post(std::function<void()> fn) const;
 
+        /// Thread-safe: a token that is stopped when the object dies (when alive() turns false; already stopped for an
+        /// empty handle). Stop callbacks registered on it run on the main thread, inside cancelHandles() or the
+        /// destructor.
+        [[nodiscard]] std::stop_token stopToken() const;
+
     private:
         friend class ScriptObject;
-        explicit Handle(std::shared_ptr<const std::atomic<bool>> alive);
-        std::shared_ptr<const std::atomic<bool>> m_alive;
+        explicit Handle(std::stop_source state);
+        /// The object's: stopped when it dies. No state for an empty handle.
+        std::stop_source m_state{std::nostopstate};
     };
 
     /// Takes the next object id.
@@ -87,6 +97,27 @@ public:
     /// Main thread: a Handle that worker threads use to post back to this object safely (see Handle::post).
     [[nodiscard]] Handle handle();
 
+    /// Main thread: runs `work` on the background pool (runInBackground) and hands its result to `done` on the main
+    /// thread, through handle(): `done` runs only while this object lives, so it may use `this`, notify() and emit().
+    ///  * `work` is called as work(std::stop_token) or work(), on a worker thread, and returns R (or void). The token
+    ///    stops when this object dies (its handles go dead) or the pool shuts down; work stopped before it starts is
+    ///    skipped. It must not touch this object: give it copies (and Live<T>::writer()s).
+    ///  * `done` is called as done(R&&) (done() for void) on the main thread, after `work` returned.
+    ///  * `fail` gets the message of an exception `work` threw ("unknown C++ exception" for a non-std one), on the main
+    ///    thread, also only while this object lives. Without `fail`, the exception is reported as a script error
+    ///    ("runAsync (<type>): <what>").
+    /// `work`, `done` and `fail` may be move-only. They are destroyed on whichever thread drops them last (a worker,
+    /// or the main thread), so their captures must not need the main thread to be destroyed (no Lua references).
+    template <class Work, class Done>
+    void runAsync(Work work, Done done) {
+        startJob(std::move(work), std::move(done), ReportFailure{});
+    }
+    template <class Work, class Done, class Fail>
+        requires std::invocable<Fail&, std::string>
+    void runAsync(Work work, Done done, Fail fail) {
+        startJob(std::move(work), std::move(done), std::move(fail));
+    }
+
     /// Main thread: makes every handle of this object dead now (alive() false, posts dropped), before the destructor
     /// gets to it. The registry calls it before an element's destroyed(); a derived class's destructor that waits
     /// for its workers, or a host destroying a singleton, calls it first, so the workers see the cancellation while
@@ -115,6 +146,65 @@ public:
     void detach();
 
 private:
+    /// runAsync() without a `fail`: the exception is reported.
+    struct ReportFailure {};
+
+    /// Calls `work` with the stop token, or without it.
+    template <class Work>
+    static decltype(auto) invokeWork(Work& work, std::stop_token stop) {
+        if constexpr (std::invocable<Work&, std::stop_token>)
+            return std::invoke(work, std::move(stop));
+        else
+            return std::invoke(work);
+    }
+
+    /// runAsync()'s typed part: wraps work, done and fail into a job that runs `work` on a worker and returns the
+    /// main-thread continuation (done or fail).
+    template <class Work, class Done, class Fail>
+    void startJob(Work work, Done done, Fail fail) {
+        using Result =
+            std::remove_cvref_t<decltype(invokeWork(std::declval<Work&>(), std::declval<std::stop_token>()))>;
+        if constexpr (std::is_void_v<Result>)
+            static_assert(std::invocable<Done&>, "runAsync: done must be callable as done() for work returning void");
+        else
+            static_assert(std::invocable<Done&, Result&&>, "runAsync: done must be callable as done(result)");
+        struct Job {
+            Work work;
+            Done done;
+            Fail fail;
+        };
+        // Shared by the worker's function and the continuation: std::function needs copyable functions, and the
+        // callables may be move-only.
+        auto job = std::make_shared<Job>(Job{std::move(work), std::move(done), std::move(fail)});
+        startAsync([job, context = asyncContext()](std::stop_token stop) -> std::function<void()> {
+            std::optional<std::string> what; // stays empty for an exception that isn't a std::exception
+            try {
+                if constexpr (std::is_void_v<Result>) {
+                    invokeWork(job->work, std::move(stop));
+                    return [job] { std::invoke(job->done); };
+                } else {
+                    auto result = std::make_shared<Result>(invokeWork(job->work, std::move(stop)));
+                    return [job, result] { std::invoke(job->done, std::move(*result)); };
+                }
+            } catch (const std::exception& e) {
+                what = e.what();
+            } catch (...) {
+            }
+            return [job, context, what = std::move(what)] {
+                if constexpr (std::is_same_v<Fail, ReportFailure>)
+                    luaui::reportException("runAsync", context, what ? what->c_str() : nullptr);
+                else
+                    std::invoke(job->fail, what.value_or("unknown C++ exception"));
+            };
+        });
+    }
+
+    /// runAsync()'s untyped core: queues `job` on the background pool with a token that stops when this object dies or
+    /// the pool shuts down, and posts the continuation it returns through handle().
+    void startAsync(std::function<std::function<void()>(std::stop_token)> job);
+    /// " (<dynamic type>)": the context of a runAsync() error report.
+    [[nodiscard]] std::string asyncContext() const;
+
     /// emit()'s body, inside its protected call. Returns whether the handler ran without an error.
     template <class... Args>
     bool callHandler(std::string_view signal, const Args&... args) {
@@ -151,8 +241,8 @@ private:
     std::uint64_t m_objectId;
     lua::State* m_state = nullptr;
     bool m_singleton = false;
-    /// Shared with every Handle, created by the first handle(). Set to false by cancelHandles() or the destructor.
-    std::shared_ptr<std::atomic<bool>> m_alive;
+    /// Shared with every Handle, created by the first handle(). Stopped by cancelHandles() or the destructor.
+    std::stop_source m_handles{std::nostopstate};
     bool m_cancelled = false; ///< cancelHandles() ran: a handle taken later starts dead
 };
 
@@ -204,7 +294,7 @@ std::uint64_t ScriptObject::objectId() const { return m_objectId; }
 
 ScriptObject::~ScriptObject() {
     // Destructors run on the main thread, like the posted functions that check it: none can run past this point.
-    if (m_alive) m_alive->store(false, std::memory_order_release);
+    m_handles.request_stop(); // no-op without a state
     if (!m_state) return;
     // Destroyed while still linked (e.g. a singleton that dies before the engine): forget the link.
     pushLinks(m_state);
@@ -213,28 +303,54 @@ ScriptObject::~ScriptObject() {
     lua::pop(m_state);
 }
 
-ScriptObject::Handle::Handle(std::shared_ptr<const std::atomic<bool>> alive) : m_alive{std::move(alive)} {}
+ScriptObject::Handle::Handle(std::stop_source state) : m_state{std::move(state)} {}
 
-bool ScriptObject::Handle::alive() const { return m_alive && m_alive->load(std::memory_order_acquire); }
+bool ScriptObject::Handle::alive() const { return m_state.stop_possible() && !m_state.stop_requested(); }
 
 bool ScriptObject::Handle::post(std::function<void()> fn) const {
     if (!fn || !alive()) return false;
-    imlui::post([alive = m_alive, fn = std::move(fn)] {
+    imlui::post([state = m_state, fn = std::move(fn)] {
         // On the main thread, where the object is destroyed too: it can't die between this check and fn().
-        if (alive->load(std::memory_order_acquire)) fn();
+        if (!state.stop_requested()) fn();
     });
     return true;
 }
 
+std::stop_token ScriptObject::Handle::stopToken() const {
+    if (m_state.stop_possible()) return m_state.get_token();
+    std::stop_source stopped;
+    stopped.request_stop();
+    return stopped.get_token();
+}
+
 ScriptObject::Handle ScriptObject::handle() {
-    if (!m_alive) m_alive = std::make_shared<std::atomic<bool>>(!m_cancelled);
-    return Handle{m_alive};
+    if (!m_handles.stop_possible()) {
+        m_handles = std::stop_source{};
+        if (m_cancelled) m_handles.request_stop();
+    }
+    return Handle{m_handles};
 }
 
 void ScriptObject::cancelHandles() {
     m_cancelled = true;
-    if (m_alive) m_alive->store(false, std::memory_order_release);
+    m_handles.request_stop(); // no-op without a state
 }
+
+void ScriptObject::startAsync(std::function<std::function<void()>(std::stop_token)> job) {
+    const Handle self = handle();
+    if (!self.alive()) return; // cancelled already: nothing could receive the result
+    runInBackground([self, job = std::move(job)](std::stop_token poolStop) {
+        // One token for the work: stopped by the pool's shutdown or the object's death, whichever comes first. The
+        // callbacks run on the thread that stops (a shutdown, the main thread), or right here when it already happened.
+        std::stop_source stop;
+        const std::stop_callback onShutdown{std::move(poolStop), [&stop] { stop.request_stop(); }};
+        const std::stop_callback onDeath{self.stopToken(), [&stop] { stop.request_stop(); }};
+        if (stop.stop_requested()) return; // nobody waits for this result any more
+        self.post(job(stop.get_token()));
+    });
+}
+
+std::string ScriptObject::asyncContext() const { return std::format(" ({})", typeid(*this).name()); }
 
 lua::State* ScriptObject::luaState() const { return m_state; }
 bool ScriptObject::isSingleton() const { return m_singleton; }

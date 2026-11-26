@@ -10,6 +10,9 @@
 //
 // To post to an element or singleton that Lua may destroy before the function runs, use ScriptObject::handle()
 // (module imlui.types.script_object): its post() runs the function only if the object is still alive.
+//
+// The queue is never destroyed (not even by static destruction), so post() stays safe from a worker thread that
+// outlives main().
 export module imlui.ui.main_thread;
 
 import std;
@@ -45,26 +48,37 @@ namespace imlui {
 
 namespace {
 
-/// Guards `queue` and `wakeHandler`. The handler is called with it held, so it can't be removed (and the window it
-/// wakes destroyed) while a worker is inside it.
-std::mutex mutex;
-std::vector<std::function<void()>> queue;
-std::function<void()> wakeHandler;
+/// The queue's state. Allocated once and never destroyed: a worker thread may post while the process exits (static
+/// destructors run while other threads still do, until the OS ends them), and must not find a destroyed mutex.
+struct Queue {
+    /// Guards `functions` and `wakeHandler`. The handler is called with it held, so it can't be removed (and the
+    /// window it wakes destroyed) while a worker is inside it.
+    std::mutex mutex;
+    std::vector<std::function<void()>> functions;
+    std::function<void()> wakeHandler;
+};
+
+Queue& queue() {
+    static Queue* const instance = new Queue; // never deleted, see Queue
+    return *instance;
+}
 
 } // namespace
 
 void post(std::function<void()> fn) {
     if (!fn) return;
-    std::scoped_lock lock{mutex};
-    queue.push_back(std::move(fn));
-    if (wakeHandler) wakeHandler();
+    Queue& q = queue();
+    std::scoped_lock lock{q.mutex};
+    q.functions.push_back(std::move(fn));
+    if (q.wakeHandler) q.wakeHandler();
 }
 
 std::size_t runPosted() {
     std::vector<std::function<void()>> posted;
     {
-        std::scoped_lock lock{mutex};
-        posted.swap(queue);
+        Queue& q = queue();
+        std::scoped_lock lock{q.mutex};
+        posted.swap(q.functions);
     }
     for (auto& fn : posted)
         luaui::reportCxx(fn, "posted function");
@@ -74,20 +88,23 @@ std::size_t runPosted() {
 void clearPosted() {
     std::vector<std::function<void()>> dropped;
     {
-        std::scoped_lock lock{mutex};
-        dropped.swap(queue);
+        Queue& q = queue();
+        std::scoped_lock lock{q.mutex};
+        dropped.swap(q.functions);
     }
     // Destroyed here, outside the lock: a capture's destructor may post again.
 }
 
 std::size_t postedCount() {
-    std::scoped_lock lock{mutex};
-    return queue.size();
+    Queue& q = queue();
+    std::scoped_lock lock{q.mutex};
+    return q.functions.size();
 }
 
 void setPostWakeHandler(std::function<void()> handler) {
-    std::scoped_lock lock{mutex};
-    wakeHandler = std::move(handler);
+    Queue& q = queue();
+    std::scoped_lock lock{q.mutex};
+    q.wakeHandler = std::move(handler);
 }
 
 } // namespace imlui
