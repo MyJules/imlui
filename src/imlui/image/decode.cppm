@@ -24,8 +24,14 @@ struct DecodedImage {
     [[nodiscard]] bool ok() const;
 };
 
-/// Decodes a PNG or JPEG file held in `bytes`. Any other format, a damaged file or one larger than 16384 pixels
-/// on a side gives an image with `error` set and no pixels.
+/// The most bytes of RGBA pixels (4 per pixel) decodeImage() decodes an image to: 256 MiB, 8192 x 8192 pixels, the
+/// image cache's default budget (ImageCache::defaultBudget). A small file can declare a huge image (a flat 16384 x
+/// 16384 PNG is about 1 MiB and decodes to 1 GiB, and its texture takes as much again), so the size is checked from
+/// the header before anything is decoded.
+inline constexpr std::size_t maxImageBytes = std::size_t{256} << 20;
+
+/// Decodes a PNG or JPEG file held in `bytes`. Any other format, a damaged file, one larger than 16384 pixels on a
+/// side or one whose pixels would take more than maxImageBytes gives an image with `error` set and no pixels.
 [[nodiscard]] DecodedImage decodeImage(std::span<const std::byte> bytes);
 
 } // namespace imlui
@@ -51,6 +57,13 @@ DecodedImage decodeImage(std::span<const std::byte> bytes) {
     const auto* data = reinterpret_cast<const stbi::stbi_uc*>(bytes.data());
     const int size = static_cast<int>(bytes.size());
     int channels = 0;
+    // The header alone gives the size (a file whose header doesn't parse fails in the decoder, with its reason).
+    if (int w = 0, h = 0; stbi::stbi_info_from_memory(data, size, &w, &h, &channels) && w > 0 && h > 0 &&
+                          static_cast<std::uint64_t>(w) * static_cast<std::uint64_t>(h) * 4 > maxImageBytes) {
+        out.error =
+            std::format("too large ({} x {} pixels; at most {} MiB of pixels are decoded)", w, h, maxImageBytes >> 20);
+        return out;
+    }
     stbi::stbi_uc* pixels = stbi::stbi_load_from_memory(data, size, &out.width, &out.height, &channels, 4);
     if (!pixels) {
         const char* reason = stbi::stbi_failure_reason();

@@ -62,8 +62,9 @@ inline constexpr float maxStyleValue = 10000.0f;
 
 /// Schedules `t` to become the theme at the start of the next frame
 /// (safe to call from inside a frame, e.g. from a Lua click handler). Values out of range are brought into it:
-/// `fontScale` is clamped (not finite: 1), `spacing` and `shape` radii too (not finite: the default), and style
-/// overrides with a styleValueProblem() are dropped. imlui.lua.theme_table reports them to the script first.
+/// `fontScale` is clamped (not finite: 1), `spacing` and `shape` radii too (not finite: the default), colors (`seed`,
+/// the scheme's roles, `imguiColors`) to 0..1 (clampColor: NaN is 0), and style overrides with a styleValueProblem()
+/// are dropped. imlui.lua.theme_table reports them to the script first.
 void setTheme(Theme t);
 
 /// Applies a pending theme, its fonts included (useFontSet()); call between frames. Returns true if it changed.
@@ -299,6 +300,12 @@ void setTheme(Theme t) {
           std::pair{&t.shape.extraLarge, defaults.shape.extraLarge}})
         bounded(*radius, 0.0f, maxStyleValue, fallback);
     std::erase_if(t.style, [](const Theme::StyleOverride& o) { return !styleValueProblem(o.name, o.value).empty(); });
+    // Widgets and ImGui turn colors into bytes with IM_F32_TO_INT8_SAT, which casts NaN to int (undefined).
+    t.seed = clampColor(t.seed);
+    for (const auto& role : roles())
+        t.scheme.*role.member = clampColor(t.scheme.*role.member);
+    for (auto& entry : t.imguiColors)
+        entry.second = clampColor(entry.second);
     pendingTheme = std::move(t);
 }
 

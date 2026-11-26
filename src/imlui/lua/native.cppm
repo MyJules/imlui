@@ -161,7 +161,7 @@ constexpr NativeFn nativeFns[] = {
     {"mix",
      [](lua::State* state) -> int {
          lua::pushstring(
-             state, toHex(mix(argColor(state, 1), argColor(state, 2), toFloat(lua::tonumber(state, 3)))));
+             state, toHex(mix(argColor(state, 1), argColor(state, 2), clampUnit(toFloat(lua::tonumber(state, 3))))));
          return 1;
      }},
     {"alpha",

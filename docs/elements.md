@@ -761,8 +761,10 @@ and drawn as a texture. It's drawn at its natural size times the DPI scale (one 
 | `status` | string | — | *Read-only.* `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render. Decoding happens on the first render that needs it. |
 | `implicitWidth`, `implicitHeight` | number | `0` | *Read-only.* The image's size in pixels (dp at its natural size); 0 until it's ready. |
 
-A missing or undecodable file is reported once in the error overlay (`Image: image 'app:/logo.png' not found`) and
-drawn as a placeholder: a `surfaceContainerHighest` box with a broken-image icon, 48dp unless sized.
+Images are PNG or JPEG, at most 16384 pixels on a side and 256 MiB of pixels (4 bytes each, 8192 x 8192:
+`maxImageBytes`); a larger one is undecodable, found from its header before anything is decoded. A missing or
+undecodable file is reported once in the error overlay (`Image: image 'app:/logo.png' not found`) and drawn as a
+placeholder: a `surfaceContainerHighest` box with a broken-image icon, 48dp unless sized.
 
 **Signals:** `onStatusChanged(self, status)`, `onImplicitWidthChanged(self, w)`, `onImplicitHeightChanged(self, h)`
 

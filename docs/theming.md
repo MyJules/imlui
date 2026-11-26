@@ -52,7 +52,7 @@ Values are checked, since ImGui asserts on some of them: every component must be
 in magnitude, `Alpha` and `DisabledAlpha` must be in 0..1, and both components of `WindowMinSize` at least 1. A style
 value, `spacing`, `fontScale` or a radius out of its range, or one that isn't a number, reports an error
 (`theme.style.Alpha: must be in 0..1`) and is ignored: the field keeps its default. A `Theme` built in C++ is held to the same limits by `setTheme`, which
-clamps `fontScale`, `spacing` and the radii and drops style overrides it can't apply (`styleValueProblem`). Sizes are
+clamps `fontScale`, `spacing`, the radii and every color (`seed`, the scheme's roles, `imguiColors`: to 0..1, NaN as 0) and drops style overrides it can't apply (`styleValueProblem`). Sizes are
 scaled by the DPI scale and zoom like the defaults (ImGui truncates them to whole pixels); `WindowMinSize` stays at
 least 1 pixel at any zoom, and `ItemSpacing.x` is applied as at least 0 (ImGui's menus store it as an unsigned
 width; a negative `ItemSpacing.y` is kept).
@@ -138,7 +138,7 @@ Element color props (`color = ...`), Canvas painter colors and `color.*` functio
 | role name | `"primary"` |
 | role with alpha (a number in 0..1; anything else, such as `"onSurface/O.6"` or `"primary/2"`, is an invalid color) | `"onSurface/0.6"` |
 | hex: `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA` (`#` optional) | `"#FF5722"`, `"#00000080"` |
-| table `{r, g, b[, a]}` in 0..1 | `{ 1, 0.34, 0.13, 1 }` |
+| table `{r, g, b[, a]}` in 0..1 (clamped to it; NaN reads as 0) | `{ 1, 0.34, 0.13, 1 }` |
 
 Roles are resolved against the scheme **currently in effect**, so `color = "primary"` follows theme changes. The
 theme table itself (`seed`, `colors`, `imgui`) accepts the same specs, but there `colors` and `imgui` roles mean the

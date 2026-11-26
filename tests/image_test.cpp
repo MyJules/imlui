@@ -1,7 +1,9 @@
 // Tests for images: decoding (imlui.image.decode), sizes and fill modes (imlui.image.fill_mode), the ImageCache
-// (hits, misses, errors, reloading changed files, textures, the byte budget) and the Image element through the headless harness,
-// with `app:/` on tests/data or on a temporary folder.
+// (hits, misses, errors, reloading changed files, textures, the byte budget) and the Image element through the headless
+// harness, with `app:/` on tests/data or on a temporary folder.
 #include <gtest/gtest.h>
+
+import std;
 
 import imgui;
 import imlui.image.decode;
@@ -55,6 +57,27 @@ std::size_t countErrors(std::string_view part) {
     return n;
 }
 
+/// The start of a PNG declaring a `width` x `height` RGBA image: the signature, the IHDR chunk and an empty IDAT
+/// chunk (stb_image's header scan reads up to the first IDAT). Enough for the size check, which reads the header
+/// only; the decoder fails on it (no pixel data).
+std::string pngHeader(std::uint32_t width, std::uint32_t height) {
+    std::string png = "\x89PNG\r\n\x1a\n";
+    const auto be32 = [&png](std::uint32_t v) {
+        for (int shift = 24; shift >= 0; shift -= 8)
+            png += static_cast<char>((v >> shift) & 0xFF);
+    };
+    be32(13);
+    png += "IHDR";
+    be32(width);
+    be32(height);
+    png += std::string{"\x08\x06\x00\x00\x00", 5}; // 8 bits, RGBA, deflate, adaptive filters, not interlaced
+    be32(0); // the CRC: stb_image doesn't check it
+    be32(0);
+    png += "IDAT";
+    be32(0);
+    return png;
+}
+
 } // namespace
 
 // ------------------------------------------------------------------ decoding
@@ -103,6 +126,25 @@ TEST(ImageDecode, ReportsUndecodableData) {
     // A truncated PNG: the header is fine, the data isn't.
     const auto png = testFile("rgba_4x2.png");
     EXPECT_FALSE(decodeImage(std::span{png}.first(40)).ok());
+}
+
+// A flat 16384 x 16384 PNG is about 1 MiB and would decode to 1 GiB (and its texture take as much again, where an
+// allocation failure aborts): an image over maxImageBytes is rejected from its header, before decoding.
+TEST(ImageDecode, RejectsImagesTooLargeFromTheHeader) {
+    static_assert(maxImageBytes == std::size_t{8192} * 8192 * 4);
+    for (const auto [w, h] : {std::pair{16384u, 16384u}, std::pair{8192u, 8193u}, std::pair{16384u, 4097u}}) {
+        const std::string png = pngHeader(w, h);
+        const DecodedImage image = decodeImage(std::as_bytes(std::span{png.data(), png.size()}));
+        EXPECT_FALSE(image.ok()) << w << " x " << h;
+        EXPECT_EQ(image.error, std::format("too large ({} x {} pixels; at most 256 MiB of pixels are decoded)", w, h));
+        EXPECT_TRUE(image.rgba.empty());
+        EXPECT_EQ(image.width, 0);
+    }
+    // At the limit the decoder runs (and fails here: the file has no pixel data).
+    const std::string atLimit = pngHeader(8192, 8192);
+    const DecodedImage image = decodeImage(std::as_bytes(std::span{atLimit.data(), atLimit.size()}));
+    EXPECT_FALSE(image.ok());
+    EXPECT_TRUE(image.error.starts_with("not a PNG or JPEG image")) << image.error;
 }
 
 // ------------------------------------------------------------------ sizes and fill modes
@@ -217,9 +259,17 @@ TEST(ImageCache, CachesFailuresWithAClearMessage) {
     EXPECT_NE(broken.error().find("image 'app:/broken.png': not a PNG or JPEG image"), std::string::npos)
         << broken.error();
 
+    dir.write("huge.png", pngHeader(16384, 16384));
+    const auto& huge = cache.get("app:/huge.png");
+    EXPECT_FALSE(huge.ready());
+    EXPECT_EQ(huge.error(), "image 'app:/huge.png': too large (16384 x 16384 pixels; at most 256 MiB of pixels are "
+                            "decoded)");
+    EXPECT_EQ(cache.bytes(), 0u);
+
     cache.get("app:/missing.png");
     cache.get("app:/broken.png");
-    EXPECT_EQ(cache.decodeCount(), 2u) << "a failure is cached too";
+    cache.get("app:/huge.png");
+    EXPECT_EQ(cache.decodeCount(), 3u) << "a failure is cached too";
     EXPECT_EQ(cache.refresh(), 0u) << "nothing changed";
 }
 

@@ -13,9 +13,11 @@ struct Oklch {
     float h = 0; ///< hue in degrees
 };
 
+/// The components are clamped to [0, 1] first (clampColor), so the result is finite for any input.
 Oklch toOklch(Color color);
 
-/// Converts back to sRGB, reducing chroma until the color fits the gamut.
+/// Converts back to sRGB, reducing chroma until the color fits the gamut. A non-finite lightness, chroma or hue (or a
+/// negative chroma) reads as 0, so the result is always a valid color.
 Color fromOklch(Oklch o, float alpha = 1.0f);
 
 /// Material "tone" (CIE L*, 0..100) -> OKLab lightness, exact for greys.
@@ -58,6 +60,8 @@ bool inGamut(Linear c) {
 } // namespace
 
 Oklch toOklch(Color color) {
+    // Unclamped, a huge component overflows pow() in toLinear, and inf - inf makes the lightness NaN.
+    color = clampColor(color);
     float r = toLinear(color.r), g = toLinear(color.g), b = toLinear(color.b);
     float l = std::cbrt(0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b);
     float m = std::cbrt(0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b);
@@ -71,7 +75,9 @@ Oklch toOklch(Color color) {
 }
 
 Color fromOklch(Oklch o, float alpha) {
-    o.l = std::clamp(o.l, 0.0f, 1.0f);
+    o.l = clampUnit(o.l);
+    if (!std::isfinite(o.c) || o.c < 0.0f) o.c = 0.0f;
+    if (!std::isfinite(o.h)) o.h = 0.0f;
     Linear lin = oklchToLinear(o);
     if (!inGamut(lin)) {
         float lo = 0, hi = o.c;
@@ -82,7 +88,7 @@ Color fromOklch(Oklch o, float alpha) {
         }
         lin = oklchToLinear({o.l, lo, o.h});
     }
-    auto g = [](float x) { return std::clamp(toGamma(std::clamp(x, 0.0f, 1.0f)), 0.0f, 1.0f); };
+    auto g = [](float x) { return clampUnit(toGamma(clampUnit(x))); };
     return {g(lin.r), g(lin.g), g(lin.b), alpha};
 }
 

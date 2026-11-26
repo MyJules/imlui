@@ -362,7 +362,8 @@ std::optional<Color> Node::colorFromTable(lua::State* state, int idx) {
         lua::pop(state);
         if (!number && i < 3) return std::nullopt; // r, g and b are required; alpha defaults to 1
     }
-    return Color{c[0], c[1], c[2], c[3]};
+    // Clamped to 0..1 (the documented range): an infinity or NaN from a script never reaches the color math or ImGui.
+    return clampColor(Color{c[0], c[1], c[2], c[3]});
 }
 
 void Node::resolveBind(int idx) const {
