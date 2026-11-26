@@ -529,7 +529,7 @@ Text { text = function() return s.status end }
 | `await(f) -> values...` | Only inside an async function (raises otherwise, also in a plain coroutine inside one). Waits until future `f` settles and returns its values, or raises its error: a Lua error, catchable with `pcall(await, f)`, `"cancelled"` for a cancelled future. A value that isn't a future is returned as it is. |
 | `sleep(ms) -> future` | Done after `ms` milliseconds, a timer like `setTimeout` (same check on `ms`). Cancelling it clears the timer. |
 | `all({f1, f2, ...}) -> future` | Done with the list of their values (the first value of each, in order, `n` = the count) once all are; failed or cancelled like the first input that fails or is cancelled. Values that aren't futures are taken as they are. Cancelling it cancels the inputs. |
-| `future() -> f` | A pending future the script settles: `f:resolve(values...)`, `f:reject(err)` (each returns whether it settled it; only futures made by `future()` take them). |
+| `future() -> f` | A pending future the script settles: `f:resolve(values...)`, `f:reject(err)` (each returns whether it settled it; only futures made by `future()` take them); `f:report(p)` reports its progress. |
 
 A future `f`:
 
@@ -538,9 +538,12 @@ A future `f`:
 | `f.state` | `"pending"`, `"done"`, `"failed"` or `"cancelled"`. Bindings read it like any field; settling a future requests a frame, so they update. |
 | `f.value` | The first value, once done. |
 | `f.error` | The error, once failed; `"cancelled"` once cancelled. |
-| `f:next(onValue, onError) -> future` | When `f` is done, `onValue(values...)`; when it failed or was cancelled, `onError(err)`. The new future settles with what the handler returns (a future it returns is followed) or fails with what it raises. A missing handler passes the outcome on. Handlers run in the scope `next` was called in. |
-| `f:catch(onError) -> future` | `f:next(nil, onError)`. |
-| `f:cancel() -> boolean` | Settles a pending `f` as cancelled and stops what it waits on: the C++ work behind it (its stop token), a `sleep`'s timer, an async function (it never resumes; its to-be-closed variables are closed; the future it awaits is cancelled), `all`'s inputs. A future from `next` doesn't cancel its source. `false` when `f` already settled. |
+| `f.progress` | The last progress reported while pending (a number, by convention 0..1), or `nil` before the first. Reporting requests a frame, so bindings update. A C++ job's reports are coalesced: at most one per loop iteration, the latest. |
+| `f:next(onValue, onError) -> future` | When `f` is done, `onValue(values...)`; when it failed, `onError(err)`. The new future settles with what the handler returns (a future it returns is followed) or fails with what it raises. A missing handler passes the outcome on. When `f` is cancelled, the new future is cancelled (no handler runs). Handlers run in the scope `next` was called in. |
+| `f:catch(onError) -> future` | `f:next(nil, onError)`. It doesn't see cancellation: that isn't an error. |
+| `f:cancel() -> boolean` | Settles a pending `f` as cancelled, which cancels the futures `next`/`catch` made from it, and stops what it waits on: the C++ work behind it (its stop token), a `sleep`'s timer, an async function (it never resumes; its to-be-closed variables are closed). What it waits on as a consumer (`next`'s source or the future its handler returned, what an async function awaits, `all`'s inputs) is **released**: cancelled when nothing else consumes it. `false` when `f` already settled. |
+| `f:onProgress(fn) -> f` | Calls `fn(progress)` at each progress reported from now until `f` settles (`f.progress` is the current one). Returns `f`, to chain: `backend:fetch(url):onProgress(show):next(use)`. `fn` runs in the scope `onProgress` was called in. Progress isn't forwarded through `next`. |
+| `f:report(p) -> boolean` | Only for a future made by `future()`: reports progress `p` (a number). `false` once settled. |
 
 ```lua
 backend:fetch(url)
@@ -561,8 +564,16 @@ Text { text = function() return loading.state == "pending" and "Loading..." or "
   attached by then: `unhandled future rejection: <error>` (with the traceback of a Lua error). So an async function
   used as a handler (`onClicked = async(...)`) reports its errors like a plain handler. Cancelled futures are never
   reported.
+- **Cancellation.** Cancelling flows down a chain and, where nothing else waits, up: a cancelled future cancels what
+  `next`/`catch` made from it, makes `all` over it cancelled, and raises `"cancelled"` in an `await` on it (catchable
+  with `pcall`). Cancelling a future that consumes others releases them: a source with one consumer (a `next`, an
+  `await`, an `all`, a C++ method that took it) is cancelled with it; with two, once both let go. A C++ method that
+  took the future and cancels it cancels it outright. Cancelled futures are never reported.
+- **Futures as C++ arguments.** A method declared with an `imlui::Future<T>` parameter takes any future (`lab:after(f)`);
+  it settles from this one (its first value converted to `T`; one that doesn't convert fails the C++ side with
+  the field path). Passing a future counts as handling its rejection. See [Extending](extending.md#lua-futures-as-arguments).
 - **Hot reload.** Futures and coroutines belong to the Lua state and die with it. A C++ future that settles after a
-  reload settles only on the C++ side.
+  reload settles only on the C++ side; a C++ future that was waiting on a Lua future is cancelled.
 - `await` yields, so it works where a coroutine can yield: through `pcall`, `xpcall` and metamethods, not inside a
   C function such as a `table.sort` comparator (that raises `attempt to yield across a C-call boundary`). An async
   function's body must not call `coroutine.yield` itself (its future fails).
