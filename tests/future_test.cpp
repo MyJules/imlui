@@ -34,7 +34,16 @@ struct Report {
     int pages = 0;
 };
 
+/// A value whose conversion to Lua throws.
+struct Explosive {};
+
 } // namespace
+
+template <>
+struct imlui::LuaConvert<Explosive> {
+    static constexpr std::string_view name = "explosive";
+    static void push(lua::State*, const Explosive&) { throw std::runtime_error("cannot push an explosive"); }
+};
 
 template <>
 struct imlui::LuaFields<Report> {
@@ -89,6 +98,7 @@ public:
             .method("plusOne", &Backend::plusOne)
             .method("same", &Backend::same)
             .method("download", &Backend::download)
+            .method("explode", &Backend::explode)
             .nonVisual();
     }
     void render(Frame&) override {}
@@ -137,6 +147,10 @@ public:
     }
     /// The future it got.
     Future<int> same(Future<int> f) { return f; }
+    /// A future whose value doesn't convert to Lua.
+    Future<Explosive> explode() {
+        return runAsync([] { return Explosive{}; });
+    }
     /// Work that reports progress 100 times, waits for the test, and returns.
     Future<int> download() {
         return runAsync([](std::stop_token, Progress progress) {
@@ -777,6 +791,56 @@ TEST_F(LuaFutureTest, APendingPropertyBackedByAMemberFutureReadsTheSettledState)
     ASSERT_TRUE(runUntil(posts, "second.state == 'done'"));
     EXPECT_EQ(m_h->run("assert(filler.filling == false and seen[#seen] == 'false/false')"), "");
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Cancelling a C++ future from Lua cancels the C++ side first: its handlers (here notifyWhenSettled's change signal)
+// have run, and the property reads the settled state, by the time an awaiter resumes.
+TEST_F(LuaFutureTest, CancellingFromLuaRunsTheCxxHandlersBeforeTheAwaiters) {
+    EXPECT_EQ(m_h->run(R"(
+        seen = {}
+        filler = Filler { onFillingChanged = function(self, v) seen[#seen + 1] = tostring(v) end }
+        local fut = filler:fill(1)
+        async(function()
+            local ok, err = pcall(await, fut)
+            after = { ok = ok, err = err, filling = filler.filling, seen = table.concat(seen, " ") }
+        end)()
+        fut:next(nil, function() end) -- a derived future, cancelled with it
+        assert(fut:cancel() == true and fut:cancel() == false)
+        assert(fut.state == "cancelled")
+        assert(after.ok == false and after.err == "cancelled", tostring(after.err))
+        assert(after.filling == false, "the awaiter saw the C++ future pending")
+        assert(after.seen == "true false", "the C++ handler ran after the awaiter: " .. after.seen)
+        assert(seen[3] == nil, "settled twice")
+    )"),
+              "");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A C++ future whose value doesn't convert to Lua (its LuaConvert throws) fails the Lua future with the error, once:
+// in the awaiter, or as an unhandled rejection.
+TEST_F(LuaFutureTest, AValueThatFailsToPushRejectsTheLuaFuture) {
+    test::PostWaiter posts;
+    ASSERT_EQ(m_h->run(R"(
+        async(function()
+            local ok, err = pcall(await, w:explode())
+            caught = { ok = ok, err = err }
+        end)()
+        lone = w:explode()
+    )"),
+              "");
+    ASSERT_TRUE(runUntil(posts, "caught ~= nil and lone.state ~= 'pending'"));
+    EXPECT_EQ(m_h->run(R"(
+        assert(caught.ok == false and caught.err:find("cannot push an explosive", 1, true), tostring(caught.err))
+        assert(lone.state == "failed" and lone.error:find("cannot push an explosive", 1, true), tostring(lone.error))
+    )"),
+              "");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front(); // reported only as unhandled, a frame later
+    m_h->renderFrame("root");
+    int reports = 0;
+    for (const auto& e : luaui::errors())
+        if (e.find("cannot push an explosive") != std::string::npos) ++reports;
+    EXPECT_EQ(reports, 1);
+    EXPECT_TRUE(hasError("unhandled future rejection"));
 }
 
 // An adopted Lua future: its settling (synchronous, inside Lua's) notifies the property.

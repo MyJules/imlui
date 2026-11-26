@@ -1,6 +1,7 @@
 // Element id scopes and parent links (src/resources/imlui.lua), with the built-in types registered and rendered
 // through the headless frame harness: per-instance `ids` of components and delegates, app-level ids as free names,
-// weak ids, duplicate reports, and the read-only, weak `parent` of every element.
+// weak ids, duplicate reports, and the read-only, weak `parent` of every element. App-level callbacks triggered from a
+// component stay at app level, and an async function keeps the scopes it enters to itself.
 #include <gtest/gtest.h>
 
 import std;
@@ -431,6 +432,86 @@ TEST_F(ElementScopesTest, AHandlerThatRaisesLeavesTheScopeStackIntact) {
         assert(failingIds.half == keepHalf)
         after = Text { id = "afterHandler" }
         assert(ui.ids.afterHandler == after, "the scope of the failed handler stayed active"))");
+}
+
+// What was set up at app level runs at app level, also when a component's handler triggers it: a watcher, a future's
+// next handler and an async function resumed by a future the handler resolves.
+TEST_F(ElementScopesTest, AppLevelCallbacksTriggeredFromAComponentRunAtAppLevel) {
+    run(R"(
+        s = state { n = 0 }
+        keep = {}
+        appGate = future()
+        ui.watch(s, "n", function() keep.watch = Text { id = "fromAppWatch" } end)
+        appGate:next(function() keep.next = Text { id = "fromAppNext" } end)
+        async(function()
+            await(appGate)
+            keep.task = Text { id = "fromAppTask" }
+        end)()
+        Bumper = component(function(props, ids)
+            bumperIds = ids
+            return Button { "Bump", onClicked = function()
+                s.n = s.n + 1
+                appGate:resolve()
+                keep.own = Text { id = "fromHandler" }
+            end }
+        end)
+        root = Bumper {})");
+    m_h.renderFrame("root");
+    m_h.click("root", 20, 20);
+    run(R"(
+        for _, k in ipairs { "watch", "next", "task" } do
+            assert(keep[k] ~= nil, k .. " didn't run")
+        end
+        assert(ui.ids.fromAppWatch == keep.watch and bumperIds.fromAppWatch == nil, "the watcher ran in the component")
+        assert(ui.ids.fromAppNext == keep.next and bumperIds.fromAppNext == nil, "next ran in the component")
+        assert(ui.ids.fromAppTask == keep.task and bumperIds.fromAppTask == nil, "the task ran in the component")
+        assert(bumperIds.fromHandler == keep.own and ui.ids.fromHandler == nil, "the handler lost its scope"))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
+// A component whose builder awaits keeps its scope to the async function: other code doesn't run in it while the
+// function waits, the builder has it again when it resumes, and cancelling the function pops it from the function's
+// stack, not from the canceller's.
+TEST_F(ElementScopesTest, AnAwaitingComponentBuilderKeepsItsScopeToItself) {
+    run(R"(
+        gate = future()
+        Slow = component(function(props, ids)
+            props.out.ids = ids
+            local _ <close> = setmetatable({}, { __close = function() props.out.closed = true end })
+            await(props.gate)
+            return Column { Text { id = "late" } }
+        end)
+        first = {}
+        task = async(function() return Slow { out = first, gate = gate } end)()
+        assert(task.state == "pending")
+        during = Text { id = "duringWait" }
+        assert(ui.ids.duringWait == during and first.ids.duringWait == nil, "the waiting builder's scope stayed active")
+        gate:resolve()
+        assert(task.state == "done", task.state)
+        assert(first.ids.late ~= nil and ui.ids.late == nil, "the builder resumed outside its scope")
+        afterResume = Text { id = "afterResume" }
+        assert(ui.ids.afterResume == afterResume and first.ids.afterResume == nil))");
+
+    run(R"(
+        second = {}
+        stuck = async(function() return Slow { out = second, gate = future() } end)()
+        Canceller = component(function(props, ids)
+            cancellerIds = ids
+            return Button { "Cancel", onClicked = function()
+                assert(stuck:cancel())
+                keep = Text { id = "afterCancel" }
+            end }
+        end)
+        root = Canceller {})");
+    m_h.renderFrame("root");
+    m_h.click("root", 20, 20);
+    run(R"(
+        assert(stuck.state == "cancelled" and second.closed == true)
+        assert(cancellerIds.afterCancel == keep and ui.ids.afterCancel == nil, "the cancel popped the handler's scope")
+        assert(second.ids.afterCancel == nil)
+        afterAll = Text { id = "afterAll" }
+        assert(ui.ids.afterAll == afterAll and cancellerIds.afterAll == nil and second.ids.afterAll == nil))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
 TEST_F(ElementScopesTest, ParentLinksKeepOtherFieldsAndMethodsWorking) {
