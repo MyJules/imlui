@@ -2,7 +2,9 @@
 // Async section of src/resources/imlui.lua): async/await, next/catch, cancel, sleep, all, future(), unhandled
 // rejections, and what happens when the object or the Lua state dies before a future settles. Progress, Lua futures
 // read back into C++ (method arguments), and cancellation through next/catch chains and all. runAsyncThen(work, then):
-// the main-thread step, its value, errors, cancels and progress.
+// the main-thread step, its value, errors, cancels and progress, and the settlement right after it. whenSettled() and
+// notifyWhenSettled(): once after settling, never after the owner died or cancelHandles(), a `pending` property backed
+// by a member future, combinator results and Lua-adopted futures.
 #include <gtest/gtest.h>
 
 import std;
@@ -12,6 +14,7 @@ import imlui.lua.errors;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.future;
+import imlui.types.future_combinators;
 import imlui.types.lua_convert;
 import imlui.types.progress;
 import imlui.types.script_object;
@@ -149,6 +152,104 @@ private:
     std::pair<Promise<int>, Future<int>> m_kept = makePromise<int>();
 };
 
+/// Released by Filler::fill's work before it returns (the test lets it).
+std::counting_semaphore<> fillGo{0};
+
+/// An element with `pending` properties backed by member futures, notified through notifyWhenSettled().
+class Filler final : public Element {
+public:
+    static void declare(TypeBuilder<Filler>& type) {
+        type.property("filling", &Filler::filling)
+            .property("watching", &Filler::watching)
+            .method("fill", &Filler::fill)
+            .method("watch", &Filler::watch)
+            .nonVisual();
+    }
+    void render(Frame&) override {}
+
+    [[nodiscard]] bool filling() const { return m_fill.pending(); }
+    [[nodiscard]] bool watching() const { return m_watched.pending(); }
+    /// Ten times n, through runAsyncThen; the work waits for `fillGo`.
+    Future<int> fill(int n) {
+        m_fill.cancel();
+        m_fill = runAsyncThen(
+            [n] {
+                fillGo.acquire();
+                return n;
+            },
+            [this](int rows) {
+                m_rows = rows;
+                return rows * 10;
+            });
+        notify("filling");
+        notifyWhenSettled(m_fill, "filling");
+        return m_fill;
+    }
+    /// Watches a Lua future.
+    void watch(Future<int> f) {
+        m_watched = std::move(f);
+        notify("watching");
+        notifyWhenSettled(m_watched, "watching");
+    }
+
+private:
+    Future<int> m_fill;
+    Future<int> m_watched;
+    int m_rows = 0;
+};
+
+/// whenSettled() calls made after their Holder died: each would also touch the dead Holder (ASan).
+std::atomic<int> callsAfterDeath = 0;
+
+/// A plain object with member futures it reacts to through whenSettled().
+class Holder final : public ScriptObject {
+public:
+    /// With `cancelInDestructor`, the destructor cancels the member futures (after cancelHandles()).
+    explicit Holder(bool cancelInDestructor = false) : m_cancelInDestructor{cancelInDestructor} {}
+    ~Holder() override {
+        m_dying = true;
+        if (!m_cancelInDestructor) return;
+        cancelHandles();
+        m_watched.cancel();
+        m_work.cancel();
+    }
+    Holder(const Holder&) = delete;
+    Holder& operator=(const Holder&) = delete;
+    Holder(Holder&&) = delete;
+    Holder& operator=(Holder&&) = delete;
+
+    void watch(Future<int> f) {
+        m_watched = std::move(f);
+        whenSettled(m_watched, [this] { react(); });
+    }
+    /// A runAsyncThen future whose work waits for `fillGo`.
+    void work() {
+        m_work = runAsyncThen(
+            [] {
+                fillGo.acquire();
+                return 1;
+            },
+            [this](int n) {
+                react();
+                return n;
+            });
+        whenSettled(m_work, [this] { react(); });
+    }
+    [[nodiscard]] int calls() const { return m_calls; }
+
+private:
+    void react() {
+        if (m_dying) ++callsAfterDeath;
+        ++m_calls;
+    }
+
+    bool m_cancelInDestructor = false;
+    bool m_dying = false;
+    int m_calls = 0;
+    Future<int> m_watched;
+    Future<int> m_work;
+};
+
 class FutureTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -164,9 +265,13 @@ protected:
         }
         while (downloadGo.try_acquire()) {
         }
+        while (fillGo.try_acquire()) {
+        }
+        callsAfterDeath = 0;
     }
     void TearDown() override {
         downloadGo.release(); // a download still waiting returns
+        fillGo.release(8);    // so does a fill
         shutdownBackground(std::chrono::seconds{10});
         asked.reset();
         askedFuture.reset();
@@ -184,6 +289,7 @@ protected:
         FutureTest::SetUp();
         m_h.emplace(test::HeadlessFrame::Options{.builtins = true});
         m_h->registerType<Backend>("Backend");
+        m_h->registerType<Filler>("Filler");
         ASSERT_EQ(m_h->run("root = Column {}; w = Backend {}"), "");
     }
     void TearDown() override {
@@ -472,7 +578,238 @@ TEST_F(FutureTest, RunAsyncThenWorkReportsProgress) {
     EXPECT_EQ(progressAtThen, 1.0); // reports made by the work are applied before its main-thread step
 }
 
+// The future settles inside the main-thread step that ran `then`: no later post runs first, and a cancel after `then`
+// finds it settled. Inside `then` it is still pending.
+TEST_F(FutureTest, RunAsyncThenSettlesRightAfterThen) {
+    test::PostWaiter posts;
+    Owner owner;
+    bool pendingInThen = false;
+    bool laterPostRan = false;
+    std::optional<bool> laterPostRanAtSettle;
+    Future<int> future;
+    future = owner.runAsyncThen([] { return 2; },
+                                [&](int n) {
+                                    pendingInThen = future.pending();
+                                    post([&laterPostRan] { laterPostRan = true; });
+                                    return n + 1;
+                                });
+    future.onSettled([&](const Future<int>&) { laterPostRanAtSettle = laterPostRan; });
+    ASSERT_TRUE(posts.runUntil([&] { return !future.pending(); }));
+    EXPECT_TRUE(pendingInThen);
+    EXPECT_EQ(laterPostRanAtSettle, false); // settled before anything posted after `then`
+    EXPECT_EQ(*future.value(), 3);
+    EXPECT_FALSE(future.cancel());
+
+    // A cancel from inside `then` wins: what `then` returns is dropped.
+    Future<int> cancelled;
+    cancelled = owner.runAsyncThen([] { return 1; },
+                                   [&cancelled](int n) {
+                                       EXPECT_TRUE(cancelled.cancel());
+                                       return n;
+                                   });
+    ASSERT_TRUE(posts.runUntil([&] { return !cancelled.pending(); }));
+    EXPECT_EQ(cancelled.status(), FutureStatus::Cancelled);
+    Future<void> voidCancelled;
+    voidCancelled = owner.runAsyncThen([] {}, [&voidCancelled] { voidCancelled.cancel(); });
+    ASSERT_TRUE(posts.runUntil([&] { return !voidCancelled.pending(); }));
+    EXPECT_EQ(voidCancelled.status(), FutureStatus::Cancelled);
+}
+
+// ---- whenSettled
+
+TEST_F(FutureTest, WhenSettledRunsOnceAfterTheFutureSettles) {
+    Owner owner;
+    auto [promise, future] = makePromise<int>();
+    int calls = 0;
+    std::optional<int> value;
+    owner.whenSettled(future, [&](const Future<int>& f) {
+        ++calls;
+        value = *f.value();
+    });
+    owner.whenSettled(future, [&calls, p = std::make_unique<int>(1)] { calls += *p; }); // fn(), move-only
+    EXPECT_EQ(calls, 0);
+    promise.resolve(4);
+    promise.resolve(5);
+    runPosted();
+    EXPECT_EQ(calls, 2);
+    EXPECT_EQ(value, 4);
+    runPosted();
+    EXPECT_EQ(calls, 2);
+
+    // Settled already, or an empty future (cancelled): at once.
+    owner.whenSettled(future, [&calls] { ++calls; });
+    EXPECT_EQ(calls, 3);
+    owner.whenSettled(Future<int>{}, [&calls](const Future<int>& f) {
+        if (f.status() == FutureStatus::Cancelled) ++calls;
+    });
+    EXPECT_EQ(calls, 4);
+    // An exception is reported, like onSettled's.
+    owner.whenSettled(future, [] { throw std::runtime_error("bad handler"); });
+    EXPECT_TRUE(hasError("bad handler"));
+}
+
+TEST_F(FutureTest, WhenSettledIsDroppedByCancelHandlesAndDeath) {
+    auto [promise, future] = makePromise<int>();
+    int calls = 0;
+    auto captured = std::make_shared<int>(0);
+    const std::weak_ptr<int> watch = captured;
+    Owner cancelled;
+    cancelled.whenSettled(future, [&calls, held = std::move(captured)] { ++calls; });
+    EXPECT_FALSE(watch.expired());
+    cancelled.cancelHandles();
+    EXPECT_TRUE(watch.expired()); // destroyed with what it captured, before the future settles
+
+    auto dying = std::make_unique<Owner>();
+    auto captured2 = std::make_shared<int>(0);
+    const std::weak_ptr<int> watch2 = captured2;
+    dying->whenSettled(future, [&calls, held = std::move(captured2)] { ++calls; });
+    dying.reset();
+    EXPECT_TRUE(watch2.expired());
+
+    // After cancelHandles(): nothing, not even for a settled future.
+    cancelled.whenSettled(Future<int>{}, [&calls] { ++calls; });
+    promise.resolve(1);
+    runPosted();
+    EXPECT_EQ(future.status(), FutureStatus::Done);
+    EXPECT_EQ(calls, 0);
+
+    // `fn` may kill its own object (cancelHandles) while it runs.
+    auto [promise2, future2] = makePromise<int>();
+    Owner owner;
+    owner.whenSettled(future2, [&owner, &calls, keep = std::make_shared<int>(2)] {
+        owner.cancelHandles();
+        calls += *keep;
+    });
+    promise2.resolve(1);
+    runPosted();
+    EXPECT_EQ(calls, 2);
+}
+
+// Destroying the owner while its member futures are pending is safe: nothing calls back into it, whether the
+// destructor cancels them (after cancelHandles()) or leaves that to the owner's death. ASan checks the "never".
+TEST_F(FutureTest, DestroyingTheOwnerWithPendingMemberFuturesIsSafe) {
+    test::PostWaiter posts;
+    for (const bool cancelInDestructor : {false, true}) {
+        SCOPED_TRACE(cancelInDestructor ? "the destructor cancels" : "the death cancels");
+        auto [promise, future] = makePromise<int>();
+        auto holder = std::make_unique<Holder>(cancelInDestructor);
+        holder->watch(future);
+        holder->work();
+        holder.reset();
+        promise.resolve(1);
+        fillGo.release(); // the work returns: its `then` must not run
+        shutdownBackground(std::chrono::seconds{10});
+        runPosted();
+        runPosted();
+        EXPECT_EQ(future.status(), cancelInDestructor ? FutureStatus::Cancelled : FutureStatus::Done);
+        EXPECT_EQ(callsAfterDeath, 0);
+    }
+    // Alive, both run: `then`, then the handler, in one step.
+    Holder holder;
+    holder.work();
+    fillGo.release();
+    ASSERT_TRUE(posts.runUntil([&] { return holder.calls() == 2; }));
+}
+
+TEST_F(FutureTest, WhenSettledWorksWithCombinatorResults) {
+    Owner owner;
+    auto [p1, f1] = makePromise<int>();
+    auto [p2, f2] = makePromise<int>();
+    int calls = 0;
+    std::vector<int> values;
+    owner.whenSettled(all(std::vector{f1, f2}), [&](const Future<std::vector<int>>& f) {
+        ++calls;
+        values = *f.value();
+    });
+    p1.resolve(1);
+    runPosted();
+    EXPECT_EQ(calls, 0);
+    p2.resolve(2);
+    runPosted();
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(values, (std::vector{1, 2}));
+
+    // The owner dies before the race is decided: never called.
+    auto dying = std::make_unique<Owner>();
+    auto [p3, f3] = makePromise<int>();
+    auto [p4, f4] = makePromise<int>();
+    const Future<int> raced = race(f3, f4);
+    dying->whenSettled(raced, [&calls] { ++calls; });
+    dying.reset();
+    p4.resolve(4);
+    runPosted();
+    EXPECT_EQ(*raced.value(), 4);
+    EXPECT_EQ(f3.status(), FutureStatus::Cancelled);
+    EXPECT_EQ(calls, 1);
+}
+
 // ---- Lua
+
+// A `pending` property backed by a member future: notify() at the start and notifyWhenSettled() write true, then
+// false, back to Lua, and the change handler and an awaiter both read the settled state.
+TEST_F(LuaFutureTest, APendingPropertyBackedByAMemberFutureReadsTheSettledState) {
+    test::PostWaiter posts;
+    ASSERT_EQ(m_h->run(R"(
+        seen = {}
+        filler = Filler { onFillingChanged = function(self, v)
+            seen[#seen + 1] = tostring(v) .. "/" .. tostring(self.filling)
+        end }
+        async(function()
+            local rows = await(filler:fill(3))
+            after = { rows = rows, filling = filler.filling }
+        end)()
+        assert(filler.filling == true and #seen == 1 and seen[1] == "true/true")
+    )"),
+              "");
+    fillGo.release();
+    ASSERT_TRUE(runUntil(posts, "after ~= nil"));
+    EXPECT_EQ(m_h->run(R"(
+        assert(after.rows == 30 and after.filling == false)
+        assert(#seen == 2 and seen[2] == "false/false", table.concat(seen, " "))
+    )"),
+              "");
+
+    // A fill that replaces a running one: the first is cancelled, the new one is pending.
+    ASSERT_EQ(m_h->run("seen = {}; first = filler:fill(1); second = filler:fill(2)"), "");
+    EXPECT_EQ(m_h->run(R"(assert(first.state == "cancelled" and filler.filling == true, table.concat(seen, " ")))"),
+              "");
+    fillGo.release(2);
+    ASSERT_TRUE(runUntil(posts, "second.state == 'done'"));
+    EXPECT_EQ(m_h->run("assert(filler.filling == false and seen[#seen] == 'false/false')"), "");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// An adopted Lua future: its settling (synchronous, inside Lua's) notifies the property.
+TEST_F(LuaFutureTest, NotifyWhenSettledWorksWithALuaAdoptedFuture) {
+    EXPECT_EQ(m_h->run(R"(
+        seen = {}
+        watcher = Filler { onWatchingChanged = function(self, v) seen[#seen + 1] = v end }
+        local g = future()
+        watcher:watch(g)
+        assert(watcher.watching == true and seen[1] == true)
+        g:resolve(1)
+        assert(watcher.watching == false and seen[2] == false and #seen == 2)
+        local h = future()
+        watcher:watch(h)
+        h:cancel()
+        assert(watcher.watching == false and #seen == 4)
+    )"),
+              "");
+}
+
+// The element is collected while its fill is pending: nothing calls back into it.
+TEST_F(LuaFutureTest, AnElementCollectedWithAPendingFillIsSafe) {
+    test::PostWaiter posts;
+    ASSERT_EQ(m_h->run(R"(
+        local function start() return Filler {}:fill(1) end
+        pendingFill = start()
+    )"),
+              "");
+    ASSERT_EQ(m_h->run("collectgarbage(); collectgarbage()"), "");
+    fillGo.release();
+    ASSERT_TRUE(runUntil(posts, "pendingFill.state == 'cancelled'"));
+    EXPECT_TRUE(luaui::errors().empty());
+}
 
 TEST_F(LuaFutureTest, AwaitAValueAStructAndNothing) {
     test::PostWaiter posts;

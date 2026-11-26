@@ -786,7 +786,9 @@ Plot { series = { label = "cpu", points = { { x = 0, y = 1 }, { x = 1, y = 3 } }
   "partial" form of a class to tell the two apart). A `std::optional` field is optional either way. `static
   constexpr bool outputOnly = true;` in `LuaFields<T>` makes the fields required wherever the struct is used (and
   counts the structs inside as output too): for one that reaches Lua some way the generator can't see, or one whose
-  input use always has every field.
+  input use always has every field. A struct a script can also hand in, even indirectly (a `Future<T>` argument
+  takes a Lua future the script resolves with a table it built), keeps optional fields for that reason: don't mark
+  it `outputOnly`, or the definitions would promise fields a script-built value may leave out.
 - **Missing fields.** Reading starts from `T{}`. A missing (`nil`) field keeps its default member value, like an
   element property that is `nil`; a missing `std::optional` field reads as `std::nullopt`. A field that is present
   but doesn't convert fails the check, which rejects the whole value like any other mismatch. Keys that aren't
@@ -1073,9 +1075,10 @@ imlui::Future<FillReport> Backend::fill(std::string path) {
         },
         [this, start = Clock::now()](std::vector<LogLine> rows) { // the main thread, while `this` lives
             m_logs.replace(std::move(rows));
-            notify("filling");
             return FillReport{static_cast<int>(m_logs.size()), msSince(start)};
         });
+    notify("filling");                   // `filling` is m_fill.pending(): true now
+    notifyWhenSettled(m_fill, "filling"); // false once it settles, whichever way
     return m_fill;
 }
 ```
@@ -1085,7 +1088,9 @@ local report = await(backend:fill("app.log")) -- a FillReport; f.progress meanwh
 ```
 
 The work's token stops when the future is cancelled (`fut:cancel()`) or `this` dies, and `then` then never runs;
-`Progress` reports and errors behave as with `runAsync(work)`; what `then` throws fails the future.
+`Progress` reports and errors behave as with `runAsync(work)`; what `then` throws fails the future. The future
+settles right after `then` returns; inside `then` it is still pending, so a property defined by it is notified
+from [`notifyWhenSettled`](#a-pending-property-backed-by-a-member-future), not from `then`.
 
 **Lifetime.** Nothing in C++ points into a Lua state, and the Lua value doesn't keep a model alive (unless it was
 pushed from a `std::shared_ptr`): it tracks the model's life through its [handle](#lower-level-handles-and-posts).
@@ -1123,7 +1128,9 @@ That object must outlive `engine.run()`. Declaring it before the `Engine` in `ma
 Don't keep `Element*` pointers to instances in other C++ objects: Lua decides when they die. Keep shared state
 in a singleton (or a [list model](#list-models) the singleton owns) and let elements read it through bindings. Background work that
 reports back to an element goes through its `runAsync` or a `Live<T>` (see
-[background work owned by an element](#background-work-owned-by-an-element)).
+[background work owned by an element](#background-work-owned-by-an-element)). Code that reacts to a future settling
+uses the object's [`whenSettled`](#a-pending-property-backed-by-a-member-future), which never calls into an object
+that died.
 
 ## Testing elements
 
@@ -1408,7 +1415,7 @@ highest level down:
 | Tool | For |
 |---|---|
 | `runAsync(work, done[, fail]) -> Task` (on every `ScriptObject`) | Work an element or singleton starts: `work` on the background pool, its result to `done` on the main thread, only while the object lives. The [`Task`](#cancelling-a-job-task) cancels it. |
-| `runAsync(work) -> Future<R>`, `imlui::Promise<T>` (module `imlui.types.future`) | A result a method returns to Lua, which the script [awaits](lua-api.md#async), with optional [progress](#progress); a method can also take a Lua future as a `Future<T>` argument. [Combinators](#combinators): `delay`, `withTimeout`, `race`, `all`. |
+| `runAsync(work) -> Future<R>`, `imlui::Promise<T>` (module `imlui.types.future`) | A result a method returns to Lua, which the script [awaits](lua-api.md#async), with optional [progress](#progress); a method can also take a Lua future as a `Future<T>` argument. [Combinators](#combinators): `delay`, `withTimeout`, `race`, `all`. React to one settling with [`whenSettled` / `notifyWhenSettled`](#a-pending-property-backed-by-a-member-future). |
 | `imlui::Live<T>` (module `imlui.types.live`) | A property a worker updates at any rate (telemetry, progress, status text): the UI applies the latest value at most once per loop iteration. |
 | `VectorModel<T>::appender()` (module `imlui.types.vector_model`) | Rows a worker produces at any rate (a log tail): they reach the [list model](#list-models) in one batch per loop iteration. |
 | `ScriptObject::Handle`, `imlui::post`, `runInBackground` | The lower level both are built on: your own threads, objects the host keeps alive. |
@@ -1520,7 +1527,10 @@ and returns a future of its result (`Future<void>` for `void` work):
 - **the object's death cancels the future** (on the main thread, at the next loop iteration), and a result that
   arrives after that is dropped: the script's `await` raises `"cancelled"` (when its state is still alive), and
   nothing the object would have been needed for runs. Work stopped before it started is skipped, its future
-  cancelled.
+  cancelled;
+- it settles in the one function the worker posts with the result (the promise's `resolve`), at the next loop
+  iteration: there is no main-thread step before it, so nothing on the main thread sees the result while the
+  future is still pending.
 
 **`runAsyncThen(work, then) -> Future<R>`** puts a main-thread step between the work and the future: `work` runs
 exactly as for `runAsync(work)` (same signatures, token, `Progress`), then `then(result)` (`then()` for `void` work)
@@ -1531,8 +1541,12 @@ a decoded image) and the script only needs a summary. Details:
 - `then` may use `this`, edit models, `notify()` and `emit()`; it isn't called when `work` threw (the future fails with
   that message) or when the future was cancelled or the object died first (the future is cancelled);
 - what `then` throws fails the future with its message (not a script error);
-- the future settles at the loop iteration after `then` (promises post), so a cancel in that gap keeps `then`'s
-  effects and cancels the future;
+- **the future settles synchronously right after `then` returns**, in the same main-thread step: its `onSettled`
+  handlers, then the Lua future's awaiters, run before anything else does. Inside `then` it is still pending
+  (`pending()` is true there: notify a property defined by it with
+  [`notifyWhenSettled`](#a-pending-property-backed-by-a-member-future)). So a cancel, or the object's death, wins
+  only before `then` starts; once `then` ran, the future is done with its value (or failed with what it threw). A
+  cancel from inside `then` cancels it, and what `then` returns is dropped;
 - `work` and `then` may be move-only, and are destroyed on a worker or the main thread (no Lua references).
 
 **Promises.** A result that comes from elsewhere (a callback API, another thread, a dialog) goes through a promise:
@@ -1562,7 +1576,7 @@ arrives later is dropped. `runAsync` passes its object's `handle().stopToken()`.
 | `value()` | `const T*`: the value once done, else `nullptr` (not for `Future<void>`). |
 | `error()` | The message once failed; `"cancelled"` once cancelled. |
 | `cancel()` | Settles it as cancelled and stops the promise's token (an adopted Lua future is cancelled too). `false` once settled. |
-| `onSettled(fn)` | Calls `fn(const Future&)` once settled (now if it is). An exception it throws is reported. |
+| `onSettled(fn)` | Calls `fn(const Future&)` once settled (now if it is). An exception it throws is reported. A handler that uses an object goes through the object's [`whenSettled`](#a-pending-property-backed-by-a-member-future) instead, which runs it only while the object lives. |
 | `progress()` | `std::optional<double>`: the last progress applied, `nullopt` before the first. |
 | `onProgress(fn)` | Calls `fn(double)` at each progress applied from now until it settles. An exception it throws is reported. |
 
@@ -1586,7 +1600,9 @@ What code that combines futures (the [combinators](#combinators), your own) may 
 - **The first settlement wins.** A future settles once; whatever comes later (`resolve`, `reject`, `cancel`, the
   owner stopping) does nothing. A promise's `resolve()`/`reject()` from any thread may race a `cancel()`: the first
   to reach the main thread wins, and a value that lost is dropped (`resolve` only posts; `cancel` settles at once, so
-  a cancel made before the posted settlement ran wins). `cancel()` returning `true` means no value or error follows.
+  a cancel made before the posted settlement ran wins). A `runAsyncThen` future has no such gap: it settles in the
+  main-thread step that ran `then`, right after it, so a cancel wins only before `then` starts. `cancel()`
+  returning `true` means no value or error follows.
 - **Handlers run in order.** The `onSettled` handlers run once each, in the order they were added, right after the
   status changed (inside a handler the future is settled: `status()` says how, `cancel()` returns `false`), and
   before the Lua future hears, so Lua's awaiters and `next` handlers run after the C++ ones. A handler added to a
@@ -1714,6 +1730,64 @@ imlui::Future<Report> Lab::fetchWithin(imlui::Future<Report> f, int ms) {
 
 A script that wants a timeout or a race that keeps whatever values the futures have uses the prelude's
 [`timeout(f, ms)` and `race{...}`](lua-api.md#async), which need no C++.
+
+#### A `pending` property backed by a member future
+
+`Future::onSettled(fn)` knows nothing of the object that added it: a handler capturing `this` may run after the
+object died (the object's death cancels its `runAsync` futures at the next loop iteration, and runs their handlers
+then), or inside its destructor. Two `ScriptObject` members tie the handler to the object's life instead:
+
+| Member (main thread) | What |
+|---|---|
+| `whenSettled(f, fn)` | Calls `fn(const Future<T>&)` (or `fn()`) once `f` settles, any way, **only while the object lives**: at once when `f` is settled already (an empty future counts as cancelled), else synchronously inside its settlement. Once the object's handles die (`cancelHandles()`, which an element gets before `destroyed()`, or else `ScriptObject`'s destructor), `fn` is never called and is destroyed then, with what it captured; after that, `whenSettled` does nothing. `fn` may be move-only and may use `this`, `notify()` and `emit()`. An exception it throws is reported. |
+| `notifyWhenSettled(f, "name")` | `whenSettled(f, [this] { notify("name"); })`. |
+
+They work with every future: `runAsync`/`runAsyncThen` ones, promises, [combinator](#combinators) results and
+[adopted Lua futures](#lua-futures-as-arguments). The usual use is a read-only property that says whether a job runs,
+defined by the job's future, so it can't disagree with it:
+
+```cpp
+class Backend : public imlui::ScriptObject {
+public:
+    static void declare(imlui::TypeBuilder<Backend>& t) {
+        t.property("filling", &Backend::filling).method("fill", &Backend::fill);
+    }
+    [[nodiscard]] bool filling() const { return m_fill.pending(); }
+
+    imlui::Future<FillReport> fill(std::string path) {
+        m_fill.cancel(); // the previous fill: cancelled, and its notifyWhenSettled notifies (false)
+        m_fill = runAsyncThen([path](std::stop_token stop) { return readLogFile(path, stop); },
+                              [this](std::vector<LogLine> rows) {
+                                  m_logs.replace(std::move(rows));
+                                  return FillReport{static_cast<int>(m_logs.size())};
+                              });
+        notify("filling");                   // true
+        notifyWhenSettled(m_fill, "filling"); // false: done, failed or cancelled
+        return m_fill;
+    }
+
+private:
+    imlui::VectorModel<LogLine> m_logs;
+    imlui::Future<FillReport> m_fill; // default-constructed: cancelled, so `filling` starts false
+};
+```
+
+```lua
+Text { text = function() return backend.filling and "Loading..." or "" end }
+local load = async(function()
+    local report = await(backend:fill("app.log"))
+    assert(not backend.filling) -- settled: notified before the await resumed
+end)
+```
+
+The notification runs inside the settlement, before Lua's awaiters resume, so `backend.filling` already reads
+`false` in `onFillingChanged` and right after the `await`. Notifying from inside `then` would read `true`: the future
+is still pending there.
+
+**Destructors.** The object's death cancels its `runAsync` futures (and stops their work), so a destructor needn't
+cancel them. One that cancels member futures anyway (or settles them another way) calls `cancelHandles()` first:
+before that the object still lives, and the handlers would run inside the destructor, notifying from an object being
+destroyed.
 
 ### Live properties
 

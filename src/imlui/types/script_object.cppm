@@ -26,7 +26,10 @@
 // Task it returns (imlui.types.task) cancels it. runAsync(work) returns a Future of the result instead
 // (imlui.types.future), which a method can return to Lua; work taking an imlui::Progress reports progress to it.
 // runAsyncThen(work, then) hands the result to `then` on the main thread first, and the future gets what `then`
-// returns: big data (rows for a model) stays in C++, and Lua gets a small report.
+// returns: big data (rows for a model) stays in C++, and Lua gets a small report; it settles right after `then`.
+// whenSettled(f, fn) runs `fn` once a future settles, only while the object lives (an onSettled handler that the
+// object's death drops), and notifyWhenSettled(f, "filling") notifies a property backed by a member future
+// (m_fill.pending()).
 export module imlui.types.script_object;
 
 import std;
@@ -149,8 +152,9 @@ public:
     ///  * cancelling it (Future::cancel(), fut:cancel() in Lua) stops the token `work` gets, like this object's death;
     ///  * this object's death cancels it (makePromise with handle().stopToken()): a result that arrives later is
     ///    dropped. Work stopped before it started is skipped, and its future cancelled.
-    /// Settling runs on the main thread (imlui::post). `work` may be move-only; it is destroyed on a worker or the main
-    /// thread, so its captures must not need the main thread.
+    /// Settling runs on the main thread, in the one function the worker posts with the result (Promise::resolve): there
+    /// is no main-thread step before it. `work` may be move-only; it is destroyed on a worker or the main thread, so
+    /// its captures must not need the main thread.
     template <class Work>
     auto runAsync(Work work) {
         using Result = std::remove_cvref_t<decltype(invokeWithProgress(
@@ -189,9 +193,10 @@ public:
     ///    lives and the future isn't cancelled, so it may use `this`, edit models, notify() and emit(); it returns the
     ///    future's value R (Future<void> for void);
     ///  * the future fails with the message of what `work` or `then` threw (`then` isn't called when `work` threw);
-    ///  * cancelling it, or this object's death, before `then` ran: `then` never runs, the future is cancelled. The
-    ///    future settles at the loop iteration after `then` (Promise::resolve posts), so a cancel in between leaves
-    ///    `then`'s effects and cancels the future.
+    ///  * the future settles synchronously right after `then` returns, in the same main-thread step: inside `then` it
+    ///    is still pending, and once `then` returned it is done (its onSettled handlers, then Lua, run before anything
+    ///    else). So a cancel, or this object's death, wins only before `then` starts: `then` never runs, and the
+    ///    future is cancelled. A cancel from inside `then` cancels it too (what `then` returns is dropped).
     /// `work` and `then` may be move-only; they are destroyed on a worker or the main thread, so their captures must
     /// not need the main thread to be destroyed (no Lua references).
     template <class Work, class Then>
@@ -204,8 +209,11 @@ public:
             Then then;
         };
         auto made = makePromise<Result>(handle().stopToken());
-        startAsync([job = std::make_shared<Job>(std::move(work), std::move(then)),
-                    promise = made.first](std::stop_token stop) -> std::function<void()> {
+        // The main-thread step settles the state itself, not through the promise (which posts). Weak: the closures
+        // may die on a worker, where the state (it may hold a LuaFunction) must not be released; the promise keeps it.
+        startAsync([job = std::make_shared<Job>(std::move(work), std::move(then)), promise = made.first,
+                    settled = std::weak_ptr{future_detail::Access<Result>::state(made.second)}](
+                       std::stop_token stop) -> std::function<void()> {
             // One token for the work: stopped by this object's death or the pool's shutdown (`stop`), or a cancel.
             std::stop_source both;
             const std::stop_callback onStop{std::move(stop), [&both] { both.request_stop(); }};
@@ -225,24 +233,73 @@ public:
                 promise.reject("unknown C++ exception");
                 return {};
             }
-            // Posted through the handle: runs only while this object lives (else the promise goes: cancelled).
-            return [job, promise, produced] {
-                if (promise.stopToken().stop_requested()) return; // cancelled meanwhile: nothing is applied
+            // Posted through the handle: runs only while this object lives (else the promise goes: cancelled). The
+            // promise it holds keeps the state alive while it runs.
+            return [job, promise, produced, settled] {
+                const std::shared_ptr<future_detail::State<Result>> state = settled.lock();
+                if (!state || state->status() != FutureStatus::Pending) return; // cancelled meanwhile: nothing applied
                 try {
                     if constexpr (std::is_void_v<Result>) {
                         invokeThen<Produced>(job->then, produced.get());
-                        promise.resolve();
+                        state->resolve({});
                     } else {
-                        promise.resolve(invokeThen<Produced>(job->then, produced.get()));
+                        state->resolve(invokeThen<Produced>(job->then, produced.get()));
                     }
                 } catch (const std::exception& e) {
-                    promise.reject(e.what());
+                    state->fail(e.what());
                 } catch (...) {
-                    promise.reject("unknown C++ exception");
+                    state->fail("unknown C++ exception");
                 }
             };
         });
         return std::move(made.second);
+    }
+
+    /// Main thread: calls `fn` once `f` settles (any way), on the main thread, only while this object lives: a
+    /// Future::onSettled handler tied to this object's life, so `fn` may use `this`, notify() and emit().
+    ///  * `fn` is called as fn(const Future<T>&) or fn(); at once when `f` is settled already (an empty future is
+    ///    cancelled), else synchronously inside its settlement (after the handlers added before);
+    ///  * once this object's handles die (cancelHandles(), which an element gets before destroyed(), or else
+    ///    ScriptObject's destructor), `fn` is never called and is destroyed then, with what it captured; and so after
+    ///    cancelHandles() (or from an object being destroyed) whenSettled does nothing.
+    /// A derived destructor that cancels member futures calls cancelHandles() first, or `fn` runs inside it; it needn't
+    /// cancel runAsync futures at all (this object's death cancels them). `fn` may be move-only.
+    template <class T, class Fn>
+        requires std::invocable<Fn&, const Future<T>&> || std::invocable<Fn&>
+    void whenSettled(const Future<T>& f, Fn fn) {
+        const Handle self = handle();
+        if (!self.alive()) return;
+        if (!f.pending()) { // like onSettled's at once (which an empty future skips)
+            luaui::reportCxx([&] { invokeSettled(fn, f); }, "Future::onSettled");
+            return;
+        }
+        // The handler holds `fn` through a slot that this object's death empties.
+        struct Slot {
+            struct Drop {
+                Slot* slot;
+                void operator()() const { slot->fn.reset(); }
+            };
+            std::optional<Fn> fn;
+            std::optional<std::stop_callback<Drop>> dropOnDeath;
+        };
+        auto slot = std::make_shared<Slot>();
+        slot->fn.emplace(std::move(fn));
+        slot->dropOnDeath.emplace(self.stopToken(), typename Slot::Drop{slot.get()});
+        f.onSettled([slot](const Future<T>& settledFuture) {
+            if (!slot->fn) return; // this object died first
+            // Out of the slot first: `fn` may kill this object (cancelHandles), which would empty the slot under it.
+            Fn run = std::move(*slot->fn);
+            slot->fn.reset();
+            slot->dropOnDeath.reset();
+            invokeSettled(run, settledFuture);
+        });
+    }
+
+    /// Main thread: notify(property) once `f` settles, while this object lives (whenSettled). For a property backed by
+    /// a member future (`filling` is m_fill.pending()): the getter reads the settled state then.
+    template <class T>
+    void notifyWhenSettled(const Future<T>& f, std::string_view property) {
+        whenSettled(f, [this, name = std::string{property}] { notify(name); });
     }
 
     /// Main thread: makes every handle of this object dead now (alive() false, posts dropped), before the destructor
@@ -305,6 +362,15 @@ private:
             static_assert(std::invocable<Then&, Produced&&>, "runAsyncThen: then must be callable as then(result)");
             return std::invoke(then, std::move(*produced));
         }
+    }
+
+    /// whenSettled()'s call: fn(f), or fn().
+    template <class Fn, class T>
+    static void invokeSettled(Fn& fn, const Future<T>& f) {
+        if constexpr (std::invocable<Fn&, const Future<T>&>)
+            std::invoke(fn, f);
+        else
+            std::invoke(fn);
     }
 
     /// runAsync()'s typed part: wraps work, done and fail into a job that runs `work` on a worker and returns the

@@ -439,6 +439,12 @@ when heights above it change. `positionViewAtBeginning()` and `positionViewAtEnd
 These scroll the `ListView`'s own view only: inside a `ScrollView`, the outer view stays where it is. A `ListView`
 without `delegate` (its own children) ignores them.
 
+**A list that isn't rendered applies nothing until it renders again**: scrolled out of view inside an outer
+`ScrollView`, culled, on a page that isn't shown. Nothing is lost meanwhile: a `positionViewAtIndex` request is kept
+(its 20-frame limit counts rendered frames only) and lands from the next render on, and a list that was at its end
+with `followBottom` is still following then, so items that came meanwhile show at the bottom. `firstVisibleIndex`
+keeps the value of the last render until then.
+
 ```lua
 ListView { id = "log", height = 300, followBottom = true, model = backend.logs,
     delegate = function(line) return Text { line.text } end }

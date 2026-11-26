@@ -2,8 +2,8 @@
 // there, with a growing Lua list and a C++ model, fixed and measured heights; stops when scrolled up, resumes at the
 // end; no frames while nothing changes), positionViewAtIndex() to items that were never built (fixed and variable
 // heights, every mode, out-of-range indices, a bad mode, before the first render, inside a ScrollView),
-// positionViewAtBeginning() / positionViewAtEnd() and `firstVisibleIndex`. Renders headless ImGui frames
-// (tests/support/headless_frame.cppm).
+// positionViewAtBeginning() / positionViewAtEnd() and `firstVisibleIndex`, and requests made while the list isn't
+// rendered. Renders headless ImGui frames (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
 import std;
@@ -421,6 +421,49 @@ TEST_F(ListViewScrollTest, FirstVisibleIndexFollowsTheScroll) {
     run("list:positionViewAtIndex(100, 'end')"); // 100's bottom at the view's bottom: 91 starts the view
     settle("list");
     check("list.firstVisibleIndex == 91");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A list that isn't rendered (another page shown, or clipped inside an outer ScrollView) applies nothing: a position
+// asked for meanwhile, and items that came while it followed the end, take effect when it renders again.
+TEST_F(ListViewScrollTest, RequestsWaitWhileTheListIsNotRendered) {
+    run(R"(
+        made = {}
+        items = {}
+        for i = 1, 100 do items[i] = i end
+        list = ListView { height = 200, spacing = 0, itemHeight = 20, followBottom = true,
+                          model = function() return items end,
+                          delegate = function(i) made[i] = Bar { h = 20 }; return made[i] end }
+        other = Bar { h = 50 })");
+    settle("list");
+    ListView& l = list();
+    ASSERT_NEAR(l.scroll().y, 100.0f * 20.0f - 200.0f, 1.0f);
+
+    // Another page: items come, the list doesn't render; back on it, it is at the new end.
+    run("for i = 101, 150 do items[i] = i end");
+    settle("other");
+    check("made[150] == nil");
+    settle("list");
+    EXPECT_NEAR(l.scroll().y, 150.0f * 20.0f - 200.0f, 1.0f);
+
+    // A position asked for while another page shows: kept, and applied once the list renders.
+    run("list:positionViewAtIndex(40)");
+    settle("other");
+    check("list.firstVisibleIndex ~= 40");
+    settle("list");
+    EXPECT_NEAR(l.scroll().y, 39.0f * 20.0f, 1.0f);
+    check("list.firstVisibleIndex == 40");
+
+    // Clipped inside an outer ScrollView (below its view): the same.
+    run(R"(
+        root = ScrollView { height = 200, Column { spacing = 0, Bar { h = 1000 }, list } }
+        list:positionViewAtIndex(70))");
+    settle("root");
+    check("list.firstVisibleIndex == 40");
+    run("native.injectMouse(100, 100, nil, -100)"); // the outer view scrolls to its end: the list shows
+    settle("root");
+    EXPECT_NEAR(l.scroll().y, 69.0f * 20.0f, 1.0f);
+    check("list.firstVisibleIndex == 70");
     EXPECT_TRUE(luaui::errors().empty());
 }
 
