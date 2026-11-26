@@ -578,7 +578,10 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
 
 `Engine::reloadNow()`:
 
-1. Clears recorded errors and resets the theme to `Theme{}` (seed `#6750A4`, dark).
+1. Clears recorded errors and, through `HostSettings::reload`, remembers the host settings a script can change
+   (the theme, culling, the window title, the zoom shortcuts, a pending zoom or window size), then resets the
+   theme to `Theme{}` (seed `#6750A4`, dark) and turns the zoom shortcuts on, before the script runs, so what its
+   top level sets wins.
 2. Creates a new `lua_State`, opens the standard libraries, registers `imlui.native` (a `package.preload`
    entry) and the Canvas painter metatable, and installs the registered C++ types and singletons
    (`TypeRegistry::install`: the `imlui.types` library the DSL constructors use, methods tables, singleton
@@ -591,7 +594,8 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
    own environment over `ui.env`, see [Resources](#resources)), and returns the root, `ui.__tick` and
    `ui.__overlays`.
 5. On failure (syntax error, runtime error, or a non-table return), it closes the new state, points the
-   singletons back at the old one, restores the previous theme and keeps the old UI. On success, it replaces the
+   singletons back at the old one, puts back the settings remembered in step 1 (what the failed script set while
+   loading, `setTitle`, `setZoom`, `setWindowSize`, `setTheme` and the rest, is undone) and keeps the old UI. On success, it replaces the
    old state and applies the window title and size (size only if it changed since the last load). Closing a
    state destroys the C++ instances of its elements and detaches the singletons from it. Handlers and listeners
    (`connect`) live in the state, so they go with it, and come back with the old state after a failure. A failed
@@ -1149,6 +1153,7 @@ See [Registering C++ types](extending.md).
 | Module | Purpose |
 |---|---|
 | `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload, `exitAfterFrames`, `luaDefinitions`: `--lua-defs <dir>` / `IMLUI_LUA_DEFS`), `defaultConfig(argc, argv, std::vector<ResourcePackage>)` and `defaultConfig(argc, argv, {a::packages(), b::packages()})`, `mountPaks(resources, folder, skipPrefix)`. Declarations only: the definitions are in the implementation units `config.cpp` (in `imlui_core`) and `default_config.cpp` (in the target that holds the library's files), so the module has no private module fragment, which would forbid other units |
+| `imlui.app.host_settings` | `HostSettings`: what a script sets on its host through `imlui.native` (`install(hooks)`: title, zoom, zoom shortcuts, window size; the zoom and size are taken between frames with `takePendingZoom`/`takePendingWindowSize`), and `reload(attempt)`: a load as a transaction that starts from the default theme and zoom shortcuts and, when it fails, puts the theme, culling, title, zoom shortcuts and pending zoom and size back |
 | `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `resources()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `writeLuaDefinitions(dir)`, `run()` (writes the Lua definitions instead, without a window, when `EngineConfig::luaDefinitions` is set) |
 | `imlui` | Umbrella for apps: `import imlui;` |
 

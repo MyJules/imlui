@@ -52,6 +52,7 @@ import imlui.types.type_info;
 import imlui.types.registry;
 import imlui.types.lua_definitions;
 import imlui.app.config;
+import imlui.app.host_settings;
 
 export namespace imlui {
 
@@ -146,6 +147,7 @@ private:
     TypeRegistry m_types;
     Renderer m_renderer{m_types};
     ImageCache m_images{m_config.resources}; ///< what Image elements draw; outlives the ImGui context (see ~ImageCache)
+    HostSettings m_settings{m_renderer};     ///< title, zoom, zoom shortcuts, window size: what m_hooks set
     luaui::NativeHooks m_hooks;
     lua::State* m_state = nullptr;
     int m_rootRef = lua::noRef;
@@ -156,11 +158,8 @@ private:
     bool m_reload = false;
     int m_appliedWidth = 0;
     int m_appliedHeight = 0;
-    float m_themeScale = 0.0f;                              ///< dpiScale() the ImGui style was last built for
-    std::optional<float> m_pendingZoom;                     ///< applied at the start of the next frame
-    std::optional<std::pair<int, int>> m_pendingWindowSize; ///< dp; applied after the current frame
-    bool m_zoomShortcuts = true;
-    float m_wheelZoom = 0.0f; ///< Ctrl + wheel notches not yet turned into zoom steps
+    float m_themeScale = 0.0f; ///< dpiScale() the ImGui style was last built for
+    float m_wheelZoom = 0.0f;  ///< Ctrl + wheel notches not yet turned into zoom steps
     FileSnapshot m_snapshot;
     std::set<std::string> m_loaded; ///< resources the Lua states read or loaded (watched for hot reload)
     std::chrono::steady_clock::time_point m_lastCheck;
@@ -208,18 +207,7 @@ Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
     m_renderer.setImages(&m_images);
     m_hooks.quit = [this] { requestQuit(); };
     m_hooks.reload = [this] { requestReload(); };
-    m_hooks.setTitle = [this](const std::string& title) { m_renderer.setWindowTitle(title); };
-    m_hooks.zoom = [this] { return m_pendingZoom.value_or(zoom()); };
-    m_hooks.setZoom = [this](float z) {
-        m_pendingZoom = std::clamp(std::isnan(z) ? 1.0f : z, minZoom, maxZoom);
-        requestFrame();
-    };
-    m_hooks.setZoomShortcuts = [this](bool on) { m_zoomShortcuts = on; };
-    // Deferred: resizing from inside a frame (a click handler) would change the viewport mid-frame.
-    m_hooks.setWindowSize = [this](int w, int h) {
-        m_pendingWindowSize = std::pair{w, h};
-        requestFrame();
-    };
+    m_settings.install(m_hooks); // title, zoom, zoom shortcuts, window size
 }
 
 Engine::~Engine() { closeState(m_state); }
@@ -369,9 +357,9 @@ void Engine::syncTitleBar() {
 }
 
 void Engine::applyPendingWindowSize() {
-    if (!m_pendingWindowSize) return;
-    const auto [w, h] = *m_pendingWindowSize;
-    m_pendingWindowSize.reset();
+    const std::optional<std::pair<int, int>> size = m_settings.takePendingWindowSize();
+    if (!size) return;
+    const auto [w, h] = *size;
     // dp, scaled by the monitor content scale like the root window's width/height.
     m_window.setScaledSize(w, h);
     m_window.keepInWorkArea(); // a "phone preview" toggle must not push the window off-screen
@@ -379,10 +367,7 @@ void Engine::applyPendingWindowSize() {
 }
 
 void Engine::syncScale() {
-    if (m_pendingZoom) {
-        setZoom(*m_pendingZoom);
-        m_pendingZoom.reset();
-    }
+    if (const std::optional<float> z = m_settings.takePendingZoom()) setZoom(*z);
     // applyPendingTheme() builds the style at the current scale, so only a
     // scale change without a new theme needs the current one re-applied.
     const bool applied = applyPendingTheme();
@@ -408,13 +393,13 @@ void Engine::watchThemeFonts() {
 }
 
 void Engine::handleZoomShortcuts() {
-    if (!m_zoomShortcuts) return;
+    if (!m_settings.zoomShortcuts()) return;
     const ImGuiIO& io = ImGui::GetIO();
     if (!io.KeyCtrl || io.KeyAlt) { // Ctrl + Alt is AltGr on many layouts
         m_wheelZoom = 0.0f;
         return;
     }
-    const float current = m_pendingZoom.value_or(zoom());
+    const float current = m_settings.zoom();
     int steps = 0;
     bool reset = false;
     if (ImGui::IsKeyPressed(ImGuiKey_Equal) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) ++steps;
@@ -432,9 +417,9 @@ void Engine::handleZoomShortcuts() {
         m_wheelZoom += 1.0f;
     }
     if (reset)
-        m_hooks.setZoom(1.0f);
+        m_settings.setZoom(1.0f);
     else if (steps != 0)
-        m_hooks.setZoom(zoomStep(current, steps));
+        m_settings.setZoom(zoomStep(current, steps));
 }
 
 double Engine::secondsUntilFileCheck() const {
@@ -537,61 +522,62 @@ Engine::FileSnapshot Engine::scanFiles() const {
 
 void Engine::reloadNow() {
     luaui::clearErrors();
-    Theme previous = theme();
-    setTheme(Theme{}); // scripts start from the default theme
-
-    lua::State* state = lua::newstate();
-    if (!state) {
-        luaui::reportError("cannot create a Lua state: out of memory");
-        setTheme(std::move(previous));
-        return;
-    }
-    lua::atpanic(state, &luaui::panicHandler); // an error outside every protected call: log why before the abort
+    lua::State* state = nullptr;
     int root = lua::noRef;
     int tick = lua::noRef;
     int overlays = lua::noRef;
-    bool ok = false;
-    // All of the setup runs protected: a Lua error it raises (out of memory, a library's loader) is reported like a
-    // script error instead of reaching the panic handler, which aborts.
-    luaui::protectedCall(state, "loading the script", [&] {
-        lua::openlibs(state);
-        luaui::registerNative(state, &m_hooks);
-        luaui::registerPainter(state);
-        m_types.install(state); // before the DSL: its constructors look the registered types up
-
-        // Lua comes from the resources: `require "imlui"` is imlui:/imlui.lua, components are found next to the
-        // entry script.
-        luaui::registerResources(state, m_config.resources, &m_loaded);
-
-        constexpr std::string_view boot =
-            R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
-        if (lua::loadbuffer(state, boot, "=imlui.boot") != lua::ok) {
-            luaui::reportError(std::string{lua::tostring(state, -1)});
-            return;
+    // A transaction over the host settings: the script starts from the default theme and zoom shortcuts, and when
+    // it fails, what it set while loading (the theme, the title, the zoom, the window size, ...) is undone.
+    const bool ok = m_settings.reload([&] {
+        state = lua::newstate();
+        if (!state) {
+            luaui::reportError("cannot create a Lua state: out of memory");
+            return false;
         }
-        lua::pushstring(state, m_config.entry);
-        if (!luaui::safeCall(state, 1, 3)) return;
-        if (!lua::istable(state, -3)) {
-            luaui::reportError(m_config.entry +
-                               ": script must return a root element, e.g. `return ApplicationWindow { ... }`");
-            return;
+        lua::atpanic(state, &luaui::panicHandler); // an error outside every protected call: log why before the abort
+        bool loaded = false;
+        // All of the setup runs protected: a Lua error it raises (out of memory, a library's loader) is reported like
+        // a script error instead of reaching the panic handler, which aborts.
+        luaui::protectedCall(state, "loading the script", [&] {
+            lua::openlibs(state);
+            luaui::registerNative(state, &m_hooks);
+            luaui::registerPainter(state);
+            m_types.install(state); // before the DSL: its constructors look the registered types up
+
+            // Lua comes from the resources: `require "imlui"` is imlui:/imlui.lua, components are found next to the
+            // entry script.
+            luaui::registerResources(state, m_config.resources, &m_loaded);
+
+            constexpr std::string_view boot =
+                R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
+            if (lua::loadbuffer(state, boot, "=imlui.boot") != lua::ok) {
+                luaui::reportError(std::string{lua::tostring(state, -1)});
+                return;
+            }
+            lua::pushstring(state, m_config.entry);
+            if (!luaui::safeCall(state, 1, 3)) return;
+            if (!lua::istable(state, -3)) {
+                luaui::reportError(m_config.entry +
+                                   ": script must return a root element, e.g. `return ApplicationWindow { ... }`");
+                return;
+            }
+            overlays = lua::istable(state, -1) ? lua::ref(state) : (lua::pop(state), lua::noRef);
+            tick = lua::ref(state); // pops __tick
+            root = lua::ref(state); // pops root
+            loaded = true;
+        });
+        if (!loaded) {
+            // Before the settings are restored: closing runs the state's finalizers, which may set them too.
+            lua::close(state);          // destroys its instances and detaches the singletons from it
+            m_types.detachState(state); // also when the setup failed before install() made the state detach them
+            if (m_state) m_types.activate(m_state);
         }
-        overlays = lua::istable(state, -1) ? lua::ref(state) : (lua::pop(state), lua::noRef);
-        tick = lua::ref(state); // pops __tick
-        root = lua::ref(state); // pops root
-        ok = true;
+        return loaded;
     });
-    if (!ok) {
-        lua::close(state);         // destroys its instances and detaches the singletons from it
-        m_types.detachState(state); // also when the setup failed before install() made the state detach them
-        if (m_state) m_types.activate(m_state);
-        setTheme(std::move(previous));
-        return;
-    }
+    if (!ok) return;
 
     applyRootWindowProps(state, root);
 
-    m_zoomShortcuts = true; // a script that doesn't want them turns them off again
     closeState(m_state);
     m_state = state;
     m_rootRef = root;

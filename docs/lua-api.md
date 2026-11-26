@@ -687,7 +687,7 @@ by the zoom) when the native window size is set. A size that isn't a finite posi
 | `setZoom(z)` | Sets the user zoom, clamped to 0.5..3.0. It takes effect at the start of the next frame. |
 | `dpiScale() -> number` | The effective dp → pixel factor. |
 | `contentScale() -> number` | The monitor content scale. |
-| `setZoomShortcuts(on)` | Turns the built-in zoom shortcuts on or off (on by default, and again after a reload). |
+| `setZoomShortcuts(on)` | Turns the built-in zoom shortcuts on or off (on by default, and again after a reload: a call at the top level of the script holds). |
 
 **Built-in shortcuts:** Ctrl + `=` or `+` zooms in, Ctrl + `-` zooms out, Ctrl + `0` resets to 100 %, and
 Ctrl + mouse wheel zooms in and out. The steps are 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250 and 300 %.
@@ -743,7 +743,7 @@ Script errors are logged at error level automatically.
 | `isDark() -> bool` | Whether the current theme is dark. |
 | `imguiVersion() -> string` | Dear ImGui version, for example `"1.92.9b"`. |
 | `quit()` | Ends the frame loop and exits. |
-| `reload()` | Reloads the script before the next frame (like saving a file). |
+| `reload()` | Reloads the script before the next frame (like saving a file). A reload that fails keeps the old UI and undoes what the failed script set while loading: the theme, the title, the zoom, the window size, the zoom shortcuts and culling stay as they were. |
 | `setTitle(title)` | Sets the native window title, unless the `ApplicationWindow` has a `title` prop. See the note below. |
 | `setCulling(on)` | Turns [culling](architecture.md#culling) on or off for every container (on by default, and again after a reload). Off, every child renders every frame, also those scrolled out of view: for debugging and comparison. A single container takes `cull = false`. |
 | `culling() -> bool` | Whether culling is on. |
