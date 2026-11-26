@@ -362,7 +362,7 @@ array children are used, like a `ScrollView`. It takes every `ScrollView` prop. 
 | `model` | list, [C++ list model](lua-api.md#c-list-models), number, function or `bind` | — | Items; a number `n` means `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
 | `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by index: see [Repeater](lua-api.md#repeater--model-delegate-). A list model's own keys are used without one. |
-| `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. |
+| `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. With a negative `spacing`, each item starts at least a pixel below the one before it. |
 | `followBottom` | bool | `false` | Keeps the view at the end while it is scrolled there: see [Scrolling from a script](#scrolling-a-listview-from-a-script). |
 | `firstVisibleIndex` | integer | `0` | *Read-only.* The model index of the first item at least partly in view when the list last rendered (0 before that, with an empty model or without `delegate`); `onFirstVisibleIndexChanged(self, index)` follows it. |
 

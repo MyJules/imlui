@@ -184,7 +184,10 @@ reports as `unknown C++ exception`. A registered type's constructor that throws 
 (`<Type>: constructor failed: <what>`, whatever it throws), and the element gets no instance. The table remembers
 the failure (`__native = false`), so the constructor isn't tried again (and the error reported again) every time
 the element is rendered or measured, and its intrinsic size is zero (it renders nothing), so a `Row` around it
-settles instead of asking for frames while it waits for the size. The property sync
+settles instead of asking for frames while it waits for the size. Such a child submits no ImGui item, so the layouts
+that place children by their item rects (`Row`, `TopAppBar` actions, `NavigationRail` destinations, `ListView` items,
+stacks) give it no size and end the cursor move with an empty item, instead of reading the previous sibling's rect.
+The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
 
@@ -248,7 +251,8 @@ the Lua side for the delegates it shows, never for all of them. Each render it c
 the model and drops cached delegates the model no longer has, then `__range(self, first, last)` (a read, like
 `__children`) for the delegates of indices `first..last`, built on demand into a cache (`self.__view`: by index,
 or by key with a `key` function, at most max(256, 4 x shown) entries, the ones shown longest ago dropped first).
-The element keeps a height per index: `itemHeight` when set, else measured when the item renders (a change under
+The element keeps a height per index: `itemHeight` when set (the step from one item to the next, `itemHeight` plus
+`spacing`, at least a pixel), else measured when the item renders (a change under
 half a pixel is ignored, so whole-pixel rounding doesn't move the estimate), with the measured ones' average for the
 rest. From the scroll position it finds the first item in view (the anchor) and renders a margin of half the view's
 height above it, placed by the heights known so far, then the items from the anchor down one after the other at the
@@ -256,7 +260,8 @@ heights they render at, asking for delegates in chunks until it passes the view 
 content's total height gives ImGui the scroll range. When the measurements move where the anchor starts, it scrolls
 by the same amount (`SetScrollY`, applied on the next frame), so the items in view don't jump; new heights request
 a frame (at most `layout::maxSettleFrames` in a row). It reuses the [culling](#culling) rules: the margins also
-extend to what `cull::outOfView` counts as in view (a view's height more while a nav move scores items), and an
+extend to what `cull::outOfView` counts as in view (a view's height more while a nav move scores items; the chunks
+asked for past the list's own limit are then a view's height of items each), and an
 item that `cull::held` (the active item, the nav focus, an open popup, a non-visual element) renders on the next
 frames at its place even out of range, up to 16 per list.
 

@@ -233,6 +233,14 @@ private:
     bool m_counted = false;
 };
 
+/// Its constructor throws: the element has no instance, so it counts as visual but renders nothing.
+class Broken final : public Element {
+public:
+    static void declare(TypeBuilder<Broken>&) {}
+    Broken() { throw std::runtime_error("broken on purpose"); }
+    void render(Frame&) override {}
+};
+
 /// Records the Material surface it renders on (md::surfaceColor) and how many cards are open around it; with
 /// `boom` set it throws instead, cutting the render pass short.
 class SurfaceProbe final : public Element {
@@ -277,6 +285,7 @@ protected:
         m_h.registerType<Counter>("Counter");
         m_h.registerType<RawWriter>("RawWriter");
         m_h.registerType<SurfaceProbe>("SurfaceProbe");
+        m_h.registerType<Broken>("Broken");
     }
     [[nodiscard]] ImVec2 lastSize(std::string_view name) {
         test::LastItemProbe* p = m_h.instance<test::LastItemProbe>(name);
@@ -651,6 +660,26 @@ TEST_F(LayoutTest, AnUnknownElementTypeTakesNoSlot) {
     EXPECT_FLOAT_EQ(m->results[0].rendered.x, 90.0f);
     ASSERT_TRUE(m->results[1].intrinsic.has_value());
     EXPECT_TRUE(probe("d").seen()); // placed by its size, not rendered unseen for the unknown sibling
+}
+
+// A child that doesn't render (its constructor threw) submits no item: the Row read the previous sibling's rect as its
+// size and moved the ones after it by that. It takes its slot's gap and no width now, with intrinsic sizes and
+// without (the row renders unseen then, justified).
+TEST_F(LayoutTest, AChildThatFailsToRenderTakesNoWidthInARow) {
+    for (const char* props : {"intrinsic = true", "intrinsic = false"}) {
+        SCOPED_TRACE(props);
+        run(std::string{"a = Probe { w = 50, h = 10, "} + props + " } c = Probe { w = 30, h = 10, " + props + R"( }
+            root = Last { Row { spacing = 10, a, Broken {}, c } }
+            justified = Last { Row { spacing = 10, justify = "end", width = 300, a, Broken {}, c } })");
+        m_h.renderFrames("root", 3);
+        EXPECT_TRUE(hasError("broken on purpose"));
+        EXPECT_FLOAT_EQ(probe("c").pos().x - probe("a").pos().x, 50.0f + 10.0f + 10.0f);
+        EXPECT_FLOAT_EQ(lastSize("root").x, 50.0f + 10.0f + 10.0f + 30.0f);
+        m_h.renderFrames("justified", 3);
+        EXPECT_FLOAT_EQ(probe("c").pos().x - probe("a").pos().x, 50.0f + 10.0f + 10.0f);
+        EXPECT_FLOAT_EQ(probe("c").pos().x + 30.0f, lastMin("justified").x + 300.0f); // ends at the row's end
+        luaui::clearErrors();
+    }
 }
 
 // ------------------------------------------------------------ Grid

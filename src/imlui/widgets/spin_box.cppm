@@ -56,7 +56,9 @@ bool spinBox(const char* id, double* v, double vmin, double vmax, double step, i
     f.h = h;
     f.outlined = outlined;
     f.inputX = f.p.x + dp(16);
-    f.inputW = w - dp(16) - dp(96);
+    // At least a pixel, also in a box narrower than its insets: ImGui takes a width <= 0 as "the available width minus
+    // that", which would stretch the input past the box, over its siblings.
+    f.inputW = std::max(1.0f, w - dp(16) - dp(96));
     bool changed = false;
     // The input's focus from the last frame: the container is drawn before the input, to stay under its text.
     ImGuiStorage* st = ImGui::GetStateStorage();

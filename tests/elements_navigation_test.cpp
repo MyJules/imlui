@@ -4,6 +4,8 @@
 // ModalNavigationDrawer's `open` (plain value, bind(), function binding).
 #include <gtest/gtest.h>
 
+import std;
+
 import imgui;
 import imlui.color;
 import imlui.lua.errors;
@@ -77,12 +79,27 @@ private:
     int m_renders = 0;
 };
 
+/// Its constructor throws: the element has no instance, so it counts as visual but renders nothing.
+class Broken final : public Element {
+public:
+    static void declare(TypeBuilder<Broken>&) {}
+    Broken() { throw std::runtime_error("broken on purpose"); }
+    void render(Frame&) override {}
+};
+
+/// Whether a script error contains `part`.
+bool hasError(std::string_view part) {
+    return std::ranges::any_of(luaui::errors(),
+                               [&](const std::string& e) { return e.find(part) != std::string::npos; });
+}
+
 class NavigationElementsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         rects.clear();
         m_h.registerType<Probe>("Probe");
         m_h.registerType<Box>("Box");
+        m_h.registerType<Broken>("Broken");
     }
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
     /// Asserts a Lua expression (in the script environment) is true.
@@ -251,6 +268,20 @@ TEST_F(NavigationElementsTest, TopAppBarRightAlignsActionsAndEmitsOnNavigation) 
     expectNoErrors();
 }
 
+// An action that doesn't render (its constructor threw) submits no item: the bar read the previous action's rect as
+// its width and moved the ones after it past the bar's edge. It takes no width now.
+TEST_F(NavigationElementsTest, TopAppBarActionThatFailsToRenderTakesNoWidth) {
+    run(R"(
+        root = Probe {
+            TopAppBar { id = "bar", title = "Inbox", width = 500,
+                        Box { id = "a1", w = 48, h = 48 }, Broken {}, Box { id = "a2", w = 40, h = 30 } },
+        })");
+    frames(2);
+    EXPECT_TRUE(hasError("broken on purpose"));
+    EXPECT_FLOAT_EQ(rects["a2"].max.x, rects["bar"].max.x - 4.0f);
+    EXPECT_FLOAT_EQ(rects["a1"].max.x, rects["a2"].min.x);
+}
+
 TEST_F(NavigationElementsTest, NavigationBarSharesItsWidthAndItemsEmitOnClicked) {
     run(R"(
         s = state { selected = 1 }
@@ -329,6 +360,19 @@ TEST_F(NavigationElementsTest, NavigationRailAlignsDestinations) {
     EXPECT_FLOAT_EQ(rects["d2"].max.y, r.max.y - 12.0f);
     EXPECT_FLOAT_EQ(rects["d1"].max.y + 12.0f, rects["d2"].min.y);
     expectNoErrors();
+}
+
+// A destination that doesn't render (its constructor threw) took the previous one's height: the ones after it moved
+// down by that. It takes its gap and no height now.
+TEST_F(NavigationElementsTest, NavigationRailDestinationThatFailsToRenderTakesNoHeight) {
+    run(R"(
+        root = Probe {
+            NavigationRail { id = "rail", height = 400, spacing = 10, Box { id = "d1", w = 56, h = 50 }, Broken {},
+                             Box { id = "d2", w = 56, h = 50 } },
+        })");
+    frames(2);
+    EXPECT_TRUE(hasError("broken on purpose"));
+    EXPECT_FLOAT_EQ(rects["d2"].min.y - rects["d1"].max.y, 10.0f + 10.0f);
 }
 
 TEST_F(NavigationElementsTest, NavigationRailScrollsDestinationsThatDoNotFitAndKeepsTheHeaderFixed) {

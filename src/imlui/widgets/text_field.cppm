@@ -107,7 +107,9 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
     f.h = h;
     f.outlined = o.outlined;
     f.inputX = f.p.x + (lead ? dp(52) : dp(16));
-    f.inputW = w - (f.inputX - f.p.x) - (trail ? dp(52) : dp(16));
+    // At least a pixel, also in a field narrower than its insets: ImGui takes a width <= 0 as "the available width
+    // minus that", which would stretch the input past the field, over its siblings.
+    f.inputW = std::max(1.0f, w - (f.inputX - f.p.x) - (trail ? dp(52) : dp(16)));
 
     ImGui::BeginGroup();
     field::drawFieldBackground(f, focused, field::containerHovered(f), field::scopeDisabled());

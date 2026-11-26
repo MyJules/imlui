@@ -106,11 +106,11 @@ void TopAppBar::render(Frame& frame) {
             return;
         }
         ImGui::SetCursorScreenPos({x, p.y + (barH - child.expectedHeight(w, frame.dp(48))) * 0.5f});
-        if (unknown)
-            child.renderUnseen();
-        else
-            child.render();
-        x += ImGui::GetItemRectSize().x;
+        const bool rendered = unknown ? child.renderUnseen() : child.render();
+        // Not rendered (no instance, an unknown type, past maxDepth): no item was submitted, so the last item's rect
+        // is the previous action's. It takes no width, and an empty item ends the cursor move.
+        if (!rendered) ImGui::Dummy({0.0f, 0.0f});
+        x += rendered ? ImGui::GetItemRectSize().x : 0.0f;
     });
 
     const ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(s.onSurface.vec4());

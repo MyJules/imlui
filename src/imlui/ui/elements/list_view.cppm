@@ -286,7 +286,7 @@ float ListView::positionScroll(std::size_t i, Position mode, float scrollY, floa
                                float estimate, std::optional<float> fixed) const {
     float t = 0.0f, h = 0.0f;
     if (fixed) {
-        t = static_cast<float>(i) * (*fixed + gap);
+        t = static_cast<float>(i) * std::max(1.0f, *fixed + gap); // fixedStep in renderContent()
         h = *fixed;
     } else {
         t = top(i, gap, estimate);
@@ -320,6 +320,10 @@ void ListView::renderContent(Frame& frame) {
 
     const float gap = spacing() ? frame.dp(static_cast<float>(*spacing())) : ImGui::GetStyle().ItemSpacing.y;
     const std::optional<float> fixed = m_itemHeight ? std::optional<float>{frame.dp(*m_itemHeight)} : std::nullopt;
+    // The distance from one fixed-height item's top to the next one's. At least a pixel: a negative `spacing` as large
+    // as the height would put every item at one place, so no number of them would fill the view (and the index in
+    // view, the scroll divided by it, would divide by zero).
+    const float fixedStep = fixed ? std::max(1.0f, *fixed + gap) : 0.0f;
     if (!fixed && m_heights.size() != n) {
         // The model changed length: keep the heights of the indices that are still there.
         if (n < m_heights.size()) {
@@ -433,16 +437,15 @@ void ListView::renderContent(Frame& frame) {
     };
 
     const float est = fixed ? *fixed : estimate(frame);
-    const auto stepOf = [&](std::size_t i) { return fixed ? *fixed + gap : step(i, gap, est); };
+    const auto stepOf = [&](std::size_t i) { return fixed ? fixedStep : step(i, gap, est); };
     bool changed = false;
     std::size_t first = 0, anchor = 0, end = 0; // rendered: [first, end); anchor: the first item in view
     float anchorTop = 0.0f;
     if (n > 0) {
         // The first item in view, and the margin above it.
         if (fixed) {
-            const float s = *fixed + gap;
-            anchor = std::min(n - 1, static_cast<std::size_t>(std::max(0.0f, viewTop) / s));
-            anchorTop = static_cast<float>(anchor) * s;
+            anchor = std::min(n - 1, static_cast<std::size_t>(std::max(0.0f, viewTop) / fixedStep));
+            anchorTop = static_cast<float>(anchor) * fixedStep;
         } else {
             while (anchor + 1 < n && anchorTop + stepOf(anchor) <= viewTop)
                 anchorTop += stepOf(anchor++);
@@ -480,8 +483,12 @@ void ListView::renderContent(Frame& frame) {
         end = anchor;
         const auto more = [&] { return y < limit || !cull::outOfView(y, y + 1.0f); };
         while (end < n && more()) {
-            const float perItem = std::max(1.0f, (fixed ? *fixed : est) + gap);
-            const std::size_t want = static_cast<std::size_t>(std::ceil((limit - y) / perItem)) + 1;
+            const float perItem = fixed ? fixedStep : std::max(1.0f, est + gap);
+            // Past `limit` only while a nav move widens the view (see more()): by a view's height, so a page more.
+            // The distance is positive either way; a negative one cast to size_t is undefined (in practice a huge
+            // count that wraps, and a chunk that never advances).
+            const float reach = y < limit ? limit - y : std::max(1.0f, viewHeight);
+            const std::size_t want = static_cast<std::size_t>(std::ceil(reach / perItem)) + 1;
             const std::size_t chunkEnd = std::min(n, end + want);
             if (!pushRange(node, end + 1, chunkEnd)) break;
             const int list = lua::gettop(state);
@@ -491,7 +498,7 @@ void ListView::renderContent(Frame& frame) {
                 const float h = renderIndex(end, y);
                 lua::settop(state, list);
                 if (fixed) {
-                    y += *fixed + gap;
+                    y += fixedStep;
                 } else {
                     changed = setHeight(end, h) || changed;
                     y += step(end, gap, est);
@@ -505,7 +512,7 @@ void ListView::renderContent(Frame& frame) {
             if (i >= n || (i >= first && i < end)) continue;
             if (!pushRange(node, i + 1, i + 1)) continue;
             lua::rawgeti(state, -1, 1);
-            const float at = fixed ? static_cast<float>(i) * (*fixed + gap) : top(i, gap, est);
+            const float at = fixed ? static_cast<float>(i) * fixedStep : top(i, gap, est);
             const float h = renderIndex(i, origin.y + at);
             if (!fixed) changed = setHeight(i, h) || changed;
             lua::settop(state, wrapper);
@@ -520,13 +527,13 @@ void ListView::renderContent(Frame& frame) {
     const float est2 = fixed ? *fixed : estimate(frame);
     float total = 0.0f;
     if (fixed) {
-        total = static_cast<float>(n) * (*fixed + gap);
+        if (n > 0) total = std::max(0.0f, static_cast<float>(n - 1) * fixedStep + *fixed); // the last item's bottom
     } else {
         const std::size_t spaced = n - m_spaceless;
         total = static_cast<float>(m_measuredSum) + static_cast<float>(n - m_measured - m_spaceless) * est2 +
                 static_cast<float>(spaced) * gap;
+        if (total > 0.0f) total = std::max(0.0f, total - gap); // no gap after the last item
     }
-    if (total > 0.0f) total = std::max(0.0f, total - gap); // no gap after the last item
     m_contentHeight = total;
     m_first = n > 0 && end > first ? static_cast<std::int64_t>(first) + 1 : 0;
     m_last = n > 0 && end > first ? static_cast<std::int64_t>(end) : -1;
