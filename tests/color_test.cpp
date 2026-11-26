@@ -1,6 +1,8 @@
 // Tests for imlui.color, imlui.color.oklch and imlui.color.tonal_palette.
 #include <gtest/gtest.h>
 
+import std;
+
 import imlui.color;
 import imlui.color.oklch;
 import imlui.color.tonal_palette;
@@ -75,6 +77,23 @@ TEST(ToHex, OpaqueHasSixDigits) { EXPECT_EQ(toHex({1.0f, 0.0f, byte(0x80), 1.0f}
 TEST(ToHex, TranslucentHasEightDigits) { EXPECT_EQ(toHex({0.0f, 0.0f, 0.0f, byte(0x40)}), "#00000040"); }
 
 TEST(ToHex, ClampsOutOfRange) { EXPECT_EQ(toHex({-0.5f, 2.0f, 0.5f, 1.0f}), "#00FF80"); }
+
+// NaN fails every comparison, so std::clamp passes it through, and lround(NaN) is unspecified: toHex reads it as 0.
+TEST(ToHex, NonFiniteComponentsGiveAValidHex) {
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_EQ(toHex({nan, inf, -inf, 1.0f}), "#00FF00");
+    EXPECT_EQ(toHex({0.0f, 0.0f, 0.0f, nan}), "#00000000");
+    EXPECT_EQ(toHex(mix({0, 0, 0, 1}, {0, 0, 0, 1}, inf)), "#00000000") << "0 * inf is NaN in every component";
+}
+
+TEST(ClampColor, ClampsToUnitAndNanToZero) {
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_EQ(clampColor({nan, inf, -inf, 2.0f}), (Color{0, 1, 0, 1}));
+    EXPECT_EQ(clampColor({0.25f, -0.5f, 1.5f, 0.5f}), (Color{0.25f, 0, 1, 0.5f}));
+    static_assert(clampUnit(2.0f) == 1.0f && clampUnit(-1.0f) == 0.0f && clampUnit(0.5f) == 0.5f);
+}
 
 TEST(ToHex, RoundTripsThroughParseHex) {
     for (const char* hex : {"#000000", "#FFFFFF", "#6750A4", "#006A6A", "#B3261E", "#12345678", "#FEDCBA01"}) {
@@ -177,6 +196,27 @@ TEST(Oklch, InGamutColorIsKept) {
     EXPECT_NEAR(back.l, o.l, 1e-3f);
     EXPECT_NEAR(back.c, o.c, 1e-3f);
     EXPECT_NEAR(back.h, o.h, 0.5f);
+}
+
+// A component beyond ~1.6e16 overflowed pow() in the sRGB-to-linear step (inf), and inf - inf made the lightness NaN,
+// which no clamp downstream caught. toOklch clamps its input; fromOklch reads non-finite values as 0.
+TEST(Oklch, NonFiniteInputGivesFiniteResults) {
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const auto finite = [](Color c) {
+        return std::isfinite(c.r) && std::isfinite(c.g) && std::isfinite(c.b) && std::isfinite(c.a);
+    };
+    for (const Color c :
+         {Color{inf, 0, 0, 1}, Color{1e30f, 1e30f, 1e30f, 1}, Color{nan, nan, nan, 1}, Color{-inf, 0.5f, inf, 1}}) {
+        const Oklch o = toOklch(c);
+        EXPECT_TRUE(std::isfinite(o.l) && std::isfinite(o.c) && std::isfinite(o.h)) << o.l << " " << o.c << " " << o.h;
+        const Oklch clamped = toOklch(clampColor(c));
+        EXPECT_TRUE(o.l == clamped.l && o.c == clamped.c && o.h == clamped.h) << "the clamped color's";
+    }
+    for (const Oklch o : {Oklch{nan, 0.1f, 30}, Oklch{0.5f, nan, 30}, Oklch{0.5f, 0.1f, nan}, Oklch{0.5f, inf, 30},
+                          Oklch{0.5f, 0.1f, inf}, Oklch{inf, 0.1f, 30}, Oklch{0.5f, -1.0f, 30}, Oklch{0.5f, 1e30f, 30}})
+        EXPECT_TRUE(finite(fromOklch(o))) << o.l << " " << o.c << " " << o.h;
+    EXPECT_EQ(fromOklch({nan, 0, 0}), (Color{0, 0, 0, 1}));
 }
 
 // ------------------------------------------------------------------ tones

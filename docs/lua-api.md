@@ -550,7 +550,7 @@ These take [color specs](theming.md#color-specs) (role, `role/alpha`, hex, `{r,g
 
 | Function | Description |
 |---|---|
-| `color.mix(a, b, t)` | Linear sRGB interpolation from `a` to `b` (`t` in 0..1). |
+| `color.mix(a, b, t)` | Linear sRGB interpolation from `a` to `b` (`t` in 0..1, clamped to it; NaN reads as 0). |
 | `color.tone(c, t)` | Material tone `t` (0 = black, 100 = white) of `c`'s hue and chroma. |
 | `color.alpha(c, a)` | `c` with alpha `a`. |
 | `color.resolve(c)` | Resolves a spec against the current scheme, for example `color.resolve("primary")`. |

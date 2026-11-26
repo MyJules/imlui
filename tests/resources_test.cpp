@@ -181,6 +181,75 @@ TEST(DirectoryMount, FreesSupersededBuffersOnceNothingHoldsThem) {
     EXPECT_TRUE(versions.back().expired());
 }
 
+// The cache keeps only the files read most recently alive of its own (DirectoryMount::retainedBytes in all); other
+// data lives while a handle holds it, so a file read once (an image, a large data file) is freed when dropped instead
+// of staying in memory for the mount's lifetime. Re-reading works and still sees changes.
+TEST(DirectoryMount, ReleasesDataNothingHolds) {
+    test::TempDir dir;
+    const std::size_t large = DirectoryMount::retainedBytes + 1;
+    dir.write("large.bin", std::string(large, 'a'));
+    DirectoryMount mount{dir.path()};
+    std::weak_ptr<const void> first;
+    {
+        const auto bytes = mount.read("large.bin");
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(bytes->size(), large);
+        first = bytes->owner();
+        const auto again = mount.read("large.bin");
+        ASSERT_TRUE(again);
+        EXPECT_EQ(again->data(), bytes->data()) << "served from the cache while a handle holds it";
+    }
+    EXPECT_TRUE(first.expired()) << "a file larger than retainedBytes is released with its last handle";
+    const auto reread = mount.read("large.bin");
+    ASSERT_TRUE(reread);
+    EXPECT_EQ(reread->size(), large);
+    EXPECT_EQ(reread->text().front(), 'a');
+
+    dir.write("large.bin", std::string(large, 'b'));
+    dir.touch("large.bin", 10);
+    auto changed = mount.read("large.bin");
+    ASSERT_TRUE(changed);
+    EXPECT_EQ(changed->text().front(), 'b') << "a change is still seen";
+    EXPECT_EQ(reread->text().front(), 'a') << "the handle to the earlier bytes keeps them";
+
+    // Smaller files stay alive while they fit, the least recently read going first.
+    const std::size_t third = DirectoryMount::retainedBytes / 3 + 1;
+    std::map<std::string, std::weak_ptr<const void>> owners;
+    for (const char* name : {"a.bin", "b.bin", "c.bin"}) {
+        dir.write(name, std::string(third, name[0]));
+        owners[name] = mount.read(name)->owner();
+    }
+    EXPECT_TRUE(owners["a.bin"].expired()) << "three thirds and a bit don't fit";
+    EXPECT_FALSE(owners["b.bin"].expired());
+    EXPECT_FALSE(owners["c.bin"].expired());
+    EXPECT_EQ(mount.read("b.bin")->owner(), owners["b.bin"].lock()) << "a retained file is served from the cache";
+    owners["a.bin"] = mount.read("a.bin")->owner(); // now c.bin is the least recently read
+    EXPECT_TRUE(owners["c.bin"].expired());
+    EXPECT_FALSE(owners["a.bin"].expired());
+    EXPECT_FALSE(owners["b.bin"].expired());
+    EXPECT_EQ(mount.read("c.bin")->text().front(), 'c');
+
+    // A changed file that can't be read and whose previous bytes are gone is missing until it can be read.
+    dir.write("large.bin", std::string(large, 'c'));
+    dir.touch("large.bin", 20);
+    {
+        test::FileLock lock{dir.path() / "large.bin"};
+        if (!lock.locked()) GTEST_SKIP() << "can't lock a file here";
+        EXPECT_EQ(text(mount.read("large.bin")).front(), 'b') << "the bytes a handle still holds";
+    }
+    dir.write("large.bin", std::string(large, 'd'));
+    dir.touch("large.bin", 30);
+    {
+        test::FileLock lock{dir.path() / "large.bin"};
+        if (!lock.locked()) GTEST_SKIP() << "can't lock a file here";
+        changed.reset();
+        EXPECT_FALSE(mount.read("large.bin")) << "nothing holds the previous bytes";
+        EXPECT_FALSE(mount.modified("large.bin")) << "changed, for the next poll";
+    }
+    EXPECT_EQ(text(mount.read("large.bin")).front(), 'd');
+    EXPECT_TRUE(mount.modified("large.bin"));
+}
+
 // A selection (a manifest group's `files`, `include` and `exclude`; a dev build's source folder) limits the mount to
 // the files the build would embed: the others aren't read, found, timed or listed, and folders without a selected file
 // don't show. A file added later that matches a pattern is served at once (hot reload), as the next build embeds it.

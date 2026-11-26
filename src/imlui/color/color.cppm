@@ -18,6 +18,13 @@ struct Color {
     friend bool operator==(const Color&, const Color&) = default;
 };
 
+/// `x` clamped to [0, 1]; NaN reads as 0 (std::clamp would pass it through).
+constexpr float clampUnit(float x) { return x >= 0.0f ? (x <= 1.0f ? x : 1.0f) : 0.0f; }
+
+/// `c` with every component clamped to [0, 1] (clampUnit): what a color from outside (a script, an app) becomes
+/// before it is used, so infinities and NaN never reach the color math or ImGui.
+constexpr Color clampColor(Color c) { return {clampUnit(c.r), clampUnit(c.g), clampUnit(c.b), clampUnit(c.a)}; }
+
 /// Linear interpolation in sRGB space (what Material "state layers" do).
 constexpr Color mix(Color a, Color b, float t) {
     return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t};
@@ -33,7 +40,7 @@ constexpr Color overlay(Color base, Color layer, float opacity) {
 /// Parses "#RGB", "#RGBA", "#RRGGBB" or "#RRGGBBAA" (leading '#' optional).
 std::optional<Color> parseHex(std::string_view s);
 
-/// Formats as "#RRGGBB", or "#RRGGBBAA" when not opaque.
+/// Formats as "#RRGGBB", or "#RRGGBBAA" when not opaque. Components are clamped to [0, 1] (clampUnit: NaN is 0).
 std::string toHex(Color c);
 
 } // namespace imlui
@@ -73,7 +80,8 @@ std::optional<Color> parseHex(std::string_view s) {
 }
 
 std::string toHex(Color c) {
-    auto b = [](float x) { return static_cast<int>(std::lround(std::clamp(x, 0.0f, 1.0f) * 255.0f)); };
+    c = clampColor(c);
+    auto b = [](float x) { return static_cast<int>(std::lround(x * 255.0f)); };
     char buf[16];
     if (c.a >= 0.999f) std::snprintf(buf, sizeof buf, "#%02X%02X%02X", b(c.r), b(c.g), b(c.b));
     else std::snprintf(buf, sizeof buf, "#%02X%02X%02X%02X", b(c.r), b(c.g), b(c.b), b(c.a));

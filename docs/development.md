@@ -407,7 +407,7 @@ On this target:
   `notify`/`emit`, `__gc` lifetime, singletons (also `shared_ptr` ones), `overload` and reinstalling into a new
   state.
 - `resources_test.cpp` covers the resource system: name normalization and resolving (`..` can't leave a prefix, OS
-  paths are rejected), `DirectoryMount` (read, exists, list, modified, the read cache, a `ResourceSelection`
+  paths are rejected), `DirectoryMount` (read, exists, list, modified, the read cache and the data it releases, a `ResourceSelection`
   serving only the manifest's files and new files matching a pattern, a listed manifest served, the previous bytes
   served while a changed file is locked (`test::FileLock`, `imlui.test.file_lock`: a handle without sharing on
   Windows, no permissions elsewhere), no exceptions for names that aren't UTF-8, files whose names have no UTF-8 form left out, links to folders neither listed nor

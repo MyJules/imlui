@@ -11,14 +11,16 @@ export import imlui.resources.selection;
 export namespace imlui {
 
 /// The files under a folder. Reads are cached per file and served from the cache while the file's time and size
-/// are unchanged; a changed file is read again into a new buffer. The cache holds only each file's latest buffer;
-/// the ResourceData handles returned by read() share it, so a superseded buffer lives on while a handle to it does
-/// (data that must stay put, such as font data handed to ImGui, keeps its handle) and is freed with the last one.
-/// The folder's files are mutable, so modified() reports their times.
+/// are unchanged; a changed file is read again into a new buffer. The ResourceData handles returned by read() share
+/// the buffer, so a buffer lives on while a handle to it does (data that must stay put, such as font data handed to
+/// ImGui, keeps its handle) and is freed with the last one. The cache itself keeps a buffer alive only while it is
+/// among the files read most recently, up to retainedBytes in all (a larger file isn't kept); beyond that it only
+/// finds a buffer that a handle still holds, so a file read once and dropped (an image, once decoded) doesn't stay
+/// in memory. The folder's files are mutable, so modified() reports their times.
 ///
 /// A changed file that can't be read at the moment (an editor still holds it open without sharing) is served from
-/// its previous buffer, and until a read succeeds, modified() reports that buffer's time (nullopt when there is
-/// none): the file still counts as changed, so a hot reload that polls modified() tries again.
+/// its previous buffer while the cache still has it, and until a read succeeds, modified() reports that buffer's time
+/// (nullopt when there is none): the file still counts as changed, so a hot reload that polls modified() tries again.
 ///
 /// Paths are case-sensitive, like the embedded and .pak mounts, even on a file system that isn't (Windows, macOS):
 /// a path whose spelling on disk differs in case, in any of its segments, isn't found (with a warning naming the
@@ -40,6 +42,10 @@ public:
     /// and listFiles() show only selected files and the folders that hold one.
     explicit DirectoryMount(std::filesystem::path root, std::optional<ResourceSelection> selection = std::nullopt);
 
+    /// The most bytes of file data the cache keeps alive of its own (the files read most recently): 8 MiB, enough
+    /// for an app's scripts, so a script that can't be read while an editor saves it is served from its last bytes.
+    static constexpr std::size_t retainedBytes = std::size_t{8} << 20;
+
     [[nodiscard]] const std::filesystem::path& root() const;
 
     [[nodiscard]] std::optional<ResourceData> read(std::string_view path) const override;
@@ -51,12 +57,17 @@ public:
     [[nodiscard]] std::string origin() const override;
 
 private:
+    using Buffer = std::shared_ptr<const std::vector<std::byte>>;
+
     struct Cached {
         ResourceTime time;
         std::uintmax_t size = 0;
-        std::shared_ptr<const std::vector<std::byte>> bytes;
+        std::weak_ptr<const std::vector<std::byte>> bytes; ///< alive while `retained` or a handle holds it
+        Buffer retained;                                   ///< the cache's own reference, while among the recent reads
+        std::uint64_t lastRead = 0;                        ///< m_reads at the last read that served it
         bool stale = false; ///< the file changed but couldn't be read: `bytes` and `time` are the previous version
     };
+    using Cache = std::map<std::string, Cached, std::less<>>;
 
     /// The entry names of one folder, as of its modification time.
     struct Folder {
@@ -84,11 +95,22 @@ private:
     /// True when folder `path` (`folder` on disk) holds a selected file at any depth (always without a selection).
     [[nodiscard]] bool holdsSelected(std::string_view path, const std::filesystem::path& folder) const;
 
+    // The read cache, with m_mutex held.
+    /// Marks `entry` (holding `bytes`) as read now and keeps `bytes` among the retained buffers, then releases the
+    /// least recently read ones until they fit in retainedBytes.
+    void retain(Cache::iterator entry, const Buffer& bytes) const;
+    /// Removes `entry`, releasing its retained buffer.
+    void forget(Cache::iterator entry) const;
+    /// Removes the entries whose buffer is gone (nothing holds it any more).
+    void prune() const;
+
     std::filesystem::path m_root;
     std::optional<ResourceSelection> m_selection;
     mutable std::mutex m_mutex;
-    mutable std::map<std::string, Cached, std::less<>> m_cache; ///< the latest buffer of every file read
-    mutable std::set<std::string, std::less<>> m_unreadable;    ///< files that exist but were never read successfully
+    mutable Cache m_cache;                                   ///< the latest buffer of the files read, while it lives
+    mutable std::uint64_t m_reads = 0;                       ///< the clock of Cached::lastRead
+    mutable std::size_t m_retained = 0;                      ///< the bytes of the Cached::retained buffers
+    mutable std::set<std::string, std::less<>> m_unreadable; ///< files that exist but were never read successfully
     mutable std::mutex m_foldersMutex;
     mutable std::map<std::string, Folder, std::less<>> m_folders; ///< by path ("" is the root)
     mutable std::set<std::string, std::less<>> m_misspelled;      ///< paths already warned about
@@ -270,24 +292,30 @@ std::optional<ResourceData> DirectoryMount::readFile(std::string_view path) cons
     const auto cached = m_cache.find(path);
     if (!regular || ec) {
         // A removed (or renamed) file: its last bytes go with their last handle.
-        if (cached != m_cache.end()) m_cache.erase(cached);
+        if (cached != m_cache.end()) forget(cached);
         if (const auto it = m_unreadable.find(path); it != m_unreadable.end()) m_unreadable.erase(it);
         return std::nullopt;
     }
-    if (cached != m_cache.end() && cached->second.time == time && cached->second.size == size) {
+    // The previous buffer, when something (the cache or a handle) still holds it.
+    const Buffer previous = cached != m_cache.end() ? cached->second.bytes.lock() : nullptr;
+    if (previous && cached->second.time == time && cached->second.size == size) {
         cached->second.stale = false;
-        return ResourceData{*cached->second.bytes, cached->second.bytes};
+        retain(cached, previous);
+        return ResourceData{*previous, previous};
     }
 
     // The file is there but doesn't open (an editor saving it without sharing) or doesn't fit in memory: serve the
-    // previous version, marked stale so modified() keeps reporting its time and the next poll tries again.
+    // previous version, marked stale so modified() keeps reporting its time and the next poll tries again. Without
+    // one (never read, or released since), it is missing until it can be read.
     const auto unreadable = [&]() -> std::optional<ResourceData> {
-        if (cached == m_cache.end()) {
+        if (!previous) {
+            if (cached != m_cache.end()) forget(cached);
             m_unreadable.emplace(path);
             return std::nullopt;
         }
         cached->second.stale = true;
-        return ResourceData{*cached->second.bytes, cached->second.bytes};
+        retain(cached, previous);
+        return ResourceData{*previous, previous};
     };
     std::ifstream in{*filePath, std::ios::binary};
     if (!in) return unreadable();
@@ -303,9 +331,44 @@ std::optional<ResourceData> DirectoryMount::readFile(std::string_view path) cons
     buffer.resize(static_cast<std::size_t>(in.gcount())); // the file may have shrunk since file_size()
     // The cache drops its reference to the previous buffer; handles still holding it keep it alive.
     auto bytes = std::make_shared<const std::vector<std::byte>>(std::move(buffer));
-    m_cache.insert_or_assign(std::string{path}, Cached{time, size, bytes, false});
+    if (cached != m_cache.end()) forget(cached);
+    prune(); // so the cache doesn't grow with every file ever read
+    Cached fresh;
+    fresh.time = time;
+    fresh.size = size;
+    fresh.bytes = bytes;
+    const auto entry = m_cache.emplace(std::string{path}, std::move(fresh)).first;
+    retain(entry, bytes);
     if (const auto it = m_unreadable.find(path); it != m_unreadable.end()) m_unreadable.erase(it);
     return ResourceData{*bytes, bytes};
+}
+
+void DirectoryMount::retain(Cache::iterator entry, const Buffer& bytes) const {
+    Cached& c = entry->second;
+    c.lastRead = ++m_reads;
+    if (c.retained || bytes->size() > retainedBytes) return;
+    c.retained = bytes;
+    m_retained += bytes->size();
+    while (m_retained > retainedBytes) {
+        // The least recently read retained buffer (never `entry`'s: it was read last). A scan, only when the retained
+        // files outgrow the budget, over the files still alive.
+        auto oldest = m_cache.end();
+        for (auto it = m_cache.begin(); it != m_cache.end(); ++it)
+            if (it->second.retained && (oldest == m_cache.end() || it->second.lastRead < oldest->second.lastRead))
+                oldest = it;
+        m_retained -= oldest->second.retained->size();
+        oldest->second.retained.reset();
+    }
+}
+
+void DirectoryMount::forget(Cache::iterator entry) const {
+    if (entry->second.retained) m_retained -= entry->second.retained->size();
+    m_cache.erase(entry);
+}
+
+void DirectoryMount::prune() const {
+    // A stale entry whose buffer is gone has nothing to serve either: its file is read again (or is unreadable).
+    std::erase_if(m_cache, [](const Cache::value_type& e) { return e.second.bytes.expired(); });
 }
 
 bool DirectoryMount::exists(std::string_view path) const {

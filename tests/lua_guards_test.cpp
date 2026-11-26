@@ -1,14 +1,18 @@
 // C++ code reached from Lua that fails: exceptions from element hooks (componentComplete, tick, destroyed),
 // from the host's NativeHooks and from methods become script errors or Lua errors with a message; argument checks of
-// the native library; a Lua error during a property sync doesn't freeze the element; setInterval's checks; the ticking
-// list by id, so an element destroyed mid-tick isn't replaced by one created at its address.
+// the native library, and non-finite colors; a Lua error during a property sync doesn't freeze the element;
+// setInterval's checks; the ticking list by id, so an element destroyed mid-tick isn't replaced by one created at its
+// address.
 #include <gtest/gtest.h>
 
 import std;
 
+import imgui;
 import lua;
 import imlui.lua.errors;
 import imlui.lua.native;
+import imlui.theme.scheme;
+import imlui.theme.theme;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -320,4 +324,36 @@ TEST(NativeHooksTest, ThrowingHooksRaiseLuaErrors) {
               std::string::npos);
     EXPECT_EQ(error("require('imlui.native').reload()"), ""); // an empty hook is a no-op
     lua::close(state);
+}
+
+// A color component a script gives as math.huge (or 0/0) used to become a NaN scheme: generating it from an infinite
+// seed computed inf - inf, and the NaN reached ImGuiStyle::Colors, which ImGui casts to int (undefined). Table colors
+// are clamped to 0..1, and color.mix clamps `t` to its documented 0..1 (0 * inf was NaN).
+TEST_F(LuaGuardsTest, NonFiniteColorsStayValid) {
+    run(R"(
+        local function hex(v) return type(v) == "string" and v:match("^#%x%x%x%x%x%x$") ~= nil end
+        local huge = ui.theme { seed = { math.huge, 0, 0 } }
+        local red = ui.schemeFor { seed = { 1, 0, 0 } }
+        for role, v in pairs(huge) do
+            assert(hex(v), role .. " = " .. tostring(v))
+            assert(v == red[role], role)
+        end
+        for role, v in pairs(ui.schemeFor { seed = { 0 / 0, -math.huge, 1e300 } }) do assert(hex(v), role) end
+
+        assert(ui.color.mix("#000", "#000", math.huge) == "#000000")
+        assert(ui.color.mix("#000", "#FFF", math.huge) == "#FFFFFF")
+        assert(ui.color.mix("#000", "#FFF", -math.huge) == "#000000")
+        assert(ui.color.mix("#000", "#FFF", 0 / 0) == "#000000")
+        assert(ui.color.mix({ math.huge, 0, 0 }, { 0, 0, 0 }, 0) == "#FF0000")
+        assert(ui.color.resolve({ 0 / 0, 2, -1, math.huge }) == "#00FF00")
+        assert(ui.color.alpha("#FFF", 0 / 0) == "#FFFFFF00")
+        assert(ui.color.tone({ math.huge, math.huge, math.huge }, 50):match("^#%x%x%x%x%x%x$"))
+    )");
+    applyPendingTheme();
+    for (const ImVec4& c : ImGui::GetStyle().Colors)
+        for (const float channel : {c.x, c.y, c.z, c.w})
+            ASSERT_TRUE(channel >= 0.0f && channel <= 1.0f) << channel;
+    EXPECT_EQ(theme().scheme.primary, generateScheme({1, 0, 0, 1}, theme().dark).primary);
+    setTheme(Theme{});
+    applyPendingTheme();
 }

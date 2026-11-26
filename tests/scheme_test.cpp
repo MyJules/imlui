@@ -1,6 +1,8 @@
 // Tests for imlui.theme.scheme: Material 3 scheme generation and role lookup.
 #include <gtest/gtest.h>
 
+import std;
+
 import imlui.color;
 import imlui.theme.scheme;
 
@@ -131,6 +133,25 @@ TEST_P(SchemeForSeed, ColorsAreOpaqueAndInRange) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Seeds, SchemeForSeed, ::testing::ValuesIn(seeds));
+
+// An infinite or NaN seed component (from a script: ui.theme { seed = { math.huge, 0, 0 } }) used to make every role
+// NaN, which reached ImGui's float-to-byte conversion. It reads as the clamped color.
+TEST(GenerateScheme, NonFiniteSeedGivesTheClampedSeedsScheme) {
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (const bool dark : {false, true}) {
+        const Scheme s = generateScheme({inf, 0, 0, 1}, dark);
+        const Scheme red = generateScheme({1, 0, 0, 1}, dark);
+        for (const auto& role : roles()) {
+            const Color c = s.*role.member;
+            for (const float channel : {c.r, c.g, c.b, c.a})
+                EXPECT_TRUE(std::isfinite(channel) && channel >= 0.0f && channel <= 1.0f) << role.name;
+            EXPECT_EQ(c, red.*role.member) << role.name;
+        }
+        const Scheme grey = generateScheme({nan, nan, nan, 1}, dark);
+        EXPECT_EQ(grey.primary, generateScheme({0, 0, 0, 1}, dark).primary) << "NaN reads as 0";
+    }
+}
 
 TEST(GenerateScheme, LightAndDarkDiffer) {
     Color seed = *parseHex("#6750A4");

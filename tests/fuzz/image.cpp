@@ -9,8 +9,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
 namespace {
 
-/// Images with more pixels aren't decoded: up to 16384 x 16384 is allowed, which is only slow, not wrong, and would
-/// trip the fuzzer's memory limit.
+/// Images with more pixels aren't decoded: up to maxImageBytes (8192 x 8192) is allowed, which is only slow, not
+/// wrong, and would trip the fuzzer's memory limit.
 constexpr long long maxPixels = 4096LL * 4096;
 
 } // namespace
