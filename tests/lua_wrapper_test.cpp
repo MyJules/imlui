@@ -371,3 +371,76 @@ TEST_F(LuaWrapperTest, IsBindDetectsBindObjects) {
         lua::pop(m_state);
     }
 }
+
+// rawgetfield reads a field by any C string, a temporary buffer whose bytes change at the same address included (the
+// key is found by its bytes, not its address).
+TEST_F(LuaWrapperTest, RawGetFieldReadsByTheKeysBytes) {
+    run("return { alpha = 1, beta = 2 }");
+    std::array<char, 8> key{"alpha"};
+    EXPECT_EQ(lua::rawgetfield(m_state, -1, key.data()), lua::Type::Number);
+    EXPECT_EQ(lua::tointeger(m_state, -1), 1);
+    lua::pop(m_state);
+    std::ranges::copy(std::string_view{"beta"}, key.begin());
+    key[4] = '\0';
+    EXPECT_EQ(lua::rawgetfield(m_state, -1, key.data()), lua::Type::Number);
+    EXPECT_EQ(lua::tointeger(m_state, -1), 2);
+    lua::pop(m_state);
+    EXPECT_EQ(lua::rawgetfield(m_state, -1, "gamma"), lua::Type::Nil); // pushes nil
+    EXPECT_EQ(lua::gettop(m_state), 2);
+}
+
+// A lua::Key reads its field raw (no __index), in any thread of the state (a coroutine made before the key's first read
+// too) and after full collections (its string is kept alive), and in another state with a cache of its own.
+lua::Type readKeyed(lua::State* state, int idx) {
+    static const lua::Key key{"someKeyedField"};
+    return lua::rawget(state, idx, key);
+}
+int keyedFieldFn(lua::State* state) {
+    readKeyed(state, 1);
+    return 1;
+}
+
+TEST_F(LuaWrapperTest, KeysReadTheirFieldInEveryThreadAndState) {
+    lua::pushcfunction(m_state, &keyedFieldFn);
+    lua::setglobal(m_state, "keyed");
+    run(R"(
+        t = setmetatable({ someKeyedField = "here" }, { __index = function() return "meta" end })
+        co = coroutine.wrap(function() coroutine.yield(keyed(t)); return keyed(t) end)
+        return co())");
+    EXPECT_EQ(lua::tostring(m_state, -1), "here"); // first read ever, inside the coroutine
+    lua::pop(m_state);
+    for (int i = 0; i < 3; ++i) {
+        run("collectgarbage(); collectgarbage(); return t");
+        EXPECT_EQ(readKeyed(m_state, -1), lua::Type::String);
+        EXPECT_EQ(lua::tostring(m_state, -1), "here");
+        lua::settop(m_state, 0);
+    }
+    run("return co()"); // the coroutine again, after the main thread's reads
+    EXPECT_EQ(lua::tostring(m_state, -1), "here");
+    lua::pop(m_state);
+    run("return {}"); // absent: nil
+    EXPECT_EQ(readKeyed(m_state, -1), lua::Type::Nil);
+    lua::settop(m_state, 0);
+
+    lua::State* other = lua::newstate();
+    lua::createtable(other, 0, 1);
+    lua::pushcstring(other, "elsewhere");
+    lua::setfield(other, -2, "someKeyedField");
+    EXPECT_EQ(readKeyed(other, -1), lua::Type::String);
+    EXPECT_EQ(lua::tostring(other, -1), "elsewhere");
+    lua::close(other);
+}
+
+// strid: the same string gives the same id, other strings (and long ones) other ids.
+TEST_F(LuaWrapperTest, StringIdsTellStringsApart) {
+    run("local long = string.rep('x', 100) return { 'abc', 'abc', 'abd', long, long .. '' , string.rep('x', 101) }");
+    std::vector<std::uint64_t> ids;
+    for (int i = 1; i <= 6; ++i) {
+        lua::rawgeti(m_state, -1, i);
+        ids.push_back(lua::strid(m_state, -1));
+        lua::pop(m_state);
+    }
+    EXPECT_EQ(ids[0], ids[1]); // short strings are one object
+    EXPECT_NE(ids[0], ids[2]);
+    EXPECT_NE(ids[3], ids[5]);
+}

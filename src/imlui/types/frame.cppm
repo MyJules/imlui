@@ -149,7 +149,7 @@ public:
         lua::State* state = parent.state();
         m_renderer.forEachChild(parent, [&](int idx) {
             const luaui::Node node{state, idx};
-            if (!node.boolean("visible", true)) return;
+            if (!node.boolean(luaui::keys::visible, true)) return;
             Child child{*this, node};
             f(child);
         });

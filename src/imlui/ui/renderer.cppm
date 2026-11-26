@@ -111,14 +111,13 @@ public:
                 lua::getfield(state, -1, "__type");
                 bool element = lua::isstring(state, -1);
                 lua::pop(state);
-                lua::pushcstring(state, "__inline"); // raw: only the table's own marker counts
-                lua::rawget(state, -2);
+                lua::rawget(state, -1, luaui::keys::inlined); // raw: only the table's own marker counts
                 bool inl = lua::toboolean(state, -1);
                 lua::pop(state);
                 if (element && inl) {
                     luaui::Node c{state, lua::gettop(state)};
                     const Nesting level{*this};
-                    if (level && c.boolean("visible", true)) forEachChild(c, f);
+                    if (level && c.boolean(luaui::keys::visible, true)) forEachChild(c, f);
                 } else if (element) {
                     f(lua::gettop(state));
                 }
@@ -376,7 +375,7 @@ bool Renderer::render(lua::State* state, int idx) {
         luaui::reportError("unknown element type '" + n.type() + "'");
         return false;
     }
-    if (!n.boolean("visible", true)) return false;
+    if (!n.boolean(luaui::keys::visible, true)) return false;
     return renderElement(n, kind);
 }
 
@@ -404,7 +403,7 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
     const ImGuiID id = ImGui::GetID(idKey(key));
     const MaterialStacksGuard stacks;
     ImGui::PushID(idKey(key));
-    const bool disabled = n.has("enabled") && !n.boolean("enabled", true);
+    const bool disabled = n.has(luaui::keys::enabled) && !n.boolean(luaui::keys::enabled, true);
     if (disabled) ImGui::BeginDisabled();
     // Every visual element is exactly one layout item (a group), so
     // composite elements (label + field, ...) behave inside Rows.
@@ -419,7 +418,7 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
         ImGui::EndGroup();
         layout::recordSize(id, ImGui::GetItemRectSize(), m_provisional != provisional);
     }
-    if (n.has("tooltip")) md::tooltip(n.string("tooltip"));
+    if (n.has(luaui::keys::tooltip)) md::tooltip(n.string("tooltip"));
     if (disabled) ImGui::EndDisabled();
     ImGui::PopID();
     return true;
@@ -431,7 +430,7 @@ void Renderer::pushElementId(const Node& node) { ImGui::PushID(idKey(elementId(n
 
 bool Renderer::pushChildren(const Node& node) {
     lua::State* state = node.state();
-    if (node.pushRaw("__children") != lua::Type::Function) {
+    if (node.pushRaw(luaui::keys::children) != lua::Type::Function) {
         lua::pop(state);
         lua::pushvalue(state, node.index());
         return true;
@@ -554,7 +553,7 @@ float Renderer::renderStack(const Node& node) {
             return;
         }
         Node c{state, idx};
-        if (!c.boolean("visible", true)) return;
+        if (!c.boolean(luaui::keys::visible, true)) return;
         if (!first && spacing)
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
                                  ImGui::GetStyle().ItemSpacing.y);
@@ -659,7 +658,9 @@ void Renderer::requestConvergeFrame() {
     if (m_convergeStreak <= maxConvergeFrames) requestFrame();
 }
 
-bool Renderer::cullsChildren(const Node& node) const { return cull::enabled() && node.boolean("cull", true); }
+bool Renderer::cullsChildren(const Node& node) const {
+    return cull::enabled() && node.boolean(luaui::keys::cull, true);
+}
 
 Renderer::Culling::Culling(Renderer& renderer, const Node& node, float width)
     : m_renderer{renderer}, m_state{node.state()}, m_pins{renderer.cullsChildren(node)} {
@@ -771,7 +772,7 @@ std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
     forEachChild(node, [&](int idx) {
         if (!known || !isVisual(state, idx)) return;
         const Node c{state, idx};
-        if (!c.boolean("visible", true)) return;
+        if (!c.boolean(luaui::keys::visible, true)) return;
         if (!first && spacing) y += static_cast<float>(*spacing) * dpiScale() - lineGap;
         const std::optional<ImVec2> size = intrinsicSize(c, maxWidth);
         if (!size) {

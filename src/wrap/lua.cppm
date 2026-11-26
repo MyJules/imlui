@@ -105,6 +105,9 @@ Integer tointeger(State* state, int idx);
 const void* topointer(State* state, int idx);
 void* touserdata(State* state, int idx);
 std::string_view tostring(State* state, int idx);
+/// An identity of the string (Type::String, not a number) at `idx` for change detection, cheaper than hashing its
+/// bytes: its address, length and Lua's own hash of it (see imlui_lua_strid).
+std::uint64_t strid(State* state, int idx);
 /// Like tostring but converts any value (uses __tostring); pushes nothing.
 std::string toStringAny(State* state, int idx);
 /// luaL_tolstring: converts any value (runs __tostring, which may raise) and pushes the result; returns it.
@@ -132,6 +135,27 @@ void createtable(State* state, int narr, int nrec);
 /// hint: nothing when they fit already).
 void reservehash(State* state, int idx, int n);
 Type getfield(State* state, int idx, const char* k);
+/// rawget of `t[k]` for the table at `idx` and the key `k`, in one call (no key pushed): pushes the value, returns its
+/// type. For the hot reads of known keys (an element's props); `k` may be any NUL-terminated string.
+Type rawgetfield(State* state, int idx, const char* k);
+
+/// A field name read over and over (an element's props, imlui's own markers): its Lua string is made once per state
+/// and kept in the state's key cache under the Key's slot, so rawget(state, idx, key) reads the field with no lookup
+/// of the name at all. A Key's name never changes; make one per name and keep it (a static, a member of what lives
+/// as long as the names it reads), not one per read: every Key takes a slot for the life of the process.
+class Key {
+public:
+    explicit Key(std::string name) : m_name{std::move(name)}, m_slot{nextSlot()} {}
+    [[nodiscard]] const std::string& name() const { return m_name; }
+    [[nodiscard]] int slot() const { return m_slot; }
+
+private:
+    static int nextSlot();
+    std::string m_name;
+    int m_slot;
+};
+/// rawget of `t[key]` for the table at `idx`: pushes the value, returns its type (rawgetfield with a Key).
+Type rawget(State* state, int idx, const Key& key);
 void setfield(State* state, int idx, const char* k);
 Type gettable(State* state, int idx);
 void settable(State* state, int idx);
@@ -318,7 +342,9 @@ State* newstate(Alloc allocator, void* ud) { return lua_newstate(allocator, ud);
 void close(State* state) {
     void* ud = nullptr;
     const bool pooled = lua_getallocf(state, &ud) == &Pool::alloc;
+    void* keys = imlui_lua_keys(state); // used until the end of lua_close (a finalizer may read fields)
     lua_close(state);
+    imlui_lua_freekeys(keys);
     if (pooled) delete static_cast<Pool*>(ud); // after lua_close, which frees its blocks through it
 }
 void openlibs(State* state) { luaL_openlibs(state); }
@@ -359,6 +385,7 @@ Number tonumber(State* state, int idx) { return lua_tonumberx(state, idx, nullpt
 Integer tointeger(State* state, int idx) { return lua_tointegerx(state, idx, nullptr); }
 const void* topointer(State* state, int idx) { return lua_topointer(state, idx); }
 void* touserdata(State* state, int idx) { return lua_touserdata(state, idx); }
+std::uint64_t strid(State* state, int idx) { return imlui_lua_strid(state, idx); }
 std::string_view tostring(State* state, int idx) {
     std::size_t len = 0;
     const char* s = lua_tolstring(state, idx, &len);
@@ -394,6 +421,14 @@ void newtable(State* state) { lua_newtable(state); }
 void createtable(State* state, int narr, int nrec) { lua_createtable(state, narr, nrec); }
 void reservehash(State* state, int idx, int n) { imlui_lua_reservehash(state, idx, n); }
 Type getfield(State* state, int idx, const char* k) { return toType(lua_getfield(state, idx, k)); }
+Type rawgetfield(State* state, int idx, const char* k) { return toType(imlui_lua_rawgetfield(state, idx, k)); }
+int Key::nextSlot() {
+    static std::atomic<int> next{0};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+Type rawget(State* state, int idx, const Key& key) {
+    return toType(imlui_lua_rawgetkey(state, idx, key.slot(), key.name().c_str()));
+}
 void setfield(State* state, int idx, const char* k) { lua_setfield(state, idx, k); }
 Type gettable(State* state, int idx) { return toType(lua_gettable(state, idx)); }
 void settable(State* state, int idx) { lua_settable(state, idx); }

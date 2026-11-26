@@ -277,8 +277,8 @@ std::uint64_t mix(std::uint64_t h, std::uint64_t v) {
     return z ^ (z >> 31);
 }
 
-/// Mixes the value on top of the stack into `h`: nil, booleans, numbers and strings by value, anything else
-/// (tables, functions, bind objects, userdata) by identity.
+/// Mixes the value on top of the stack into `h`: nil, booleans and numbers by value, strings by lua::strid (their
+/// object, length and hash), anything else (tables, functions, bind objects, userdata) by identity.
 std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
     const lua::Type t = lua::type(state, -1);
     h = mix(h, static_cast<std::uint64_t>(t));
@@ -288,7 +288,9 @@ std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
     case lua::Type::Number:
         if (lua::isinteger(state, -1)) return mix(h, static_cast<std::uint64_t>(lua::tointeger(state, -1)));
         return mix(h, std::bit_cast<std::uint64_t>(static_cast<double>(lua::tonumber(state, -1))));
-    case lua::Type::String: return mix(h, std::hash<std::string_view>{}(lua::tostring(state, -1)));
+    // Lua's identity of the string (address, length, its hash), not a hash of its bytes on every check: a long
+    // static `text` is fingerprinted several times a frame.
+    case lua::Type::String: return mix(h, lua::strid(state, -1));
     default: return mix(h, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(lua::topointer(state, -1))));
     }
 }
@@ -297,8 +299,7 @@ std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
 /// (luaui::sharedMetaMarker): property reads then go through its __index for a field the table doesn't hold.
 bool hasOwnMeta(lua::State* state, int tbl) {
     if (lua::getmetatable(state, tbl) == 0) return false;
-    lua::pushcstring(state, luaui::sharedMetaMarker);
-    const bool own = lua::rawget(state, -2) == lua::Type::Nil;
+    const bool own = lua::rawget(state, -1, luaui::keys::sharedMeta) == lua::Type::Nil;
     lua::pop(state, 2);
     return own;
 }
@@ -313,8 +314,7 @@ std::uint64_t fingerprint(lua::State* state, int tbl, const TypeInfo& info) {
     std::uint64_t h = 0;
     for (const TypeInfo::Property& p : info.properties()) {
         if (!p.assign) continue;
-        lua::pushcstring(state, p.name.c_str());
-        lua::rawget(state, tbl);
+        lua::rawget(state, tbl, *p.key);
         h = mixValue(state, h);
         lua::pop(state);
     }
@@ -345,8 +345,7 @@ void collectDynamicFields(lua::State* state, int tbl, const TypeInfo& info, std:
     for (std::size_t i = 0; i < properties.size(); ++i) {
         const TypeInfo::Property& p = properties[i];
         if (!p.assign) continue;
-        lua::pushcstring(state, p.name.c_str());
-        const lua::Type t = lua::rawget(state, tbl);
+        const lua::Type t = lua::rawget(state, tbl, *p.key);
         lua::pop(state);
         bool dynamic = false;
         switch (t) {
@@ -401,8 +400,8 @@ Box* boxAt(lua::State* state, int idx) {
         lua::pop(state);
         return static_cast<Box*>(lua::touserdata(state, idx));
     }
-    lua::pushcstring(state, markerKey);
-    lua::rawget(state, -2);
+    static const lua::Key marker{markerKey};
+    lua::rawget(state, -1, marker);
     const bool ours = lua::toboolean(state, -1);
     lua::pop(state, 2);
     return ours ? static_cast<Box*>(lua::touserdata(state, idx)) : nullptr;
@@ -411,8 +410,7 @@ Box* boxAt(lua::State* state, int idx) {
 /// The Box of an element table (`__native`) or of a singleton userdata.
 Box* selfBox(lua::State* state, int idx) {
     if (lua::istable(state, idx)) {
-        lua::pushcstring(state, "__native");
-        lua::rawget(state, idx);
+        lua::rawget(state, idx, luaui::keys::native);
         Box* b = boxAt(state, -1);
         lua::pop(state);
         return b;
@@ -472,7 +470,7 @@ void resetProperty(const Box& b, std::size_t index) {
 void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index) {
     const TypeInfo& info = *b.type;
     const TypeInfo::Property& p = info.properties()[index];
-    node.push(p.name.c_str());
+    node.push(*p.key);
     if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
         lua::pop(state);
         lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child
@@ -537,8 +535,7 @@ void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) 
     }
     // `parent` is read through the metatable from the parents table, so a raw field (a script assigned it) would
     // shadow it: dropped here. (A script's write counts as a change, so the element syncs again after it.)
-    lua::pushcstring(state, "parent");
-    if (lua::rawget(state, tbl) != lua::Type::Nil) {
+    if (lua::rawget(state, tbl, luaui::keys::parent) != lua::Type::Nil) {
         lua::pushcstring(state, "parent");
         lua::pushnil(state);
         lua::rawset(state, tbl);
@@ -753,8 +750,7 @@ void pushTypeMeta(lua::State* state, const TypeInfo& info) {
 
 /// Whether the constructor of the element table at `tbl` failed before (attachInstance stored `__native = false`).
 bool constructionFailed(lua::State* state, int tbl) {
-    lua::pushcstring(state, "__native");
-    lua::rawget(state, tbl);
+    lua::rawget(state, tbl, luaui::keys::native);
     const bool failed = lua::isboolean(state, -1) && !lua::toboolean(state, -1);
     lua::pop(state);
     return failed;
@@ -767,8 +763,7 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     tbl = lua::absindex(state, tbl);
     lua::checkstack(state, 8);
     // One read of `__native` for both questions (selfBox, constructionFailed): this runs for every element built.
-    lua::pushcstring(state, "__native");
-    lua::rawget(state, tbl);
+    lua::rawget(state, tbl, luaui::keys::native);
     Box* existing = lua::isnil(state, -1) ? nullptr : boxAt(state, -1);
     const bool failed = lua::isboolean(state, -1) && !lua::toboolean(state, -1);
     lua::pop(state);

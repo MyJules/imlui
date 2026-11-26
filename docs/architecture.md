@@ -338,7 +338,8 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   which asks its children, and then each of them renders) neither syncs nor measures an element twice; a sync of the
   element, or Lua that may change tables, drops them. The skip
   doesn't trust the count alone: each sync keeps a fingerprint of the element table's declared fields (their raw
-  values: numbers, booleans and strings by value, tables and functions by identity), and a skip compares it, so a
+  values: numbers and booleans by value, strings by Lua's identity of them (`lua::strid`: object, length and hash),
+  tables and functions by identity), and a skip compares it, so a
   write that bypassed the count (a raw `lua_setfield` from C++, a binding that writes its own element) still reaches
   the render on the same frame. A debug build reports such a write as a script error (`Gauge: a declared field of the
   element table changed without luaui::changes() counting it ...`): the code that made it probably writes other
@@ -1148,8 +1149,17 @@ project already has `glfw`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is 
   The API has C++ linkage: `src/wrap/lua.cppm` includes the headers without `extern "C"`. After `onelua.c`, the same
   file defines two additions that need Lua's internals (`external/lua_cxx/imlui_lua_state.h`, installed with the
   headers): `imlui_lua_newstate` (`luaL_newstate` with another allocator, keeping lauxlib's private panic and warning
-  functions) and `imlui_lua_reservehash` (`lua::reservehash`: room in a table's hash part for `n` more keys, in one
-  resize).
+  functions), `imlui_lua_reservehash` (`lua::reservehash`: room in a table's hash part for `n` more keys, in one
+  resize), and the field reads of the render path: `imlui_lua_rawgetfield` (`lua::rawgetfield`: a raw read by a C
+  string in one call, no key pushed), `imlui_lua_rawgetkey` (`lua::rawget` with a `lua::Key`: the key's string made
+  once per state and kept in a per-state cache under the Key's slot, reached through the threads' `LUA_EXTRASPACE`,
+  its strings kept alive in the registry, freed by `lua::close` after `lua_close`) and `imlui_lua_strid`
+  (`lua::strid`: a string's object, length and Lua hash, which the property fingerprint mixes instead of hashing the
+  bytes). The same file sets `STRCACHE_N` (509, the C-string cache `lua_getfield` and `rawgetfield` look keys up in)
+  and routes Lua's `strcmp` to an inline comparison, and `luai_userstateopen` clears the extra space of a new state.
+  The fields imlui reads for every element every frame (`visible`, `enabled`, `tooltip`, `width`, `fillWidth`,
+  `__children`, `__native`, each property's name: `TypeInfo::Property::key`, ...) are `lua::Key`s
+  (`luaui::keys`); `luaui::Node` takes a Key wherever it takes a name for the hot reads.
 - **GLFW 3.4** is built via `add_subdirectory` (its CMake does the per-platform work).
 - **spdlog 1.15.3** is built from its sources as its own CMake would build the static library: `SPDLOG_COMPILED_LIB`
   with the bundled fmt.

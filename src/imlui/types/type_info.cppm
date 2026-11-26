@@ -17,6 +17,8 @@ public:
 
     struct Property {
         std::string name;
+        /// `name` as a lua::Key: the sync reads the property's field through it. Set by addProperty().
+        std::optional<lua::Key> key;
         std::string_view typeName; ///< LuaConvert<V>::name, for error messages
         /// Pushes the getter's value.
         std::function<void(lua::State*, const ScriptObject&)> push;
@@ -165,6 +167,7 @@ void TypeInfo::checkUnique(std::string_view name) const {
 
 void TypeInfo::addProperty(Property property) {
     checkUnique(property.name);
+    property.key.emplace(property.name);
     m_properties.push_back(std::move(property));
 }
 

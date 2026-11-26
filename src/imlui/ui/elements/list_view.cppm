@@ -264,8 +264,7 @@ void ListView::renderContent(Frame& frame) {
                 spaced = true;
             }
         };
-        lua::pushcstring(state, "__inline"); // raw, like the renderer: only the table's own marker counts
-        lua::rawget(state, item);
+        lua::rawgetfield(state, item, "__inline"); // raw, like the renderer: only the table's own marker counts
         const bool isInline = lua::toboolean(state, -1);
         lua::pop(state);
         if (isInline) {

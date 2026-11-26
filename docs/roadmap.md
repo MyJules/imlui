@@ -15,8 +15,6 @@ Follow-ups not scheduled yet:
   props are read ~18 times a frame (`visible` 3, `width`/`fillWidth` 3, `__children` 2.5). Keep a container's
   children (table, kind, id, `visible`, size props) for the frame while `luaui::changes()` stands still. The kind is
   answered from the `__native` box already.
-- Property reads still push their key through `lua_pushstring` (Lua's address cache, then a `strcmp`): ~6% of a
-  steady frame. Intern the keys once per state (registry refs, or upvalues of the hot C functions).
 - The Lua call path: read `bind(t, k)` without a pcall when `t` has no metatable or a plain `__index` table; push a
   delegate's scope from C++ instead of Lua `inScope`; reuse the `__children` cache entry instead of a new table.
 - First frame of a big page: only what is in view (and 256 children below it) renders now, and elements cost about

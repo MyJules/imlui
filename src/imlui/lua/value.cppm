@@ -53,8 +53,8 @@ float toFloat(double v) {
 bool isBind(lua::State* state, int idx) {
     if (!lua::istable(state, idx)) return false;
     idx = lua::absindex(state, idx);
-    lua::pushcstring(state, "__bind");
-    lua::rawget(state, idx);
+    static const lua::Key bindKey{"__bind"}; // read for every table-valued prop, every frame
+    lua::rawget(state, idx, bindKey);
     bool b = lua::toboolean(state, -1);
     lua::pop(state);
     return b;
