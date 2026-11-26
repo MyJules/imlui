@@ -42,9 +42,13 @@ module :private;
 namespace imlui {
 
 void Divider::declare(TypeBuilder<Divider>& type) {
-    type.fillsWidth(); // an unset width fills
+    type.doc("A 1dp `outlineVariant` horizontal rule, e.g. between menu items or list sections.\n"
+             "Natural size: the available width (unless `width` is set), 1dp high.")
+        .fillsWidth(); // an unset width fills
     type.property("inset", &Divider::inset, &Divider::setInset)
-        .property("insetEnd", &Divider::insetEnd, &Divider::setInsetEnd);
+        .doc("The start inset (dp).")
+        .property("insetEnd", &Divider::insetEnd, &Divider::setInsetEnd)
+        .doc("The end inset (dp).");
 }
 
 void Divider::render(Frame& frame) { md::divider(m_inset, m_insetEnd, frame.resolvedWidth()); }

@@ -41,8 +41,12 @@ module :private;
 namespace imlui {
 
 void NavigationBar::declare(TypeBuilder<NavigationBar>& type) {
-    type.fillsWidth(); // an unset width fills
-    type.property("color", &NavigationBar::color, &NavigationBar::setColor);
+    type.doc("The Material 3 bottom navigation bar, for compact windows. Its visible children are "
+             "`NavigationItem`s (directly or from a `Repeater`), which share the width equally.\n"
+             "Natural size: the available width (unless `width` is set), 80dp high.")
+        .fillsWidth(); // an unset width fills
+    type.property("color", &NavigationBar::color, &NavigationBar::setColor)
+        .doc("The container color; unset: `surfaceContainer`.");
 }
 
 void NavigationBar::render(Frame& frame) {

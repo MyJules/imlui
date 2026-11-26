@@ -38,7 +38,14 @@ module :private;
 
 namespace imlui {
 
-void Menu::declare(TypeBuilder<Menu>& type) { type.property("title", &Menu::title, &Menu::setTitle); }
+void Menu::declare(TypeBuilder<Menu>& type) {
+    type.doc("A Material menu of `MenuItem`s, `Divider`s, nested `Menu`s (submenus), `Repeater`s, ...: in a "
+             "`MenuBar` a title that opens it, inside a menu a submenu, and as a `Button`'s or `IconButton`'s "
+             "`menu` a dropdown under the button.\n"
+             "As wide as its widest row (at least 112dp; a row at least 160dp).")
+        .property("title", &Menu::title, &Menu::setTitle)
+        .doc("The title in a menu bar, or the submenu's label.");
+}
 
 void Menu::render(Frame& frame) {
     const std::string label = Frame::labelId(m_title, "menu");

@@ -24,7 +24,10 @@ module :private;
 
 namespace imlui {
 
-void MenuBar::declare(TypeBuilder<MenuBar>&) {}
+void MenuBar::declare(TypeBuilder<MenuBar>& type) {
+    type.doc("A window's menu bar: give it as `ApplicationWindow.menuBar` or `Window.menuBar`. Its children are "
+             "`Menu`s, shown as titles that open their menus.");
+}
 
 void MenuBar::render(Frame& frame) {
     if (ImGui::BeginMenuBar()) {

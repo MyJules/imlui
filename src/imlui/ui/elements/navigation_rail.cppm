@@ -64,9 +64,17 @@ float renderCentered(Frame::Child& child, float x, float width, float y) {
 } // namespace
 
 void NavigationRail::declare(TypeBuilder<NavigationRail>& type) {
-    type.property("color", &NavigationRail::color, &NavigationRail::setColor)
+    type.doc("The Material 3 navigation rail, for medium windows. Its children are `NavigationItem`s, stacked "
+             "below an optional `header` element (e.g. a menu `IconButton` or a FAB), which stays fixed at the top. "
+             "When the destinations don't fit they scroll, with a thin scrollbar shown only then.\n"
+             "Natural size: 80dp wide, the available height (unless `height` is set; at least 80dp).")
+        .property("color", &NavigationRail::color, &NavigationRail::setColor)
+        .doc("The container color; unset: `surface`.")
         .property("spacing", &NavigationRail::spacing, &NavigationRail::setSpacing)
-        .property("align", &NavigationRail::align, &NavigationRail::setAlign);
+        .doc("The gap between destinations (dp).")
+        .property("align", &NavigationRail::align, &NavigationRail::setAlign)
+        .doc("Where the destinations sit in the height below the header while they fit: `\"top\"` (default), "
+             "`\"center\"` or `\"bottom\"`.");
 }
 
 void NavigationRail::render(Frame& frame) {

@@ -55,12 +55,22 @@ module :private;
 namespace imlui {
 
 void TopAppBar::declare(TypeBuilder<TopAppBar>& type) {
-    type.fillsWidth(); // an unset width fills
+    type.doc("The Material 3 top app bar: an optional navigation icon, a title and, as children, **actions** "
+             "(`IconButton`s, ...) right-aligned in the 64dp top row, each centered vertically.\n"
+             "Natural size: the available width (unless `width` is set), the `variant`'s height.")
+        .fillsWidth(); // an unset width fills
     type.property("title", &TopAppBar::title, &TopAppBar::setTitle)
+        .doc("The title: `titleLarge` for `\"small\"` and `\"center\"`, `headlineSmall` for `\"medium\"`, "
+             "`headlineMedium` for `\"large\"`.")
         .property("navigationIcon", &TopAppBar::navigationIcon, &TopAppBar::setNavigationIcon)
+        .doc("A Material icon name for a leading icon button (clicks fire `onNavigation`); `\"\"` for none.")
         .property("variant", &TopAppBar::variant, &TopAppBar::setVariant)
+        .doc("`\"small\"` (default, 64dp), `\"center\"` (64dp, centered title), `\"medium\"` (112dp) or `\"large\"` "
+             "(152dp); `medium` and `large` put the title below the top row.")
         .property("color", &TopAppBar::color, &TopAppBar::setColor)
-        .signal("onNavigation");
+        .doc("The container color; unset: the current surface.")
+        .signal<>("onNavigation")
+        .doc("Called when the navigation icon is clicked.");
 }
 
 void TopAppBar::render(Frame& frame) {

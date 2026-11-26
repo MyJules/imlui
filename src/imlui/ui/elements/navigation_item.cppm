@@ -53,12 +53,23 @@ module :private;
 namespace imlui {
 
 void NavigationItem::declare(TypeBuilder<NavigationItem>& type) {
-    type.fillsWidth(); // an unset width fills
+    type.doc("A navigation destination, in the look of the container it renders in: a drawer item (a 56dp pill "
+             "with icon, `labelLarge` label and trailing badge) by default and in a `ModalNavigationDrawer`; a bar "
+             "destination in a `NavigationBar`; a rail destination in a `NavigationRail`.\n"
+             "`NavigationItem { \"Inbox\", icon = \"inbox\" }` sets `text`. A drawer item fills the width unless "
+             "`width` is set; in a bar or rail the container sets the width.")
+        .fillsWidth(); // an unset width fills
     type.property("icon", &NavigationItem::icon, &NavigationItem::setIcon)
+        .doc("A Material icon name.")
         .property("text", &NavigationItem::text, &NavigationItem::setText)
+        .doc("The label. The positional value: `NavigationItem { \"Inbox\" }`.")
         .property("selected", &NavigationItem::selected, &NavigationItem::setSelected)
+        .doc("Draws the selected look (in a bar or rail, a `secondaryContainer` indicator behind the icon).")
         .property("badge", &NavigationItem::badge, &NavigationItem::setBadge)
-        .signal("onClicked")
+        .doc("Drawer item: trailing text. Bar or rail: a small `error` badge on the icon with this text, or a 6dp "
+             "dot for `\".\"` (or `\"•\"`). `\"\"` for none.")
+        .signal<>("onClicked")
+        .doc("Called when the destination is clicked.")
         .defaultProperty("text");
 }
 

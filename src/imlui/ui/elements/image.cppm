@@ -103,15 +103,31 @@ constexpr float placeholderSize = 48.0f;
 } // namespace
 
 void Image::declare(TypeBuilder<Image>& type) {
-    type.property("source", &Image::source, &Image::setSource)
+    type.doc("A PNG or JPEG image from the app's resources, decoded once per resource name and drawn as a "
+             "texture. A missing or undecodable file is reported once and drawn as a broken-image placeholder.\n"
+             "`Image { \"img/logo.png\" }` sets `source`. Natural size: the image's pixels as dp (times the DPI "
+             "scale); with only `width` or `height` set, the other follows the aspect ratio.")
+        .property("source", &Image::source, &Image::setSource)
+        .doc("A resource name: `\"app:/img/logo.png\"`, or relative to the folder of the script that created the "
+             "`Image`. The positional value. `\"\"`: nothing is drawn and no space is taken.")
         .property("fillMode", &Image::fillMode, &Image::setFillMode)
+        .doc("How the image fills its size when the aspect ratios differ: `\"stretch\"` (default), `\"fit\"` (inside, "
+             "centered), `\"crop\"` (covers it, centered and cut off) or `\"tile\"` (repeated at its natural size).")
         .property("radius", &Image::radius, &Image::setRadius)
+        .doc("The corner radius (dp); not applied to `\"tile\"`. Half the size with `\"crop\"`: a circle.")
         .property("opacity", &Image::opacity, &Image::setOpacity)
+        .doc("0 to 1.")
         .property("tint", &Image::tint, &Image::setTint)
+        .doc("Multiplies the pixels (`\"primary\"`, `\"#FFFFFF80\"`); its alpha multiplies the opacity.")
         .property("smooth", &Image::smooth, &Image::setSmooth)
+        .doc("`false` samples the nearest pixel (pixel art, scaled-up icons) instead of filtering.")
         .property("status", &Image::status)
+        .doc("Read-only: `\"loading\"` (before the first render), `\"ready\"`, `\"error\"` (missing or undecodable "
+             "file) or `\"none\"` (no source).")
         .property("implicitWidth", &Image::implicitWidth)
+        .doc("Read-only: the image's width in pixels; 0 until it's ready.")
         .property("implicitHeight", &Image::implicitHeight)
+        .doc("Read-only: the image's height in pixels; 0 until it's ready.")
         .defaultProperty("source");
 }
 

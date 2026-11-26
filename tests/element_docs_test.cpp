@@ -24,6 +24,9 @@ constexpr bool requireEveryBuiltin = false;
 /// The built-ins documented completely, by Lua name (an alias is a type of its own: list it too).
 const std::set<std::string, std::less<>> documentedTypes{
     "Button",
+    // family B: app bars, navigation, menus, text and decoration
+    "TopAppBar", "NavigationItem", "NavigationBar", "NavigationRail", "ModalNavigationDrawer", "MenuBar", "Menu",
+    "MenuItem", "Text", "Label", "Icon", "Image", "Link", "Divider", "Separator", "Spacer",
 };
 
 /// What `info` leaves undocumented: "the type", ".prop", ".onSignal", ":method".

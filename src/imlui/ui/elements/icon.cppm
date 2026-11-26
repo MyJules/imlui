@@ -51,11 +51,18 @@ module :private;
 namespace imlui {
 
 void Icon::declare(TypeBuilder<Icon>& type) {
-    type.property("name", &Icon::name, &Icon::setName)
+    type.doc("A Material icon glyph, named by the first of `name`, `icon` and `text` that is set.\n"
+             "`Icon { \"home\" }` sets `text`. Natural size: a `size` square.")
+        .property("name", &Icon::name, &Icon::setName)
+        .doc("The Material icon name (`\"home\"`, `\"settings\"`, ...).")
         .property("icon", &Icon::icon, &Icon::setIcon)
+        .doc("The icon name, when `name` isn't set.")
         .property("text", &Icon::text, &Icon::setText)
+        .doc("The icon name, when neither `name` nor `icon` is set. The positional value: `Icon { \"home\" }`.")
         .property("size", &Icon::size, &Icon::setSize)
+        .doc("The glyph's size (dp).")
         .property("color", &Icon::color, &Icon::setColor)
+        .doc("The tint; unset: `onSurfaceVariant`.")
         .defaultProperty("text");
 }
 

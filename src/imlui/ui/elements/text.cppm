@@ -66,12 +66,24 @@ module :private;
 namespace imlui {
 
 void Text::declare(TypeBuilder<Text>& type) {
-    type.property("text", &Text::text, &Text::setText)
+    type.doc("A line or paragraph of text in a Material type-scale `style` (`Label` is the same element).\n"
+             "`Text { \"Hello\" }` sets `text`. Natural size: the text's; wrapping or aligned text fills the "
+             "available width (in a `Row`, a share of the free width).")
+        .property("text", &Text::text, &Text::setText)
+        .doc("The content. The positional value: `Text { \"Hello\" }`.")
         .property("style", &Text::style, &Text::setStyle)
+        .doc("A type-scale role: `\"bodyLarge\"` (default), `\"titleMedium\"`, `\"headlineSmall\"`, ...; unknown "
+             "names draw as `bodyLarge`.")
         .property("color", &Text::color, &Text::setColor)
+        .doc("The text color; unset: the theme's text color (`onSurface`).")
         .property("wrap", &Text::wrap, &Text::setWrap)
+        .doc("Wraps at the available width (a fixed `Column`'s, a `Grid` cell's, a `Row` share, ...).")
         .property("align", &Text::align, &Text::setAlign)
+        .doc("The line's position in the available width: `\"start\"` (default), `\"center\"` or `\"end\"`. "
+             "Ignored while `wrap` is on.")
         .property("font", &Text::font, &Text::setFont)
+        .doc("A font the theme declares (`\"mono\"`, or `\"regular\"` / `\"medium\"`), drawn at the style's size; "
+             "`\"\"` or an undeclared name: the style's own face.")
         .defaultProperty("text")
         .fillsWidthWhen(&Text::followsWidth); // takes a share of a Row, and wraps or aligns in it
 }

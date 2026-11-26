@@ -35,7 +35,12 @@ module :private;
 namespace imlui {
 
 void Spacer::declare(TypeBuilder<Spacer>& type) {
-    type.property("fill", &Spacer::fill, &Spacer::setFill).fillsWidthWhen(&Spacer::fill);
+    type.doc("Empty space: `width` and `height` (fixed, fill or fill minus, like every size; unset: 1px), or "
+             "`fill`.\n"
+             "`Row { Text { \"Left\" }, Spacer { fill = true }, Text { \"Right\" } }` pushes the texts apart.")
+        .property("fill", &Spacer::fill, &Spacer::setFill)
+        .doc("Fills the available width when `width` is unset: in a `Row`, a share of the remaining width.")
+        .fillsWidthWhen(&Spacer::fill);
 }
 
 void Spacer::render(Frame& frame) {
