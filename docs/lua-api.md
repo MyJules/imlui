@@ -40,7 +40,7 @@ Every constructor registers its `id` (`ui.registerId(props)`), the Lua-side `Rep
 | while a [`Repeater` / `ListView` delegate](#repeater--model-delegate-) runs | that **delegate instance's** `ids`, the third argument of `delegate(item, index, ids)` | no |
 | later, by a function of an element built in a component instance or delegate (see below) | that instance's or delegate's `ids` | no |
 | later, by a timer, watcher or `onFrame` callback set up while an instance or delegate was being built | that instance's or delegate's `ids` | no |
-| later, by any other code (functions of app-level elements, timers set at app level) | the app scope | yes |
+| later, by any other code (functions of app-level elements, timers and watchers set at app level) | the app scope | yes |
 
 **Functions run in their element's scope.** Every element built in a component instance or delegate remembers that
 scope, and its functions run in it whenever imlui calls them: its bindings (`text = function(self) ... end`), its
@@ -48,8 +48,12 @@ scope, and its functions run in it whenever imlui calls them: its bindings (`tex
 and the functions the Lua-side containers call (`model`, `condition`, a `Loader`'s `item`, a `Responsive` class
 function). So a button inside a component that builds a `Text { id = "row" }` when clicked registers it in that
 instance's `ids`, and two instances don't clash. `ui.setTimeout`, `ui.setInterval`, `ui.watch` and `ui.onFrame`
-capture the scope that is active when they're called, and run their callback in it. The scope is popped however the
-call ends (a to-be-closed variable), so a handler that raises can't leave it behind. Not covered: the getter and
+capture the scope that is active when they're called, and run their callback in it, the app scope included: an
+app-level watcher that a component's handler triggers (by writing the state) builds into `ui.ids`, not into the
+component's `ids`. So do a future's `next`/`catch`/`onProgress` handlers and an async function's coroutine. The scope
+is popped however the call ends (a to-be-closed variable), so a handler that raises can't leave it behind. An async
+function keeps its scopes to itself: one that awaits while a component it builds is in its scope doesn't leave that
+scope active for other code while it waits, gets it back when it resumes, and pops it when it's cancelled. Not covered: the getter and
 setter of a `bind(getter, setter)` (they run in whatever scope is active, app level when imlui calls them), and
 functions of an app-level element, which run in whatever scope is active (app level whenever the engine calls them).
 
@@ -625,7 +629,7 @@ A future `f`:
 | `f.progress` | The last progress reported while pending (a number, by convention 0..1), or `nil` before the first. Reporting requests a frame, so bindings update. A C++ job's reports are coalesced: at most one per loop iteration, the latest. |
 | `f:next(onValue, onError) -> future` | When `f` is done, `onValue(values...)`; when it failed, `onError(err)`. The new future settles with what the handler returns (a future it returns is followed) or fails with what it raises. A missing handler passes the outcome on. When `f` is cancelled, the new future is cancelled (no handler runs). Handlers run in the scope `next` was called in. |
 | `f:catch(onError) -> future` | `f:next(nil, onError)`. It doesn't see cancellation: that isn't an error. |
-| `f:cancel() -> boolean` | Settles a pending `f` as cancelled, which cancels the futures `next`/`catch` made from it, and stops what it waits on: the C++ work behind it (its stop token), a `sleep`'s timer, an async function (it never resumes; its to-be-closed variables are closed). What it waits on as a consumer (`next`'s source or the future its handler returned, what an async function awaits, `all`'s inputs) is **released**: cancelled when nothing else consumes it. `false` when `f` already settled. |
+| `f:cancel() -> boolean` | Settles a pending `f` as cancelled (a future from C++: its C++ side first, so its C++ `onSettled` handlers have run and a `pending` property backed by it reads `false` when the Lua awaiters and handlers run), which cancels the futures `next`/`catch` made from it, and stops what it waits on: the C++ work behind it (its stop token), a `sleep`'s timer, an async function (it never resumes; its to-be-closed variables are closed). What it waits on as a consumer (`next`'s source or the future its handler returned, what an async function awaits, `all`'s inputs) is **released**: cancelled when nothing else consumes it. `false` when `f` already settled. |
 | `f:onProgress(fn) -> f` | Calls `fn(progress)` at each progress reported from now until `f` settles (`f.progress` is the current one). Returns `f`, to chain: `backend:fetch(url):onProgress(show):next(use)`. `fn` runs in the scope `onProgress` was called in. Progress isn't forwarded through `next`. |
 | `f:report(p) -> boolean` | Only for a future made by `future()`: reports progress `p` (a number). `false` once settled. |
 
@@ -661,6 +665,9 @@ Text { text = function() return loading.state == "pending" and "Loading..." or "
   it settles from this one (its first value converted to `T`; one that doesn't convert fails the C++ side with
   the field path). Passing a future counts as handling its rejection. A `Future<void>` parameter takes every future
   and ignores its values. See [Extending](extending.md#lua-futures-as-arguments).
+- **Futures from C++.** A C++ future's value is converted to Lua when it settles. A value whose conversion raises or
+  throws (a custom `LuaConvert<T>::push`, out of memory) fails the Lua future with that error instead
+  (`Future value: <what>` for a C++ exception), while the C++ side stays done.
 - **Hot reload.** Futures and coroutines belong to the Lua state and die with it. A C++ future that settles after a
   reload settles only on the C++ side; a C++ future that was waiting on a Lua future is cancelled.
 - `await` yields, so it works where a coroutine can yield: through `pcall`, `xpcall` and metamethods, not inside a

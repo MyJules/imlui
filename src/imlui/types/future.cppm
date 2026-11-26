@@ -162,6 +162,8 @@ private:
     /// Pushes the receiver of an adopted Lua future: a C closure whose upvalue holds a strong reference to this state,
     /// and whose finalizer (the future settled, or the state closing) cancels it if pending and releases it.
     void pushReceiver(lua::State* state);
+    /// Arg 1: the Core (a light userdata). Pushes its settlement arguments (pushSettlement), for a protected call.
+    static int luaPushSettlement(lua::State* state);
     static int luaCancel(lua::State* state);
     static int luaReceive(lua::State* state);
     static int cancellerGc(lua::State* state);
@@ -568,9 +570,31 @@ void Core::notifyLua() {
     luaui::protectedCall(state, "Future", [&] {
         lua::checkstack(state, 8);
         m_link.push(state);
-        const int nargs = pushSettlement(state);
+        // The settlement in a protected call of its own: a value whose push raises or throws (its LuaConvert<T>, out
+        // of memory) fails the Lua future with that error instead. Otherwise it would stay pending for good: this
+        // state is settled and never tells Lua again. The error then reaches the future's awaiters, or is reported as
+        // an unhandled rejection, once.
+        const int base = lua::gettop(state);
+        lua::pushcfunction(state, &luaPushSettlement);
+        lua::pushlightuserdata(state, this);
+        int nargs = 0;
+        if (lua::pcall(state, 1, lua::multRet, 0) == lua::ok) {
+            nargs = lua::gettop(state) - base;
+        } else {
+            std::string message{lua::isstring(state, -1) ? lua::tostring(state, -1) : "unknown C++ exception"};
+            lua::settop(state, base);
+            lua::pushstring(state, "failed");
+            lua::pushstring(state, message);
+            lua::pushboolean(state, false); // the C++ handlers saw it done: nothing handled this error yet
+            nargs = 3;
+        }
         luaui::safeCall(state, nargs, 0);
     });
+}
+
+int Core::luaPushSettlement(lua::State* state) {
+    const auto* core = static_cast<const Core*>(lua::touserdata(state, 1));
+    return luaui::catchCxx(state, [&] { return core->pushSettlement(state); }, "Future value");
 }
 
 void Core::notifyProgress() {

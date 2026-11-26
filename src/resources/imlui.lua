@@ -50,7 +50,10 @@ ui.native = native
 local function weakIds() return setmetatable({}, { __mode = "v" }) end
 ui.ids = weakIds()
 
--- The scope stack, innermost last: { ids = table, what = function() -> description }. Empty: app level.
+-- The scope stack, innermost last: { ids = table, what = function() -> description }, or false for app level
+-- (atAppLevel). Empty: app level too. `scopes[#scopes] or nil` is the current scope, nil at app level. Each async
+-- function's coroutine has a stack of its own, swapped in while it runs (see step): a coroutine that awaits inside a
+-- scope keeps it to itself, and the pops of its to-be-closed POP_SCOPEs (when it resumes, or is closed) apply to it.
 local scopes = {}
 
 -- The elements registered under an id since the last ui.__tick. Ids are weak, so until then, while a script still
@@ -61,7 +64,7 @@ local pinned = {}
 -- the stack right however the block is left, a component that raises included.
 local POP_SCOPE = setmetatable({}, { __close = function() scopes[#scopes] = nil end })
 
--- Calls fn(...) with `scope` as the innermost scope and returns its results.
+-- Calls fn(...) with `scope` as the innermost scope (false: app level) and returns its results.
 local function inScope(scope, fn, ...)
     scopes[#scopes + 1] = scope
     local _ <close> = POP_SCOPE
@@ -77,22 +80,16 @@ end
 local scopeOf = setmetatable({}, { __mode = "k" })
 if native.setScopeHooks then native.setScopeHooks(scopeOf, inScope) end
 
--- `fn` as a function that runs in the current scope when called later (a timer, a watcher), or `fn` itself at app
--- level.
+-- `fn` as a function that runs in the current scope when called later (a timer, a watcher, a future's handler): at
+-- app level too, when set up there, whatever scope is active when it is called (a component's handler that changes a
+-- state, or settles a future).
 local function inCurrentScope(fn)
-    local scope = scopes[#scopes]
-    if scope == nil then return fn end
+    local scope = scopes[#scopes] or false
     return function(...) return inScope(scope, fn, ...) end
 end
 
--- Calls fn(...) at app level (an empty scope stack) and returns its results: a module's top level runs there,
--- whoever requires it first.
-local function atAppLevel(fn, ...)
-    local saved = scopes
-    scopes = {}
-    local _ <close> = setmetatable({}, { __close = function() scopes = saved end })
-    return fn(...)
-end
+-- Calls fn(...) at app level and returns its results: a module's top level runs there, whoever requires it first.
+local function atAppLevel(fn, ...) return inScope(false, fn, ...) end
 
 -- A new scope for one instance of `kind` built by `fn`; `what()` names it in duplicate-id reports.
 local function newScope(kind, fn)
@@ -127,7 +124,7 @@ end
 --- containers (Repeater, ListView, If, Loader, Responsive) too.
 function ui.registerId(props)
     local id = rawget(props, "id")
-    if id ~= nil then registerIn(scopes[#scopes], props, id) end
+    if id ~= nil then registerIn(scopes[#scopes] or nil, props, id) end
 end
 
 --- Shows a script error in the error overlay (logged once; the script keeps running).
@@ -251,7 +248,7 @@ local function finishElement(props)
     end
     shareMeta(props)
     forEachChild(props, setParent, holder(props))
-    local scope = scopes[#scopes]
+    local scope = scopes[#scopes] or nil
     if scope ~= nil then scopeOf[props] = scope end
     ui.registerId(props)
     return props
@@ -293,7 +290,7 @@ function ui.element(name)
                     local c = props[i] -- raw: a hole reads the type's methods, which have no integer keys
                     if isElement(c) then linkChild(c, props) end
                 end
-                local scope = scopes[#scopes]
+                local scope = scopes[#scopes] or nil
                 if scope ~= nil then scopeOf[props] = scope end
                 if id ~= nil then registerIn(scope, props, id) end
                 return props
@@ -428,7 +425,7 @@ function ui.component(fn)
         local scope = newScope("component", fn)
         local root = inScope(scope, fn, props, scope.ids)
         local id = type(props) == "table" and rawget(props, "id") or nil
-        if id ~= nil and type(root) == "table" then registerIn(scopes[#scopes], root, id) end
+        if id ~= nil and type(root) == "table" then registerIn(scopes[#scopes] or nil, root, id) end
         return root
     end
 end
@@ -468,7 +465,7 @@ function ui.connect(target, signal, fn)
     if types == nil then error("connect: no C++ types (the library runs without an engine)", 2) end
     local ok, why = types.listen(target, signal)
     if not ok then error("connect: " .. why, 2) end
-    local scope = scopes[#scopes]
+    local scope = scopes[#scopes] or nil
     local rec
     if scope == nil then
         rec = { fn }
@@ -1193,7 +1190,8 @@ end
 -- cancel() also stops: a C++ job, a timer, an async function), __waiting (the future a next/catch future waits on,
 -- released when it is cancelled), __handled (something takes its outcome: an awaiter, next/catch, all, a C++
 -- handler), __resolvable (made by future()), __core (the C++ future it was pushed from or read into: a userdata C++
--- reads back), __trace (a Lua error's traceback, for the report).
+-- reads back), __cxx (pushed from C++: cancel() cancels the C++ side first), __trace (a Lua error's traceback, for
+-- the report).
 --
 -- Handlers run synchronously when a future settles: an awaiting coroutine resumes inside the resolve(), the timer or
 -- the posted C++ function that settled it, inside a frame or outside one. Settling requests a frame.
@@ -1374,8 +1372,17 @@ function FUTURE_METHODS:cancel()
     checkFuture(self, "cancel")
     if self.state ~= "pending" then return false end
     local stop, waiting = self.__cancel, self.__waiting
-    settle(self, "cancelled", "cancelled")
-    if stop then protectedCall(stop) end
+    if rawget(self, "__cxx") then
+        -- A C++ future settles first, running its C++ handlers (Future::onSettled, whenSettled, notifyWhenSettled)
+        -- before the Lua future's awaiters and next() handlers, as when C++ settles it. It doesn't tell Lua (the
+        -- canceller cancels without the link), so settling here is the only settle, unless a C++ handler cancelled
+        -- it from Lua meanwhile: then this one does nothing.
+        if stop then protectedCall(stop) end
+        settle(self, "cancelled", "cancelled")
+    else
+        settle(self, "cancelled", "cancelled")
+        if stop then protectedCall(stop) end
+    end
     if waiting then protectedCall(release, waiting) end
     return true
 end
@@ -1425,12 +1432,24 @@ function ui.future()
     return f
 end
 
--- Async functions. tasks[coroutine] = { co, future, scope, waiting = the future it awaits, cancelled }.
+-- Async functions. tasks[coroutine] = { co, future, scopes = its scope stack, waiting = the future it awaits,
+-- cancelled }. The stack starts with the scope the async function was called in (false: app level).
 local tasks = setmetatable({}, { __mode = "k" })
 
--- After a resume of `task`: settles its future when the body returned or raised. A body that yielded without await
--- (coroutine.yield) fails: nothing would ever resume it.
-local function finish(task, ok, ...)
+-- Closes the coroutine of `task` (its pending to-be-closed variables, POP_SCOPEs included) with its scope stack in
+-- place, and puts the current one back.
+local function closeTask(task)
+    local saved = scopes
+    scopes = task.scopes
+    coroutine.close(task.co) -- returns an error a __close raised; never raises
+    scopes = saved
+end
+
+-- After a resume of `task`, with its scope stack still in place (`saved` is the resumer's): puts `saved` back and
+-- settles the task's future when the body returned or raised. A body that yielded without await (coroutine.yield)
+-- fails: nothing would ever resume it.
+local function finish(task, saved, ok, ...)
+    scopes = saved
     local co = task.co
     if coroutine.status(co) == "dead" then
         tasks[co] = nil
@@ -1439,23 +1458,22 @@ local function finish(task, ok, ...)
         else
             local err = (...)
             if type(err) == "string" then task.future.__trace = debug.traceback(co, err) end
-            coroutine.close(co) -- closes its pending to-be-closed variables
+            closeTask(task) -- closes its pending to-be-closed variables
             settle(task.future, "failed", err)
         end
     elseif task.waiting == nil and not task.cancelled then
         tasks[co] = nil
-        coroutine.close(co)
+        closeTask(task)
         settle(task.future, "failed", "async: the function yielded with coroutine.yield; use await")
     end
 end
 
--- Resumes `task` with `...`, in the scope it was started in.
+-- Resumes `task` with `...`, with its own scope stack in place (the scope it was started in, and those it entered).
 local function step(task, ...)
     task.waiting = nil
-    if task.scope then
-        return finish(task, inScope(task.scope, coroutine.resume, task.co, ...))
-    end
-    return finish(task, coroutine.resume(task.co, ...))
+    local saved = scopes
+    scopes = task.scopes
+    return finish(task, saved, coroutine.resume(task.co, ...)) -- resume never raises: `saved` is always put back
 end
 
 --- async(fn) -> function. Calling the result runs fn(...) in a new coroutine, which may `await`, and returns a future
@@ -1466,7 +1484,7 @@ function ui.async(fn)
     if type(fn) ~= "function" then error("async: a function expected, got " .. type(fn), 2) end
     return function(...)
         local f = newFuture()
-        local task = { co = coroutine.create(fn), future = f, scope = scopes[#scopes] }
+        local task = { co = coroutine.create(fn), future = f, scopes = { scopes[#scopes] or false } }
         tasks[task.co] = task
         f.__cancel = function()
             task.cancelled = true
@@ -1474,7 +1492,7 @@ function ui.async(fn)
             local waiting = task.waiting
             task.waiting = nil
             if waiting then release(waiting) end
-            if coroutine.status(task.co) == "suspended" then coroutine.close(task.co) end
+            if coroutine.status(task.co) == "suspended" then closeTask(task) end
         end
         step(task, ...)
         return f
@@ -1652,6 +1670,7 @@ function ui.__futureLink(canceller, core, ...)
     local f = newFuture()
     f.__cancel = canceller
     f.__core = core
+    f.__cxx = true
     local function link(kind, ...)
         if kind == nil then return f end
         if kind == "progress" then
