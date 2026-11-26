@@ -998,8 +998,10 @@ It runs the built app on the build machine, so not when cross-compiling.
 ${PROJECT_SOURCE_DIR}` and an editor opened on the project folder completes and checks the scripts after the first
 build. The file sets Lua 5.4, the definitions folder as `workspace.library`, and `workspace.ignoreDir`: the build
 tree and a copy of imlui when they're inside `<dir>` (a submodule: its own `imlui.lua` and tests would define the DSL a
-second time), plus `IGNORE <dir>...` (relative to `<dir>`). It holds build-tree paths, so don't commit it (add
-`.luarc.json` to `.gitignore`); with several build trees the last one configured wins. Its first line (a `//`
+second time), plus `IGNORE <dir>...` (relative to `<dir>`). With `LUARC`, `OUTPUT` defaults to
+`<dir>/.lua-definitions/`: every build tree (preset) writes that one folder, so the library path doesn't depend on
+which preset was configured or built last, and any build provides the definitions. Git-ignore both (`.luarc.json`,
+`.lua-definitions/`): they're generated, and the file names the build tree it ignores. Its first line (a `//`
 comment, which the language server accepts) marks it as generated: it's rewritten at every configure while that line
 is there. Delete the line to keep your own edits; a `.luarc.json` without it is never touched, and configuring warns
 with the path to add.

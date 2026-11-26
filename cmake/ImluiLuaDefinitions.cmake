@@ -15,9 +15,11 @@
 #     LUARC <dir> also writes <dir>/.luarc.json at configure time (usually LUARC ${PROJECT_SOURCE_DIR}: the folder
 #     the editor opens), so the language server finds the definitions with no setup: Lua 5.4, the OUTPUT folder as a
 #     library, and these folders ignored: the build tree, a copy of imlui inside <dir> (a submodule: its own scripts
-#     would define the DSL a second time), and every IGNORE folder (relative to <dir>). The file's first line marks it
-#     as generated; it is rewritten at every configure (the last configured build tree wins) as long as that line is
-#     there. Delete the line to keep your own edits: a .luarc.json without it is never touched (a warning says so).
+#     would define the DSL a second time), and every IGNORE folder (relative to <dir>). With LUARC, OUTPUT defaults to
+#     <dir>/.lua-definitions: one folder every build tree (preset) writes, so the file's library path doesn't depend
+#     on which one was configured or built last (git-ignore it, like the file). The file's first line marks it as
+#     generated; it is rewritten at every configure as long as that line is there. Delete the line to keep your own
+#     edits: a .luarc.json without it is never touched (a warning says so).
 include_guard(GLOBAL)
 
 # A JSON string of `path` for <dir>/.luarc.json: relative to <dir> when inside it, else absolute; forward slashes.
@@ -101,7 +103,13 @@ function(imlui_add_lua_definitions target)
         message(FATAL_ERROR "imlui_add_lua_definitions: ${target} is not a target")
     endif()
     set(output ${arg_OUTPUT})
-    if(NOT output)
+    if(NOT output AND arg_LUARC)
+        set(output ${arg_LUARC})
+        if(NOT IS_ABSOLUTE ${output})
+            set(output ${CMAKE_CURRENT_SOURCE_DIR}/${output})
+        endif()
+        set(output ${output}/.lua-definitions)
+    elseif(NOT output)
         set(output ${CMAKE_CURRENT_BINARY_DIR}/lua-definitions)
     elseif(NOT IS_ABSOLUTE ${output})
         set(output ${CMAKE_CURRENT_BINARY_DIR}/${output})
