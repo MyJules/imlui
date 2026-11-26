@@ -35,6 +35,11 @@ Follow-ups not scheduled yet:
   final pixel size.
 - A file reached through a linked folder is readable but not listed, so hot reload sees it only once loaded.
 - `TextField` copies its text every frame (`md::textField` edits in place).
+- Left over from the November 2026 fixes: with measured heights (no `itemHeight`), a negative `spacing` of at least an
+  item's height still builds every delegate; a plain user coroutine (not an async task) that yields inside `inScope`
+  shares the global scope stack; bare hex without `#` (`"face"`) is a documented color spec, so a mistyped role made of
+  hex digits reads as a color — decide whether to require `#` for roles; `boxAt`-style forgery aside, scripts have the
+  full `debug` library.
 - Follow-ups from the November 2026 review: a test for the painter's `catchCxx` path (nothing in it throws on
   demand); the 240 fps cap with `vsync = false` is a constant, not the monitor's refresh rate; free an image's CPU
   pixels once the backend has uploaded it, if no backend re-uploads from them.
