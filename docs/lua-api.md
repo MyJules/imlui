@@ -426,6 +426,23 @@ ListView { height = 240, model = function() return db.query("select id, title fr
     delegate = function(row) return ListItem { text = row.title } end }
 ```
 
+Scrolling from a script (see [Scrolling a ListView from a script](elements.md#scrolling-a-listview-from-a-script)):
+
+- `followBottom = true` keeps the view at the end while it is there, as items are appended (a Lua list or a C++
+  model): a log or a chat. Scrolling up stops it, scrolling back to the end resumes it.
+- `list:positionViewAtIndex(index, mode)` scrolls item `index` (1-based, clamped to the model) to `"beginning"`
+  (default), `"center"`, `"end"` or `"contain"` (the least scroll that shows it), also an item whose delegate was
+  never built: it scrolls by the known heights and corrects over the next frames as the items there are measured.
+  `list:positionViewAtBeginning()`, `list:positionViewAtEnd()`. They work before the first render.
+- `list.firstVisibleIndex` (read-only) is the first item in view, with `onFirstVisibleIndexChanged(self, index)`.
+
+```lua
+ListView { id = "chat", height = 400, followBottom = true, model = backend.messages,
+    delegate = function(m) return ListItem { m.text, supportingText = m.author } end }
+Button { "Oldest", onClicked = function() chat:positionViewAtBeginning() end }
+Button { "Unread", onClicked = function() chat:positionViewAtIndex(s.firstUnread, "center") end }
+```
+
 ### `If { condition, ...children, otherwise = element }`
 
 Shows its array children while `condition` (a value, function or `bind`) is truthy. Otherwise it shows the single

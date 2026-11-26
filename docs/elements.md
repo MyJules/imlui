@@ -363,6 +363,14 @@ array children are used, like a `ScrollView`. It takes every `ScrollView` prop. 
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
 | `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by index: see [Repeater](lua-api.md#repeater--model-delegate-). A list model's own keys are used without one. |
 | `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. |
+| `followBottom` | bool | `false` | Keeps the view at the end while it is scrolled there: see [Scrolling from a script](#scrolling-a-listview-from-a-script). |
+| `firstVisibleIndex` | integer | `0` | *Read-only.* The model index of the first item at least partly in view when the list last rendered (0 before that, with an empty model or without `delegate`); `onFirstVisibleIndexChanged(self, index)` follows it. |
+
+| Method | Notes |
+|---|---|
+| `positionViewAtIndex(index, mode)` | Scrolls so that item `index` is placed by `mode`: `"beginning"` (default), `"center"`, `"end"` or `"contain"`. Built or not; see below. |
+| `positionViewAtBeginning()` | Scrolls to the top. |
+| `positionViewAtEnd()` | Scrolls to the end (the last item's bottom at the view's bottom). |
 
 Item heights. With `itemHeight`, finding the items in view costs the same for any length. Without it, the items
 are measured as they render, and the content height (the scroll range) is the measured heights plus the average for
@@ -399,6 +407,43 @@ What virtualization changes:
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,
     delegate = function(item) return ListItem { item.title, supportingText = item.note } end }
+```
+
+#### Scrolling a ListView from a script
+
+**`followBottom = true`** is the "sticky bottom" of a log, a chat or a live tail. While the view is scrolled to the
+end (within a pixel, checked at the start of each frame), anything that makes the content taller keeps it there:
+items appended to a Lua list or a [C++ model](lua-api.md#c-list-models), new items that turn out taller than
+estimated once they are measured, a view that gets smaller. New items show at the bottom one frame after they arrive.
+Scrolling up (wheel, scrollbar, keyboard, `positionViewAtIndex`) stops following; scrolling back to the end starts
+it again. A list that starts with `followBottom` starts at the end, and one shorter than its view follows as soon
+as it gets longer. A list at its end that nothing changes renders no frames for it.
+
+**`positionViewAtIndex(index, mode)`** scrolls to an item whether or not its delegate was ever built. `index` is
+1-based and clamped to `1..#model` (0, negatives and indices past the end are the first and the last item); a `mode`
+that isn't one of the four raises an error. The modes place the item's top at the view's top (`"beginning"`, the
+default), its middle at the view's middle (`"center"`), its bottom at the view's bottom (`"end"`), or scroll as
+little as shows all of it (`"contain"`: nothing when it is in view already; its top wins for an item taller than the
+view). Near the ends the scroll range limits it: `positionViewAtIndex(#model)` shows the last item at the bottom.
+
+The call takes effect at the next render, also before the list ever rendered, and asks for the frames it needs.
+With `itemHeight` the position is exact and lands in one frame. Without it, the first scroll is by the heights known
+then: the measured ones, and their average for the others. The items there are built and measured on that frame,
+which moves where the item really starts, so the target is computed again from what is known now, until the scroll is
+at it and no height changed: the item is then where it was asked to be (within the pixel ImGui rounds the scroll to).
+It usually takes two to five frames, and builds only the items near the target; it gives up after 20 frames of
+heights that keep changing (an animated item). Meanwhile it wins over `followBottom` and over keeping the view still
+when heights above it change. `positionViewAtBeginning()` and `positionViewAtEnd()` are
+`positionViewAtIndex(1, "beginning")` and `positionViewAtIndex(#model, "end")`.
+
+These scroll the `ListView`'s own view only: inside a `ScrollView`, the outer view stays where it is. A `ListView`
+without `delegate` (its own children) ignores them.
+
+```lua
+ListView { id = "log", height = 300, followBottom = true, model = backend.logs,
+    delegate = function(line) return Text { line.text } end }
+Button { "Jump to error", onClicked = function() log:positionViewAtIndex(backend:firstError(), "center") end }
+Text { text = function() return "line " .. log.firstVisibleIndex end }
 ```
 
 ### Card

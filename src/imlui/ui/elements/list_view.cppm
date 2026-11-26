@@ -8,6 +8,11 @@
 // hasn't rendered yet. Items above the first one in view are measured too (the margin), and when that changes where
 // the first one in view starts, the scroll moves by the same amount on the next frame, so what is on screen doesn't
 // jump. A ListView without a delegate is a plain ScrollView of its own children.
+//
+// Scrolling from a script: `followBottom` keeps the view at the end while it is there (checked at the start of a
+// frame against ImGui's scroll range, which is the last frame's content), and positionViewAtIndex() remembers a
+// request that every frame turns into a scroll target from the heights known by then, until the scroll is at the
+// target and no height changed (the item is then where it was asked to be), for at most maxPositionFrames frames.
 export module imlui.ui.elements.list_view;
 
 import std;
@@ -17,6 +22,7 @@ import imgui;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_builder;
 import imlui.ui.culling;
 import imlui.ui.elements.scroll_view;
@@ -31,9 +37,15 @@ export namespace imlui {
 /// A ScrollView whose children come from `model` / `delegate` (Lua side), every ScrollView prop. Only the delegates
 /// in view, and a margin of half the view's height above and below it, are built and rendered.
 ///
-/// Props:   itemHeight = unset (measured)
+/// Props:   itemHeight = unset (measured), followBottom = false, firstVisibleIndex (read-only)
+/// Methods: positionViewAtIndex(index, mode), positionViewAtBeginning(), positionViewAtEnd()
 class ListView final : public ScrollView {
 public:
+    /// Where positionViewAtIndex() puts the item: its top at the view's top, its middle at the view's middle, its
+    /// bottom at the view's bottom, or the least scroll that shows all of it (its top, when it is taller than the
+    /// view).
+    enum class Position { Beginning, Center, End, Contain };
+
     static void declare(TypeBuilder<ListView>& type);
 
     /// The height of every item (dp). Unset: each item's height is measured when it renders, and the average of the
@@ -46,6 +58,20 @@ public:
     [[nodiscard]] float contentHeight() const;
     /// The model indices (1-based, inclusive) rendered last time; {0, -1} when none were.
     [[nodiscard]] std::pair<std::int64_t, std::int64_t> renderedRange() const;
+
+    /// Keeps the view at the end while it is scrolled there (a log, a chat): new items, taller items, a smaller view.
+    [[nodiscard]] bool followBottom() const;
+    void setFollowBottom(bool followBottom);
+    /// The model index (1-based) of the first item in view when the element last rendered; 0 when none was.
+    [[nodiscard]] std::int64_t firstVisibleIndex() const;
+
+    /// Scrolls so that item `index` (1-based, clamped to the model) is where `mode` says (Beginning when unset),
+    /// built or not: from the next render on, until it is there.
+    void positionViewAtIndex(std::int64_t index, std::optional<Position> mode);
+    /// Scrolls to the top.
+    void positionViewAtBeginning();
+    /// Scrolls to the end.
+    void positionViewAtEnd();
 
 protected:
     void renderContent(Frame& frame) override;
@@ -64,8 +90,30 @@ private:
     [[nodiscard]] float top(std::size_t i, float gap, float estimate) const;
     /// The height of an item that wasn't measured: the measured ones' average, else a list item's.
     [[nodiscard]] float estimate(const Frame& frame) const;
+    /// The scroll that puts index `i` where `mode` says in a view `viewHeight` tall scrolled to `scrollY`.
+    [[nodiscard]] float positionScroll(std::size_t i, Position mode, float scrollY, float viewHeight, float gap,
+                                       float estimate, std::optional<float> fixed) const;
+    /// Sets firstVisibleIndex, and tells Lua when it changed.
+    void publishFirstVisible(std::int64_t index);
+
+    /// A positionViewAtIndex() call that hasn't landed yet.
+    struct PendingPosition {
+        std::int64_t index = 1;
+        Position mode = Position::Beginning;
+        int frames = 0; ///< scroll targets set for it so far
+    };
+    /// Frames a position may take to land before it is dropped (heights that keep changing).
+    static constexpr int maxPositionFrames = 20;
 
     std::optional<float> m_itemHeight;
+    bool m_followBottom = false;
+    bool m_following = true;    ///< the view was at the end last frame (it starts there)
+    float m_viewHeight = -1.0f; ///< the visible content height last frame (pixels)
+    float m_followTarget = -1.0f; ///< the scroll followBottom asked for last frame (-1: none), and the scroll then
+    float m_followScroll = -1.0f;
+    std::int64_t m_firstVisible = 0;
+    std::optional<PendingPosition> m_position;
+    int m_steerFrame = -1; ///< ImGui frame of the last render that scrolled for the above (the first one of a frame)
 
     std::vector<float> m_heights; ///< per model index (0-based), when `itemHeight` is unset
     double m_measuredSum = 0.0;   ///< the measured heights' sum
@@ -83,6 +131,16 @@ private:
 };
 
 } // namespace imlui
+
+template <>
+struct imlui::EnumNames<imlui::ListView::Position> {
+    static constexpr std::pair<imlui::ListView::Position, std::string_view> values[] = {
+        {imlui::ListView::Position::Beginning, "beginning"},
+        {imlui::ListView::Position::Center, "center"},
+        {imlui::ListView::Position::End, "end"},
+        {imlui::ListView::Position::Contain, "contain"},
+    };
+};
 
 module :private;
 
@@ -138,6 +196,24 @@ void ListView::declare(TypeBuilder<ListView>& type) {
     type.property("itemHeight", &ListView::itemHeight, &ListView::setItemHeight)
         .doc("Every item's height (dp). Unset (or not > 0): each item is measured as it renders, and the measured "
              "ones' average stands in for the others.")
+        .property("followBottom", &ListView::followBottom, &ListView::setFollowBottom)
+        .doc("Keeps the view at the end while it is scrolled there (`false`): new items, items that turn out taller "
+             "and a smaller view keep the last item in view, for a log or a chat. Scrolling up stops it; scrolling "
+             "back to the end starts it again. A list starts at the end. Needs a `delegate`.")
+        .property("firstVisibleIndex", &ListView::firstVisibleIndex)
+        .doc("Read-only: the model index (1-based) of the first item at least partly in view when the list last "
+             "rendered; 0 before that, with an empty model or without a `delegate`.")
+        .method("positionViewAtIndex", &ListView::positionViewAtIndex, {"index", "mode"})
+        .doc("Scrolls so that item `index` (1-based; clamped to 1..the model's length) is placed by `mode`: "
+             "`\"beginning\"` (default: its top at the view's top), `\"center\"`, `\"end\"` (its bottom at the view's "
+             "bottom) or `\"contain\"` (the least scroll that shows all of it). Works for items never built: it "
+             "scrolls by the heights known (`itemHeight`, else the measured ones and their average), and corrects "
+             "on the next frames as the items there are measured. Takes effect at the next render; nothing with an "
+             "empty model or without a `delegate`.")
+        .method("positionViewAtBeginning", &ListView::positionViewAtBeginning)
+        .doc("Scrolls to the top: `positionViewAtIndex(1, \"beginning\")`.")
+        .method("positionViewAtEnd", &ListView::positionViewAtEnd)
+        .doc("Scrolls to the end: the last item's bottom at the view's bottom.")
         .docMember("spacing", "The gap between items (dp). Unset: ImGui's item spacing.");
 }
 
@@ -148,6 +224,22 @@ void ListView::setItemHeight(std::optional<float> itemHeight) {
 }
 float ListView::contentHeight() const { return m_contentHeight; }
 std::pair<std::int64_t, std::int64_t> ListView::renderedRange() const { return {m_first, m_last}; }
+bool ListView::followBottom() const { return m_followBottom; }
+void ListView::setFollowBottom(bool followBottom) { m_followBottom = followBottom; }
+std::int64_t ListView::firstVisibleIndex() const { return m_firstVisible; }
+
+void ListView::positionViewAtIndex(std::int64_t index, std::optional<Position> mode) {
+    m_position = PendingPosition{index, mode.value_or(Position::Beginning), 0};
+    requestFrame();
+}
+void ListView::positionViewAtBeginning() { positionViewAtIndex(1, Position::Beginning); }
+void ListView::positionViewAtEnd() { positionViewAtIndex(std::numeric_limits<std::int64_t>::max(), Position::End); }
+
+void ListView::publishFirstVisible(std::int64_t index) {
+    if (index == m_firstVisible) return;
+    m_firstVisible = index;
+    notify("firstVisibleIndex");
+}
 
 bool ListView::setHeight(std::size_t i, float h) {
     float& slot = m_heights[i];
@@ -190,6 +282,27 @@ float ListView::estimate(const Frame& frame) const {
     return frame.dp(defaultItemHeight);
 }
 
+float ListView::positionScroll(std::size_t i, Position mode, float scrollY, float viewHeight, float gap,
+                               float estimate, std::optional<float> fixed) const {
+    float t = 0.0f, h = 0.0f;
+    if (fixed) {
+        t = static_cast<float>(i) * (*fixed + gap);
+        h = *fixed;
+    } else {
+        t = top(i, gap, estimate);
+        const float measured = m_heights[i];
+        h = measured >= 0.0f ? measured : (measured == noSpace ? 0.0f : estimate);
+    }
+    switch (mode) {
+    case Position::Beginning: return t;
+    case Position::Center: return t + (h - viewHeight) * 0.5f;
+    case Position::End: return t + h - viewHeight;
+    case Position::Contain: break;
+    }
+    // The least scroll that shows it: its bottom first, then its top, which wins for an item taller than the view.
+    return std::min(std::max(scrollY, t + h - viewHeight), t);
+}
+
 void ListView::renderContent(Frame& frame) {
     const luaui::Node& node = frame.node();
     lua::State* state = node.state();
@@ -198,7 +311,9 @@ void ListView::renderContent(Frame& frame) {
     const std::optional<std::size_t> count = callCount(node);
     if (!count) {
         // No delegate: the ListView's own children, like a ScrollView.
+        m_position.reset();
         ScrollView::renderContent(frame);
+        publishFirstVisible(0);
         return;
     }
     const std::size_t n = *count;
@@ -221,6 +336,23 @@ void ListView::renderContent(Frame& frame) {
     const float margin = std::max(viewHeight * 0.5f, frame.dp(defaultItemHeight));
     const float limit = origin.y + viewTop + viewHeight + margin; // screen y where rendering stops
     const float scrollY = ImGui::GetScrollY();
+    // The content's visible height (without the padding and a horizontal scrollbar): the scroll range is the content's
+    // height minus this.
+    const float visibleHeight = std::max(0.0f, ImGui::GetContentRegionAvail().y);
+    const bool restoring = restoringScroll();
+    // followBottom and positions steer the scroll on the first render of a frame (the same list shown twice in a frame
+    // has two windows), and not while ScrollView puts its scroll back.
+    const int frameNo = ImGui::GetFrameCount();
+    const bool steer = !restoring && frameNo != m_steerFrame;
+    if (steer) m_steerFrame = frameNo;
+    // Following: at the end now (ImGui's range is last frame's content, which the scroll was clamped to), or following
+    // last frame and the view changed height (a smaller view leaves the scroll where it was, above the end).
+    bool following = false;
+    if (m_followBottom && steer) {
+        following = scrollY >= ImGui::GetScrollMaxY() - 1.0f ||
+                    (m_following && std::abs(visibleHeight - m_viewHeight) > 0.5f);
+    }
+    const float prevTotal = m_contentHeight;
 
     // Horizontal placement: the stack's `align`, as Frame::renderStack does it.
     const float align = alignFactor(this->align());
@@ -401,14 +533,65 @@ void ListView::renderContent(Frame& frame) {
     ImGui::SetCursorScreenPos({origin.x, origin.y + total});
     ImGui::Dummy({0.0f, 0.0f}); // the content's extent: the scroll range
 
-    if (!fixed && n > 0) {
+    // A position asked for wins over following the end, and both over keeping the first item in view still.
+    bool scrolled = false;
+    // ImGui's scroll range next frame: the content's height (which it truncates to whole pixels) minus the view's.
+    const float maxScroll = std::max(0.0f, std::trunc(total) - visibleHeight);
+    if (m_position && steer) {
+        if (n == 0) {
+            m_position.reset();
+        } else {
+            const auto index = static_cast<std::size_t>(
+                std::clamp<std::int64_t>(m_position->index, 1, static_cast<std::int64_t>(n)));
+            const float target = std::clamp(
+                std::round(positionScroll(index - 1, m_position->mode, scrollY, visibleHeight, gap, est2, fixed)),
+                0.0f, maxScroll);
+            // There: the scroll is at the target by the heights this frame rendered at, and none of them changed.
+            const bool landed = !changed && std::abs(total - prevTotal) <= 0.5f &&
+                                std::abs(scrollY - std::min(target, ImGui::GetScrollMaxY())) <= 1.0f;
+            if (landed || m_position->frames >= maxPositionFrames) {
+                m_position.reset();
+            } else {
+                ++m_position->frames;
+                ImGui::SetScrollY(target);
+                frame.requestFrame();
+                scrolled = true;
+            }
+        }
+    } else if (following && std::abs(maxScroll - scrollY) > 0.5f) {
+        // The same target as last frame, which left the scroll where it was: ImGui's range ends short of it (content
+        // that ends above the last item's bottom), and asking again would never settle.
+        const bool stuck = std::abs(maxScroll - m_followTarget) <= 0.5f && std::abs(scrollY - m_followScroll) <= 0.5f;
+        if (!stuck) {
+            ImGui::SetScrollY(maxScroll);
+            frame.requestFrame();
+        }
+        m_followTarget = maxScroll;
+        m_followScroll = scrollY;
+        scrolled = true;
+    } else {
+        m_followTarget = -1.0f;
+    }
+    if (m_followBottom && steer) {
+        m_following = following;
+        m_viewHeight = visibleHeight;
+    }
+    if (!fixed && n > 0 && !scrolled && !following) {
         const float moved = top(anchor, gap, est2) - anchorTop;
-        if (std::abs(moved) > 0.5f && !restoringScroll()) ImGui::SetScrollY(scrollY + moved);
+        if (std::abs(moved) > 0.5f && !restoring) ImGui::SetScrollY(scrollY + moved);
     }
     // New heights change the content's size, which ImGui's scroll range follows on the next frame: render it, unless
     // the heights keep changing (an animated item), like the layout cache's settle limit.
     m_unsettled = changed ? m_unsettled + 1 : 0;
     if (changed && m_unsettled <= layout::maxSettleFrames) frame.requestFrame();
+    // The first item in view is the anchor, unless no more than half a pixel of it is (its gap, the scroll's
+    // rounding): a list positioned at an item starts with that item.
+    std::size_t firstVisible = anchor;
+    if (n > 0 && anchor + 1 < n) {
+        const float s = stepOf(anchor);
+        if (anchorTop + (s > 0.0f ? s - gap : 0.0f) <= viewTop + 0.5f) ++firstVisible;
+    }
+    if (steer) publishFirstVisible(n > 0 ? static_cast<std::int64_t>(firstVisible) + 1 : 0);
 }
 
 } // namespace imlui

@@ -25,12 +25,12 @@ Follow-ups not scheduled yet:
   factory that knows the type's size), Lua's incremental GC steps and the `Box` userdata. A lazily built `Repeater`
   would change what it means (all its children exist), so long lists stay `ListView`'s job.
 - Lua's generational GC made no measurable difference on the bench (tried; not switched).
-- `ListView`: a `positionViewAtIndex` method (a script can't scroll to an item that isn't built), and a prop for the
-  delegate cache size.
+- `ListView`: a prop for the delegate cache size; `followBottom` and `positionViewAtIndex` for a `ListView`
+  without `delegate` (its own children).
 - List models: `ListView` heights per row identity instead of per index (an insertion above the view keeps each
-  index's old height until it renders); Lua signals on models (`onRowsInserted`, for "scroll to the end"); a
-  write path from Lua (`model:set(i, v)`); a delegate's `item` typed by the model in the Lua definitions (LuaLS
-  doesn't infer a callback parameter from a generic field).
+  index's old height until it renders); Lua signals on models (`onRowsInserted`; `followBottom` covers "scroll to
+  the end"); a write path from Lua (`model:set(i, v)`); a delegate's `item` typed by the model in the Lua
+  definitions (LuaLS doesn't infer a callback parameter from a generic field).
 - `font_check` assumes glyphs up to ~128 px; `fontScale` is capped at 4, but zoom × DPI can still exceed it: cap the
   final pixel size.
 - A file reached through a linked folder is readable but not listed, so hot reload sees it only once loaded.
