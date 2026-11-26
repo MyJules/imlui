@@ -3,6 +3,29 @@
 Work planned or in progress, in order. Each step lands as its own commit on `material-ui`; [changelog.md](changelog.md)
 records what landed.
 
+## In progress: skins
+
+Make the look of the controls switchable from Lua (`theme { design = "fluent" }`), with Material as the default and a
+Windows-like Fluent skin as the second. Steps, each landing on its own branch:
+
+1. **The skin seam, no visible change.** A `Skin` class (`imlui.skin`) with one virtual draw and one virtual size
+   function per control; its default bodies are today's `md::` widgets, so Material is the base class and another
+   skin overrides only what it draws (the rest falls back to Material). Elements call `skin()` instead of `md::`;
+   drawing helpers that decide no look (rounded rects, icons, text, clipping) stay direct calls. `Theme::design`
+   (`"material"` default) picks the skin between frames; `registerSkin(name, factory)` lets an app add its own C++
+   skin. Layout caches reset when the design changes. Every test passes unchanged; the bench doesn't regress.
+2. **Fluent foundation.** `FluentSkin`, driven entirely by a `SkinTokens` struct (control height, corner radius,
+   border widths, fill or outline, focus and accent-underline styles, density) that `theme { tokens = { ... } }` can
+   override, so other flat looks are a token table away. Its colors derive from the same scheme roles scripts use
+   (`primary` is the accent), so `colors = { ... }` overrides work under both skins. Fonts stay the theme's (Roboto by
+   default): Segoe UI Variable and Segoe Fluent Icons can't be vendored.
+3. **Fluent controls**, in parallel groups: buttons (button, icon button, segmented); inputs (text field, spin box,
+   dropdown / combo box, color field); toggles and ranges (checkbox, radio, switch, slider, progress); containers and
+   navigation (card, dialog, menu, list item, tabs, navigation items, snackbar → info bar, chip, expander). Material-
+   only variants map to the nearest Fluent one (`filled`/`tonal` → accent, `outlined`/`elevated` → standard, `text` →
+   subtle). Tests per skin for sizes and layout.
+4. **Gallery**: a design switch on the Home page to compare the skins side by side.
+
 ## Next
 
 Follow-ups not scheduled yet:
