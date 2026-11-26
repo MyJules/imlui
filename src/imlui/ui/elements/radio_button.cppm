@@ -72,10 +72,19 @@ void uncheckRadioPeers(const luaui::Node& n) {
 } // namespace
 
 void RadioButton::declare(TypeBuilder<RadioButton>& type) {
-    type.property("text", &RadioButton::text, &RadioButton::setText)
+    type.doc("A Material 3 radio button with an optional label. A click sets `checked` to `true` (two-way); "
+             "only a `group` sets it back to `false`.\n"
+             "`group = <any value>` (Lua side, read when the element is created): the RadioButtons with the same "
+             "`group` act as one, a click writes `checked = false` to the others (a function binding is left alone). "
+             "Or derive `checked` from state and set that state in `onClicked`.\n"
+             "`RadioButton { \"Small\" }` sets `text`. Natural size: the ring and its label, 40dp high.")
+        .property("text", &RadioButton::text, &RadioButton::setText)
+        .doc("The label. The positional value: `RadioButton { \"Small\" }`.")
         .property("checked", &RadioButton::checked, &RadioButton::setChecked)
+        .doc("**Two-way.** Set to `true` when clicked; a click on another button of the `group` sets it to `false`.")
         .defaultProperty("text")
-        .signal("onClicked");
+        .signal<>("onClicked")
+        .doc("Called when the button is clicked (after `checked` and the group were updated).");
 }
 
 void RadioButton::render(Frame& frame) {

@@ -64,14 +64,25 @@ constexpr int maxDecimals = 15;
 } // namespace
 
 void SpinBox::declare(TypeBuilder<SpinBox>& type) {
-    type.property("value", &SpinBox::value, &SpinBox::setValue)
+    type.doc("A Material 3 numeric field with decrement and increment icon buttons, editing `value` (two-way) "
+             "in `from`..`to`.\n"
+             "Natural size: 200dp wide (`width`, raw), 56dp high.")
+        .property("value", &SpinBox::value, &SpinBox::setValue)
+        .doc("**Two-way.** The value (default 0), clamped to the range when the user changes it.")
         .property("from", &SpinBox::from, &SpinBox::setFrom)
+        .doc("The low end of the range (default `-1e9`). With `from > to` the range is empty and nothing clamps.")
         .property("to", &SpinBox::to, &SpinBox::setTo)
+        .doc("The high end of the range (default `1e9`).")
         .property("stepSize", &SpinBox::stepSize, &SpinBox::setStepSize)
+        .doc("What the buttons add or subtract (default 1).")
         .property("decimals", &SpinBox::decimals, &SpinBox::setDecimals)
+        .doc("The decimals shown, clamped to 0..15 (default 0).")
         .property("label", &SpinBox::label, &SpinBox::setLabel)
+        .doc("The floating label.")
         .property("variant", &SpinBox::variant, &SpinBox::setVariant)
-        .signal("onValueModified");
+        .doc("`\"filled\"` (default) or `\"outlined\"`.")
+        .signal<double>("onValueModified", {"value"})
+        .doc("Called when the user changes the value (typing or the buttons), with the new `value`.");
 }
 
 void SpinBox::render(Frame& frame) {

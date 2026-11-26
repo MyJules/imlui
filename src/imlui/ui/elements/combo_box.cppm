@@ -63,15 +63,28 @@ module :private;
 namespace imlui {
 
 void ComboBox::declare(TypeBuilder<ComboBox>& type) {
-    type.property("model", &ComboBox::model, &ComboBox::setModel)
+    type.doc("A Material 3 exposed dropdown menu: a text-field look showing the selected option of `model`, "
+             "`currentIndex` (1-based, two-way), with the menu of options anchored below.\n"
+             "Natural size: 240dp wide (`width`, raw); 56dp high, plus a line for the supporting text.")
+        .property("model", &ComboBox::model, &ComboBox::setModel)
+        .doc("The options.")
         .property("icons", &ComboBox::icons, &ComboBox::setIcons)
+        .doc("Per-option Material icon names in the menu.")
         .property("currentIndex", &ComboBox::currentIndex, &ComboBox::setCurrentIndex)
+        .doc("**Two-way.** The selected option, 1-based (default 1).")
         .property("label", &ComboBox::label, &ComboBox::setLabel)
+        .doc("The floating label.")
         .property("leadingIcon", &ComboBox::leadingIcon, &ComboBox::setLeadingIcon)
+        .doc("A leading Material icon name; `\"\"` for none.")
         .property("supportingText", &ComboBox::supportingText, &ComboBox::setSupportingText)
+        .doc("Helper text below the field.")
         .property("variant", &ComboBox::variant, &ComboBox::setVariant)
+        .doc("`\"filled\"` (default) or `\"outlined\"`.")
         .property("error", &ComboBox::error, &ComboBox::setError)
-        .signal("onActivated");
+        .doc("The error colors.")
+        .signal<int, std::string>("onActivated", {"index", "text"})
+        .doc("Called when an option is picked, with its 1-based index and text (after `currentIndex` was written "
+             "back).");
 }
 
 void ComboBox::render(Frame& frame) {

@@ -55,14 +55,27 @@ module :private;
 namespace imlui {
 
 void IconButton::declare(TypeBuilder<IconButton>& type) {
-    type.property("text", &IconButton::text, &IconButton::setText)
+    type.doc("A Material 3 icon button: a 40dp icon container in a 48dp touch target.\n"
+             "`IconButton { \"menu\" }` sets `text`, the icon name unless `icon` is set. With `checked` in the table "
+             "(any value, even a binding that returns `nil`) it is a toggle: a click flips `checked` (two-way). "
+             "`menu = Menu { ... }` opens that menu under the button on a click.\n"
+             "Natural size: 48dp square.")
+        .property("text", &IconButton::text, &IconButton::setText)
+        .doc("The icon name when `icon` isn't set. The positional value: `IconButton { \"menu\" }`.")
         .property("icon", &IconButton::icon, &IconButton::setIcon)
+        .doc("The Material icon name; unset: `text`.")
         .property("checkedIcon", &IconButton::checkedIcon, &IconButton::setCheckedIcon)
+        .doc("The icon while a toggle is checked; unset: the normal icon.")
         .property("variant", &IconButton::variant, &IconButton::setVariant)
+        .doc("`\"standard\"` (default), `\"filled\"`, `\"tonal\"` or `\"outlined\"`.")
         .property("checked", &IconButton::checked, &IconButton::setChecked)
+        .doc("**Two-way.** Present at all, it makes the button a toggle with selected and unselected looks; a click "
+             "flips it.")
         .property("color", &IconButton::color, &IconButton::setColor)
+        .doc("The icon tint; unset: the variant's.")
         .defaultProperty("text")
-        .signal("onClicked");
+        .signal<>("onClicked")
+        .doc("Called when the button is clicked (after a toggle flipped `checked`).");
 }
 
 void IconButton::render(Frame& frame) {

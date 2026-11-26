@@ -47,10 +47,18 @@ module :private;
 namespace imlui {
 
 void ColorPicker::declare(TypeBuilder<ColorPicker>& type) {
-    type.property("color", &ColorPicker::color, &ColorPicker::setColor)
+    type.doc("A color field: a swatch with the hex value of `color` (two-way). Clicking it opens a picker popup "
+             "with a hue bar and a hex field.\n"
+             "Natural size: as wide as the swatch, hex value and label (`width`, raw); 56dp high.")
+        .property("color", &ColorPicker::color, &ColorPicker::setColor)
+        .doc("**Two-way.** Any color spec; written back as `\"#RRGGBB\"` (`\"#RRGGBBAA\"` with alpha). Unset shows "
+             "white.")
         .property("label", &ColorPicker::label, &ColorPicker::setLabel)
+        .doc("The field's label.")
         .property("alpha", &ColorPicker::alpha, &ColorPicker::setAlpha)
-        .signal("onColorChanged");
+        .doc("Adds an alpha bar. Without it the color stays opaque, also when the hex field gets an alpha.")
+        .signal<std::string>("onColorChanged", {"hex"})
+        .doc("Called on every edit, with the new color as `\"#RRGGBB\"` (`\"#RRGGBBAA\"` with alpha).");
 }
 
 void ColorPicker::render(Frame& frame) {

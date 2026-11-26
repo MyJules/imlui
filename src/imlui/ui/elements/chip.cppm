@@ -51,13 +51,23 @@ module :private;
 namespace imlui {
 
 void Chip::declare(TypeBuilder<Chip>& type) {
-    type.property("text", &Chip::text, &Chip::setText)
+    type.doc("A 32dp Material 3 chip. A `\"filter\"` chip toggles `checked` on a click (two-way, unless "
+             "`checkable = false`) and shows a check while selected; the other variants only report clicks.\n"
+             "`Chip { \"lua\" }` sets `text`. Natural size: its label, icon and padding, 32dp high.")
+        .property("text", &Chip::text, &Chip::setText)
+        .doc("The label. The positional value: `Chip { \"lua\" }`.")
         .property("checked", &Chip::checked, &Chip::setChecked)
+        .doc("The selected state. **Two-way** on a checkable `\"filter\"` chip.")
         .property("checkable", &Chip::checkable, &Chip::setCheckable)
+        .doc("`false` stops a filter chip from toggling itself (it still reports clicks). Default `true`.")
         .property("variant", &Chip::variant, &Chip::setVariant)
+        .doc("`\"filter\"` (default), `\"assist\"`, `\"suggestion\"` or `\"input\"`.")
         .property("icon", &Chip::icon, &Chip::setIcon)
+        .doc("A leading Material icon name; `\"\"` for none.")
         .defaultProperty("text")
-        .signal("onClicked");
+        .signal<bool>("onClicked", {"checked"})
+        .doc("Called when the chip is clicked, with `not` the state before the click (for every variant, also when it "
+             "doesn't toggle).");
 }
 
 void Chip::render(Frame&) {

@@ -56,6 +56,9 @@ const std::set<std::string, std::less<>> documentedTypes{
     // family B: app bars, navigation, menus, text and decoration
     "TopAppBar", "NavigationItem", "NavigationBar", "NavigationRail", "ModalNavigationDrawer", "MenuBar", "Menu",
     "MenuItem", "Text", "Label", "Icon", "Image", "Link", "Divider", "Separator", "Spacer",
+    // family C: buttons, selection controls, value inputs
+    "Checkbox", "Chip", "ColorPicker", "ComboBox", "IconButton", "ListItem", "RadioButton", "RadioGroup",
+    "SegmentedButton", "Slider", "SpinBox", "Switch", "TextArea", "TextField",
 };
 
 /// What `info` leaves undocumented: "the type", ".prop", ".onSignal", ":method".

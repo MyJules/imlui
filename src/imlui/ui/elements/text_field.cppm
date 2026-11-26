@@ -78,21 +78,38 @@ module :private;
 namespace imlui {
 
 void TextField::declare(TypeBuilder<TextField>& type) {
+    type.doc("A single-line Material 3 text field with a floating label, editing `text` (two-way). Clicking "
+             "anywhere in the container (but the trailing icon) focuses the input. `TextArea` is the multi-line one.\n"
+             "Natural size: fills the width (`width`, raw); 56dp high, plus the supporting text.");
     type.fillsWidth(); // an unset width fills
     type.property("text", &TextField::text, &TextField::setText)
+        .doc("**Two-way.** The content.")
         .property("label", &TextField::label, &TextField::setLabel)
+        .doc("The floating label.")
         .property("placeholderText", &TextField::placeholderText, &TextField::setPlaceholderText)
+        .doc("A hint, shown while the field is focused and empty (always while empty if there's no `label`).")
         .property("leadingIcon", &TextField::leadingIcon, &TextField::setLeadingIcon)
+        .doc("A leading Material icon name; `\"\"` for none.")
         .property("trailingIcon", &TextField::trailingIcon, &TextField::setTrailingIcon)
+        .doc("A trailing Material icon name, clickable (`onTrailingClicked`); `\"\"` for none.")
         .property("supportingText", &TextField::supportingText, &TextField::setSupportingText)
+        .doc("Helper text below the field, error-colored while `error` is set.")
         .property("variant", &TextField::variant, &TextField::setVariant)
+        .doc("`\"filled\"` (default) or `\"outlined\"`.")
         .property("password", &TextField::password, &TextField::setPassword)
+        .doc("Masks the input and adds a visibility toggle as the trailing icon, unless `trailingIcon` is set.")
         .property("echoMode", &TextField::echoMode, &TextField::setEchoMode)
+        .doc("`\"password\"` does the same as `password = true`.")
         .property("readOnly", &TextField::readOnly, &TextField::setReadOnly)
+        .doc("The text can't be edited (it can still be selected).")
         .property("error", &TextField::error, &TextField::setError)
-        .signal("onTextChanged")
-        .signal("onAccepted")
-        .signal("onTrailingClicked");
+        .doc("The error colors.")
+        .signal<std::string>("onTextChanged", {"text"})
+        .doc("Called on every edit, with the new `text` (after it was written back).")
+        .signal<std::string>("onAccepted", {"text"})
+        .doc("Called when Enter is pressed, with the `text`.")
+        .signal<>("onTrailingClicked")
+        .doc("Called when the trailing icon is clicked (the password visibility toggle too).");
 }
 
 void TextField::render(Frame& frame) {

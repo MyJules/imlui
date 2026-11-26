@@ -56,14 +56,30 @@ module :private;
 namespace imlui {
 
 void Slider::declare(TypeBuilder<Slider>& type) {
+    type.doc("A Material 3 slider for `value` (two-way) in `from`..`to`; a value label shows above the handle "
+             "while you drag. `value` is written back only when the user moves the slider, so a bound `0.1` stays "
+             "`0.1`.\n"
+             "Natural size: fills the width (`width`, raw); 44dp high.");
     type.fillsWidth(); // an unset width fills
     type.property("value", &Slider::value, &Slider::setValue)
+        .doc("**Two-way.** The value (default 0). A stepped value is `from + k * stepSize` without binary noise, at "
+             "most the last whole step in the range; with an integral `stepSize` it is an integer.")
         .property("from", &Slider::from, &Slider::setFrom)
+        .doc("The low end of the range (default 0). An empty (`from >= to`) or non-finite range leaves `value` "
+             "alone.")
         .property("to", &Slider::to, &Slider::setTo)
+        .doc("The high end of the range (default 1).")
         .property("stepSize", &Slider::stepSize, &Slider::setStepSize)
+        .doc("The step; `0` (default, or below, or not finite): continuous. Tick marks show with at most 40 steps.")
         .property("format", &Slider::format, &Slider::setFormat)
-        .signal("onMoved")
-        .signal("onReleased");
+        .doc("The value label's printf format, with exactly one `%f`, `%e` or `%g` conversion (plus any `%%`); an "
+             "invalid one is reported once and replaced by `\"%.2f\"`. Unset: `\"%.0f\"` when `stepSize >= 1`, "
+             "else `\"%.2f\"`.")
+        .signal<double>("onMoved", {"value"})
+        .doc("Called while the user changes the value, with the new `value`.")
+        .signal<double>("onReleased", {"value"})
+        .doc("Called when the handle is released after the drag or click changed the value, with the final "
+             "`value`.");
 }
 
 void Slider::render(Frame& frame) {

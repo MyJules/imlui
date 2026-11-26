@@ -47,10 +47,18 @@ module :private;
 namespace imlui {
 
 void SegmentedButton::declare(TypeBuilder<SegmentedButton>& type) {
-    type.property("model", &SegmentedButton::model, &SegmentedButton::setModel)
+    type.doc("A Material 3 single-select segmented button from a `model` of labels; the selected segment is "
+             "`currentIndex` (1-based, two-way) and shows a check.\n"
+             "Natural size: every segment as wide as the widest label, 40dp high; `width` (raw) sizes the whole.")
+        .property("model", &SegmentedButton::model, &SegmentedButton::setModel)
+        .doc("The segment labels.")
         .property("icons", &SegmentedButton::icons, &SegmentedButton::setIcons)
+        .doc("Per-segment Material icon names, shown on the unselected segments (the selected one shows a check).")
         .property("currentIndex", &SegmentedButton::currentIndex, &SegmentedButton::setCurrentIndex)
-        .signal("onActivated");
+        .doc("**Two-way.** The selected segment, 1-based (default 1).")
+        .signal<int, std::string>("onActivated", {"index", "text"})
+        .doc("Called when a segment is picked, with its 1-based index and label (after `currentIndex` was written "
+             "back).");
 }
 
 void SegmentedButton::render(Frame& frame) {

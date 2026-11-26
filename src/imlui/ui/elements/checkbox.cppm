@@ -41,10 +41,16 @@ module :private;
 namespace imlui {
 
 void Checkbox::declare(TypeBuilder<Checkbox>& type) {
-    type.property("text", &Checkbox::text, &Checkbox::setText)
+    type.doc("A Material 3 checkbox with an optional label. A click toggles `checked` (two-way).\n"
+             "`Checkbox { \"Remember me\" }` sets `text`.\n"
+             "Natural size: the box and its label, 40dp high.")
+        .property("text", &Checkbox::text, &Checkbox::setText)
+        .doc("The label. The positional value: `Checkbox { \"Remember me\" }`.")
         .property("checked", &Checkbox::checked, &Checkbox::setChecked)
+        .doc("**Two-way.** Whether the box is checked.")
         .defaultProperty("text")
-        .signal("onToggled");
+        .signal<bool>("onToggled", {"checked"})
+        .doc("Called when a click toggles the box, with the new `checked`.");
 }
 
 void Checkbox::render(Frame&) {
