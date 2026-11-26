@@ -10,6 +10,7 @@ import lua;
 import imgui;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.platform.stack;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -29,6 +30,7 @@ import imlui.theme.dpi;
 import imlui.theme.theme;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
+import imlui.ui.renderer;
 import imlui.ui.layout_cache;
 import imlui.color;
 import imlui.widgets.card;
@@ -1962,4 +1964,55 @@ TEST(RendererDepth, ADeepTreeBelowTheLimitRenders) {
     h.renderFrames("root", 2);
     EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
     EXPECT_TRUE(h.syncElement("leaf") != nullptr);
+}
+
+namespace {
+
+/// Calls fn() from deeper in the native stack, where at most `left` bytes of it remain (burnt in 16 KiB frames).
+void withStackLeft(std::size_t left, const std::function<void()>& fn) {
+    const std::optional<std::size_t> now = platform::stackRemaining();
+    if (!now || *now <= left) {
+        fn();
+        return;
+    }
+    volatile char pad[16 * 1024];
+    pad[0] = 1;
+    pad[sizeof pad - 1] = 1;
+    withStackLeft(left, fn);
+    pad[0] = static_cast<char>(pad[0] + pad[sizeof pad - 1]); // used after the call: no tail call, no elided frame
+}
+
+} // namespace
+
+TEST(RendererDepth, TheNativeStackIsMeasuredWhereTheCallerIs) {
+    const std::optional<std::size_t> here = platform::stackRemaining();
+    if (!here) GTEST_SKIP() << "the stack bounds aren't known on this platform";
+    std::optional<std::size_t> deeper;
+    withStackLeft(*here - 64 * 1024, [&] { deeper = platform::stackRemaining(); });
+    ASSERT_TRUE(deeper.has_value());
+    EXPECT_LE(*deeper, *here - 64 * 1024);
+    EXPECT_GT(*deeper, std::size_t{0});
+}
+
+// A tree that fits maxDepth but not the stack the thread has left is cut where the stack runs low, and reported,
+// instead of overflowing it (sanitized builds make every level several times larger; a host may render on a thread
+// with a small stack).
+TEST(RendererDepth, ATreeDeeperThanTheStackHoldsIsCutAndReported) {
+    if (!platform::stackRemaining()) GTEST_SKIP() << "the stack bounds aren't known on this platform";
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    ASSERT_EQ(h.run(R"(
+        root = Text { id = "leaf", "leaf" }
+        for i = 1, 200 do root = (i % 2 == 0 and Column or Row) { root } end)"),
+              "");
+    h.renderFrame("root"); // the window exists, the Lua state is warm
+    luaui::clearErrors();
+    withStackLeft(Renderer::stackReserve + 64 * 1024, [&] { h.renderFrame("root"); });
+    bool cut = false;
+    for (const std::string& e : luaui::errors())
+        cut = cut || e.find("element tree nested deeper than the native stack holds") != std::string::npos;
+    EXPECT_TRUE(cut);
+    EXPECT_TRUE(reportedTooDeep());
+    luaui::clearErrors();
+    h.renderFrame("root"); // with the whole stack again, it renders whole
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }

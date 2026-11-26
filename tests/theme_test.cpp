@@ -120,6 +120,30 @@ TEST(ThemeStyleOverrides, EveryAcceptedValueRendersAtTheZoomLimits) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A negative ItemSpacing.x is accepted but reaches ImGui as 0: menus and popups store it as an unsigned 16-bit width
+// (ImGuiMenuColumns), where a negative one is undefined (UBSan: "-5000 is outside the range of ... unsigned short").
+// The vertical spacing keeps its sign.
+TEST(ThemeStyleOverrides, ItemSpacingXIsClampedToWhatMenusStore) {
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    for (const float zoom : {minZoom, 1.0f, maxZoom}) {
+        setZoom(zoom);
+        Theme t;
+        t.style.push_back({"ItemSpacing", {-maxStyleValue, -4.0f}});
+        setTheme(std::move(t));
+        applyPendingTheme();
+        EXPECT_EQ(ImGui::GetStyle().ItemSpacing.x, 0.0f) << zoom;
+        EXPECT_LT(ImGui::GetStyle().ItemSpacing.y, 0.0f) << zoom;
+        Theme wide;
+        wide.style.push_back({"ItemSpacing", {maxStyleValue, maxStyleValue}});
+        setTheme(std::move(wide));
+        applyPendingTheme();
+        EXPECT_LE(ImGui::GetStyle().ItemSpacing.x, 65535.0f) << zoom;
+    }
+    setZoom(1.0f);
+    setTheme(Theme{});
+    applyPendingTheme();
+}
+
 // ------------------------------------------------------------------ imguiColorIndex
 
 TEST_F(ThemeTest, ImGuiColorIndexMatchesEveryName) {

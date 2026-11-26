@@ -273,6 +273,9 @@ void applyNow(const Theme& t) {
     // either of these below 1.
     st.WindowMinSize = {std::max(st.WindowMinSize.x, 1.0f), std::max(st.WindowMinSize.y, 1.0f)};
     st.WindowBorderHoverPadding = std::max(st.WindowBorderHoverPadding, 1.0f);
+    // Menus and popups store ItemSpacing.x as an unsigned 16-bit width (ImGuiMenuColumns::Update): a negative one, or
+    // one past 65535 (an accepted 10000 at a large zoom and monitor scale), would be undefined there.
+    st.ItemSpacing.x = std::clamp(st.ItemSpacing.x, 0.0f, 65535.0f);
     st.FontSizeBase = 16.0f;
     st.FontScaleDpi = scale;
     st.FontScaleMain = t.fontScale;

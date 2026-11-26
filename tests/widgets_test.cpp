@@ -52,6 +52,25 @@ protected:
 
 } // namespace
 
+// ------------------------------------------------------------------ icon
+
+// icon()'s item is the square drawIcon() draws: never infinite or NaN (ImGui converts the cursor to int, and an
+// `Icon { size = 1/0 }` was undefined there), at most maxIconPixels, empty for a size that isn't positive.
+TEST_F(WidgetsTest, IconSizeIsFiniteAndMatchesWhatIsDrawn) {
+    const float inf = std::numeric_limits<float>::infinity();
+    EXPECT_EQ(md::iconSize(inf).x, md::maxIconPixels);
+    EXPECT_EQ(md::iconSize(1e9f).y, md::maxIconPixels);
+    EXPECT_EQ(md::iconSize(std::numeric_limits<float>::quiet_NaN()).x, 0.0f);
+    EXPECT_EQ(md::iconSize(-8.0f).x, 0.0f);
+    EXPECT_EQ(md::iconSize(-inf).y, 0.0f);
+    EXPECT_FLOAT_EQ(md::iconSize(24.0f).x, dp(24.0f));
+    frame([inf] {
+        const float y = ImGui::GetCursorPosY();
+        md::icon("star", inf);
+        EXPECT_NEAR(ImGui::GetCursorPosY() - y, md::maxIconPixels + ImGui::GetStyle().ItemSpacing.y, 1.0f);
+    });
+}
+
 // ------------------------------------------------------------------ Snackbar
 
 // A width of 0 is a widget's natural width, never a fill: whether an element fills by default is its type's policy
