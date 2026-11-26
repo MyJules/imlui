@@ -445,8 +445,8 @@ Not culled:
   records its own size as provisional (`Renderer::noteProvisional`, `layout::recordSize(..., provisional)`): a `Row`
   may place by it, but it doesn't settle, so it isn't culled before its content has converged. `Grid` rows follow the
   same rules (an estimated row reserves the average height of the rows before it, a cell holding a non-visual element
-  still renders in its column, and its height isn't recorded). On a page's first frame this leaves the delegates'
-  construction in Lua as most of the cost (5000 rows of controls: 87%).
+  still renders in its column, and its height isn't recorded). On a page's first frame this leaves building the
+  delegates in Lua as most of the cost.
 - **Pinned children.** Around each child it renders, the stack watches ImGui's state (`cull::watch` / `cull::held`):
   whether the child's render held the active item (`ActiveIdIsAlive`: a `TextField` being edited, a `Slider` being
   dragged), the nav focus (`NavIdIsAlive`), began an open popup (a menu, a combo box's list), or rendered a
