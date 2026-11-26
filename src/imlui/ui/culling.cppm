@@ -32,10 +32,11 @@ inline constexpr float margin = 32.0f;
 
 /// The same for the rows `top`..`bottom` (screen y) at any x: a whole table row.
 [[nodiscard]] bool outOfView(float top, float bottom);
-/// Whether something that starts at screen y `top` is entirely below the view of the current window, a window that
-/// scrolls (its content is taller than it), past its clip rect widened like outOfView(): nothing in view is placed
-/// after it, and its size only adds to the scroll range. False in a window that doesn't scroll (a Card, an
-/// auto-sized window): what is past its clip rect may be what it grows to fit on the next frame.
+/// Whether something that starts at screen y `top` is entirely below the view of the current window, past its clip
+/// rect widened like outOfView(): nothing in view is placed after it, and its size only adds to the scroll range (or
+/// to nothing, in a window that can't scroll). Only in a window whose height doesn't follow its content: false in an
+/// auto-sized window (a Dialog, a popup, a Window with autoResize), a child window that grows to fit (a Card), and a
+/// window fitting itself on its first frames, where what is past the clip rect is what it grows to fit.
 [[nodiscard]] bool belowView(float top);
 
 /// Starts the next row of the current table (ImGui::TableNextRow) and returns its top (screen y).
@@ -118,7 +119,9 @@ bool outOfView(ImVec2 min, ImVec2 max) {
 bool belowView(float top) {
     const ImGuiContext& g = *ImGui::GetCurrentContext();
     const ImGuiWindow* window = g.CurrentWindow;
-    if (!window || window->ScrollMax.y <= 0.0f) return false;
+    if (!window || (window->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0 ||
+        (window->ChildFlags & ImGuiChildFlags_AutoResizeY) != 0 || window->AutoFitFramesY > 0)
+        return false;
     const float clipMin = window->ClipRect.Min.y, clipMax = window->ClipRect.Max.y;
     float m = dp(margin);
     if (g.NavMoveScoringItems) m += std::max(0.0f, clipMax - clipMin);

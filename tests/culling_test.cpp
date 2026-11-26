@@ -245,6 +245,31 @@ TEST_F(CullingTest, ADialogDeclaredOutOfViewStillOpens) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A page longer than Renderer::convergeRenders: on its first frame, the children below the view that were never
+// measured are laid out at an estimate instead of rendering, except one whose subtree holds a non-visual element (a
+// Dialog), which renders, so the Dialog opens right away, in a stack and in a Grid cell alike.
+TEST_F(CullingTest, AFirstFrameEstimatesWhatIsBelowTheViewButRendersADialogInIt) {
+    for (const char* layout : {"Column", "Grid"}) {
+        start();
+        run(std::string{"Layout = "} + layout + R"(
+            s = state { open = false }
+            renders = 0
+            root = ScrollView { height = 200,
+                Layout { columns = 2,
+                    Repeater { model = 1000, delegate = function(i)
+                        return Box { h = function() renders = renders + 1; return 30 end } end },
+                    Column { Box { id = "last" },
+                             Dialog { open = bind(s, "open"), title = "T", Box { id = "inDialog" } } } } })");
+        m_h->renderFrame("root");
+        EXPECT_LT(readNumber("renders"), 500) << layout; // not every box of the 1000 on the first frame
+        EXPECT_EQ(box("inDialog").renders(), 0) << layout;
+        run("s.open = true");
+        m_h->renderFrames("root", 2);
+        EXPECT_GT(box("inDialog").renders(), 0) << layout;
+        EXPECT_TRUE(luaui::errors().empty()) << layout;
+    }
+}
+
 TEST_F(CullingTest, AFocusedTextFieldScrolledOutKeepsItsEdit) {
     run(R"(
         s = state { t = "" }

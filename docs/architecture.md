@@ -434,10 +434,19 @@ Not culled:
   a few cheap frames. Without this, every child of a long page rendered on its second and third frames too (the
   scrollbar appears on the second and changes the width the children get, so they settle only on the third): about
   90 ms each for 5000 `Row`s of controls. The same holds on a frame the stack's width changed (a resize), where only
-  the children below the view are culled. The very first frame still renders every child, so each is measured and
-  pins what it holds (a `Dialog`) at least once. In a window that doesn't scroll (a `Card`, an auto-sized window), what
-  is past the clip rect is what the window grows to fit, so it isn't culled this way. `Grid` rows follow the same
-  rules.
+  the children below the view are culled. A child **never measured** (a long page's first frame), below the view and
+  past the frame's converging renders, is laid out at the average height of the siblings laid out before it (no
+  width, so it widens nothing) and measured on a later frame, unless its subtree holds a non-visual element
+  (`Renderer::holdsNonVisual`: a walk over its tables, kinds only, no sync or render, remembered per child): that one
+  renders, so a `Dialog` declared anywhere in the page pins and opens from the start. "Below the view" means in a
+  window whose height doesn't follow its content (`cull::belowView`): not an auto-sized window, a `Card` (a child
+  window that grows to fit) or a window fitting itself on its first frames, where what is past the clip rect is what
+  the window grows to fit. An element whose render laid out anything by an unsettled size (an estimate, a last size)
+  records its own size as provisional (`Renderer::noteProvisional`, `layout::recordSize(..., provisional)`): a `Row`
+  may place by it, but it doesn't settle, so it isn't culled before its content has converged. `Grid` rows follow the
+  same rules (an estimated row reserves the average height of the rows before it, a cell holding a non-visual element
+  still renders in its column, and its height isn't recorded). On a page's first frame this leaves the delegates'
+  construction in Lua as most of the cost (5000 rows of controls: 87%).
 - **Pinned children.** Around each child it renders, the stack watches ImGui's state (`cull::watch` / `cull::held`):
   whether the child's render held the active item (`ActiveIdIsAlive`: a `TextField` being edited, a `Slider` being
   dragged), the nav focus (`NavIdIsAlive`), began an open popup (a menu, a combo box's list), or rendered a

@@ -40,8 +40,11 @@ export namespace imlui::layout {
 void assumeWidth(ImGuiID id, float size);
 void assumeHeight(ImGuiID id, float size);
 /// Records the size `id` rendered at this frame. Requests another frame when a layout assumed a size that differs by
-/// more than half a pixel (unless `id` has mismatched on too many frames in a row).
-void recordSize(ImGuiID id, ImVec2 size);
+/// more than half a pixel (unless `id` has mismatched on too many frames in a row). `provisional`: the size came out
+/// of a layout that placed something by a size not settled yet (below the view: an estimate, or a last size; see
+/// Renderer::noteProvisional), so it isn't settled however often it repeats: a layout may place by it (lastSize), but
+/// culling doesn't trust it (settledSize) until a render without such a placement records it.
+void recordSize(ImGuiID id, ImVec2 size, bool provisional = false);
 
 /// Consecutive frames a size may differ from the assumed one before its mismatches stop requesting frames.
 inline constexpr int maxSettleFrames = 8;
@@ -168,7 +171,7 @@ std::optional<ImVec2> settledSize(ImGuiID id) {
 void assumeWidth(ImGuiID id, float size) { assume(id, 0, size); }
 void assumeHeight(ImGuiID id, float size) { assume(id, 1, size); }
 
-void recordSize(ImGuiID id, ImVec2 size) {
+void recordSize(ImGuiID id, ImVec2 size, bool provisional) {
     Entry& e = touch(id);
     const int frame = e.touched;
     const std::array<float, 2> got{size.x, size.y};
@@ -178,7 +181,8 @@ void recordSize(ImGuiID id, ImVec2 size) {
         e.assumedFrame[axis] = -1; // compared once: a second record this frame (an aggregate) needs a new assumption
         if (std::fabs(got[axis] - e.assumed[axis]) > tolerance) mismatch = true;
     }
-    e.settled = e.size && std::fabs(e.size->x - size.x) <= tolerance && std::fabs(e.size->y - size.y) <= tolerance;
+    e.settled = !provisional && e.size && std::fabs(e.size->x - size.x) <= tolerance &&
+                std::fabs(e.size->y - size.y) <= tolerance;
     e.size = size;
     if (!mismatch) return;
     if (e.mismatchFrame == frame) return; // already counted (and requested) this frame
