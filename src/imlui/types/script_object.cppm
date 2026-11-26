@@ -22,8 +22,9 @@
 // alive by then (Lua may collect an element, or close its state on hot reload, at any time).
 //
 // runAsync(work, done[, fail]) is the usual way to use one: `work` runs on the background pool (imlui.ui.background)
-// with a stop token that stops when the object dies, and `done(result)` runs on the main thread while it lives.
-// runAsync(work) returns a Future of the result instead (imlui.types.future), which a method can return to Lua.
+// with a stop token that stops when the object dies, and `done(result)` runs on the main thread while it lives; the
+// Task it returns (imlui.types.task) cancels it. runAsync(work) returns a Future of the result instead
+// (imlui.types.future), which a method can return to Lua; work taking an imlui::Progress reports progress to it.
 export module imlui.types.script_object;
 
 import std;
@@ -35,6 +36,8 @@ import imlui.lua.listeners;
 import imlui.lua.node;
 import imlui.types.future;
 import imlui.types.lua_convert;
+import imlui.types.progress;
+import imlui.types.task;
 import imlui.ui.background;
 import imlui.ui.frame_request;
 import imlui.ui.main_thread;
@@ -124,18 +127,22 @@ public:
     ///    ("runAsync (<type>): <what>").
     /// `work`, `done` and `fail` may be move-only. They are destroyed on whichever thread drops them last (a worker,
     /// or the main thread), so their captures must not need the main thread to be destroyed (no Lua references).
+    /// The returned Task (ignore it if you don't need it) cancels the job: Task::cancel() stops `work`'s token too,
+    /// and `done`/`fail` are then never called.
     template <class Work, class Done>
-    void runAsync(Work work, Done done) {
-        startJob(std::move(work), std::move(done), ReportFailure{});
+    Task runAsync(Work work, Done done) {
+        return startJob(std::move(work), std::move(done), ReportFailure{});
     }
     template <class Work, class Done, class Fail>
         requires std::invocable<Fail&, std::string>
-    void runAsync(Work work, Done done, Fail fail) {
-        startJob(std::move(work), std::move(done), std::move(fail));
+    Task runAsync(Work work, Done done, Fail fail) {
+        return startJob(std::move(work), std::move(done), std::move(fail));
     }
 
     /// Main thread: runs `work` on the background pool, like runAsync(work, done), and returns a Future of its result
     /// (Future<void> for work returning void), which a method may return to Lua to be awaited:
+    ///  * `work` is called as work(std::stop_token, imlui::Progress), work(std::stop_token) or work(); the Progress
+    ///    reports the future's progress (Promise::progress: coalesced, any rate);
     ///  * the future is done with what `work` returned, or failed with the message of what it threw;
     ///  * cancelling it (Future::cancel(), fut:cancel() in Lua) stops the token `work` gets, like this object's death;
     ///  * this object's death cancels it (makePromise with handle().stopToken()): a result that arrives later is
@@ -144,8 +151,8 @@ public:
     /// thread, so its captures must not need the main thread.
     template <class Work>
     auto runAsync(Work work) {
-        using Result =
-            std::remove_cvref_t<decltype(invokeWork(std::declval<Work&>(), std::declval<std::stop_token>()))>;
+        using Result = std::remove_cvref_t<decltype(invokeWithProgress(
+            std::declval<Work&>(), std::declval<std::stop_token>(), std::declval<Progress>()))>;
         auto made = makePromise<Result>(handle().stopToken());
         startAsync([work = std::make_shared<Work>(std::move(work)),
                     promise = made.first](std::stop_token stop) -> std::function<void()> {
@@ -156,10 +163,10 @@ public:
             if (both.stop_requested()) return {}; // the promise is dropped unsettled: the future is cancelled
             try {
                 if constexpr (std::is_void_v<Result>) {
-                    invokeWork(*work, both.get_token());
+                    invokeWithProgress(*work, both.get_token(), promise.reporter());
                     promise.resolve();
                 } else {
-                    promise.resolve(invokeWork(*work, both.get_token()));
+                    promise.resolve(invokeWithProgress(*work, both.get_token(), promise.reporter()));
                 }
             } catch (const std::exception& e) {
                 promise.reject(e.what());
@@ -213,11 +220,19 @@ private:
         else
             return std::invoke(work);
     }
+    /// Calls `work` with the stop token and the progress reporter, or like invokeWork().
+    template <class Work>
+    static decltype(auto) invokeWithProgress(Work& work, std::stop_token stop, Progress progress) {
+        if constexpr (std::invocable<Work&, std::stop_token, Progress>)
+            return std::invoke(work, std::move(stop), std::move(progress));
+        else
+            return invokeWork(work, std::move(stop));
+    }
 
     /// runAsync()'s typed part: wraps work, done and fail into a job that runs `work` on a worker and returns the
-    /// main-thread continuation (done or fail).
+    /// main-thread continuation (done or fail), which runs only if it ends the task (Task::finish).
     template <class Work, class Done, class Fail>
-    void startJob(Work work, Done done, Fail fail) {
+    Task startJob(Work work, Done done, Fail fail) {
         using Result =
             std::remove_cvref_t<decltype(invokeWork(std::declval<Work&>(), std::declval<std::stop_token>()))>;
         if constexpr (std::is_void_v<Result>)
@@ -228,31 +243,46 @@ private:
             Work work;
             Done done;
             Fail fail;
+            Task task;
+            /// A job dropped without its continuation running (the object died, the pool shut down first) ends too.
+            ~Job() { task.finish(); }
         };
+        const Task task = Task::make();
         // Shared by the worker's function and the continuation: std::function needs copyable functions, and the
         // callables may be move-only.
-        auto job = std::make_shared<Job>(Job{std::move(work), std::move(done), std::move(fail)});
+        auto job = std::make_shared<Job>(std::move(work), std::move(done), std::move(fail), task);
         startAsync([job, context = asyncContext()](std::stop_token stop) -> std::function<void()> {
+            // One token for the work: stopped by this object's death or the pool's shutdown (`stop`), or a cancel.
+            std::stop_source both;
+            const std::stop_callback onStop{std::move(stop), [&both] { both.request_stop(); }};
+            const std::stop_callback onCancel{job->task.stopToken(), [&both] { both.request_stop(); }};
+            if (job->task.cancelled()) return {};
             std::optional<std::string> what; // stays empty for an exception that isn't a std::exception
             try {
                 if constexpr (std::is_void_v<Result>) {
-                    invokeWork(job->work, std::move(stop));
-                    return [job] { std::invoke(job->done); };
+                    invokeWork(job->work, both.get_token());
+                    return [job] {
+                        if (job->task.finish()) std::invoke(job->done);
+                    };
                 } else {
-                    auto result = std::make_shared<Result>(invokeWork(job->work, std::move(stop)));
-                    return [job, result] { std::invoke(job->done, std::move(*result)); };
+                    auto result = std::make_shared<Result>(invokeWork(job->work, both.get_token()));
+                    return [job, result] {
+                        if (job->task.finish()) std::invoke(job->done, std::move(*result));
+                    };
                 }
             } catch (const std::exception& e) {
                 what = e.what();
             } catch (...) {
             }
             return [job, context, what = std::move(what)] {
+                if (!job->task.finish()) return;
                 if constexpr (std::is_same_v<Fail, ReportFailure>)
                     luaui::reportException("runAsync", context, what ? what->c_str() : nullptr);
                 else
                     std::invoke(job->fail, what.value_or("unknown C++ exception"));
             };
         });
+        return task;
     }
 
     /// runAsync()'s untyped core: queues `job` on the background pool with a token that stops when this object dies or

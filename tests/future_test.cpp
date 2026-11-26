@@ -1,6 +1,7 @@
 // Future<T>, Promise<T> and runAsync(work) (imlui.types.future, imlui.types.script_object), and the Lua side (the
 // Async section of src/resources/imlui.lua): async/await, next/catch, cancel, sleep, all, future(), unhandled
-// rejections, and what happens when the object or the Lua state dies before a future settles.
+// rejections, and what happens when the object or the Lua state dies before a future settles. Progress, Lua futures
+// read back into C++ (method arguments), and cancellation through next/catch chains and all.
 #include <gtest/gtest.h>
 
 import std;
@@ -11,6 +12,7 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.future;
 import imlui.types.lua_convert;
+import imlui.types.progress;
 import imlui.types.script_object;
 import imlui.types.type_builder;
 import imlui.ui.background;
@@ -62,6 +64,11 @@ std::counting_semaphore<> holdStarted{0};
 /// Backend::ask's promise and future, for the test to settle and inspect.
 std::optional<Promise<int>> asked;
 std::optional<Future<int>> askedFuture;
+/// The future Backend::keep got.
+std::optional<Future<Report>> keptReport;
+/// Released by Backend::download's work once it reported its progress; the work then waits for `downloadGo`.
+std::counting_semaphore<> downloadReported{0};
+std::counting_semaphore<> downloadGo{0};
 
 /// An element whose methods return futures.
 class Backend final : public Element {
@@ -74,6 +81,10 @@ public:
             .method("hold", &Backend::hold)
             .method("ask", &Backend::ask)
             .method("kept", &Backend::kept)
+            .method("keep", &Backend::keep)
+            .method("plusOne", &Backend::plusOne)
+            .method("same", &Backend::same)
+            .method("download", &Backend::download)
             .nonVisual();
     }
     void render(Frame&) override {}
@@ -106,6 +117,32 @@ public:
     }
     /// The same future every call.
     [[nodiscard]] Future<int> kept() const { return m_kept.second; }
+    [[nodiscard]] const Promise<int>& keptPromise() const { return m_kept.first; }
+    /// Takes a Lua future: the test inspects it.
+    void keep(Future<Report> f) { keptReport = std::move(f); }
+    /// A future of f's value + 1, or of its error.
+    Future<int> plusOne(Future<int> f) {
+        auto [promise, out] = makePromise<int>();
+        f.onSettled([promise](const Future<int>& settled) {
+            if (settled.value())
+                promise.resolve(*settled.value() + 1);
+            else
+                promise.reject(settled.error());
+        });
+        return out;
+    }
+    /// The future it got.
+    Future<int> same(Future<int> f) { return f; }
+    /// Work that reports progress 100 times, waits for the test, and returns.
+    Future<int> download() {
+        return runAsync([](std::stop_token, Progress progress) {
+            for (int i = 1; i <= 100; ++i)
+                progress.report(i / 100.0);
+            downloadReported.release();
+            downloadGo.acquire();
+            return 7;
+        });
+    }
 
 private:
     std::pair<Promise<int>, Future<int>> m_kept = makePromise<int>();
@@ -121,11 +158,18 @@ protected:
         }
         asked.reset();
         askedFuture.reset();
+        keptReport.reset();
+        while (downloadReported.try_acquire()) {
+        }
+        while (downloadGo.try_acquire()) {
+        }
     }
     void TearDown() override {
+        downloadGo.release(); // a download still waiting returns
         shutdownBackground(std::chrono::seconds{10});
         asked.reset();
         askedFuture.reset();
+        keptReport.reset();
         runPosted(); // the promises' destructors hand their state to the main thread
         clearPosted();
         luaui::clearErrors();
@@ -546,4 +590,305 @@ TEST_F(LuaFutureTest, StateClosedBeforeSettleIsANoOp) {
     ASSERT_EQ(askedFuture->status(), FutureStatus::Done);
     EXPECT_EQ(*askedFuture->value(), 5);
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ---- Progress
+
+TEST_F(FutureTest, ProgressIsCoalescedAndTheLatestWins) {
+    auto [promise, future] = makePromise<int>();
+    EXPECT_EQ(future.progress(), std::nullopt);
+    std::vector<double> applied;
+    future.onProgress([&](double p) { applied.push_back(p); });
+    std::thread{[promise] {
+        for (int i = 1; i <= 1000; ++i)
+            promise.progress(i / 1000.0);
+    }}.join();
+    EXPECT_TRUE(applied.empty()); // posted, not applied yet
+    EXPECT_EQ(runPosted(), 1u);   // a thousand reports, one apply
+    EXPECT_EQ(applied, std::vector<double>{1.0});
+    EXPECT_EQ(future.progress(), 1.0);
+
+    promise.progress(0.5);
+    promise.progress(std::nan(""));  // dropped
+    promise.reporter().report(0.75); // the same, through a reporter
+    EXPECT_EQ(runPosted(), 1u);
+    EXPECT_EQ(applied, (std::vector<double>{1.0, 0.75}));
+}
+
+TEST_F(FutureTest, ProgressAfterSettlingIsDropped) {
+    auto [promise, future] = makePromise<int>();
+    int applies = 0;
+    future.onProgress([&](double) { ++applies; });
+    promise.progress(0.5); // queued before the settlement: applied before it
+    promise.resolve(1);
+    promise.progress(0.9); // after resolve(): dropped
+    runPosted();
+    EXPECT_EQ(future.status(), FutureStatus::Done);
+    EXPECT_EQ(future.progress(), 0.5);
+    EXPECT_EQ(applies, 1);
+
+    auto [cancelledPromise, cancelled] = makePromise<int>();
+    cancelledPromise.progress(0.1); // queued
+    cancelled.cancel();
+    const Progress reporter = cancelledPromise.reporter();
+    reporter.report(0.2);
+    runPosted();
+    EXPECT_EQ(cancelled.progress(), std::nullopt); // settled before the apply ran
+
+    Progress dangling;
+    {
+        auto made = makePromise<int>();
+        dangling = made.first.reporter();
+    }
+    dangling.report(0.3); // the promise is gone: nothing
+    Progress{}.report(0.4);
+    runPosted();
+}
+
+TEST_F(FutureTest, RunAsyncWorkReportsProgress) {
+    test::PostWaiter posts;
+    Owner owner;
+    std::vector<double> applied;
+    Future<int> future = owner.runAsync([](std::stop_token, Progress progress) {
+        for (int i = 1; i <= 10; ++i)
+            progress.report(i / 10.0);
+        return 5;
+    });
+    future.onProgress([&](double p) { applied.push_back(p); });
+    ASSERT_TRUE(posts.runUntil([&] { return !future.pending(); }));
+    EXPECT_EQ(*future.value(), 5);
+    ASSERT_FALSE(applied.empty());
+    EXPECT_LE(applied.size(), 10u);
+    EXPECT_EQ(applied.back(), 1.0); // applied before the settlement (posts run in order)
+    EXPECT_EQ(future.progress(), 1.0);
+}
+
+TEST_F(LuaFutureTest, ProgressReachesLuaAndOnProgress) {
+    test::PostWaiter posts;
+    ASSERT_EQ(m_h->run(R"(
+        seen = {}
+        f = w:ask():onProgress(function(p) seen[#seen + 1] = p end)
+        assert(f.progress == nil)
+    )"),
+              "");
+    asked->progress(0.25);
+    asked->progress(0.5);
+    clearFrameRequests();
+    runPosted();
+    EXPECT_EQ(secondsUntilFrame(), 0.0); // bindings reading f.progress update
+    EXPECT_EQ(m_h->run("assert(f.progress == 0.5 and #seen == 1 and seen[1] == 0.5)"), "");
+    asked->resolve(3);
+    asked->progress(0.9);
+    runPosted();
+    EXPECT_EQ(m_h->run("assert(f.state == 'done' and f.progress == 0.5 and #seen == 1)"), "");
+
+    // runAsync work: a hundred reports before the test lets it return.
+    ASSERT_EQ(m_h->run("d = w:download(); d:onProgress(function(p) last = p end)"), "");
+    downloadReported.acquire();
+    ASSERT_TRUE(runUntil(posts, "d.progress == 1"));
+    EXPECT_EQ(m_h->run("assert(last == 1 and d.state == 'pending')"), "");
+    downloadGo.release();
+    ASSERT_TRUE(runUntil(posts, "d.state == 'done'"));
+    EXPECT_EQ(m_h->run("assert(d.value == 7 and d.progress == 1)"), "");
+}
+
+TEST_F(LuaFutureTest, AFuturePushedAfterProgressArrivesWithIt) {
+    Backend* backend = m_h->instance<Backend>("w");
+    ASSERT_NE(backend, nullptr);
+    backend->keptPromise().progress(0.4);
+    runPosted();
+    EXPECT_EQ(m_h->run("assert(w:kept().progress == 0.4, tostring(w:kept().progress))"), "");
+}
+
+TEST_F(LuaFutureTest, LuaFuturesReportProgress) {
+    EXPECT_EQ(m_h->run(R"(
+        local f = future()
+        local got = {}
+        assert(f:onProgress(function(p) got[#got + 1] = p end) == f)
+        assert(f:report(0.2) == true and f.progress == 0.2)
+        f:report(0.7)
+        assert(#got == 2 and got[2] == 0.7)
+        f:resolve("x")
+        assert(f:report(0.9) == false and f.progress == 0.7 and #got == 2)
+    )"),
+              "");
+    EXPECT_NE(m_h->run("sleep(1):report(0.5)").find("only a future made by future()"), std::string::npos);
+    EXPECT_NE(m_h->run("future():report('half')").find("report: a number expected"), std::string::npos);
+    EXPECT_NE(m_h->run("future():onProgress(1)").find("onProgress: a function expected"), std::string::npos);
+}
+
+// ---- Lua futures as C++ arguments
+
+TEST_F(LuaFutureTest, ALuaMadeFutureIsReadIntoCxx) {
+    ASSERT_EQ(m_h->run("f = future(); w:keep(f)"), "");
+    ASSERT_TRUE(keptReport.has_value());
+    EXPECT_TRUE(keptReport->pending());
+    ASSERT_EQ(m_h->run("f:report(0.3)"), "");
+    EXPECT_EQ(keptReport->progress(), 0.3);
+    ASSERT_EQ(m_h->run("f:resolve({ title = 'weekly', pages = 4 })"), "");
+    ASSERT_EQ(keptReport->status(), FutureStatus::Done); // synchronously: Lua settled it
+    EXPECT_EQ(keptReport->value()->title, "weekly");
+    EXPECT_EQ(keptReport->value()->pages, 4);
+
+    // Settled already: the C++ future arrives settled.
+    ASSERT_EQ(m_h->run("local g = future(); g:reject('nope'); w:keep(g)"), "");
+    EXPECT_EQ(keptReport->status(), FutureStatus::Failed);
+    EXPECT_EQ(keptReport->error(), "nope");
+    m_h->renderFrame("root");
+    EXPECT_TRUE(luaui::errors().empty()); // C++ took the rejection: not reported
+
+    EXPECT_NE(m_h->run("w:keep(5)").find("future expected, got number"), std::string::npos);
+}
+
+TEST_F(LuaFutureTest, AValueThatDoesNotConvertRejectsWithItsPath) {
+    ASSERT_EQ(m_h->run("f = future(); w:keep(f); f:resolve({ title = 'x', pages = 'many' })"), "");
+    ASSERT_EQ(keptReport->status(), FutureStatus::Failed);
+    EXPECT_EQ(keptReport->error(), "bad future value (pages: integer expected, got string)");
+    EXPECT_EQ(m_h->run("assert(f.state == 'done')"), ""); // the Lua future itself is fine
+}
+
+TEST_F(LuaFutureTest, AsyncNextAllAndSleepFuturesAreArguments) {
+    test::PostWaiter posts;
+    ASSERT_EQ(m_h->run(R"(
+        fromAsync = w:plusOne(async(function() return await(w:twice(20)) + 1 end)())
+        fromNext = w:plusOne(all({ 1 }):next(function(r) return r[1] end))
+        fromSleep = w:plusOne(sleep(10):next(function() return 9 end))
+        failed = w:plusOne(async(function() error("inner", 0) end)())
+        failed:catch(function() end)
+    )"),
+              "");
+    ASSERT_TRUE(runUntil(posts, "fromAsync.state == 'done' and fromNext.state == 'done' and failed.state == 'failed'"));
+    m_h->advanceTime(0.02);
+    m_h->renderFrame("root"); // the sleep's timer
+    ASSERT_TRUE(runUntil(posts, "fromSleep.state == 'done'"));
+    EXPECT_EQ(m_h->run(R"(
+        assert(fromAsync.value == 42, tostring(fromAsync.value))
+        assert(fromNext.value == 2 and fromSleep.value == 10)
+        assert(failed.error == "inner", failed.error)
+    )"),
+              "");
+}
+
+TEST_F(LuaFutureTest, AFutureReadBackIsTheSameFuture) {
+    // A C++ future pushed and read back: the same state, no extra hop.
+    EXPECT_EQ(m_h->run("local k = w:kept(); assert(rawequal(w:same(k), k))"), "");
+    ASSERT_EQ(m_h->run("asked0 = w:ask(); back = w:same(asked0)"), "");
+    asked->resolve(4);
+    runPosted();
+    EXPECT_EQ(m_h->run("assert(rawequal(back, asked0) and back.value == 4)"), "");
+    // A Lua future read into C++ and pushed back: the same Lua object.
+    EXPECT_EQ(m_h->run("local f = future(); assert(rawequal(w:same(f), f)); assert(rawequal(w:same(f), f))"), "");
+}
+
+TEST_F(LuaFutureTest, CancellingEitherSideCancelsTheOther) {
+    ASSERT_EQ(m_h->run("a = future(); w:keep(a)"), "");
+    EXPECT_TRUE(keptReport->cancel());
+    EXPECT_EQ(m_h->run("assert(a.state == 'cancelled')"), "");
+
+    ASSERT_EQ(m_h->run("b = future(); w:keep(b); b:cancel()"), "");
+    EXPECT_EQ(keptReport->status(), FutureStatus::Cancelled);
+
+    // Cancelled from C++, a next() future releases its source like a Lua cancel: `s` has another consumer, so it lives.
+    ASSERT_EQ(m_h->run("s = sleep(10); s:next(function() woke = true end); w:keep(s:next(function() return {} end))"),
+              "");
+    EXPECT_TRUE(keptReport->cancel());
+    m_h->advanceTime(0.02);
+    m_h->renderFrame("root");
+    EXPECT_EQ(m_h->run("assert(s.state == 'done' and woke == true)"), "");
+}
+
+TEST_F(LuaFutureTest, StateClosedBeforeALuaFutureSettlesCancelsTheCxxFuture) {
+    ASSERT_EQ(m_h->run("f = future(); w:keep(f)"), "");
+    m_h.reset();
+    runPosted();
+    ASSERT_TRUE(keptReport.has_value());
+    EXPECT_EQ(keptReport->status(), FutureStatus::Cancelled);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ---- Cancellation through chains
+
+TEST_F(LuaFutureTest, CancellingASourceCancelsWhatNextMadeFromIt) {
+    EXPECT_EQ(m_h->run(R"(
+        local f = future()
+        local g = f:next(function() ran = true end, function() caught = true end)
+        local h = f:catch(function() caught = true end)
+        local deep = g:next(function() ran = true end):catch(function() caught = true end)
+        assert(f:cancel())
+        assert(g.state == "cancelled" and h.state == "cancelled" and deep.state == "cancelled")
+        assert(ran == nil and caught == nil)
+
+        -- a future a handler returned is followed: its cancel reaches the chain
+        local s, inner = future(), future()
+        local chained = s:next(function() return inner end)
+        s:resolve()
+        inner:cancel()
+        assert(chained.state == "cancelled")
+
+        -- an async function awaiting a cancelled future: await raises "cancelled"
+        local held = future()
+        local t = async(function() local ok, err = pcall(await, held); return err end)()
+        held:cancel()
+        assert(t.value == "cancelled")
+    )"),
+              "");
+    m_h->renderFrame("root");
+    EXPECT_TRUE(luaui::errors().empty()); // cancellation is never reported
+}
+
+TEST_F(LuaFutureTest, CancellingADerivedFutureReleasesItsSource) {
+    EXPECT_EQ(m_h->run(R"(
+        -- the only consumer: the source is cancelled
+        local f = future()
+        local g = f:next(function() end)
+        assert(g:cancel() and f.state == "cancelled")
+
+        -- two consumers: cancelled once both let go
+        local s = future()
+        local a, b = s:next(function() end), s:catch(function() end)
+        a:cancel()
+        assert(s.state == "pending")
+        b:cancel()
+        assert(s.state == "cancelled")
+
+        -- an await is a consumer too
+        local shared = future()
+        local t = async(function() return await(shared) end)()
+        shared:next(function() end):cancel()
+        assert(shared.state == "pending")
+        shared:resolve(1)
+        assert(t.value == 1)
+
+        -- the future a handler returned is released too
+        local src, inner = future(), future()
+        local chained = src:next(function() return inner end)
+        src:resolve()
+        chained:cancel()
+        assert(inner.state == "cancelled")
+    )"),
+              "");
+}
+
+TEST_F(LuaFutureTest, CancellingADerivedFutureStopsTheCxxWork) {
+    ASSERT_EQ(m_h->run("held = w:hold(); g = held:next(function() end)"), "");
+    holdStarted.acquire();
+    ASSERT_EQ(m_h->run("assert(g:cancel() and held.state == 'cancelled')"), "");
+    shutdownBackground(std::chrono::seconds{10});
+    EXPECT_TRUE(holdSawStop);
+}
+
+TEST_F(LuaFutureTest, AllIsCancelledByAnInputAndReleasesItsInputs) {
+    EXPECT_EQ(m_h->run(R"(
+        local a, b = future(), future()
+        local both = all({ a, b })
+        a:cancel()
+        assert(both.state == "cancelled" and b.state == "pending")
+
+        local kept, alone = future(), future()
+        kept:next(function() end) -- another consumer
+        local x = all({ kept, alone, 3 })
+        assert(x:cancel())
+        assert(kept.state == "pending" and alone.state == "cancelled")
+    )"),
+              "");
 }
