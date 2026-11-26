@@ -19,11 +19,12 @@ Follow-ups not scheduled yet:
   steady frame. Intern the keys once per state (registry refs, or upvalues of the hot C functions).
 - The Lua call path: read `bind(t, k)` without a pcall when `t` has no metatable or a plain `__index` table; push a
   delegate's scope from C++ instead of Lua `inScope`; reuse the `__children` cache entry instead of a new table.
-- First frame of a big page: only what is in view (and 256 children below it) renders now; the rest is the Lua
-  side building every `Repeater` delegate (controls at 5000: ~130 ms, 87% of it; `ui.Text` ~1.2 µs each against 0.1 µs
-  for a plain table: `types.attach` ~0.6 µs, mostly allocation, and `finishElement`). A pooled allocator for Lua
-  (`lua_newstate` with a size-class free list) for the allocation share; a lazily built `Repeater` would change what
-  it means (all its children exist), so long lists stay `ListView`'s job.
+- First frame of a big page: only what is in view (and 256 children below it) renders now, and elements cost about
+  half as much to build (a pool allocator per Lua state, the constructors' short path: `ui.Text` ~0.6 µs against
+  0.06 µs for a plain table). What's left is mostly building every `Repeater` delegate in Lua: the C++ instance's own
+  heap allocation (`operator new` through `TypeInfo::Factory`; an in-place construction in the userdata would need a
+  factory that knows the type's size), Lua's incremental GC steps and the `Box` userdata. A lazily built `Repeater`
+  would change what it means (all its children exist), so long lists stay `ListView`'s job.
 - Lua's generational GC made no measurable difference on the bench (tried; not switched).
 - `ListView`: a `positionViewAtIndex` method (a script can't scroll to an item that isn't built), and a prop for the
   delegate cache size.

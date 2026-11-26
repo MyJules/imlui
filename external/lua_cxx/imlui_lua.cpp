@@ -6,6 +6,8 @@
 //   - A std::bad_alloc thrown by C++ code under a protected call becomes a Lua memory error ("not enough memory").
 //   - Any other foreign C++ exception becomes status -1, as in upstream Lua: not an error with a usable message.
 //     The library's C functions turn their C++ exceptions into Lua errors themselves (luaui::catchCxx).
+// It also defines the additions of imlui_lua_state.h, which need Lua's internals: luaL_newstate with another allocator
+// (lauxlib's private panic and warning functions) and imlui_lua_reservehash (ltable.c).
 #include <new>
 
 #include "imlui_lua_error.h"
@@ -24,3 +26,26 @@
 
 #define MAKE_LIB
 #include "onelua.c"
+
+#include "imlui_lua_state.h"
+
+// lauxlib.c's luaL_newstate, with `f` for its l_alloc.
+lua_State* imlui_lua_newstate(lua_Alloc f, void* ud) {
+    lua_State* L = lua_newstate(f, ud);
+    if (L) {
+        lua_atpanic(L, &panic);
+        lua_setwarnf(L, warnfoff, L); /* default is warnings off */
+    }
+    return L;
+}
+
+void imlui_lua_reservehash(lua_State* L, int idx, int n) {
+    Table* t = hvalue(index2value(L, idx));
+    unsigned int used = 0;
+    if (!isdummy(t)) {
+        for (Node *node = gnode(t, 0), *end = gnode(t, sizenode(t)); node < end; ++node)
+            if (!isempty(gval(node))) ++used;
+        if (used + static_cast<unsigned int>(n) <= sizenode(t)) return;
+    }
+    luaH_resize(L, t, luaH_realasize(t), used + static_cast<unsigned int>(n));
+}

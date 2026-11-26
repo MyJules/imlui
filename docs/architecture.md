@@ -534,7 +534,11 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
   `parent` field (a script assigned it) would shadow the side table, so `syncInstance` drops it, and reports it in
   debug builds. The constructor (`finishElement`) links its children (positional,
   `menu` / `menuBar` / `header` / `otherwise`, a `Responsive`'s classes) to its *holder*: itself, or for an inline
-  container its own parent, so inline containers are skipped. When an inline container gets a parent, its
+  container its own parent, so inline containers are skipped. Most elements are built from a fresh table (no
+  metatable, no `parent`, `__inline`, `__list`, `__box` or element-valued prop besides positional children); for
+  those, a registered type's constructor takes a shorter path with the same result: `types.attach(props, name)`
+  sets `__type` (the table resized once for it and `__native`) and the type's metatable, and only the positional
+  children are linked, read without a `rawget` each. When an inline container gets a parent, its
   children are re-linked to the new holder. Delegates and `Loader` / `Responsive` items are linked when built or
   shown.
 
@@ -961,7 +965,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
+| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, `reservehash`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes); `newstate()` gives each state a memory pool of its own (blocks up to 512 bytes from size-class free lists carved from chunks of 16 KiB to 1 MiB, larger ones from the C heap; released by `close()`; the plain allocator under AddressSanitizer, so ASan still sees Lua's memory); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on a normal scope exit (not while a Lua error unwinds it) |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
@@ -1141,7 +1145,11 @@ project already has `glfw`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is 
   `onelua.c`), without the `lua`/`luac` executables. The vendored sources are unchanged: the file only sets the
   error-handling hooks `ldo.c` leaves to the build (`LUAI_THROW`/`LUAI_TRY`), so Lua throws `imlui_lua_error`
   (`external/lua_cxx/imlui_lua_error.h`, `lua::Raised` in the wrapper) and maps a `std::bad_alloc` to a memory error.
-  The API has C++ linkage: `src/wrap/lua.cppm` includes the headers without `extern "C"`.
+  The API has C++ linkage: `src/wrap/lua.cppm` includes the headers without `extern "C"`. After `onelua.c`, the same
+  file defines two additions that need Lua's internals (`external/lua_cxx/imlui_lua_state.h`, installed with the
+  headers): `imlui_lua_newstate` (`luaL_newstate` with another allocator, keeping lauxlib's private panic and warning
+  functions) and `imlui_lua_reservehash` (`lua::reservehash`: room in a table's hash part for `n` more keys, in one
+  resize).
 - **GLFW 3.4** is built via `add_subdirectory` (its CMake does the per-platform work).
 - **spdlog 1.15.3** is built from its sources as its own CMake would build the static library: `SPDLOG_COMPILED_LIB`
   with the bundled fmt.
