@@ -15,6 +15,7 @@ import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
 import imlui.ui.frame_request;
+import imlui.ui.renderer;
 
 using namespace imlui;
 
@@ -244,6 +245,31 @@ TEST_F(CullingTest, ADialogDeclaredOutOfViewStillOpens) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A page longer than Renderer::convergeRenders: on its first frame, the children below the view that were never
+// measured are laid out at an estimate instead of rendering, except one whose subtree holds a non-visual element (a
+// Dialog), which renders, so the Dialog opens right away, in a stack and in a Grid cell alike.
+TEST_F(CullingTest, AFirstFrameEstimatesWhatIsBelowTheViewButRendersADialogInIt) {
+    for (const char* layout : {"Column", "Grid"}) {
+        start();
+        run(std::string{"Layout = "} + layout + R"(
+            s = state { open = false }
+            renders = 0
+            root = ScrollView { height = 200,
+                Layout { columns = 2,
+                    Repeater { model = 1000, delegate = function(i)
+                        return Box { h = function() renders = renders + 1; return 30 end } end },
+                    Column { Box { id = "last" },
+                             Dialog { open = bind(s, "open"), title = "T", Box { id = "inDialog" } } } } })");
+        m_h->renderFrame("root");
+        EXPECT_LT(readNumber("renders"), 500) << layout; // not every box of the 1000 on the first frame
+        EXPECT_EQ(box("inDialog").renders(), 0) << layout;
+        run("s.open = true");
+        m_h->renderFrames("root", 2);
+        EXPECT_GT(box("inDialog").renders(), 0) << layout;
+        EXPECT_TRUE(luaui::errors().empty()) << layout;
+    }
+}
+
 TEST_F(CullingTest, AFocusedTextFieldScrolledOutKeepsItsEdit) {
     run(R"(
         s = state { t = "" }
@@ -267,6 +293,40 @@ TEST_F(CullingTest, AFocusedTextFieldScrolledOutKeepsItsEdit) {
     m_h->renderFrames("root", 2);
     EXPECT_EQ(m_h->run(R"(assert(s.t == "ab", s.t))"), "");
     EXPECT_TRUE(ImGui::IsAnyItemActive());
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A long page renders every child on its first frame only. On the next ones (where the ScrollView's scrollbar
+// appears and the width its children get changes) the children below the view are laid out by their last sizes,
+// except for up to Renderer::convergeRenders a frame that render so their sizes settle: the scroll range converges,
+// over frames it asks for, to the one with culling off, and then the page asks for nothing.
+TEST_F(CullingTest, ALongPageConvergesWithoutRenderingEveryChildAgain) {
+    constexpr int n = 2000;
+    const auto renderedOnNextFrame = [&] {
+        std::vector<int> before(n + 1);
+        for (int i = 1; i <= n; ++i)
+            before[static_cast<std::size_t>(i)] = box("b" + std::to_string(i)).renders();
+        m_h->renderFrame("root");
+        int rendered = 0;
+        for (int i = 1; i <= n; ++i)
+            rendered += box("b" + std::to_string(i)).renders() > before[static_cast<std::size_t>(i)] ? 1 : 0;
+        return rendered;
+    };
+    run(std::string{"N = "} + std::to_string(n) + "\n" + mixedTree);
+    m_h->renderFrame("root");
+    EXPECT_LT(renderedOnNextFrame(), Renderer::convergeRenders + 100); // not all n again
+    int frames = 1;
+    for (; frames < 100 && !std::isinf(secondsUntilFrame()); ++frames)
+        m_h->renderFrame("root");
+    EXPECT_GT(frames, 2);   // it converged over frames it asked for ...
+    EXPECT_LT(frames, 100); // ... and then asks for nothing
+    const float converged = m_h->instance<Scroller>("scroller")->maxY();
+
+    start();
+    run(std::string{"N = "} + std::to_string(n) + "\n" + mixedTree);
+    run("ui.setCulling(false)");
+    m_h->renderFrames("root", 6);
+    EXPECT_FLOAT_EQ(converged, m_h->instance<Scroller>("scroller")->maxY());
     EXPECT_TRUE(luaui::errors().empty());
 }
 

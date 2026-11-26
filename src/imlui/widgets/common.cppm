@@ -51,8 +51,13 @@ inline constexpr float hugeExtent = 3.4e38f;
 [[nodiscard]] std::string scopedWindowName(std::string_view label, std::string_view id);
 
 /// Smoothly moves a per-id stored value towards `target`. Requests another frame while it moves. A non-finite
-/// target is ignored (the stored value stays); a non-finite stored value jumps to the target.
+/// target is ignored (the stored value stays); a non-finite stored value jumps to the target. The first call for an
+/// id starts at `target`. Values are kept per ImGui context, in a hash map of imlui's (not the window's ImGuiStorage,
+/// a sorted vector: a page showing thousands of widgets for the first time inserted into it in quadratic time); one
+/// not asked for in animateKeepFrames frames is dropped (its widget starts at its target again, as if at rest).
 float animate(ImGuiID id, float target, float speed = 14.0f);
+/// Frames an animate() value is kept without being asked for.
+inline constexpr int animateKeepFrames = 600;
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
 float stateLayer(ImGuiID id, bool hovered, bool active);
 
@@ -149,8 +154,42 @@ void notePopupOver(ImGuiPopupFlags flags) {
     ImGui::GetStateStorage()->SetBool(ImGui::GetID("##popupOver"), ImGui::IsPopupOpen("", flags));
 }
 
+namespace {
+
+/// animate()'s values: by id, with the frame each was last asked for, for the current ImGui context.
+struct Animated {
+    float value;
+    int used;
+};
+struct AnimatedValues {
+    ImGuiContext* context = nullptr;
+    int swept = 0;
+    std::unordered_map<ImGuiID, Animated> byId;
+};
+AnimatedValues animated; // main thread only, like all ImGui code
+
+/// The value of `id`, created at `initial` on its first use; drops the ones unused for animateKeepFrames frames,
+/// looking for them every 64 frames.
+float& animatedValue(ImGuiID id, float initial) {
+    if (animated.context != ImGui::GetCurrentContext()) {
+        animated.byId.clear();
+        animated.context = ImGui::GetCurrentContext();
+        animated.swept = 0;
+    }
+    const int frame = ImGui::GetFrameCount();
+    if (frame - animated.swept >= 64 || frame < animated.swept) {
+        animated.swept = frame;
+        std::erase_if(animated.byId, [&](const auto& e) { return frame - e.second.used >= animateKeepFrames; });
+    }
+    Animated& a = animated.byId.try_emplace(id, Animated{initial, frame}).first->second;
+    a.used = frame;
+    return a.value;
+}
+
+} // namespace
+
 float animate(ImGuiID id, float target, float speed) {
-    float* v = ImGui::GetStateStorage()->GetFloatRef(id, target);
+    float* v = &animatedValue(id, target);
     // A NaN target (a Slider value of 0/0) would never converge and request frames forever.
     if (!std::isfinite(target)) return std::isfinite(*v) ? *v : 0.0f;
     if (!std::isfinite(*v)) *v = target;

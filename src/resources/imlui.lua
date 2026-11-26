@@ -218,10 +218,11 @@ local function forEachChild(el, f, arg)
     if box and isElement(box[1]) then f(box[1], arg) end
 end
 
--- Makes `parent` the parent of `child` (nothing for a value that isn't an element). The children of an inline
--- container follow it: their parent is its new holder.
-local function setParent(child, parent)
-    if not isElement(child) or child == parent then return end
+-- Makes `parent` the parent of element `child`, or of any value (nothing for one that isn't an element) with
+-- setParent. The children of an inline container follow it: their parent is its new holder.
+local setParent
+local function linkChild(child, parent)
+    if child == parent then return end
     shareMeta(child)
     if parents[child] == parent then return end
     parents[child] = parent
@@ -229,6 +230,15 @@ local function setParent(child, parent)
         forEachChild(child, setParent, holder(child))
     end
 end
+setParent = function(child, parent)
+    if isElement(child) then linkChild(child, parent) end
+end
+
+-- The keys that make finishElement do more than link positional children, the scope and the id: a `parent` prop to
+-- drop, element-valued children, the children a container built, an inline container's holder. ui.element's
+-- constructors take their shortcut only without any of them.
+local NOT_PLAIN_KEYS = { "parent", "__list", "__box", "__inline" }
+for _, k in ipairs(CHILD_KEYS) do NOT_PLAIN_KEYS[#NOT_PLAIN_KEYS + 1] = k end
 
 -- The end of every constructor, once `__type` is set: the shared metatable (a `parent` prop is reported and
 -- dropped), the children's parent links, the scope the element is built in (see scopeOf) and the id.
@@ -260,8 +270,34 @@ end
 --- The constructor sets the parent links of the element's children (`child.parent`) and registers its id.
 function ui.element(name)
     local typed = types ~= nil and types.isType(name)
+    -- Most elements are built from a fresh table: no metatable (so its fields read raw, with no call), at most
+    -- positional children, no `parent` prop. For those of a registered type the constructor does what
+    -- finishElement does with less work: attach sets `__type` (the table resized once for it and `__native`) and the
+    -- type's metatable, and only the positional children are walked. Same result.
+    local plainPath = typed and name ~= "Responsive"
     return function(props)
         if type(props) ~= "table" then props = { props } end
+        if plainPath and getmetatable(props) == nil then
+            local plain = true
+            for i = 1, #NOT_PLAIN_KEYS do
+                if props[NOT_PLAIN_KEYS[i]] ~= nil then
+                    plain = false
+                    break
+                end
+            end
+            if plain then
+                local n, id = #props, props.id
+                types.attach(props, name)
+                for i = 1, n do
+                    local c = props[i] -- raw: a hole reads the type's methods, which have no integer keys
+                    if isElement(c) then linkChild(c, props) end
+                end
+                local scope = scopes[#scopes]
+                if scope ~= nil then scopeOf[props] = scope end
+                if id ~= nil then registerIn(scope, props, id) end
+                return props
+            end
+        end
         props.__type = name
         if typed then types.attach(props) end
         return finishElement(props)

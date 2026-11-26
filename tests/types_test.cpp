@@ -448,7 +448,9 @@ TEST_F(TypesTest, NilResetsPropertiesToTheirDefaults) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
-TEST_F(TypesTest, DefaultsAreCapturedPerInstanceBeforeAnySetter) {
+// Defaults are the values right after construction, captured before any setter ran (once per type, from its first
+// instance, and shared): an instance built after another one was set resets to the constructed value too.
+TEST_F(TypesTest, DefaultsAreTheConstructedValuesBeforeAnySetter) {
     run(R"(
         a = Probe { value = 7 }
         b = Probe { }
@@ -458,6 +460,10 @@ TEST_F(TypesTest, DefaultsAreCapturedPerInstanceBeforeAnySetter) {
     EXPECT_DOUBLE_EQ(sync("a")->value(), 0);
     EXPECT_DOUBLE_EQ(sync("b")->value(), 0);
     EXPECT_DOUBLE_EQ(sync("b")->scale(), 2); // never set: the explicit default applies from the first sync
+    run("c = Probe { value = 5 }");
+    sync("c");
+    run("c.value = nil");
+    EXPECT_DOUBLE_EQ(sync("c")->value(), 0);
 }
 
 TEST_F(TypesTest, SyncCallsSettersOnlyOnChange) {

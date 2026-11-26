@@ -26,6 +26,23 @@ export namespace imlui::luaui {
 /// such a metatable only adds methods and `parent`, never a property, so property reads skip it (see pushRaw).
 inline constexpr const char* sharedMetaMarker = "__imlui_shared";
 
+/// The fields imlui reads from every element, every frame, as lua::Keys (read with no lookup of the name).
+namespace keys {
+inline const lua::Key visible{"visible"};
+inline const lua::Key enabled{"enabled"};
+inline const lua::Key tooltip{"tooltip"};
+inline const lua::Key width{"width"};
+inline const lua::Key height{"height"};
+inline const lua::Key fillWidth{"fillWidth"};
+inline const lua::Key cull{"cull"};
+inline const lua::Key children{"__children"};
+inline const lua::Key inlined{"__inline"};
+inline const lua::Key native{"__native"};
+inline const lua::Key parent{"parent"};
+inline const lua::Key bind{"__bind"};
+inline const lua::Key sharedMeta{sharedMetaMarker};
+} // namespace keys
+
 class Node {
 public:
     /// Wraps the table at stack index `idx` (converted to an absolute index).
@@ -41,16 +58,22 @@ public:
     /// Pushes the raw (unresolved) field: the table's own, else what its metatable's __index gives, unless that
     /// is a metatable shared by a type's elements (sharedMetaMarker), which holds no properties.
     lua::Type pushRaw(const char* key) const;
+    lua::Type pushRaw(const lua::Key& key) const;
 
     /// Pushes the resolved value of property `key`; returns its Lua type.
     lua::Type push(const char* key) const;
+    lua::Type push(const lua::Key& key) const;
 
     [[nodiscard]] bool has(const char* key) const;
+    [[nodiscard]] bool has(const lua::Key& key) const;
 
     [[nodiscard]] std::optional<double> number(const char* key) const;
+    [[nodiscard]] std::optional<double> number(const lua::Key& key) const;
     [[nodiscard]] double number(const char* key, double def) const;
     [[nodiscard]] float numf(const char* key, float def) const;
+    [[nodiscard]] float numf(const lua::Key& key, float def) const;
     [[nodiscard]] bool boolean(const char* key, bool def) const;
+    [[nodiscard]] bool boolean(const lua::Key& key, bool def) const;
     [[nodiscard]] std::string string(const char* key, std::string_view def = {}) const;
     [[nodiscard]] std::optional<Color> color(const char* key) const;
 
@@ -79,6 +102,15 @@ public:
 private:
     /// Replaces the bind object at `idx` (relative) with the bound value.
     void resolveBind(int idx) const;
+    /// pushRaw() after the table's own field was pushed (of type `t`): an absent one is looked up through the table's
+    /// own metatable (not a shared one), by `key`.
+    lua::Type pushRawRest(lua::Type t, const char* key) const;
+    /// push() after pushRaw(): a binding on top is called, a bind object read; returns the type of the value.
+    lua::Type resolveTop() const;
+    /// The number on top (or nullopt), popped.
+    std::optional<double> popNumber() const;
+    /// The boolean on top (of type `t`; `def` for nil), popped.
+    bool popBoolean(lua::Type t, bool def) const;
 
     /// What the table's metatable is to property reads, found at the first read of a field the table lacks.
     enum class Meta : std::uint8_t { Unknown, Skip, Index };
@@ -112,8 +144,7 @@ int bindSet(lua::State* state) {
 /// an __index (one that raises, too) isn't taken for a bind object.
 lua::Type pushRawField(lua::State* state, int idx, const char* key) {
     idx = lua::absindex(state, idx);
-    lua::pushstring(state, key);
-    return lua::rawget(state, idx);
+    return lua::rawgetfield(state, idx, key);
 }
 
 } // namespace
@@ -131,15 +162,17 @@ std::string Node::type() const {
     return t;
 }
 
-lua::Type Node::pushRaw(const char* key) const {
-    lua::pushcstring(m_state, key);
-    const lua::Type t = lua::rawget(m_state, m_index);
+lua::Type Node::pushRaw(const char* key) const { return pushRawRest(lua::rawgetfield(m_state, m_index, key), key); }
+lua::Type Node::pushRaw(const lua::Key& key) const {
+    return pushRawRest(lua::rawget(m_state, m_index, key), key.name().c_str());
+}
+
+lua::Type Node::pushRawRest(lua::Type t, const char* key) const {
     if (t != lua::Type::Nil || m_meta == Meta::Skip) return t;
     if (m_meta == Meta::Unknown) {
         m_meta = Meta::Skip; // no metatable, or a shared one
         if (lua::getmetatable(m_state, m_index) != 0) {
-            lua::pushcstring(m_state, sharedMetaMarker); // nil, meta, marker
-            if (lua::rawget(m_state, -2) == lua::Type::Nil) m_meta = Meta::Index;
+            if (lua::rawget(m_state, -1, keys::sharedMeta) == lua::Type::Nil) m_meta = Meta::Index; // nil, meta, marker
             lua::pop(m_state, 2); // nil
         }
         if (m_meta == Meta::Skip) return t;
@@ -150,6 +183,14 @@ lua::Type Node::pushRaw(const char* key) const {
 
 lua::Type Node::push(const char* key) const {
     pushRaw(key);
+    return resolveTop();
+}
+lua::Type Node::push(const lua::Key& key) const {
+    pushRaw(key);
+    return resolveTop();
+}
+
+lua::Type Node::resolveTop() const {
     if (lua::isfunction(m_state, -1)) {
         lua::pushvalue(m_state, m_index);
         if (!safeRead(m_state, scopedArgs(m_state, m_index, 1), 1)) lua::pushnil(m_state);
@@ -164,19 +205,38 @@ bool Node::has(const char* key) const {
     lua::pop(m_state);
     return r;
 }
+bool Node::has(const lua::Key& key) const {
+    bool r = pushRaw(key) != lua::Type::Nil;
+    lua::pop(m_state);
+    return r;
+}
 
 std::optional<double> Node::number(const char* key) const {
+    push(key);
+    return popNumber();
+}
+std::optional<double> Node::number(const lua::Key& key) const {
+    push(key);
+    return popNumber();
+}
+
+std::optional<double> Node::popNumber() const {
     std::optional<double> r;
-    if (push(key) == lua::Type::Number || lua::isnumber(m_state, -1)) r = lua::tonumber(m_state, -1);
+    if (lua::type(m_state, -1) == lua::Type::Number || lua::isnumber(m_state, -1)) r = lua::tonumber(m_state, -1);
     lua::pop(m_state);
     return r;
 }
 
 double Node::number(const char* key, double def) const { return number(key).value_or(def); }
 float Node::numf(const char* key, float def) const { return toFloat(number(key, static_cast<double>(def))); }
+float Node::numf(const lua::Key& key, float def) const {
+    return toFloat(number(key).value_or(static_cast<double>(def)));
+}
 
-bool Node::boolean(const char* key, bool def) const {
-    lua::Type t = push(key);
+bool Node::boolean(const char* key, bool def) const { return popBoolean(push(key), def); }
+bool Node::boolean(const lua::Key& key, bool def) const { return popBoolean(push(key), def); }
+
+bool Node::popBoolean(lua::Type t, bool def) const {
     bool r = t == lua::Type::Nil ? def : lua::toboolean(m_state, -1);
     lua::pop(m_state);
     return r;

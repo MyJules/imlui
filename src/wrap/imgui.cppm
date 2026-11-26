@@ -502,6 +502,7 @@ using ImGui::BeginTable;
 using ImGui::EndTable;
 using ImGui::TableNextColumn;
 using ImGui::TableNextRow;
+using ImGui::TableSetColumnIndex;
 using ImGui::TableSetupColumn;
 using ImGui::TableHeadersRow;
 using ImGui::TableHeader;

@@ -10,13 +10,20 @@ Follow-ups not scheduled yet:
 - **Run `tidy` (and the sanitizer preset) in CI**, and extend the naming check to `tests/`.
 - The default test presets skip the slow `package` tests; label the GL smoke tests so CI can skip them.
 - Lua language-server definitions (`---@meta`) generated from the type registry.
-- Per-child cost in big containers: `Frame::Child` is built up to three times per child in a `Row`, and
-  `Node::type()` (a `std::string`) plus a map lookup runs 2–3 times per element per frame; answer the kind from the
-  `__native` box (`renderer.cppm`, `frame.cppm`, `registry.cppm`).
+- Per-child cost in big containers: a `Row` builds a `Frame::Child` per pass (fills, sizes, render, and its parent's
+  `contentFillsWidth` / size questions), each an instance lookup and an ImGui ID; in the `nested` bench an element's
+  props are read ~18 times a frame (`visible` 3, `width`/`fillWidth` 3, `__children` 2.5). Keep a container's
+  children (table, kind, id, `visible`, size props) for the frame while `luaui::changes()` stands still. The kind is
+  answered from the `__native` box already.
 - The Lua call path: read `bind(t, k)` without a pcall when `t` has no metatable or a plain `__index` table; push a
   delegate's scope from C++ instead of Lua `inScope`; reuse the `__children` cache entry instead of a new table.
-- First frame of a big stack: every child renders once to learn its size before culling applies (controls at 5000:
-  ~430 ms). Estimate unknown sizes from settled siblings, as `ListView` does.
+- First frame of a big page: only what is in view (and 256 children below it) renders now, and elements cost about
+  half as much to build (a pool allocator per Lua state, the constructors' short path: `ui.Text` ~0.6 µs against
+  0.06 µs for a plain table). What's left is mostly building every `Repeater` delegate in Lua: the C++ instance's own
+  heap allocation (`operator new` through `TypeInfo::Factory`; an in-place construction in the userdata would need a
+  factory that knows the type's size), Lua's incremental GC steps and the `Box` userdata. A lazily built `Repeater`
+  would change what it means (all its children exist), so long lists stay `ListView`'s job.
+- Lua's generational GC made no measurable difference on the bench (tried; not switched).
 - `ListView`: a `positionViewAtIndex` method (a script can't scroll to an item that isn't built), and a prop for the
   delegate cache size.
 - `font_check` assumes glyphs up to ~128 px; `fontScale` is capped at 4, but zoom × DPI can still exceed it: cap the

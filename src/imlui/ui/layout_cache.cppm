@@ -40,8 +40,11 @@ export namespace imlui::layout {
 void assumeWidth(ImGuiID id, float size);
 void assumeHeight(ImGuiID id, float size);
 /// Records the size `id` rendered at this frame. Requests another frame when a layout assumed a size that differs by
-/// more than half a pixel (unless `id` has mismatched on too many frames in a row).
-void recordSize(ImGuiID id, ImVec2 size);
+/// more than half a pixel (unless `id` has mismatched on too many frames in a row). `provisional`: the size came out
+/// of a layout that placed something by a size not settled yet (below the view: an estimate, or a last size; see
+/// Renderer::noteProvisional), so it isn't settled however often it repeats: a layout may place by it (lastSize), but
+/// culling doesn't trust it (settledSize) until a render without such a placement records it.
+void recordSize(ImGuiID id, ImVec2 size, bool provisional = false);
 
 /// Consecutive frames a size may differ from the assumed one before its mismatches stop requesting frames.
 inline constexpr int maxSettleFrames = 8;
@@ -49,6 +52,10 @@ inline constexpr int maxSettleFrames = 8;
 /// Retention: an entry not used for keepFrames frames and keepSeconds seconds (ImGui time) is dropped.
 inline constexpr int keepFrames = 600;
 inline constexpr double keepSeconds = 60.0;
+/// How often (in frames) the entries old in frames and in time are looked for: a walk over the whole cache, which a
+/// big page holds thousands of entries in, so not every frame. It delays a drop by up to as many frames. The cap
+/// (maxEntries) is checked every frame.
+inline constexpr int ageSweepFrames = 64;
 /// Above this many entries, the least recently used ones are dropped (never those used on this frame or the last).
 inline constexpr std::size_t maxEntries = 16384;
 
@@ -82,17 +89,21 @@ struct Entry {
 struct Cache {
     ImGuiContext* context = nullptr;
     int sweptFrame = -1;
+    int ageSweptFrame = -1;
     std::unordered_map<ImGuiID, Entry> entries;
 };
 
 Cache cache; // main thread only, like all ImGui code
 
-/// Drops the entries that are old in frames and in time, then, above maxEntries, the least recently used ones that
-/// aren't live.
+/// Drops the entries that are old in frames and in time (every ageSweepFrames), then, above maxEntries, the least
+/// recently used ones that aren't live.
 void sweep(std::unordered_map<ImGuiID, Entry>& map, int frame, double now) {
-    std::erase_if(map, [&](const auto& e) {
-        return frame - e.second.touched >= keepFrames && now - e.second.touchedTime >= keepSeconds;
-    });
+    if (cache.ageSweptFrame < 0 || frame - cache.ageSweptFrame >= ageSweepFrames || frame < cache.ageSweptFrame) {
+        cache.ageSweptFrame = frame;
+        std::erase_if(map, [&](const auto& e) {
+            return frame - e.second.touched >= keepFrames && now - e.second.touchedTime >= keepSeconds;
+        });
+    }
     if (map.size() <= maxEntries) return;
     std::vector<std::pair<int, ImGuiID>> old; // (last frame used, id) of the entries that may go
     old.reserve(map.size());
@@ -111,6 +122,7 @@ std::unordered_map<ImGuiID, Entry>& entries() {
         cache.entries.clear();
         cache.context = context;
         cache.sweptFrame = -1;
+        cache.ageSweptFrame = -1;
     }
     const int frame = ImGui::GetFrameCount();
     if (cache.sweptFrame != frame) {
@@ -159,7 +171,7 @@ std::optional<ImVec2> settledSize(ImGuiID id) {
 void assumeWidth(ImGuiID id, float size) { assume(id, 0, size); }
 void assumeHeight(ImGuiID id, float size) { assume(id, 1, size); }
 
-void recordSize(ImGuiID id, ImVec2 size) {
+void recordSize(ImGuiID id, ImVec2 size, bool provisional) {
     Entry& e = touch(id);
     const int frame = e.touched;
     const std::array<float, 2> got{size.x, size.y};
@@ -169,7 +181,8 @@ void recordSize(ImGuiID id, ImVec2 size) {
         e.assumedFrame[axis] = -1; // compared once: a second record this frame (an aggregate) needs a new assumption
         if (std::fabs(got[axis] - e.assumed[axis]) > tolerance) mismatch = true;
     }
-    e.settled = e.size && std::fabs(e.size->x - size.x) <= tolerance && std::fabs(e.size->y - size.y) <= tolerance;
+    e.settled = !provisional && e.size && std::fabs(e.size->x - size.x) <= tolerance &&
+                std::fabs(e.size->y - size.y) <= tolerance;
     e.size = size;
     if (!mismatch) return;
     if (e.mismatchFrame == frame) return; // already counted (and requested) this frame

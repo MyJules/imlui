@@ -91,8 +91,11 @@ Who requests frames:
 | `ui.requestFrame(ms?)`, `ui.setZoom`, `native.injectMouse` | a frame (or the settle period) |
 | A reload | the settle period |
 
-`md::animate` caps the frame time it advances by at 1/30 s, so a transition that starts on the first frame after
-a long sleep doesn't jump to its end.
+`md::animate` keeps its values in a hash map of imlui's by ImGui ID (per context; a value unused for
+`md::animateKeepFrames` 600 frames is dropped, and its widget starts at rest again), not in the window's
+`ImGuiStorage`: that is a sorted vector, and a page showing thousands of widgets for the first time inserted into it
+in quadratic time (18% of such a first frame). It caps the frame time it advances by at 1/30 s, so a transition that
+starts on the first frame after a long sleep doesn't jump to its end.
 
 ### Scaling
 
@@ -309,7 +312,8 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   (logged once at debug level), so a layout that can't settle doesn't render forever.
 - **Retention.** A hidden page (another `TabBar` tab, an `If` branch, a collapsed `Section`) keeps its sizes, so it
   is in place, and seen, on the frame it comes back. An entry is dropped only when it is old both in frames and in
-  time (`layout::keepFrames` 600 frames and `layout::keepSeconds` 60s: on-demand rendering renders few frames while
+  time (`layout::keepFrames` 600 frames and `layout::keepSeconds` 60s, looked for every `layout::ageSweepFrames` 64
+  frames, as a walk over the whole cache costs ~1 µs per hundred entries: on-demand rendering renders few frames while
   idle, an animation many a second), and above `layout::maxEntries` (16384, about 2 MB) the least recently used go
   first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
   the element's ImGui ID in the parent's ID scope, made from its identity (see [Element identity](#element-identity)),
@@ -334,7 +338,8 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   which asks its children, and then each of them renders) neither syncs nor measures an element twice; a sync of the
   element, or Lua that may change tables, drops them. The skip
   doesn't trust the count alone: each sync keeps a fingerprint of the element table's declared fields (their raw
-  values: numbers, booleans and strings by value, tables and functions by identity), and a skip compares it, so a
+  values: numbers and booleans by value, strings by Lua's identity of them (`lua::strid`: object, length and hash),
+  tables and functions by identity), and a skip compares it, so a
   write that bypassed the count (a raw `lua_setfield` from C++, a binding that writes its own element) still reaches
   the render on the same frame. A debug build reports such a write as a script error (`Gauge: a declared field of the
   element table changed without luaui::changes() counting it ...`): the code that made it probably writes other
@@ -421,8 +426,28 @@ until it settles again. Turn it off with `ui.setCulling(false)` (every container
 
 Not culled:
 
-- **A child without a settled size**: its first two frames, or while its size changes (a `Card` whose window fits
-  its content a frame later, text that wraps at a new width), so the size the stack lays out is right.
+- **A child without a settled size** in view or above it: its first two frames, or while its size changes (a `Card`
+  whose window fits its content a frame later, text that wraps at a new width), so the size the stack lays out is
+  right. **Below the view** of a window that scrolls (`cull::belowView`), such a child renders only while the frame's
+  `Renderer::convergeRenders` (256) last, so its size settles; past them it is laid out at its last size and another
+  frame is requested (`Renderer::requestConvergeFrame`, at most `maxConvergeFrames` 120 in a row). Nothing in view is
+  placed after it, so a size still converging only moves what is out of view, and the scroll range becomes exact over
+  a few cheap frames. Without this, every child of a long page rendered on its second and third frames too (the
+  scrollbar appears on the second and changes the width the children get, so they settle only on the third): about
+  90 ms each for 5000 `Row`s of controls. The same holds on a frame the stack's width changed (a resize), where only
+  the children below the view are culled. A child **never measured** (a long page's first frame), below the view and
+  past the frame's converging renders, is laid out at the average height of the siblings laid out before it (no
+  width, so it widens nothing) and measured on a later frame, unless its subtree holds a non-visual element
+  (`Renderer::holdsNonVisual`: a walk over its tables, kinds only, no sync or render, remembered per child): that one
+  renders, so a `Dialog` declared anywhere in the page pins and opens from the start. "Below the view" means in a
+  window whose height doesn't follow its content (`cull::belowView`): not an auto-sized window, a `Card` (a child
+  window that grows to fit) or a window fitting itself on its first frames, where what is past the clip rect is what
+  the window grows to fit. An element whose render laid out anything by an unsettled size (an estimate, a last size)
+  records its own size as provisional (`Renderer::noteProvisional`, `layout::recordSize(..., provisional)`): a `Row`
+  may place by it, but it doesn't settle, so it isn't culled before its content has converged. `Grid` rows follow the
+  same rules (an estimated row reserves the average height of the rows before it, a cell holding a non-visual element
+  still renders in its column, and its height isn't recorded). On a page's first frame this leaves building the
+  delegates in Lua as most of the cost.
 - **Pinned children.** Around each child it renders, the stack watches ImGui's state (`cull::watch` / `cull::held`):
   whether the child's render held the active item (`ActiveIdIsAlive`: a `TextField` being edited, a `Slider` being
   dragged), the nav focus (`NavIdIsAlive`), began an open popup (a menu, a combo box's list), or rendered a
@@ -510,7 +535,11 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
   `parent` field (a script assigned it) would shadow the side table, so `syncInstance` drops it, and reports it in
   debug builds. The constructor (`finishElement`) links its children (positional,
   `menu` / `menuBar` / `header` / `otherwise`, a `Responsive`'s classes) to its *holder*: itself, or for an inline
-  container its own parent, so inline containers are skipped. When an inline container gets a parent, its
+  container its own parent, so inline containers are skipped. Most elements are built from a fresh table (no
+  metatable, no `parent`, `__inline`, `__list`, `__box` or element-valued prop besides positional children); for
+  those, a registered type's constructor takes a shorter path with the same result: `types.attach(props, name)`
+  sets `__type` (the table resized once for it and `__native`) and the type's metatable, and only the positional
+  children are linked, read without a `rawget` each. When an inline container gets a parent, its
   children are re-linked to the new holder. Delegates and `Loader` / `Responsive` items are linked when built or
   shown.
 
@@ -937,7 +966,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
+| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, `reservehash`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes); `newstate()` gives each state a memory pool of its own (blocks up to 512 bytes from size-class free lists carved from chunks of 16 KiB to 1 MiB, larger ones from the C heap; released by `close()`; the plain allocator under AddressSanitizer, so ASan still sees Lua's memory); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on a normal scope exit (not while a Lua error unwinds it) |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
@@ -1117,7 +1146,20 @@ project already has `glfw`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is 
   `onelua.c`), without the `lua`/`luac` executables. The vendored sources are unchanged: the file only sets the
   error-handling hooks `ldo.c` leaves to the build (`LUAI_THROW`/`LUAI_TRY`), so Lua throws `imlui_lua_error`
   (`external/lua_cxx/imlui_lua_error.h`, `lua::Raised` in the wrapper) and maps a `std::bad_alloc` to a memory error.
-  The API has C++ linkage: `src/wrap/lua.cppm` includes the headers without `extern "C"`.
+  The API has C++ linkage: `src/wrap/lua.cppm` includes the headers without `extern "C"`. After `onelua.c`, the same
+  file defines two additions that need Lua's internals (`external/lua_cxx/imlui_lua_state.h`, installed with the
+  headers): `imlui_lua_newstate` (`luaL_newstate` with another allocator, keeping lauxlib's private panic and warning
+  functions), `imlui_lua_reservehash` (`lua::reservehash`: room in a table's hash part for `n` more keys, in one
+  resize), and the field reads of the render path: `imlui_lua_rawgetfield` (`lua::rawgetfield`: a raw read by a C
+  string in one call, no key pushed), `imlui_lua_rawgetkey` (`lua::rawget` with a `lua::Key`: the key's string made
+  once per state and kept in a per-state cache under the Key's slot, reached through the threads' `LUA_EXTRASPACE`,
+  its strings kept alive in the registry, freed by `lua::close` after `lua_close`) and `imlui_lua_strid`
+  (`lua::strid`: a string's object, length and Lua hash, which the property fingerprint mixes instead of hashing the
+  bytes). The same file sets `STRCACHE_N` (509, the C-string cache `lua_getfield` and `rawgetfield` look keys up in)
+  and routes Lua's `strcmp` to an inline comparison, and `luai_userstateopen` clears the extra space of a new state.
+  The fields imlui reads for every element every frame (`visible`, `enabled`, `tooltip`, `width`, `fillWidth`,
+  `__children`, `__native`, each property's name: `TypeInfo::Property::key`, ...) are `lua::Key`s
+  (`luaui::keys`); `luaui::Node` takes a Key wherever it takes a name for the hot reads.
 - **GLFW 3.4** is built via `add_subdirectory` (its CMake does the per-platform work).
 - **spdlog 1.15.3** is built from its sources as its own CMake would build the static library: `SPDLOG_COMPILED_LIB`
   with the bundled fmt.

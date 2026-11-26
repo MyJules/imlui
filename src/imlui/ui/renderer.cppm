@@ -38,8 +38,9 @@ public:
         /// Whether a type is registered under a name, and whether it takes layout space.
         enum class Kind { Unknown, Visual, NonVisual };
 
-        /// What `type` is.
-        [[nodiscard]] virtual Kind kind(std::string_view type) const = 0;
+        /// What the element `node` is: by its instance's type once it has one (no `__type` read or name lookup),
+        /// else by its `__type`.
+        [[nodiscard]] virtual Kind kind(const luaui::Node& node) const = 0;
         /// Syncs and renders the element `node`, of a registered type. Runs inside the renderer's per-element
         /// wrapper.
         virtual void renderElement(Renderer& renderer, const luaui::Node& node) = 0;
@@ -110,14 +111,13 @@ public:
                 lua::getfield(state, -1, "__type");
                 bool element = lua::isstring(state, -1);
                 lua::pop(state);
-                lua::pushcstring(state, "__inline"); // raw: only the table's own marker counts
-                lua::rawget(state, -2);
+                lua::rawget(state, -1, luaui::keys::inlined); // raw: only the table's own marker counts
                 bool inl = lua::toboolean(state, -1);
                 lua::pop(state);
                 if (element && inl) {
                     luaui::Node c{state, lua::gettop(state)};
                     const Nesting level{*this};
-                    if (level && c.boolean("visible", true)) forEachChild(c, f);
+                    if (level && c.boolean(luaui::keys::visible, true)) forEachChild(c, f);
                 } else if (element) {
                     f(lua::gettop(state));
                 }
@@ -141,6 +141,8 @@ public:
     /// frame: for a layout that can't place it yet, on the first frame it has neither an intrinsic size nor a
     /// size in the layout cache, so it doesn't flash in the wrong place.
     bool renderUnseen(lua::State* state, int idx);
+    /// render() of an element whose `visible` the caller has just read as true (Frame::Child): not read again.
+    bool renderShown(lua::State* state, int idx);
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
     /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box), by their
@@ -159,12 +161,45 @@ public:
     /// the layout cache puts it out of view at `at` (its x moved right by `(alignIn - width) * align` for a stack's
     /// `align`), lays out an item of that size there (a Dummy), as its group would, and returns where and
     /// how big. Else (no cached size yet, pinned, in view) returns nullopt and changes nothing. The cached size is only
-    /// read (kept from decaying), never re-recorded or compared, so a culled child asks for no settle frames.
+    /// read (kept from decaying), never re-recorded or compared, so a culled child asks for no settle frames. The size
+    /// is its settled one (layout::settledSize). A child below the view (cull::belowView) without one yet (its first
+    /// frames, a Row placing children it measured the frame before, a width that changed with a scrollbar) renders
+    /// while takeConvergeRenders() allows, so its size settles, and past that goes by its last size and asks for
+    /// another frame: nothing in view is placed after it, and the scroll range converges over a few cheap frames
+    /// instead of every child of a long page rendering on each of them. `belowOnly`: only a child below the view is
+    /// culled (Culling::cullsBelow()).
     struct Skipped {
         ImVec2 at;   ///< where its size was laid out
         ImVec2 size; ///< the size from the layout cache
     };
-    std::optional<Skipped> skipOutOfView(ImGuiID key, ImVec2 at, float alignIn = 0.0f, float align = 0.0f);
+    std::optional<Skipped> skipOutOfView(ImGuiID key, ImVec2 at, float alignIn = 0.0f, float align = 0.0f,
+                                         bool belowOnly = false);
+
+    /// How many children below the view without a settled size may still render on a frame (skipOutOfView, Grid's
+    /// rows), so that their sizes settle and the scroll range becomes exact.
+    static constexpr int convergeRenders = 256;
+    /// Whether the subtree of `node` (its children, inline containers spliced in, recursively) holds a non-visual
+    /// element (a Dialog, a Timer, a Window, ...) or one of an unknown type: a child that does must render at least
+    /// once, so that it pins what it holds (and reports what it must), before it is laid out by an estimate. Reads the
+    /// tables only: no sync, no render (a Repeater's delegates are built, as its render would).
+    [[nodiscard]] bool holdsNonVisual(const luaui::Node& node);
+
+    /// Notes that a child was laid out by a size that hasn't settled (below the view: an estimate, or a last size):
+    /// the element (and the Grid row) that holds it records its own size as provisional (layout::recordSize), so it
+    /// doesn't settle at a size made of estimates and stops being rendered before its content converged.
+    void noteProvisional() { ++m_provisional; }
+    /// How many noteProvisional() calls there were: compare a count taken before a render with one after.
+    [[nodiscard]] std::uint64_t provisionals() const { return m_provisional; }
+
+    /// Takes `n` of this frame's convergeRenders; false (nothing taken) when fewer are left.
+    bool takeConvergeRenders(int n = 1);
+    /// Consecutive frames requestConvergeFrame() asks for, at most: children whose sizes never settle (more than
+    /// convergeRenders of them, changing on every frame) don't keep the app rendering. Past it, they settle on the
+    /// frames rendered anyway.
+    static constexpr int maxConvergeFrames = 120;
+    /// Asks for another frame for the children below the view laid out by a size that hasn't settled yet (past
+    /// this frame's convergeRenders), unless maxConvergeFrames frames in a row asked already.
+    void requestConvergeFrame();
 
     /// A container's culling for one render of its children (renderStack, Grid). Whether it pins and culls, and a
     /// memo of its children by position from the last frame (their tables, ImGui IDs and whether they are visual),
@@ -185,6 +220,10 @@ public:
         [[nodiscard]] bool pins() const { return m_pins; }
         /// It culls on this frame.
         [[nodiscard]] bool culls() const { return m_culls; }
+        /// It culls the children below the view on this frame: whenever it culls, and also on its first frame and on
+        /// a frame its width changed (a resize, a scrollbar that appeared), where only they may be culled: by their
+        /// last sizes (at the old width) or, never measured, by an estimate, which place nothing in view.
+        [[nodiscard]] bool cullsBelow() const { return m_cullsBelow; }
         /// Moves to the next child, at stack index `idx`; returns whether it is visual (isVisual()), from the memo
         /// when its table is the one at this position last frame.
         bool next(int idx);
@@ -193,12 +232,16 @@ public:
         /// same address and position since the last frame: then a culled child is laid out at the dead one's size
         /// until it comes into view, where it renders and is looked up afresh.
         ImGuiID key(const luaui::Node& child, bool fresh);
+        /// Whether the current child's subtree holds a non-visual element (Renderer::holdsNonVisual), remembered
+        /// with its memo entry: walked once per child table.
+        bool holdsNonVisual(const luaui::Node& child);
 
         /// A child as the memo remembers it.
         struct Child {
             const void* table = nullptr;
             ImGuiID key = 0;
             bool visual = false;
+            std::int8_t nonVisual = -1; ///< holdsNonVisual(): -1 not walked yet, else 0 / 1
         };
 
     private:
@@ -209,6 +252,7 @@ public:
         bool m_hit = false;                       ///< the current child matches its memo entry
         bool m_pins = false;
         bool m_culls = false;
+        bool m_cullsBelow = false;
     };
 
     /// Pops up `node.menu` (a Menu element) anchored to the last item when
@@ -243,8 +287,6 @@ private:
     /// the next pass call it again. Returns false, with nothing pushed, when it failed (reported) or returned no
     /// table.
     bool pushChildren(const luaui::Node& node);
-    /// render() of a child whose `visible` the caller has just read as true.
-    bool renderShown(lua::State* state, int idx);
     /// render() from the element's ID scope on, for a known type.
     bool renderElement(const luaui::Node& node, Types::Kind kind);
 
@@ -264,7 +306,12 @@ private:
     CullMemos m_cullMemos;
     std::string m_title{"imlui"};
     ImageCache* m_images = nullptr;
-    int m_depth = 0; ///< levels of nesting entered (Nesting)
+    int m_depth = 0;          ///< levels of nesting entered (Nesting)
+    int m_convergeFrame = -1; ///< the frame m_convergeLeft is for
+    int m_convergeLeft = 0;   ///< takeConvergeRenders() left on it
+    std::uint64_t m_provisional = 0; ///< noteProvisional() calls
+    int m_convergeAsked = -1; ///< the last frame requestConvergeFrame() ran on
+    int m_convergeStreak = 0; ///< consecutive frames it ran on, up to that one
 };
 
 } // namespace imlui
@@ -323,23 +370,21 @@ void Renderer::setImages(ImageCache* images) { m_images = images; }
 bool Renderer::render(lua::State* state, int idx) {
     lua::checkstack(state, 32);
     const Node n{state, idx};
-    const std::string type = n.type();
-    const Types::Kind kind = m_types.kind(type);
+    const Types::Kind kind = m_types.kind(n);
     if (kind == Types::Kind::Unknown) {
-        luaui::reportError("unknown element type '" + type + "'");
+        luaui::reportError("unknown element type '" + n.type() + "'");
         return false;
     }
-    if (!n.boolean("visible", true)) return false;
+    if (!n.boolean(luaui::keys::visible, true)) return false;
     return renderElement(n, kind);
 }
 
 bool Renderer::renderShown(lua::State* state, int idx) {
     lua::checkstack(state, 32);
     const Node n{state, idx};
-    const std::string type = n.type();
-    const Types::Kind kind = m_types.kind(type);
+    const Types::Kind kind = m_types.kind(n);
     if (kind == Types::Kind::Unknown) {
-        luaui::reportError("unknown element type '" + type + "'");
+        luaui::reportError("unknown element type '" + n.type() + "'");
         return false;
     }
     return renderElement(n, kind);
@@ -358,11 +403,12 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
     const ImGuiID id = ImGui::GetID(idKey(key));
     const MaterialStacksGuard stacks;
     ImGui::PushID(idKey(key));
-    const bool disabled = n.has("enabled") && !n.boolean("enabled", true);
+    const bool disabled = n.has(luaui::keys::enabled) && !n.boolean(luaui::keys::enabled, true);
     if (disabled) ImGui::BeginDisabled();
     // Every visual element is exactly one layout item (a group), so
     // composite elements (label + field, ...) behave inside Rows.
     const bool visual = kind == Types::Kind::Visual;
+    const std::uint64_t provisional = m_provisional;
     if (visual)
         ImGui::BeginGroup();
     else
@@ -370,9 +416,9 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
     m_types.renderElement(*this, n);
     if (visual) {
         ImGui::EndGroup();
-        layout::recordSize(id, ImGui::GetItemRectSize());
+        layout::recordSize(id, ImGui::GetItemRectSize(), m_provisional != provisional);
     }
-    if (n.has("tooltip")) md::tooltip(n.string("tooltip"));
+    if (n.has(luaui::keys::tooltip)) md::tooltip(n.string("tooltip"));
     if (disabled) ImGui::EndDisabled();
     ImGui::PopID();
     return true;
@@ -384,7 +430,7 @@ void Renderer::pushElementId(const Node& node) { ImGui::PushID(idKey(elementId(n
 
 bool Renderer::pushChildren(const Node& node) {
     lua::State* state = node.state();
-    if (node.pushRaw("__children") != lua::Type::Function) {
+    if (node.pushRaw(luaui::keys::children) != lua::Type::Function) {
         lua::pop(state);
         lua::pushvalue(state, node.index());
         return true;
@@ -445,7 +491,7 @@ void Renderer::renderChildren(const Node& node) {
 }
 
 bool Renderer::isVisual(lua::State* state, int idx) const {
-    return m_types.kind(Node{state, idx}.type()) == Types::Kind::Visual;
+    return m_types.kind(Node{state, idx}) == Types::Kind::Visual;
 }
 
 bool Renderer::fillsWidth(lua::State* state, int idx) {
@@ -495,6 +541,11 @@ float Renderer::renderStack(const Node& node) {
     Culling culling{*this, node, boxAvail};
     const bool pins = culling.pins();
     const bool cull = culling.culls();
+    const bool cullBelow = culling.cullsBelow();
+    // The heights of the visual children laid out so far (rendered or culled): their average is the estimate for a
+    // child never measured yet.
+    float knownHeights = 0.0f;
+    int known = 0;
     bool first = true;
     forEachChild(node, [&](int idx) {
         if (!culling.next(idx)) {
@@ -502,7 +553,7 @@ float Renderer::renderStack(const Node& node) {
             return;
         }
         Node c{state, idx};
-        if (!c.boolean("visible", true)) return;
+        if (!c.boolean(luaui::keys::visible, true)) return;
         if (!first && spacing)
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
                                  ImGui::GetStyle().ItemSpacing.y);
@@ -512,11 +563,26 @@ float Renderer::renderStack(const Node& node) {
         // whole-pixel indent, which would put the children after the first a fraction of a pixel left of it in a
         // stack that starts at a fractional x (after a Text in a Row), and their sizes would no longer compose.
         ImGui::SetCursorScreenPos({x0, ImGui::GetCursorScreenPos().y});
-        if (cull) {
+        if (cullBelow) {
             // Out of view: only its size from the layout cache, placed where `align` would place it.
-            if (const auto culled = skipOutOfView(culling.key(c, false), ImGui::GetCursorScreenPos(), avail, align)) {
+            if (const auto culled =
+                    skipOutOfView(culling.key(c, false), ImGui::GetCursorScreenPos(), avail, align, !cull)) {
                 if (align > 0.0f) widest = std::max(widest, culled->size.x);
                 right = std::max(right, culled->at.x + culled->size.x);
+                knownHeights += culled->size.y;
+                ++known;
+                first = false;
+                return;
+            }
+            // Never measured (a long page's first frame), below the view, and past this frame's converging renders:
+            // laid out at the average height of its siblings so far (no width: it widens nothing), and measured on a
+            // later frame (asked for). Not when its subtree holds a non-visual element: that renders now, to pin it.
+            const ImGuiID k = culling.key(c, false);
+            if (known > 0 && cull::belowView(ImGui::GetCursorScreenPos().y) && !cull::pinned(k) &&
+                !layout::lastSize(k) && !takeConvergeRenders() && !culling.holdsNonVisual(c)) {
+                ImGui::Dummy({0.0f, knownHeights / static_cast<float>(known)});
+                noteProvisional();
+                requestConvergeFrame();
                 first = false;
                 return;
             }
@@ -560,6 +626,8 @@ float Renderer::renderStack(const Node& node) {
         if (rendered) {
             if (align > 0.0f) widest = std::max(widest, ImGui::GetItemRectSize().x);
             right = std::max(right, ImGui::GetItemRectMax().x);
+            knownHeights += ImGui::GetItemRectSize().y;
+            ++known;
         } else {
             // Not rendered after all (no instance, or past maxDepth): ImGui asserts when the cursor was moved past the
             // content and no item follows, so end the move with an empty one.
@@ -571,7 +639,28 @@ float Renderer::renderStack(const Node& node) {
     return right;
 }
 
-bool Renderer::cullsChildren(const Node& node) const { return cull::enabled() && node.boolean("cull", true); }
+bool Renderer::takeConvergeRenders(int n) {
+    const int frame = ImGui::GetFrameCount();
+    if (m_convergeFrame != frame) {
+        m_convergeFrame = frame;
+        m_convergeLeft = convergeRenders;
+    }
+    if (m_convergeLeft < n) return false;
+    m_convergeLeft -= n;
+    return true;
+}
+
+void Renderer::requestConvergeFrame() {
+    const int frame = ImGui::GetFrameCount();
+    if (m_convergeAsked == frame) return;
+    m_convergeStreak = m_convergeAsked == frame - 1 ? m_convergeStreak + 1 : 1;
+    m_convergeAsked = frame;
+    if (m_convergeStreak <= maxConvergeFrames) requestFrame();
+}
+
+bool Renderer::cullsChildren(const Node& node) const {
+    return cull::enabled() && node.boolean(luaui::keys::cull, true);
+}
 
 Renderer::Culling::Culling(Renderer& renderer, const Node& node, float width)
     : m_renderer{renderer}, m_state{node.state()}, m_pins{renderer.cullsChildren(node)} {
@@ -589,6 +678,7 @@ Renderer::Culling::Culling(Renderer& renderer, const Node& node, float width)
     }
     CullMemo& memo = memos.byId[ImGui::GetID("##imlui.cull")];
     if (memo.frame == frame) return; // rendered twice in a frame (one element in two places): no memo, no culling
+    m_cullsBelow = true;
     m_culls = memo.frame >= 0 && std::fabs(memo.width - width) <= 0.5f;
     memo.frame = frame;
     memo.width = width;
@@ -625,10 +715,43 @@ ImGuiID Renderer::Culling::key(const Node& child, bool fresh) {
     return id;
 }
 
-std::optional<Renderer::Skipped> Renderer::skipOutOfView(ImGuiID key, ImVec2 at, float alignIn, float align) {
+bool Renderer::Culling::holdsNonVisual(const Node& child) {
+    Child* c = m_children && m_index > 0 ? &(*m_children)[m_index - 1] : nullptr;
+    if (c && c->nonVisual >= 0) return c->nonVisual != 0;
+    const bool holds = m_renderer.holdsNonVisual(child);
+    if (c) c->nonVisual = holds ? 1 : 0;
+    return holds;
+}
+
+bool Renderer::holdsNonVisual(const Node& node) {
+    const Nesting level{*this};
+    if (!level) return true; // too deep (a cycle): rendered, which reports it
+    lua::State* state = node.state();
+    bool holds = false;
+    forEachChild(node, [&](int idx) {
+        if (holds) return;
+        const Node c{state, idx};
+        holds = m_types.kind(c) != Types::Kind::Visual || holdsNonVisual(c);
+    });
+    return holds;
+}
+
+std::optional<Renderer::Skipped> Renderer::skipOutOfView(ImGuiID key, ImVec2 at, float alignIn, float align,
+                                                         bool belowOnly) {
     if (cull::pinned(key)) return std::nullopt;
-    const std::optional<ImVec2> size = layout::settledSize(key); // also keeps the entry from being dropped
-    if (!size) return std::nullopt;
+    if (belowOnly && !cull::belowView(at.y)) return std::nullopt;
+    std::optional<ImVec2> size = layout::settledSize(key); // also keeps the entry from being dropped
+    // Not settled yet (its first frames, a Row placing children it measured on the frame before): below the view, its
+    // last size will do. Nothing in view is placed after it, so a size still converging only moves what is out of
+    // view (and the scroll range) until it renders, in view, at its real size. Above the view it would move what is
+    // in view: rendered until settled.
+    if (!size) {
+        if (!cull::belowView(at.y)) return std::nullopt;
+        size = layout::lastSize(key);
+        if (!size || takeConvergeRenders()) return std::nullopt; // rendered (unseen, below the view): it settles
+        noteProvisional();                                       // laid out by a size that may still change
+        requestConvergeFrame();                                  // the rest settle on the next frames
+    }
     if (align > 0.0f) at.x += std::max(0.0f, (alignIn - size->x) * align);
     if (!cull::outOfView(at, {at.x + size->x, at.y + size->y})) return std::nullopt;
     // What its group would take: EndGroup and Dummy both lay out an item of this size from here (ItemSize) and add it,
@@ -649,7 +772,7 @@ std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
     forEachChild(node, [&](int idx) {
         if (!known || !isVisual(state, idx)) return;
         const Node c{state, idx};
-        if (!c.boolean("visible", true)) return;
+        if (!c.boolean(luaui::keys::visible, true)) return;
         if (!first && spacing) y += static_cast<float>(*spacing) * dpiScale() - lineGap;
         const std::optional<ImVec2> size = intrinsicSize(c, maxWidth);
         if (!size) {

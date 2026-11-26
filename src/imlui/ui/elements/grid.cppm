@@ -84,6 +84,10 @@ void Grid::render(Frame& frame) {
         Renderer::Culling culling{r, frame.node(), width};
         int cell = cols;        // cells taken in the current row; `cols`: the next visual child starts a row
         bool rowCulled = false; // the current row is culled: its cells are skipped
+        bool rowEstimated = false;    // ... at an estimated height (never measured): its height isn't recorded
+        float knownRowHeights = 0.0f; // the heights of the rows laid out so far, but estimated ones
+        int knownRows = 0;
+        std::uint64_t rowProvisional = 0; // Renderer::provisionals() when the current row started
         ImGuiID rowKey = 0;     // the current row's key in the layout cache
         float rowTop = 0.0f;    // its top (screen y)
         cull::Watch rowWatch;   // ImGui's state when it started (pins)
@@ -104,24 +108,60 @@ void Grid::render(Frame& frame) {
                     const ImGuiID last = rowKey;
                     const float lastTop = rowTop;
                     rowTop = cull::nextTableRow();
-                    if (last != 0) layout::recordSize(last, {0.0f, rowTop - lastTop});
+                    if (last != 0 && !rowEstimated) {
+                        // Provisional when a cell held something laid out by an unsettled size, or the row was.
+                        layout::recordSize(last, {0.0f, rowTop - lastTop}, r.provisionals() != rowProvisional);
+                        knownRowHeights += rowTop - lastTop;
+                        ++knownRows;
+                    }
                     const luaui::Node c{state, idx};
                     rowKey = ImGui::GetID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
                         culling.key(c, false)))); // not the child's own ID: GetID hashes it again
                     rowCulled = false;
-                    if (culling.culls() && !cull::pinned(rowKey)) {
-                        if (const auto size = layout::settledSize(rowKey);
-                            size && cull::outOfView(rowTop, rowTop + size->y)) {
+                    rowEstimated = false;
+                    rowProvisional = r.provisionals();
+                    if (culling.cullsBelow() && !cull::pinned(rowKey)) {
+                        // Its settled height (only on a frame the grid culls in view too), else, for a row below
+                        // the view, its last one once the frame's converging renders are taken: nothing in view is
+                        // placed after it (Renderer::skipOutOfView).
+                        std::optional<ImVec2> size;
+                        if (culling.culls()) size = layout::settledSize(rowKey);
+                        if (!size && cull::belowView(rowTop)) {
+                            size = layout::lastSize(rowKey);
+                            if (size && r.takeConvergeRenders(cols))
+                                size.reset(); // rendered: its height settles
+                            else if (size) {
+                                r.noteProvisional();
+                                r.requestConvergeFrame(); // the rest settle on the next frames
+                            }
+                        }
+                        if (size && cull::outOfView(rowTop, rowTop + size->y)) {
                             cull::reserveTableRow(size->y);
                             rowCulled = true;
+                        } else if (!size && knownRows > 0 && cull::belowView(rowTop) && !layout::lastSize(rowKey) &&
+                                   !r.takeConvergeRenders(cols)) {
+                            // Never measured (a long grid's first frame), below the view, past this frame's
+                            // converging renders: the average height of the rows so far, measured on a later frame
+                            // (asked for). A cell holding a non-visual element still renders (below).
+                            cull::reserveTableRow(knownRowHeights / static_cast<float>(knownRows));
+                            rowCulled = true;
+                            rowEstimated = true;
+                            r.noteProvisional();
+                            r.requestConvergeFrame();
                         }
                     }
                     if (!rowCulled) rowWatch = cull::watch();
                 }
             }
             ++cell;
-            if (rowCulled) return;
-            ImGui::TableNextColumn();
+            if (rowCulled) {
+                // In a row laid out at an estimate, a cell whose subtree holds a non-visual element (a Dialog, a
+                // Timer) renders anyway, in its column, so it pins what it holds (Renderer::holdsNonVisual).
+                if (!rowEstimated || !culling.holdsNonVisual(luaui::Node{state, idx})) return;
+                ImGui::TableSetColumnIndex(cell - 1);
+            } else {
+                ImGui::TableNextColumn();
+            }
             const layout::BoxScope box{layout::regionBox()}; // the cell is the child's box
             r.render(state, idx);
         });

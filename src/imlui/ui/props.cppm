@@ -34,8 +34,17 @@ module :private;
 namespace imlui {
 
 float sizeProp(const luaui::Node& node, const char* key) {
-    if (key[0] == 'w' && node.boolean("fillWidth", false)) return -1.0f;
-    float v = node.numf(key, 0.0f);
+    float v = 0.0f;
+    // `width` and `height` are read for every child a layout places, every frame: through their lua::Keys.
+    if (std::strcmp(key, "width") == 0) {
+        if (node.boolean(luaui::keys::fillWidth, false)) return -1.0f;
+        v = node.numf(luaui::keys::width, 0.0f);
+    } else if (std::strcmp(key, "height") == 0) {
+        v = node.numf(luaui::keys::height, 0.0f);
+    } else {
+        if (key[0] == 'w' && node.boolean("fillWidth", false)) return -1.0f;
+        v = node.numf(key, 0.0f);
+    }
     return (v > 0 || v < -1.0f) ? dp(v) : v;
 }
 

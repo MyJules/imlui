@@ -109,7 +109,7 @@ public:
     [[nodiscard]] std::vector<std::string> typeNames() const;
 
     // Renderer::Types: the Renderer renders every element through these.
-    [[nodiscard]] Kind kind(std::string_view type) const override;
+    [[nodiscard]] Kind kind(const luaui::Node& node) const override;
     void renderElement(Renderer& renderer, const luaui::Node& node) override;
     [[nodiscard]] bool fillsWidth(Renderer& renderer, const luaui::Node& node) override;
     [[nodiscard]] std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
@@ -142,8 +142,8 @@ private:
         std::string name;
         ScriptObject* object;
         const TypeInfo* type;
-        std::shared_ptr<ScriptObject> owner; ///< set by the shared_ptr overload
-        TypeInfo::Defaults defaults;         ///< captured at registration
+        std::shared_ptr<ScriptObject> owner;                ///< set by the shared_ptr overload
+        std::shared_ptr<const TypeInfo::Defaults> defaults; ///< captured at registration
         /// Whether `object` still lives: a by-reference singleton may be destroyed while registered.
         ScriptObject::Handle life;
     };
@@ -190,7 +190,8 @@ struct Box {
     ScriptObject* object = nullptr;
     Element* element = nullptr; ///< set for owned element instances
     const TypeInfo* type = nullptr;
-    TypeInfo::Defaults defaults; ///< what nil resets each property to
+    /// What nil resets each property to: the type's (TypeInfo::sharedDefaults), a singleton's own. Null: none.
+    std::shared_ptr<const TypeInfo::Defaults> defaults;
     bool owned = false;
     /// A singleton's: whether `object` (which the host owns) still lives. liveObject() reads it.
     std::optional<ScriptObject::Handle> life;
@@ -276,8 +277,8 @@ std::uint64_t mix(std::uint64_t h, std::uint64_t v) {
     return z ^ (z >> 31);
 }
 
-/// Mixes the value on top of the stack into `h`: nil, booleans, numbers and strings by value, anything else
-/// (tables, functions, bind objects, userdata) by identity.
+/// Mixes the value on top of the stack into `h`: nil, booleans and numbers by value, strings by lua::strid (their
+/// object, length and hash), anything else (tables, functions, bind objects, userdata) by identity.
 std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
     const lua::Type t = lua::type(state, -1);
     h = mix(h, static_cast<std::uint64_t>(t));
@@ -287,7 +288,9 @@ std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
     case lua::Type::Number:
         if (lua::isinteger(state, -1)) return mix(h, static_cast<std::uint64_t>(lua::tointeger(state, -1)));
         return mix(h, std::bit_cast<std::uint64_t>(static_cast<double>(lua::tonumber(state, -1))));
-    case lua::Type::String: return mix(h, std::hash<std::string_view>{}(lua::tostring(state, -1)));
+    // Lua's identity of the string (address, length, its hash), not a hash of its bytes on every check: a long
+    // static `text` is fingerprinted several times a frame.
+    case lua::Type::String: return mix(h, lua::strid(state, -1));
     default: return mix(h, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(lua::topointer(state, -1))));
     }
 }
@@ -296,8 +299,7 @@ std::uint64_t mixValue(lua::State* state, std::uint64_t h) {
 /// (luaui::sharedMetaMarker): property reads then go through its __index for a field the table doesn't hold.
 bool hasOwnMeta(lua::State* state, int tbl) {
     if (lua::getmetatable(state, tbl) == 0) return false;
-    lua::pushcstring(state, luaui::sharedMetaMarker);
-    const bool own = lua::rawget(state, -2) == lua::Type::Nil;
+    const bool own = lua::rawget(state, -1, luaui::keys::sharedMeta) == lua::Type::Nil;
     lua::pop(state, 2);
     return own;
 }
@@ -312,8 +314,7 @@ std::uint64_t fingerprint(lua::State* state, int tbl, const TypeInfo& info) {
     std::uint64_t h = 0;
     for (const TypeInfo::Property& p : info.properties()) {
         if (!p.assign) continue;
-        lua::pushstring(state, p.name);
-        lua::rawget(state, tbl);
+        lua::rawget(state, tbl, *p.key);
         h = mixValue(state, h);
         lua::pop(state);
     }
@@ -344,8 +345,7 @@ void collectDynamicFields(lua::State* state, int tbl, const TypeInfo& info, std:
     for (std::size_t i = 0; i < properties.size(); ++i) {
         const TypeInfo::Property& p = properties[i];
         if (!p.assign) continue;
-        lua::pushstring(state, p.name);
-        const lua::Type t = lua::rawget(state, tbl);
+        const lua::Type t = lua::rawget(state, tbl, *p.key);
         lua::pop(state);
         bool dynamic = false;
         switch (t) {
@@ -384,11 +384,24 @@ ScriptObject* liveObject(Box& b) {
     lua::error(state, b && b->type ? "singleton '" + b->type->name() + "' was destroyed" : std::string{"singleton is gone"});
 }
 
+/// The box metatables (instance and singleton) of the installed Lua states, by address: boxAt() recognizes a box by
+/// its metatable with no table read (it runs several times per element and frame). install() adds the ones it creates
+/// and hands them to its sentinel, whose finalizer removes them: when the state closes (lua_close runs finalizers
+/// before it frees any memory), or earlier if another install() replaced the sentinel. So an address here is never
+/// one a freed table's memory was reused at. A box whose metatable isn't here (a finalizer that runs after the
+/// sentinel's at close) is recognized by its metatable's marker field instead. A list (not a set): two installs
+/// never share a metatable, but each removes exactly what it added.
+std::vector<const void*> boxMetas; // main thread only, like all Lua code
+
 /// The Box at `idx`, or nullptr if the value isn't one of ours.
 Box* boxAt(lua::State* state, int idx) {
     if (lua::type(state, idx) != lua::Type::UserData || lua::getmetatable(state, idx) == 0) return nullptr;
-    lua::pushstring(state, markerKey);
-    lua::rawget(state, -2);
+    if (std::ranges::find(boxMetas, lua::topointer(state, -1)) != boxMetas.end()) {
+        lua::pop(state);
+        return static_cast<Box*>(lua::touserdata(state, idx));
+    }
+    static const lua::Key marker{markerKey};
+    lua::rawget(state, -1, marker);
     const bool ours = lua::toboolean(state, -1);
     lua::pop(state, 2);
     return ours ? static_cast<Box*>(lua::touserdata(state, idx)) : nullptr;
@@ -397,8 +410,7 @@ Box* boxAt(lua::State* state, int idx) {
 /// The Box of an element table (`__native`) or of a singleton userdata.
 Box* selfBox(lua::State* state, int idx) {
     if (lua::istable(state, idx)) {
-        lua::pushstring(state, "__native");
-        lua::rawget(state, idx);
+        lua::rawget(state, idx, luaui::keys::native);
         Box* b = boxAt(state, -1);
         lua::pop(state);
         return b;
@@ -450,14 +462,15 @@ int singletonGc(lua::State* state) {
 /// Resets property `index` of the object in `b` to its default. Unchanged when it has none.
 void resetProperty(const Box& b, std::size_t index) {
     const TypeInfo::Property& p = b.type->properties()[index];
-    if (p.reset && index < b.defaults.size() && b.defaults[index]) p.reset(b.defaults[index].get(), *b.object);
+    if (p.reset && b.defaults && index < b.defaults->size() && (*b.defaults)[index])
+        p.reset((*b.defaults)[index].get(), *b.object);
 }
 
 /// Writes declared property `index` of the element table `node` into b's object.
 void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index) {
     const TypeInfo& info = *b.type;
     const TypeInfo::Property& p = info.properties()[index];
-    node.push(p.name.c_str());
+    node.push(*p.key);
     if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
         lua::pop(state);
         lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child
@@ -522,9 +535,8 @@ void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) 
     }
     // `parent` is read through the metatable from the parents table, so a raw field (a script assigned it) would
     // shadow it: dropped here. (A script's write counts as a change, so the element syncs again after it.)
-    lua::pushcstring(state, "parent");
-    if (lua::rawget(state, tbl) != lua::Type::Nil) {
-        lua::pushstring(state, "parent");
+    if (lua::rawget(state, tbl, luaui::keys::parent) != lua::Type::Nil) {
+        lua::pushcstring(state, "parent");
         lua::pushnil(state);
         lua::rawset(state, tbl);
         if constexpr (reportBypassedWrites)
@@ -540,18 +552,23 @@ void syncInstance(lua::State* state, int tbl, Box& b, Sync mode = Sync::Always) 
     const std::uint64_t theme = themeGeneration();
     const bool dynamicOnly = b.complete && b.staticSynced && fields == b.syncedFields && theme == b.syncedTheme;
     if (!dynamicOnly) collectDynamicFields(state, tbl, *b.type, b.dynamicFields);
-    b.staticSynced = false; // until this sync gets to its end
-    b.syncing = true;
-    // Protected: an error in the loop is reported, not raised, and can't skip the reset below (`syncing` left set
-    // would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.) It only reads
-    // the table (and the bindings), so it doesn't count as a change itself.
-    lua::checkstack(state, 5);
-    lua::pushcfunction(state, &syncPropertiesFn);
-    lua::pushlightuserdata(state, &b);
-    lua::pushvalue(state, tbl);
-    lua::pushboolean(state, dynamicOnly);
-    // An error cut the loop short: some static properties may not be applied, so the next sync is a full one.
-    const bool ok = luaui::safeRead(state, 3, 0);
+    bool ok = true;
+    // Nothing to read (every property static and already applied): no protected call. The most common case on a
+    // steady frame (plain Text, Icon, Button).
+    if (!dynamicOnly || !b.dynamicFields.empty()) {
+        b.staticSynced = false; // until this sync gets to its end
+        b.syncing = true;
+        // Protected: an error in the loop is reported, not raised, and can't skip the reset below (`syncing` left
+        // set would skip every later sync of the element). (The table at `tbl` keeps `b` alive meanwhile.) It only
+        // reads the table (and the bindings), so it doesn't count as a change itself.
+        lua::checkstack(state, 5);
+        lua::pushcfunction(state, &syncPropertiesFn);
+        lua::pushlightuserdata(state, &b);
+        lua::pushvalue(state, tbl);
+        lua::pushboolean(state, dynamicOnly);
+        // An error cut the loop short: some static properties may not be applied, so the next sync is a full one.
+        ok = luaui::safeRead(state, 3, 0);
+    }
     b.syncing = false;
     b.staticSynced = ok;
     b.syncedTheme = theme;
@@ -657,6 +674,10 @@ int singletonToString(lua::State* state) {
 
 int sentinelGc(lua::State* state) {
     auto* registry = static_cast<TypeRegistry*>(lua::touserdata(state, lua::upvalueindex(1)));
+    for (const int i : {2, 3}) // the box metatables install() tracked, before lua_close frees them
+        if (const auto it = std::ranges::find(boxMetas, lua::touserdata(state, lua::upvalueindex(i)));
+            it != boxMetas.end())
+            boxMetas.erase(it);
     registry->detachState(state);
     return 0;
 }
@@ -729,8 +750,7 @@ void pushTypeMeta(lua::State* state, const TypeInfo& info) {
 
 /// Whether the constructor of the element table at `tbl` failed before (attachInstance stored `__native = false`).
 bool constructionFailed(lua::State* state, int tbl) {
-    lua::pushstring(state, "__native");
-    lua::rawget(state, tbl);
+    lua::rawget(state, tbl, luaui::keys::native);
     const bool failed = lua::isboolean(state, -1) && !lua::toboolean(state, -1);
     lua::pop(state);
     return failed;
@@ -742,8 +762,13 @@ bool constructionFailed(lua::State* state, int tbl) {
 Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     tbl = lua::absindex(state, tbl);
     lua::checkstack(state, 8);
-    if (Box* existing = selfBox(state, tbl)) return existing;
-    if (!info.factory() || constructionFailed(state, tbl)) return nullptr;
+    // One read of `__native` for both questions (selfBox, constructionFailed): this runs for every element built.
+    lua::rawget(state, tbl, luaui::keys::native);
+    Box* existing = lua::isnil(state, -1) ? nullptr : boxAt(state, -1);
+    const bool failed = lua::isboolean(state, -1) && !lua::toboolean(state, -1);
+    lua::pop(state);
+    if (existing) return existing;
+    if (!info.factory() || failed) return nullptr;
 
     // The userdata first, so a Lua memory error can't leak a constructed instance.
     Box* b = new (lua::newuserdata(state, sizeof(Box))) Box{};
@@ -753,7 +778,7 @@ Box* attachInstance(lua::State* state, int tbl, const TypeInfo& info) {
     try {
         b->element = info.factory()().release();
         // Right after construction: what nil resets each property to.
-        if (b->element) b->defaults = info.captureDefaults(*b->element);
+        if (b->element) b->defaults = info.sharedDefaults(*b->element);
     } catch (const lua::Raised&) {
         delete b->element; // a Lua error (a constructor that called into Lua): not ours to report, it propagates
         b->element = nullptr;
@@ -834,17 +859,36 @@ int libIsType(lua::State* state) {
     return 1;
 }
 
-/// attach(element): creates the C++ instance of a registered element table. Returns the table.
+/// attach(element [, name]): creates the C++ instance of a registered element table. Returns the table. With `name`,
+/// first sets `element.__type = name` (a raw set), the hash part sized once for it and `__native`: the DSL's
+/// constructors pass it for a table without a metatable, so building an element resizes its table once, not twice;
+/// the table then always gets the type's metatable.
 int libAttach(lua::State* state) {
     return luaui::catchCxx(
         state,
         [&] {
             if (lua::istable(state, 1)) {
+                if (lua::isstring(state, 2)) {
+                    lua::reservehash(state, 1, 2);
+                    lua::pushcstring(state, "__type");
+                    lua::pushvalue(state, 2);
+                    lua::rawset(state, 1);
+                }
                 lua::getfield(state, 1, "__type");
                 const TypeInfo* info =
                     lua::isstring(state, -1) ? upvalueRegistry(state)->find(lua::tostring(state, -1)) : nullptr;
                 lua::pop(state);
                 if (info) attachInstance(state, 1, *info);
+                // With `name`, the table gets the type's metatable even without an instance (no factory, a constructor
+                // that failed), as the DSL's shareMeta would give it.
+                if (info && lua::isstring(state, 2)) {
+                    if (lua::getmetatable(state, 1) == 0) {
+                        pushTypeMeta(state, *info);
+                        lua::setmetatable(state, 1);
+                    } else {
+                        lua::pop(state);
+                    }
+                }
             }
             lua::settop(state, 1);
             return 1;
@@ -932,7 +976,7 @@ TypeInfo& TypeRegistry::addSingleton(std::string name, ScriptObject& object, std
     for (const Singleton& s : m_singletons)
         if (s.name == name && s.object != &object && s.life.alive()) s.object->detach();
     std::erase_if(m_singletons, [&](const Singleton& s) { return s.name == name; });
-    TypeInfo::Defaults defaults = ref.captureDefaults(object);
+    auto defaults = std::make_shared<const TypeInfo::Defaults>(ref.captureDefaults(object));
     ScriptObject::Handle life = object.handle();
     m_singletons.push_back({std::move(name), &object, &ref, std::move(owner), std::move(defaults), std::move(life)});
     return ref;
@@ -951,8 +995,10 @@ std::vector<std::string> TypeRegistry::typeNames() const {
     return out;
 }
 
-TypeRegistry::Kind TypeRegistry::kind(std::string_view type) const {
-    const TypeInfo* info = find(type);
+TypeRegistry::Kind TypeRegistry::kind(const Node& node) const {
+    // An element with an instance is of its instance's type (see instanceBox), found without reading `__type`.
+    const Box* b = selfBox(node.state(), node.index());
+    const TypeInfo* info = b && b->element && b->type ? b->type : find(node.type());
     if (!info) return Kind::Unknown;
     return info->visual() ? Kind::Visual : Kind::NonVisual;
 }
@@ -1098,15 +1144,26 @@ void TypeRegistry::install(lua::State* state) {
     }
     lua::settop(state, top);
 
-    // Detach the singletons when this state closes.
+    // Detach the singletons when this state closes, and stop recognizing its boxes by their metatables (boxMetas).
+    std::array<void*, 2> metas{};
+    for (std::size_t i = 0; i < metas.size(); ++i) {
+        lua::getfield(state, lua::registryIndex, i == 0 ? instanceMetaKey : singletonMetaKey);
+        metas[i] = const_cast<void*>(lua::topointer(state, -1));
+        lua::pop(state);
+    }
     lua::newuserdata(state, 1);
     lua::createtable(state, 0, 1);
     lua::pushlightuserdata(state, this);
-    lua::pushcclosure(state, &sentinelGc, 1);
+    lua::pushlightuserdata(state, metas[0]);
+    lua::pushlightuserdata(state, metas[1]);
+    lua::pushcclosure(state, &sentinelGc, 3);
     lua::setfield(state, -2, "__gc");
     lua::setmetatable(state, -2);
     lua::setfield(state, lua::registryIndex, sentinelKey);
     lua::settop(state, top);
+    // Last: only metatables a sentinel will remove again are tracked.
+    for (void* meta : metas)
+        if (meta) boxMetas.push_back(meta);
 }
 
 void TypeRegistry::activate(lua::State* state) {
