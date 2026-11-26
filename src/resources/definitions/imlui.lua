@@ -85,17 +85,44 @@ ids = {}
 ---@type table
 env = {}
 
+---Rows that live in C++ (`imlui::ListModel`, `imlui::VectorModel<T>`), read-only: `model[i]` is row `i` (1-based;
+---nil out of range), `#model` the row count, `ipairs(model)` walks the rows. A row is converted when it is first
+---read, and an unchanged row reads as the same table while something holds it. Give it to a `Repeater` or `ListView`
+---as its `model`. A model that was destroyed reads as empty.
+---@class ListModel<T>: { [integer]: T }
+---@operator len: integer
+local ListModel = {}
+
+---The number of rows (`#model`).
+---@return integer
+function ListModel:count() end
+
+---Row `i`'s key (an integer or a string); nil when the model has no keys.
+---@param i integer
+---@return integer|string|nil
+function ListModel:key(i) end
+
+---Whether the model identifies its rows by key: delegates are then kept by key without a `key` function.
+---@return boolean
+function ListModel:hasKeys() end
+
+---A number that changes with every change of the model; -1 once the model was destroyed.
+---@return integer
+function ListModel:revision() end
+
 -- The Lua-side containers' own props (their constructors and classes are in types.lua).
 
+---@alias ModelValue any[]|ListModel<any>|integer
+
 ---@class RepeaterProps
----@field model any[]|integer|(fun(self: Element): any[]|integer)|Binding The items; a number n means 1..n.
+---@field model ModelValue|(fun(self: Element): ModelValue)|Binding The items: a list, a C++ list model, or a number n for 1..n.
 ---@field delegate fun(item: any, index: integer, ids: Ids): Element? Builds one item's element.
----@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index.
+---@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index (a list model's own keys without it).
 
 ---@class ListViewProps
----@field model? any[]|integer|(fun(self: Element): any[]|integer)|Binding The items; a number n means 1..n.
+---@field model? ModelValue|(fun(self: Element): ModelValue)|Binding The items: a list, a C++ list model, or a number n for 1..n.
 ---@field delegate? fun(item: any, index: integer, ids: Ids): Element? Builds one item's element.
----@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index.
+---@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index (a list model's own keys without it).
 ---@field itemHeight? number dp, for items that all have the same height.
 
 ---@class IfProps

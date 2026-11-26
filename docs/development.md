@@ -596,8 +596,13 @@ in a 1180 x 820 display, each inside a page-like `ScrollView`. Per scenario and 
 tree (`build`: the constructors; a `Repeater` builds its delegates on its first frame, so they count in `first`), the
 first frame, and the median and mean time per frame over 100 frames (after 10 to settle) twice: `anim`, with a `Timer`
 that changes a value every item reads through a binding on every frame, and `idle`, with nothing changing (a forced
-frame: what any redraw costs). `vertices` is ImGui's vertex count of the last frame. It is built with the tests when
-imlui is the top-level project and never run by ctest. Take numbers from a Release build:
+frame: what any redraw costs). `vertices` is ImGui's vertex count of the last frame. The list-model scenarios
+(`model`, `modelkey`, `luarows`, `luarowskey`) print a table of their own: one `ListView` of `--rows` rows (100 000 by
+default) of `ListItem`s, from a C++ [`VectorModel`](extending.md#list-models) without and with keys, or from a Lua list
+of row tables without and with a `key` function; `build` is filling the rows and building the tree, then the first
+frame, the steady frame (median), the frame after one visible row changed and the frame after a row was inserted at
+the top (medians), each with the delegates it built. It is built with the tests when imlui is the top-level project
+and never run by ctest. Take numbers from a Release build:
 
 ```sh
 cmake --preset clang-release
@@ -605,6 +610,7 @@ cmake --build --preset clang-release --target imlui_bench
 build/clang-release/bin/imlui_bench                                  # every scenario at counts 1000 and 5000
 build/clang-release/bin/imlui_bench controls listview --count 1000   # some scenarios, one count
 build/clang-release/bin/imlui_bench nested --count 100,1000 --frames 300 --warmup 20 --size 1920x1080
+build/clang-release/bin/imlui_bench model modelkey luarows luarowskey --rows 100000
 ```
 
 A frame here is ImGui's `NewFrame`, `ui.__tick`, the render pass and `ImGui::Render` (the draw lists), without a

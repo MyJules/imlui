@@ -78,6 +78,8 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 - [Singletons](#singletons)
 - [Value conversion](#value-conversion): `LuaConvert<T>`, enums and structs, your own types, Lua callbacks
   (`LuaFunction`)
+- [List models](#list-models): `ListModel`, `VectorModel<T>`: C++ rows for a `Repeater` or `ListView`, row-level
+  notifications, keys, threads
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
 - [Resources and the host config](#resources-and-the-host-config): mounts, the entry script
 - [Editor support: Lua definitions](#editor-support-lua-definitions): LuaLS `---@meta` files of the DSL and the
@@ -870,6 +872,144 @@ Chart { formatter = function(v) return ("%.1f"):format(v) end } -- a LuaFunction
   }}.detach();
   ```
 
+## List models
+
+Data that lives in C++ (log lines, query results, a file list) would otherwise be copied into a Lua list for a
+`Repeater` or `ListView`, and every change would mean a new list that the prelude compares item by item. A **list
+model** keeps the rows in C++, like a Qt item model: Lua reads them lazily, and changes are row-level notifications.
+`imlui::ListModel` (module `imlui.types.list_model`) is the abstract base, `imlui::VectorModel<T>` (module
+`imlui.types.vector_model`) the ready-made one over a `std::vector<T>`, which is what most apps use. Both are in
+`import imlui;`.
+
+```cpp
+struct LogLine {
+    std::int64_t id = 0;
+    std::string level, text;
+    bool operator==(const LogLine&) const = default; // replace() and set() skip unchanged rows with it
+};
+template <> struct imlui::LuaFields<LogLine> {
+    static constexpr std::string_view name = "LogLine";
+    static constexpr std::tuple fields{imlui::field("id", &LogLine::id), imlui::field("level", &LogLine::level),
+                                       imlui::field("text", &LogLine::text)};
+};
+
+class Backend final : public imlui::ScriptObject {
+public:
+    static void declare(imlui::TypeBuilder<Backend>& type) {
+        type.property("logs", &Backend::logs).doc("The log, newest last.")
+            .method("load", &Backend::load, {"path"}).doc("Reads a log file into `logs`.")
+            .method("clear", &Backend::clear).doc("Empties `logs`.");
+    }
+    const imlui::VectorModel<LogLine>& logs() const { return m_logs; }
+
+    void load(std::string path) {
+        runAsync([path] { return readLogFile(path); },                          // a worker thread
+                 [this](std::vector<LogLine> rows) { m_logs.replace(std::move(rows)); }); // the main thread
+    }
+    void clear() { m_logs.clear(); }
+
+private:
+    imlui::VectorModel<LogLine> m_logs{[](const LogLine& l) { return l.id; }}; // keyed by id
+};
+
+engine.registerSingleton("backend", backend);
+```
+
+```lua
+ListView { height = 400, model = backend.logs,
+    delegate = function(line) return ListItem { line.text, supportingText = line.level } end }
+Text { text = function() return #backend.logs .. " lines" end }
+Button { text = "Reload", onClicked = function() backend:load("app.log") end }
+```
+
+**`ListModel`.** Derive from it and implement:
+
+| Member | What |
+|---|---|
+| `std::size_t count() const` | The number of rows. |
+| `void pushItem(lua::State*, std::size_t row) const` | Pushes exactly one value, row `row`'s item (0-based), usually `LuaConvert<Row>::push(state, rows[row])`. Called only for a row Lua reads and hasn't cached; it must not call into Lua scripts. An exception becomes a Lua error where the row is read. |
+| `bool hasKeys() const`, `std::optional<Key> key(std::size_t row) const` | *Optional.* A stable identity per row, `Key = std::variant<std::int64_t, std::string>`. With keys, delegates follow their rows (below). |
+
+and call a notification on the main thread **after** each change (when `count()` already gives the new count):
+
+| Notification | After |
+|---|---|
+| `rowsInserted(first, n)` | rows `[first, first + n)` were inserted |
+| `rowsRemoved(first, n)` | the `n` rows at `[first, first + n)` were removed |
+| `rowsChanged(first, n)` | rows `[first, first + n)` have new contents |
+| `rowsMoved(first, n, destination)` | the `n` rows at `first` moved, unchanged, to start at `destination` (an index after the move) |
+| `rowsRemapped(previous)` | every row was replaced: new row `r` is old row `previous[r]` unchanged, or new (`std::nullopt`): a sort, a refreshed query |
+| `reset()` | anything changed |
+
+Each one bumps `revision()` and requests a frame; bindings that read the model (`#backend.logs`) run again on it.
+A subclass that forgot one is caught at the next read (the counts don't match): every row then counts as new.
+
+**`VectorModel<T>`** (`T` with a `LuaConvert`, typically a `LuaFields` struct) keeps the rows in a vector and calls the
+notifications itself:
+
+| Member | What |
+|---|---|
+| `VectorModel<T>{}`, `VectorModel<T>{keyOf}` | Without keys, or with `keyOf(const T&)` returning an integer or a string |
+| `size()`, `empty()`, `at(row)`, `operator[]`, `rows()` | Reading (0-based) |
+| `append(v)`, `appendRows(vector)`, `insert(row, v)`, `insertRows(row, vector)` | `rowsInserted` |
+| `erase(row, n = 1)`, `clear()` | `rowsRemoved` |
+| `set(row, v)` | `rowsChanged`, only when the row holds something else (`T` with `operator==`) |
+| `update(row, fn)` | `fn(T&)` edits the row in place, then `rowsChanged` |
+| `move(from, n, to)` | `rowsMoved` |
+| `sort(less = {})` | A stable sort, `rowsRemapped`: every row keeps its identity |
+| `replace(vector)` | `rowsRemapped`: a new row equal to an old one keeps that row's identity, matched by key when the model has keys (else at the same index) |
+| `appender()` | A thread-safe `Appender` (below) |
+
+An index past the end throws `std::out_of_range`. Like a `std::vector`, inserting near the front moves the rows after
+it (and so does the model's per-row bookkeeping, 8 bytes a row).
+
+**What Lua sees.** A model is a value anywhere a `LuaConvert` is: a property (a getter returning
+`const VectorModel<T>&`), a method result (`VectorModel<T>&` or `ListModel*`, which don't keep it alive, or
+`std::shared_ptr<M>`, which Lua then keeps alive while it holds the value: a method that builds a model for a query),
+a signal argument, or a singleton global of its own (`engine.registerSingleton("logs", logs)` makes `logs` the model
+itself). Each model has one Lua value per state, a read-only userdata: `model[i]` (1-based, nil out of range),
+`#model`, `ipairs(model)`, and the methods `count()`, `key(i)`, `hasKeys()` and `revision()` (see
+[Lua API](lua-api.md#c-list-models)). The Lua definitions type it as `ListModel<T>`, from `VectorModel<T>::Item`
+(`model[i]` is a `T`, `#model` an integer).
+
+**How the containers use it.** Rows are converted only when read: `#model` converts nothing, and a `ListView` reads
+only the rows it builds. Each row has an identity that stays with it while it only moves (an insertion or removal
+above it, `rowsMoved`, `rowsRemapped`); `rowsChanged` and `reset()` give it a new one. Converted items are cached
+per state by that identity (weakly: while something, such as a delegate, holds the item), so an unchanged row reads as
+the same Lua table wherever it moved, and a changed one as a new table. The prelude's `Repeater` and `ListView`:
+
+- skip all their work for a model whose `revision()` didn't change: an idle frame reads no row and no key;
+- rebuild a delegate when its row changed (its item is another table), whether it is kept by index or by key;
+- use the model's keys when it has them and the container has no `key` function: an insertion at the top builds one
+  delegate, a sort or a removal none. A Lua `key` still overrides them;
+- without keys, keep delegates per index, as for a Lua list: after an insertion at the top, every index whose row
+  moved rebuilds its delegate (in a `ListView`, the ones built). Give the model keys when rows move.
+
+A kept delegate keeps the `index` it was built with, as with any `key` (see
+[Repeater](lua-api.md#repeater--model-delegate-)).
+
+**Threads.** A model, its notifications and its Lua value are **main-thread only**. Fill one from a worker the usual
+ways: `runAsync(work, done)` with the rows as the result (`done` calls `replace` or `appendRows`, as above), or
+`handle().post` batches. `VectorModel::appender()` returns a thread-safe, copyable `Appender` (`append(row)`,
+`appendRows(vector)`): its rows reach the model on the main thread in one `appendRows` (one `rowsInserted`) per
+main-loop iteration, however many arrive, like a [`Live<T>`](#live-properties); once the model is destroyed they're
+dropped.
+
+```cpp
+void Backend::tail(std::string path) {
+    runAsync([path, out = m_logs.appender()](std::stop_token stop) {
+        for (LogLine line : followFile(path, stop)) out.append(std::move(line)); // any rate
+    }, [] {});
+}
+```
+
+**Lifetime.** Nothing in C++ points into a Lua state, and the Lua value doesn't keep a model alive (unless it was
+pushed from a `std::shared_ptr`): it tracks the model's life through its [handle](#lower-level-handles-and-posts).
+So a model owned by a singleton survives [hot reloads](#hot-reload) (each new state gets a fresh value and cache),
+a model owned by an element dies with it, and a value whose model died reads as an empty model (`#m == 0`,
+`m:revision() == -1`): a `ListView` on it shows nothing. A model is a `ScriptObject` (it has `handle()` and
+`runAsync`), but its members aren't declared: put the API that changes it on its owner.
+
 ## Lifetime
 
 **Element instances** belong to Lua:
@@ -897,7 +1037,7 @@ keeps a non-owning pointer, and every Lua state the engine creates gets a global
 That object must outlive `engine.run()`. Declaring it before the `Engine` in `main` is enough.
 
 Don't keep `Element*` pointers to instances in other C++ objects: Lua decides when they die. Keep shared state
-in a singleton (or a model the singleton owns) and let elements read it through bindings. Background work that
+in a singleton (or a [list model](#list-models) the singleton owns) and let elements read it through bindings. Background work that
 reports back to an element goes through its `runAsync` or a `Live<T>` (see
 [background work owned by an element](#background-work-owned-by-an-element)).
 
@@ -1046,8 +1186,8 @@ declaration order, so they can be committed and diffed.
 
 | File | What |
 |---|---|
-| `imlui.lua` | The DSL (`---@meta imlui`, so `require "imlui"` is typed too): `state`, `watch`, `bind`, `component`, the theme, timers, `async`/`await`/`sleep`/`all`/`future`, `snackbar`, `log`, `ui.resource`, the misc functions, `native`, all also as `ui.*`; the classes `Element` (the common props), `ElementProps` (what every constructor takes: the common props and the children), `Binding`, `Future<T>`, the aliases `Color`, `SizeClass`, `Scheme`, `TextStyle`, and the Lua-side props of `Repeater`, `ListView`, `If`, `Loader`, `Responsive`. Hand-written, shipped with the library's files as `imlui:/definitions/imlui.lua` (`src/resources/definitions/imlui.lua`) and copied as it is. |
-| `types.lua` | Generated from the `TypeRegistry`. Per element type `Gauge`: `GaugeProps: ElementProps` (each writable property as its value, a binding function or a `bind`; the `on*` handlers), `Gauge: Element` (the element table: properties, handlers, methods), the constructor `Gauge(props)` and `ui.Gauge`, and the alias `GaugeSignal` (its signal names). Per singleton `backend`: a class `backend` and the global. The named structs and enums the members use. `connect`, with an overload per type and the alias `ImluiSignal` of every signal name. |
+| `imlui.lua` | The DSL (`---@meta imlui`, so `require "imlui"` is typed too): `state`, `watch`, `bind`, `component`, the theme, timers, `async`/`await`/`sleep`/`all`/`future`, `snackbar`, `log`, `ui.resource`, the misc functions, `native`, all also as `ui.*`; the classes `Element` (the common props), `ElementProps` (what every constructor takes: the common props and the children), `Binding`, `Future<T>`, `ListModel<T>`, the aliases `Color`, `SizeClass`, `Scheme`, `TextStyle`, and the Lua-side props of `Repeater`, `ListView`, `If`, `Loader`, `Responsive`. Hand-written, shipped with the library's files as `imlui:/definitions/imlui.lua` (`src/resources/definitions/imlui.lua`) and copied as it is. |
+| `types.lua` | Generated from the `TypeRegistry`. Per element type `Gauge`: `GaugeProps: ElementProps` (each writable property as its value, a binding function or a `bind`; the `on*` handlers), `Gauge: Element` (the element table: properties, handlers, methods), the constructor `Gauge(props)` and `ui.Gauge`, and the alias `GaugeSignal` (its signal names). Per singleton `backend`: a class `backend` and the global (a singleton that is a [list model](#list-models): the global, typed `ListModel<T>`). The named structs and enums the members use. `connect`, with an overload per type and the alias `ImluiSignal` of every signal name. |
 
 ```lua
 -- types.lua (excerpt)
@@ -1136,6 +1276,7 @@ client use the same server and the same file.
 | a struct with `LuaFields<T>` | `{ x: number, y: number }`; with a `name` that is a Lua identifier, a `---@class` of that name with a field per `field()`, each optional (a missing one keeps its default) |
 | `imlui::LuaFunction` | `function` |
 | `imlui::Future<T>` | `Future<T>` (`Future<nil>` for `Future<void>`) |
+| a [list model](#list-models) (`VectorModel<T>`, a `ListModel` subclass with an `Item` type, a pointer or `shared_ptr` to one) | `ListModel<T>` (`ListModel<any>` without `Item`; `?` for a pointer): `model[i]` is a `T`, `#model` an integer |
 
 Named structs and enums are declared once in `types.lua`, wherever they're used. A `LuaConvert` of your own may add
 the hook `static std::string luaType()`, or `static std::string luaType(imlui::LuaTypes& types)` when it's built from
@@ -1164,11 +1305,13 @@ the function, not the table it returns). `connect`'s overloads match the target'
 another type isn't always flagged. An element's class has what the C++ side holds (`nameField.text` is a `string`),
 though a field a script set to a binding function holds that function. `state(init)` returns a
 `table<string, any>` (a field initialized to `nil` would otherwise be typed `nil` for good), and `await(f)` unwraps a
-`Future<T>` to `T` (anything else passes through as `any`).
+`Future<T>` to `T` (anything else passes through as `any`). A `Repeater`'s or `ListView`'s delegate gets its `item`
+as `any`, also for a `ListModel<T>` model (LuaLS 3.19 doesn't infer a callback's parameter from a generic table
+field): annotate it, `---@param line LogLine` above the delegate function.
 
 ## Threading and frame requests
 
-Lua, the element tree, `notify` and `emit` are **main-thread only**. Three tools hand work between threads, from the
+Lua, the element tree, `notify` and `emit` are **main-thread only**. These tools hand work between threads, from the
 highest level down:
 
 | Tool | For |
@@ -1176,9 +1319,10 @@ highest level down:
 | `runAsync(work, done[, fail]) -> Task` (on every `ScriptObject`) | Work an element or singleton starts: `work` on the background pool, its result to `done` on the main thread, only while the object lives. The [`Task`](#cancelling-a-job-task) cancels it. |
 | `runAsync(work) -> Future<R>`, `imlui::Promise<T>` (module `imlui.types.future`) | A result a method returns to Lua, which the script [awaits](lua-api.md#async), with optional [progress](#progress); a method can also take a Lua future as a `Future<T>` argument. |
 | `imlui::Live<T>` (module `imlui.types.live`) | A property a worker updates at any rate (telemetry, progress, status text): the UI applies the latest value at most once per loop iteration. |
+| `VectorModel<T>::appender()` (module `imlui.types.vector_model`) | Rows a worker produces at any rate (a log tail): they reach the [list model](#list-models) in one batch per loop iteration. |
 | `ScriptObject::Handle`, `imlui::post`, `runInBackground` | The lower level both are built on: your own threads, objects the host keeps alive. |
 
-All three are in `import imlui`.
+All of them are in `import imlui`.
 
 ### Background work owned by an element
 
@@ -1599,6 +1743,8 @@ skeleton.
 | `imlui.types.future` | `Future<T>` (`status`, `value`, `error`, `cancel`, `onSettled`, `progress`, `onProgress`; `LuaConvert`: pushes a Lua future, reads one back or adopts it), `Promise<T>` (`resolve`, `reject`, `stopToken`, `progress`, `reporter`; thread-safe), `makePromise<T>(owner)`, `FutureStatus` |
 | `imlui.types.task` | `Task`: `cancel`, `running`, `cancelled` (thread-safe); what `runAsync(work, done[, fail])` returns |
 | `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `runAsync(work, done[, fail]) -> Task`, `runAsync(work) -> Future<R>`, `handle()` (`ScriptObject::Handle`: `alive()`, `stopToken()`, `post(fn)`, for worker threads), `cancelHandles()`, `scriptReloading()` (virtual, singletons' reload hook), the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, `noteConnection`, used by the registry) |
+| `imlui.types.list_model` | `ListModel`: rows for Lua (`count`, `pushItem`, `hasKeys`/`key`), the notifications (`rowsInserted`, `rowsRemoved`, `rowsChanged`, `rowsMoved`, `rowsRemapped`, `reset`), `revision`, its Lua value (`pushLua`, `pushShared`, `fromLua`); `LuaConvert` of a model, a pointer to one and a `shared_ptr` |
+| `imlui.types.vector_model` | `VectorModel<T>`: a `ListModel` over a `std::vector<T>` (`append`, `insert`, `erase`, `set`, `update`, `move`, `sort`, `replace`, `clear`, ...), optional keys, `appender()` (`VectorModel<T>::Appender`, thread-safe) |
 | `imlui.types.live` | `Live<T>`: a property any thread `set()`s, applied on the main thread at most once per loop iteration (latest wins); `Live<T>::Writer` |
 | `imlui.ui.background` | `runInBackground(work)`: the process-wide worker pool; `shutdownBackground(wait)` (the engine calls it), `backgroundThreadLimit`, `backgroundTaskCount` |
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
@@ -1611,7 +1757,7 @@ skeleton.
 | `imlui.ui.layout_box` | Layout boxes (`imlui::layout`): `BoxScope`, `boxTo`, `regionBox`, `shrinkToFitBox`, `insetBox`, `pushBox`/`popBox`, `availableWidth`, `claimWidth`: the space a container gives its children |
 | `imlui.ui.layout_cache` | The layout cache (`imlui::layout`): `lastSize`, `assumeWidth`/`assumeHeight`, `recordSize`: last frame's sizes by ImGui ID and convergence (another frame when a layout placed something by a stale size) |
 | `imlui.types.overload` | `overload<Args...>(&T::fn)`, `constOverload<Args...>(&T::fn)`: pick one of overloaded members |
-| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`), `install`, `activate`, `sync`, `typeNames`, `singletonTypes`; it is the `Renderer::Types` the renderer dispatches every element to |
+| `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`; a type with a `LuaConvert`, such as a list model, is that value as a global), `install`, `activate`, `sync`, `typeNames`, `singletonTypes`; it is the `Renderer::Types` the renderer dispatches every element to |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: every built-in element |
 
 `Engine` forwards `registerType<T>(name)` and both `registerSingleton(name, obj)` overloads to its registry, which

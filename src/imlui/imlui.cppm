@@ -33,6 +33,8 @@ export import imlui.types.future;
 export import imlui.types.task;
 export import imlui.types.script_object;
 export import imlui.types.live;
+export import imlui.types.list_model;
+export import imlui.types.vector_model;
 export import imlui.types.frame;
 export import imlui.types.element;
 export import imlui.types.type_info;
