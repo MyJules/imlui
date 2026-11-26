@@ -171,7 +171,35 @@ their metatables, and enums are passed as their names (`quality = "high"`). See
 
 Signals are `on*` handlers called as `handler(self, ...)`, for example `onClicked(self)`,
 `onToggled(self, checked)`, `onMoved(self, value)`, `onTextChanged(self, text)`, `onAccepted(self, text)` and
-`onActivated(self, index, text)`. Errors in handlers are caught and shown in the error overlay.
+`onActivated(self, index, text)`. Errors in handlers are caught and shown in the error overlay. A handler field holds
+one function; to listen from several places, [`connect`](#connecttarget-signal-fn---disconnect).
+
+### `connect(target, signal, fn) -> disconnect`
+
+Adds a listener to a signal of a C++ element (built-in or [registered](extending.md#signals)) or a
+[singleton](extending.md#singletons): `fn` runs whenever `target` emits `signal`, with the arguments its handler gets
+(`fn(self, ...)` on an element, `fn(...)` on a singleton). The signal is one the type declares or a property's
+`on<Name>Changed`; anything else raises (`connect: sensor has no signal 'onPaek'`), as does a target that isn't a C++
+element or singleton (a Lua-side container, a plain table). Returns a function that disconnects it; calling it again
+does nothing.
+
+```lua
+local stop = connect(lab, "onTelemetryChanged", function(t) s.cpu = t.cpu end)
+connect(saveButton, "onClicked", function(self) log.info("saved") end)
+stop() -- that listener no longer runs
+```
+
+- **Order.** The handler field (`onClicked = ...`) first, then the listeners in connect order.
+- **During a dispatch.** A listener may disconnect itself or others: a disconnected one that hasn't run yet doesn't.
+  One connected during a dispatch runs from the next one on.
+- **Errors.** A listener's error goes to the error overlay; the other listeners still run.
+- **Lifetime.** A connection never keeps its target alive: an element held only by a connection (or by its own
+  listener) is collected, and the connection with it. One made inside a [component](#componentfn---constructor)
+  instance or delegate (while it is built, or by its elements' handlers) runs in its id scope, like a `watch`, and
+  belongs to it: once the instance's elements are collected, the connection goes too. Collection isn't immediate;
+  call `disconnect` to stop it at a known time. One made at app level stays until disconnected.
+- **Hot reload.** Connections belong to the Lua state: a reload starts without them, so the new script connects
+  again.
 
 ## State and bindings
 
