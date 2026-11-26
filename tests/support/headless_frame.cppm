@@ -18,7 +18,9 @@
 // Time: the harness replaces the app clock (imlui.ui.clock) with a simulated one that starts at 0 and advances by
 // Options::deltaTime at the start of every frame, and by advanceTime() between frames (the app idling: like a
 // backend, the next frame's ImGui DeltaTime then includes the idle time, so ImGui's time catches up at that frame).
-// ui.time(), the timers, the Timer element, the snackbar and the frame requests all run on it.
+// ui.time(), the timers, the Timer element, the snackbar and the frame requests all run on it. The C++ main timers
+// (imlui.ui.main_timers: delay()) run when the time advances: at the start of every frame (before ui.__tick) and in
+// advanceTime(), like the Engine's loop running them between frames; the harness drops those left when it goes.
 //
 // Errors the scripts report go to luaui::errors() (cleared when the harness is created and destroyed).
 // Main thread only, one harness at a time (ImGui and the error list are global).
@@ -43,6 +45,7 @@ import imlui.theme.icons;
 import imlui.theme.typography;
 import imlui.ui.clock;
 import imlui.ui.frame_request;
+import imlui.ui.main_timers;
 import imlui.ui.renderer;
 import imlui.ui.elements.builtin;
 import imlui.types.element;
@@ -111,7 +114,8 @@ public:
     void click(std::string_view root, float x, float y, int framesAfter = 1);
     /// Frames rendered so far.
     [[nodiscard]] int frames() const;
-    /// Advances the simulated app clock by `seconds` without rendering (time passing while the app sleeps).
+    /// Advances the simulated app clock by `seconds` without rendering (time passing while the app sleeps), and runs
+    /// the C++ main timers due by then.
     void advanceTime(double seconds);
     /// The simulated app clock's time (clockTime()).
     [[nodiscard]] double time() const;
@@ -165,6 +169,7 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
     luaui::clearErrors();
     setClockSource([this] { return m_time; });
     clearFrameRequests();
+    clearMainTimers(); // they were due on another clock
     m_context = ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
@@ -191,6 +196,7 @@ HeadlessFrame::~HeadlessFrame() {
     ImGui::DestroyContext(m_context);
     luaui::clearErrors();
     clearFrameRequests();
+    clearMainTimers();
     setClockSource({});
 }
 
@@ -202,6 +208,7 @@ int HeadlessFrame::frames() const { return m_frames; }
 void HeadlessFrame::advanceTime(double seconds) {
     m_time += seconds;
     m_idle += seconds;
+    runDueMainTimers(); // the Engine's loop wakes for them while it idles
 }
 double HeadlessFrame::time() const { return m_time; }
 ImageCache& HeadlessFrame::images() { return m_images; }
@@ -271,6 +278,7 @@ void HeadlessFrame::renderFrame(std::string_view root) {
     io.DeltaTime = m_options.deltaTime + static_cast<float>(m_idle);
     m_time += static_cast<double>(m_options.deltaTime); // ImGui's time advances by DeltaTime in NewFrame
     m_idle = 0.0;
+    runDueMainTimers(); // the loop iteration this frame belongs to
     beginFrameRequests();
     ImGui::NewFrame();
     const int top = lua::gettop(m_state);

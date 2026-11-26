@@ -1549,6 +1549,96 @@ function ui.all(list)
     return f
 end
 
+-- Settles pending `g` the way settled `f` did.
+local function settleLike(g, f)
+    if f.state == "done" then
+        settle(g, "done", table.unpack(f.__values, 1, f.__values.n))
+    else
+        g.__trace = f.__trace
+        settle(g, f.state, f.error)
+    end
+end
+
+--- timeout(f, ms) -> future that settles like `f` (with its values, and its progress), unless `f` is still pending
+--- after `ms` milliseconds: then it fails with "timed out after <ms> ms" and releases `f` (cancelled unless something
+--- else consumes it). Cancelling it clears the timer and releases `f`. `ms` is checked like sleep's.
+function ui.timeout(f, ms)
+    if not isFuture(f) then error("timeout: a future expected, got " .. type(f), 2) end
+    if type(ms) ~= "number" or not (ms >= 0 and ms < math.huge) then
+        error("timeout: the delay must be a finite number of milliseconds >= 0, got " .. describe(ms), 2)
+    end
+    local g = newFuture()
+    local id
+    g.__waiting = f
+    onSettle(f, function()
+        if id then ui.clearTimer(id) end
+        if g.state == "pending" then settleLike(g, f) end
+    end)
+    if g.state == "pending" then
+        if f.progress ~= nil then g.progress = f.progress end
+        local list = f.__onProgress
+        if list == nil then
+            list = {}
+            f.__onProgress = list
+        end
+        list[#list + 1] = function(value) reportProgress(g, value) end
+        id = addTimer(function()
+            if settle(g, "failed", ("timed out after %g ms"):format(ms)) then release(f) end
+        end, ms, false)
+        g.__cancel = function() ui.clearTimer(id) end
+    end
+    return g
+end
+
+--- race({f1, f2, ...}) -> future that settles like the first of them to settle, whichever way (done, failed or
+--- cancelled); an input settled already, or a value that isn't a future, wins at once (the first in order). Then the
+--- others are released (each one nothing else consumes is cancelled), as they are when the race is cancelled. An
+--- empty list gives a cancelled future.
+function ui.race(list)
+    if type(list) ~= "table" then error("race: a list of futures expected, got " .. type(list), 2) end
+    local n = list.n or #list
+    local g = newFuture()
+    local inputs = {}
+    for i = 1, n do
+        if isFuture(list[i]) then inputs[#inputs + 1] = list[i] end
+    end
+    local function releaseAll(except)
+        for _, f in ipairs(inputs) do
+            if f ~= except then release(f) end
+        end
+    end
+    local armed = false
+    for _, f in ipairs(inputs) do
+        onSettle(f, function()
+            if armed and g.state == "pending" then
+                settleLike(g, f)
+                releaseAll(f)
+            end
+        end)
+    end
+    armed = true
+    for i = 1, n do
+        local item = list[i]
+        if not isFuture(item) then
+            settle(g, "done", item)
+            releaseAll(nil)
+            break
+        elseif item.state ~= "pending" then
+            settleLike(g, item)
+            releaseAll(item)
+            break
+        end
+    end
+    if g.state == "pending" then
+        if n == 0 then
+            settle(g, "cancelled", "cancelled")
+        else
+            g.__cancel = function() releaseAll(nil) end
+        end
+    end
+    return g
+end
+
 -- C++ futures (imlui::Future<T>, module imlui.types.future) push through this: a new future and its link, which C++
 -- keeps (a LuaFunction) and calls on the main thread to settle it: link("done", value), link("failed", message,
 -- handled), link("cancelled"), link("progress", value); link() returns the future. `canceller` (a C function) cancels

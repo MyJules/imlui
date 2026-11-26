@@ -24,6 +24,19 @@
 // stopToken(), which runAsync passes on to the work. A promise made with an owner token (makePromise<T>(owner); runAsync
 // uses its object's handle) cancels its future once the owner stops, and a value that arrives after that is dropped.
 //
+// Guarantees (main thread):
+// - First settlement wins. A future settles once; whatever comes later (resolve, reject, cancel, the owner stopping) does
+//   nothing. A Promise's resolve()/reject() from any thread may race a cancel(): the first to reach the main thread
+//   wins, and a value that lost is dropped. cancel() returning true means no value or error will follow.
+// - Handlers are released on settle. The onSettled handlers run once each, in the order they were added, right after
+//   the status changed (a handler sees the settled future; cancel() returns false) and before the Lua future hears
+//   (so Lua's awaiters and next() handlers run after them). Then they and the onProgress handlers are destroyed, with
+//   what they captured. A handler may therefore capture futures and promises that lead back to its own future: the
+//   cycle ends when the future settles. A handler added once settled runs at once, inside onSettled (also from inside
+//   another handler). A future that never settles keeps its handlers as long as its state lives.
+// - Progress handlers run in the order they were added, until one settles the future.
+// Combinators over futures (delay, withTimeout, race, all) are in imlui.types.future_combinators.
+//
 // Progress. Before it settles, a future may get progress reports (a double, by convention 0..1): Promise::progress(v)
 // or a Progress reporter (Promise::reporter(); runAsync hands one to work that takes it), from any thread. They are
 // coalesced like Live<T>: the latest value wins, and the main thread applies at most one per loop iteration
@@ -63,6 +76,11 @@ class Future;
 template <class T>
 class Promise;
 
+namespace future_detail {
+template <class T>
+struct Access;
+} // namespace future_detail
+
 /// A connected promise and future. With an `owner` token, the future is cancelled once `owner` stops (a value or error
 /// that arrives later is dropped): runAsync passes its object's handle().stopToken().
 template <class T>
@@ -96,8 +114,9 @@ public:
     void fail(std::string message);
     /// Settles as cancelled and stops stopToken(). Returns false (doing nothing) once settled.
     bool cancel();
-    /// Calls fn() once settled: now when it is, else when it settles. Counts as handling a rejection.
-    void addHandler(std::function<void()> fn);
+    /// Calls fn() once settled: now when it is, else when it settles (after the handlers added before). Counts as
+    /// handling a rejection unless `handles` is false (a combinator watching its own result).
+    void addHandler(std::function<void()> fn, bool handles = true);
     /// While pending: stores `value` as the progress, runs the progress handlers, tells Lua, requests a frame.
     void setProgress(double value);
     /// Calls fn(progress) at each progress applied from now until the future settles.
@@ -292,6 +311,7 @@ public:
 private:
     friend class Promise<T>;
     friend struct LuaConvert<Future>;
+    friend struct future_detail::Access<T>;
     template <class U>
     friend std::pair<Promise<U>, Future<U>> makePromise(std::stop_token owner);
 
@@ -362,6 +382,22 @@ private:
 
     std::shared_ptr<future_detail::Sender> m_sender;
 };
+
+} // namespace imlui
+
+export namespace imlui::future_detail {
+
+/// For code that builds futures on the main thread (imlui.types.future_combinators): a future's state, and a future
+/// of a state. Not an API of its own.
+template <class T>
+struct Access {
+    [[nodiscard]] static const std::shared_ptr<State<T>>& state(const Future<T>& f) { return f.m_state; }
+    [[nodiscard]] static Future<T> wrap(std::shared_ptr<State<T>> state) { return Future<T>{std::move(state)}; }
+};
+
+} // namespace imlui::future_detail
+
+export namespace imlui {
 
 template <class T>
 std::pair<Promise<T>, Future<T>> makePromise(std::stop_token owner) {
@@ -466,8 +502,8 @@ void Core::cancelFromLua() {
     complete(FutureStatus::Cancelled, "cancelled", false); // the Lua future settled itself
 }
 
-void Core::addHandler(std::function<void()> fn) {
-    m_handled = true;
+void Core::addHandler(std::function<void()> fn, bool handles) {
+    if (handles) m_handled = true;
     if (m_status == FutureStatus::Pending)
         m_handlers.push_back(std::move(fn));
     else

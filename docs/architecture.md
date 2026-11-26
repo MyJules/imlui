@@ -45,18 +45,20 @@ flowchart TD
 3. Each loop iteration:
    - Every 400 ms, compares the modification times of the watched resources (hot reload). A change, or a `reload()` call, triggers
      `reloadNow()`.
-   - Computes how long it may sleep: until the next **requested frame** (see below) or the next file check,
-     whichever comes first. With nothing pending, that's the 400 ms hot-reload interval (or forever without hot
-     reload). While minimized it sleeps at least 100 ms.
+   - Computes how long it may sleep: until the next **requested frame** (see below), the next C++ main timer or the
+     next file check, whichever comes first. With nothing pending, that's the 400 ms hot-reload interval (or forever without hot
+     reload). While minimized it sleeps at least 100 ms (but not past a C++ main timer).
    - `window.waitEvents(timeout)` (`glfwWaitEventsTimeout`). Input or window events start a **settle period** of
      0.3 s, during which every iteration renders, so transitions and hover layers finish.
    - Runs the functions other threads queued with `imlui::post()` / `Engine::post()` (`imlui.ui.main_thread`;
      one that throws is reported like a script error). They may `notify()` and so request a frame. C++ futures
      settle here, so Lua coroutines awaiting them resume here, outside a frame (and request one); `sleep` and
      timers resume theirs in `ui.__tick`, at the start of a frame, which also reports the future rejections left
-     unhandled since the last one ([Async](lua-api.md#async)).
+     unhandled since the last one ([Async](lua-api.md#async)). Then the C++ main timers due run
+     (`imlui.ui.main_timers`: `delay()`, `withTimeout`), also outside a frame.
    - `renderFrame()`, but only if a frame is due. Otherwise the loop goes back to sleep without rendering.
-4. When the loop ends (window closed, `quit()`): the wake handler is removed and the queued posts dropped, the Lua
+4. When the loop ends (window closed, `quit()`): the wake handler is removed, the C++ main timers dropped (a dropped
+   `delay` is cancelled) and the queued posts dropped, the Lua
    state closes (every element dies, so the work its `runAsync` started sees its stop token stop), the window and
    the fonts go, then `shutdownBackground()` (`imlui.ui.background`): every pool task's token stops, queued tasks are
    dropped, and the workers are joined if their tasks return within 1 s, else detached. What they posted meanwhile is
@@ -1078,6 +1080,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, wake handler |
+| `imlui.ui.main_timers` | C++ main-thread timers: `addMainTimer(seconds, fn)` / `removeMainTimer(id)` on the app clock, no Lua state needed; the engine's loop runs the due ones (`runDueMainTimers`, after the posts, outside a frame) and sleeps at most until the next (`secondsUntilMainTimer`); `clearMainTimers` drops them at shutdown. What `delay()` uses |
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
 | `imlui.ui.background` | The background pool: `runInBackground(work)` (any thread; `work(std::stop_token)` on up to `backgroundThreadLimit()` workers, `hardware_concurrency() - 1` clamped to [2, 8], started lazily; a throw reported on the main thread), `shutdownBackground(wait)` (tokens stopped, queue dropped, workers joined within `wait` or detached; a later task starts a new pool; `Engine::run()` calls it), `backgroundTaskCount` |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
@@ -1102,6 +1105,7 @@ See [Registering C++ types](extending.md).
 | `imlui.types.lua_function` | `LuaFunction`: a copyable, main-thread handle to a Lua function (a registry reference); `call(args...)` / `call<R>(args...)` convert through `LuaConvert` and report errors; expires when its state closes (a per-state liveness token: a registry userdata whose finalizer clears it), so a stale handle is a no-op; its `LuaConvert` (`takesFunction`: an element property of the type gets the function, not a binding's value) |
 | `imlui.types.progress` | `Progress`: a thread-safe, copyable progress reporter (`report(double)`) that `runAsync(work)` hands to work taking it; `Promise::reporter()` makes one |
 | `imlui.types.future` | `Future<T>` / `Promise<T>` / `makePromise<T>(owner)`: a result settled once on the main thread (done, failed, cancelled), with progress before it (`Promise::progress`, coalesced into one posted apply per loop iteration; `Future::progress`/`onProgress`). Promises are thread-safe (settling is posted; the last copy dropped unsettled cancels; an owner token that stops cancels). Pushed to Lua as a prelude future (`ui.__futureLink`), linked through a `LuaFunction`, so settling after the state closed is a no-op; Lua's `cancel()` reaches C++ through a C closure holding a weak reference and stops the promise's token. Read from Lua (a `Future<T>` argument): the future's `__core` userdata gives a pushed future back; another is adopted (`ui.__futureAdopt`: a receiver C closure holding the state settles it, converting with `LuaConvert<T>`; its finalizer cancels it when the state closes) |
+| `imlui.types.future_combinators` | `delay(ms)` (a main timer holding the state like a promise), `withTimeout(f, ms)`, `race(...)`, `all(vector)`: main-thread futures built on `future_detail::Access` (a future's state); the result settles synchronously inside the deciding input's settlement, and cancels the pending inputs once it settles (an internal handler that doesn't mark it handled) |
 | `imlui.types.task` | `Task`: the handle `runAsync(work, done[, fail])` returns: `cancel()` (stops the work's token; `done`/`fail` never run), `running()`, `cancelled()`; thread-safe, the end decided once by an atomic |
 | `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives; `stopToken()` stops when it dies), `cancelHandles()`, `runAsync(work, done[, fail]) -> Task` (work on the background pool with a token stopped by the object's death, a pool shutdown or the task's cancel; `done`/`fail` on the main thread through the handle, unless cancelled), `runAsync(work) -> Future<R>` (also stopped by the future's cancel; the object's death cancels the future; work taking a `Progress` reports to it); signals call the slot, then the listeners (`noteConnection()` turns on the dispatch through `imlui.lua.listeners`); `scriptReloading()` (virtual: a singleton's reload hook, called by `TypeRegistry::install`) |
 | `imlui.types.list_model` | `ListModel`: rows in C++ read lazily by Lua (`count`, `pushItem`, optional `key`), row-level notifications that keep per-row ids and bump `revision()`, its Lua value (a userdata per model and state: `__index`, `__len`, weak item cache by row id, `pushShared` for an owned model) and the `LuaConvert`s of models (see [List models](#children-and-inline-containers)) |
