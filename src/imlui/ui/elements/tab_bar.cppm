@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -71,7 +72,7 @@ void TabBar::render(Frame& frame) {
     });
     const int last = std::max(0, static_cast<int>(tabs.size()) - 1);
     int cur = std::clamp(indexValue(m_currentIndex) - 1, 0, last); // indexValue: no overflow on INT_MIN
-    if (md::tabs("##tabs", tabs, &cur, m_variant == "secondary", frame.size("width"))) {
+    if (skin().tabs("##tabs", tabs, &cur, m_variant == "secondary", frame.size("width"))) {
         m_currentIndex = cur + 1;
         notify("currentIndex");
         emit("onCurrentChanged", m_currentIndex);

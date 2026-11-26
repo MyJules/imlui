@@ -28,6 +28,10 @@ struct Theme {
         ImVec2 value;
     };
 
+    /// The skin that draws the controls, by its registered name ("material", or one registered with registerSkin()).
+    /// Only the name is kept here: the widgets import the theme and the skins import the widgets, so imlui.skin
+    /// resolves it (skin(), after the theme changed). An unknown name draws Material.
+    std::string design = "material";
     /// "material" | "imgui-dark" | "imgui-light" | "imgui-classic"
     std::string preset = "material";
     Color seed = *parseHex("#6750A4");
@@ -57,7 +61,7 @@ inline constexpr float maxStyleValue = 10000.0f;
 [[nodiscard]] const Theme& theme();
 
 /// A count that moves every time the theme in effect changes (applyPendingTheme()). What depends on the theme beyond
-/// the frame it was computed on (a color role resolved by a property sync) compares it.
+/// the frame it was computed on (a color role resolved by a property sync, the active skin) compares it.
 [[nodiscard]] std::uint64_t themeGeneration();
 
 /// Schedules `t` to become the theme at the start of the next frame

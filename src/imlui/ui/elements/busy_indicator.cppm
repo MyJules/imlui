@@ -7,7 +7,7 @@ export module imlui.ui.elements.busy_indicator;
 import std;
 
 import imgui;
-import imlui.widgets.progress;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -55,7 +55,7 @@ void BusyIndicator::declare(TypeBuilder<BusyIndicator>& type) {
 void BusyIndicator::render(Frame& frame) {
     const float size = frame.size("size");
     if (m_running) {
-        md::circularProgress(-1.0f, size, static_cast<float>(m_thickness));
+        skin().circularProgress(-1.0f, size, static_cast<float>(m_thickness));
     } else {
         const float side = size > 0 ? size : frame.dp(48);
         ImGui::Dummy({side, side});
@@ -69,7 +69,7 @@ void BusyIndicator::setThickness(double thickness) { m_thickness = thickness; }
 
 std::optional<ImVec2> BusyIndicator::intrinsicSize(const Frame& frame, float) {
     // render() draws the indicator, or reserves its square while it isn't running.
-    return md::circularProgressSize(frame.size("size"));
+    return skin().circularProgressSize(frame.size("size"));
 }
 
 } // namespace imlui

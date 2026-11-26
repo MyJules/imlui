@@ -4,6 +4,7 @@ export module imlui.ui.elements.menu_item;
 import std;
 
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -74,7 +75,7 @@ void MenuItem::render(Frame& frame) {
     const bool checkable = frame.node().has("checked");
     const bool reserveIcon = checkable || frame.node().has("icon");
     const std::string icon = checkable ? (m_checked ? "check" : "") : m_icon;
-    if (md::menuItem("##mi", m_text, icon, m_shortcut, false, !checkable, reserveIcon)) {
+    if (skin().menuItem("##mi", m_text, icon, m_shortcut, false, !checkable, reserveIcon)) {
         if (checkable) {
             m_checked = !m_checked;
             notify("checked");

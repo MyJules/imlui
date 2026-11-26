@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -74,7 +75,7 @@ void Chip::render(Frame&) {
     const std::string label = Frame::labelId(m_text, "chip");
     const bool v = m_checked;
     const md::ChipVariant variant = md::chipVariant(m_variant);
-    if (md::chip(label.c_str(), v, variant, m_icon)) {
+    if (skin().chip(label.c_str(), v, variant, m_icon)) {
         if (variant == md::ChipVariant::Filter && m_checkable) {
             m_checked = !v;
             notify("checked");
@@ -95,7 +96,7 @@ const std::string& Chip::icon() const { return m_icon; }
 void Chip::setIcon(std::string icon) { m_icon = std::move(icon); }
 
 std::optional<ImVec2> Chip::intrinsicSize(const Frame&, float) {
-    return md::chipSize(Frame::labelId(m_text, "chip").c_str(), m_checked, md::chipVariant(m_variant), m_icon);
+    return skin().chipSize(Frame::labelId(m_text, "chip").c_str(), m_checked, md::chipVariant(m_variant), m_icon);
 }
 
 } // namespace imlui

@@ -7,6 +7,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -51,7 +52,7 @@ void Divider::declare(TypeBuilder<Divider>& type) {
         .doc("The end inset (dp).");
 }
 
-void Divider::render(Frame& frame) { md::divider(m_inset, m_insetEnd, frame.resolvedWidth()); }
+void Divider::render(Frame& frame) { skin().divider(m_inset, m_insetEnd, frame.resolvedWidth()); }
 
 float Divider::inset() const { return m_inset; }
 void Divider::setInset(float inset) { m_inset = inset; }
@@ -59,7 +60,7 @@ float Divider::insetEnd() const { return m_insetEnd; }
 void Divider::setInsetEnd(float insetEnd) { m_insetEnd = insetEnd; }
 
 std::optional<ImVec2> Divider::intrinsicSize(const Frame& frame, float maxWidth) {
-    return md::dividerSize(frame.widthIn(maxWidth));
+    return skin().dividerSize(frame.widthIn(maxWidth));
 }
 
 } // namespace imlui

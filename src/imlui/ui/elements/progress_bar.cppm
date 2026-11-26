@@ -7,6 +7,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -54,7 +55,7 @@ void ProgressBar::declare(TypeBuilder<ProgressBar>& type) {
 void ProgressBar::render(Frame& frame) {
     // A NaN or out-of-range value is clamped here: the widget reads any negative fraction as indeterminate.
     // `width` goes through the common size path (sizeProp), so `fillWidth` and fill-minus sizes work.
-    md::progress(m_indeterminate ? -1.0f : progressFraction(m_value), frame.size("width"));
+    skin().progress(m_indeterminate ? -1.0f : progressFraction(m_value), frame.size("width"));
 }
 
 double ProgressBar::value() const { return m_value; }
@@ -63,7 +64,7 @@ bool ProgressBar::indeterminate() const { return m_indeterminate; }
 void ProgressBar::setIndeterminate(bool indeterminate) { m_indeterminate = indeterminate; }
 
 std::optional<ImVec2> ProgressBar::intrinsicSize(const Frame& frame, float maxWidth) {
-    return md::progressSize(frame.widthIn(maxWidth));
+    return skin().progressSize(frame.widthIn(maxWidth));
 }
 
 } // namespace imlui

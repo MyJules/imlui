@@ -239,8 +239,22 @@ function setWindowSize(w, h) end
 -- Theme
 -------------------------------------------------------------------------------
 
+---A theme table (docs/theming.md). Every field is optional.
+---@class ThemeTable
+---@field design? "material"|string The skin that draws the controls: `"material"` (default) or one the app registered in C++ (`registerSkin`). An unknown name reports an error and keeps `"material"`.
+---@field preset? "material"|"imgui-dark"|"imgui-light"|"imgui-classic" How ImGui's own style is set (default `"material"`).
+---@field seed? Color The color the scheme is generated from (default `"#6750A4"`).
+---@field dark? boolean Dark or light scheme (default `true`).
+---@field spacing? number Base spacing unit in dp (default 8).
+---@field fontScale? number Multiplies every text size, 0.25 to 4 (default 1).
+---@field shape? table<string, number> Corner radii in dp: `extraSmall`, `small`, `medium`, `large`, `extraLarge`.
+---@field colors? table<string, Color> Color role overrides.
+---@field imgui? table<string, Color> Raw `ImGuiCol_*` overrides by name.
+---@field style? table<string, number|number[]> Raw `ImGuiStyle` overrides by field name.
+---@field fonts? table<string, string|string[]> Text fonts by resource name: `regular`, `medium`, `fallback`, named fonts.
+
 ---Applies theme table `t` at the start of the next frame and returns the scheme it produces (docs/theming.md).
----@param t table
+---@param t ThemeTable
 ---@return Scheme
 function theme(t) end
 
@@ -249,7 +263,7 @@ function theme(t) end
 function scheme() end
 
 ---The scheme `t` would produce, without applying it.
----@param t table
+---@param t ThemeTable
 ---@return Scheme
 function schemeFor(t) end
 
@@ -512,7 +526,7 @@ function culling() end
 
 ---The C++ library behind the functions above (`require "imlui.native"`).
 ---@class imlui.native
----@field setTheme fun(t: table): Scheme
+---@field setTheme fun(t: ThemeTable): Scheme
 ---@field schemeFor fun(t: table): Scheme
 ---@field scheme fun(): Scheme
 ---@field isDark fun(): boolean

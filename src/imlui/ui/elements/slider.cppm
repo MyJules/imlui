@@ -4,7 +4,7 @@ export module imlui.ui.elements.slider;
 import std;
 
 import imgui;
-import imlui.widgets.slider;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -85,7 +85,7 @@ void Slider::declare(TypeBuilder<Slider>& type) {
 void Slider::render(Frame& frame) {
     double v = m_value;
     const std::string format = m_format.value_or(m_stepSize >= 1.0 ? "%.0f" : "%.2f");
-    const bool changed = md::slider("##slider", &v, m_from, m_to, m_stepSize, frame.size("width"), format.c_str());
+    const bool changed = skin().slider("##slider", &v, m_from, m_to, m_stepSize, frame.size("width"), format.c_str());
     if (ImGui::IsItemActivated()) m_pressValue = m_value;
     if (changed) {
         m_value = v;
@@ -107,7 +107,7 @@ const std::optional<std::string>& Slider::format() const { return m_format; }
 void Slider::setFormat(std::optional<std::string> format) { m_format = std::move(format); }
 
 std::optional<ImVec2> Slider::intrinsicSize(const Frame& frame, float maxWidth) {
-    return md::sliderSize(frame.widthIn(maxWidth));
+    return skin().sliderSize(frame.widthIn(maxWidth));
 }
 
 } // namespace imlui

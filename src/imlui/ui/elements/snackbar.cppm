@@ -6,6 +6,7 @@ import std;
 
 import imgui;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -99,7 +100,7 @@ void Snackbar::render(Frame& frame) {
     else
         frame.requestFrameAfter(dur - age);
     bool closed = false;
-    if (md::snackbar(m_text, m_actionText, t, m_closable, &closed)) {
+    if (skin().snackbar(m_text, m_actionText, t, m_closable, &closed)) {
         emit("onAction");
         closed = true;
     }

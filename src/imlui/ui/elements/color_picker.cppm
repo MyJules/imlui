@@ -5,7 +5,7 @@ import std;
 
 import imgui;
 import imlui.color;
-import imlui.widgets.color_field;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -63,7 +63,7 @@ void ColorPicker::declare(TypeBuilder<ColorPicker>& type) {
 
 void ColorPicker::render(Frame& frame) {
     Color c = m_color.value_or(Color{1, 1, 1, 1});
-    if (md::colorField("##cf", &c, m_label, m_alpha, frame.size("width"))) {
+    if (skin().colorField("##cf", &c, m_label, m_alpha, frame.size("width"))) {
         m_color = c;
         // Writes the color back as "#RRGGBB[AA]" (LuaConvert<Color>) and emits onColorChanged(hex) with it.
         notify("color");
@@ -78,7 +78,7 @@ bool ColorPicker::alpha() const { return m_alpha; }
 void ColorPicker::setAlpha(bool alpha) { m_alpha = alpha; }
 
 std::optional<ImVec2> ColorPicker::intrinsicSize(const Frame& frame, float maxWidth) {
-    return md::colorFieldSize(m_color.value_or(Color{1, 1, 1, 1}), m_label, frame.widthIn(maxWidth));
+    return skin().colorFieldSize(m_color.value_or(Color{1, 1, 1, 1}), m_label, frame.widthIn(maxWidth));
 }
 
 } // namespace imlui

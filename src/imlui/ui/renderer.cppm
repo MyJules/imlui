@@ -18,6 +18,7 @@ import lua;
 import imgui;
 import imlui.theme.dpi;
 import imlui.widgets;
+import imlui.skin;
 import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
@@ -439,7 +440,7 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
         ImGui::EndGroup();
         layout::recordSize(id, ImGui::GetItemRectSize(), m_provisional != provisional);
     }
-    if (n.has(luaui::keys::tooltip)) md::tooltip(n.string("tooltip"));
+    if (n.has(luaui::keys::tooltip)) skin().tooltip(n.string("tooltip"));
     if (disabled) ImGui::EndDisabled();
     ImGui::PopID();
     return true;
@@ -828,9 +829,9 @@ void Renderer::attachMenu(const Node& node, bool clicked) {
     ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     if (clicked) ImGui::OpenPopup("##menu");
     Node menu{state, menuIdx};
-    if (md::beginAnchoredMenu("##menu", a, b, dp(112))) {
+    if (skin().beginAnchoredMenu("##menu", a, b, dp(112))) {
         renderChildren(menu);
-        md::endAnchoredMenu();
+        skin().endAnchoredMenu();
     }
     lua::settop(state, menuIdx - 1);
 }

@@ -23,7 +23,7 @@ public:
             .method("reset", &Gauge::reset);
     }
 
-    void render(imlui::Frame& frame) override; // draw with md:: widgets or frame.drawList()
+    void render(imlui::Frame& frame) override; // draw with skin() controls, md:: helpers or frame.drawList()
 
     double value() const { return m_value; }
     void setValue(double v) {
@@ -85,6 +85,8 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 - [Editor support: Lua definitions](#editor-support-lua-definitions): LuaLS `---@meta` files of the DSL and the
   registered types, `--lua-defs <dir>`, hover docs, the `luaType` hook
 - [Testing elements](#testing-elements): the headless frame harness
+- [Skins](#skins): the look of the controls: subclass `Skin`, override what you draw, `registerSkin`,
+  `theme { design = ... }`
 - [Threading and frame requests](#threading-and-frame-requests): `runAsync` (and its `Task`), [futures](#futures)
   (`Future<T>`, `Promise<T>`, `runAsyncThen`, guarantees, combinators: `delay`, `withTimeout`, `race`, `all`;
   progress, Lua futures as arguments), `Live<T>`, the background pool;
@@ -1948,6 +1950,89 @@ away. An element dropped some other way (a table you edit yourself) stops at the
 doesn't keep a dropped element alive ([ids are weak](lua-api.md#element-ids)). Give the element a `running`
 property (like the built-in `Timer`) when scripts need to stop it. `timer.cppm` is the complete example.
 
+## Skins
+
+What the controls look like is a **skin**: an `imlui::Skin` (module `imlui.skin`, part of `import imlui;`) draws and
+measures every control the elements show. The base class *is* the Material skin (`"material"`): each of its virtual
+functions calls the `md::` widget the elements used to call. A skin of your own subclasses it and overrides only the
+controls it draws differently; everything else stays Material. Register it by name, and a script selects it with
+the theme ([Designs](theming.md#designs)):
+
+```cpp
+import std;
+import imgui;
+import imlui;
+
+// Flat, square buttons; every other control (and the FAB) stays Material.
+class SquareSkin : public imlui::Skin {
+public:
+    std::string_view name() const override { return "square"; }
+
+    bool button(const char* label, imlui::md::ButtonVariant variant, ImVec2 size,
+                std::string_view icon) const override {
+        using namespace imlui;
+        if (variant == md::ButtonVariant::Fab) return Skin::button(label, variant, size, icon);
+        const ImVec2 sz = buttonSize(label, variant, size, icon); // draw exactly what layouts measured
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::InvisibleButton(label, sz);
+        const Scheme& s = md::scheme();
+        const bool dis = md::itemDisabled();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        md::fillRoundRect(dl, p, {p.x + sz.x, p.y + sz.y}, 0.0f,
+                          dis ? md::disabledContainer() : ImGui::IsItemHovered() ? s.primaryContainer : s.primary);
+        md::drawTextV(dl, TextStyle::LabelLarge, p.x + dp(16), p.y + sz.y * 0.5f,
+                      dis ? md::disabledContent() : s.onPrimary, md::visibleLabel(label));
+        return clicked;
+    }
+
+    ImVec2 buttonSize(const char* label, imlui::md::ButtonVariant variant, ImVec2 size,
+                      std::string_view icon) const override {
+        using namespace imlui;
+        if (variant == md::ButtonVariant::Fab) return Skin::buttonSize(label, variant, size, icon);
+        const float natural = md::measure(TextStyle::LabelLarge, md::visibleLabel(label)).x + dp(32);
+        return {md::itemWidth(size.x, natural), size.y > 0 ? size.y : dp(32)};
+    }
+};
+
+int main(int argc, char** argv) {
+    imlui::registerSkin("square", [] { return std::make_unique<SquareSkin>(); });
+    imlui::Engine engine{imlui::defaultConfig(argc, argv)};
+    return engine.run();
+}
+```
+
+```lua
+theme { design = "square" }
+```
+
+- **Override a draw function together with its size function** (`button` + `buttonSize`, `checkbox` +
+  `checkboxSize`, ...). Layouts place a control by its size before it draws ([intrinsic sizes](#intrinsic-sizes)),
+  so the two must agree; have the draw function call the size function, as above. Containers come as begin/end pairs
+  (`beginCard`/`endCard`, `beginDialog`/`endDialog`, `beginMenu`/`endMenu`, ...): override both.
+- **The parameters are the `md::` widgets'**: the same vocabulary types (`md::ButtonVariant`,
+  `md::TextFieldOptions`, ...) and the same meaning (a width of 0 is the natural size, -1 fills: resolve it with
+  `md::itemWidth(requested, natural)`). The virtuals have no default arguments, so a call means the same through any
+  subclass. See each widget's declaration in `src/imlui/widgets/` for what its arguments mean.
+- **One instance draws every control**, from the main thread, through `const` functions: keep per-control state in
+  ImGui (`md::animate(id, target)`, `md::stateLayer`, the window's storage) keyed by the item's ID, not in members.
+  The factory runs when the design becomes active (and again when its registration changed); the instance lives
+  until another design is picked.
+- **The theme picks it between frames.** `skin()` returns the active skin: the one registered under
+  `theme().design`, looked up again whenever the theme changed (`themeGeneration()`). A design switches with the
+  theme at the start of a frame, never in the middle of one, and the layouts measure the new sizes on that frame.
+  `registerSkin` before `engine.run()`; registering later (or replacing a name, `"material"` included) takes effect
+  at the next theme change. `hasSkin(name)` and `skinNames()` list what `theme { design = ... }` accepts; a `Theme`
+  built in C++ with an unknown `design` draws Material (and logs a warning).
+- **Use the drawing helpers.** `md::fillRoundRect`, `strokeRoundRect`, `drawTextV`, `drawIcon`, `md::scheme()`, the
+  disabled colors and the rest of `imlui.widgets.common` decide no look, so they're shared by every skin (and cull
+  off-screen drawing for you). Colors come from the scheme's roles, so `theme { colors = ... }` works under any skin.
+- **Your own elements** can draw controls with `imlui::skin().button(...)` instead of `md::button(...)`, so they
+  follow the design too.
+
+What goes through the skin and what stays a direct `md::` call is listed in
+[Architecture](architecture.md#skins). The Material widgets still call each other inside (a snackbar's action is
+`md::button`, a spin box's steppers are `md::iconButton`), so overriding `button` doesn't restyle those yet.
+
 ## The built-ins as examples
 
 Every built-in element (`Button`, `Column`, `TabBar`, ...) is an `Element` class in its own module in
@@ -2030,6 +2115,7 @@ skeleton.
 | `imlui.types.overload` | `overload<Args...>(&T::fn)`, `constOverload<Args...>(&T::fn)`: pick one of overloaded members |
 | `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`; a type with a `LuaConvert`, such as a list model, is that value as a global), `install`, `activate`, `sync`, `typeNames`, `singletonTypes`; it is the `Renderer::Types` the renderer dispatches every element to |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: every built-in element |
+| `imlui.skin` | `Skin` (the Material skin; subclass it for another look), `skin()` (the active one), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames` ([Skins](#skins)) |
 
 `Engine` forwards `registerType<T>(name)` and both `registerSingleton(name, obj)` overloads to its registry, which
 `types()` returns. All of these come with `import imlui;`.

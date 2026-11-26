@@ -6,6 +6,7 @@ import std;
 import imgui;
 import imlui.theme.font_face_scope;
 import imlui.widgets;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -74,8 +75,8 @@ void Button::render(Frame& frame) {
     bool clicked = false;
     {
         FontFaceScope face{m_font};
-        clicked = md::button(label.c_str(), md::buttonVariant(m_variant),
-                             {frame.size("width"), frame.resolvedHeight(0.0f)}, m_icon);
+        clicked = skin().button(label.c_str(), md::buttonVariant(m_variant),
+                                {frame.size("width"), frame.resolvedHeight(0.0f)}, m_icon);
     }
     if (clicked) emit("onClicked");
     frame.attachMenu(clicked);
@@ -88,7 +89,7 @@ std::optional<ImVec2> Button::intrinsicSize(const Frame& frame, float maxWidth) 
     if (h < 0.0f) return std::nullopt;
     const std::string label = Frame::labelId(m_text, "btn");
     FontFaceScope face{m_font};
-    return md::buttonSize(label.c_str(), md::buttonVariant(m_variant), {frame.widthIn(maxWidth), h}, m_icon);
+    return skin().buttonSize(label.c_str(), md::buttonVariant(m_variant), {frame.widthIn(maxWidth), h}, m_icon);
 }
 
 const std::string& Button::text() const { return m_text; }
