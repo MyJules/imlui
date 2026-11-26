@@ -567,9 +567,37 @@ local function buildDelegate(self, item, i, key)
     return c
 end
 
--- Item `i` of a model table, and of a numeric model (no table: the item is the index).
+-- Item `i` of a model table (or a C++ list model), and of a numeric model (no table: the item is the index).
 local function rawItem(model, i) return model[i] end
 local function numberItem(_, i) return i end
+
+-- A C++ list model (imlui.types.list_model) is a userdata whose metatable's `__imlui_model` holds its functions:
+-- count(m), revision(m), hasKeys(m), key(m, i). `#m` and `m[i]` work as on a list; m[i] converts row i once and
+-- caches the item by the row's identity, so an unchanged row reads as the same item table wherever it moved (and a
+-- changed one as a new table). The containers use that: with a model, a delegate is kept only while its item is the
+-- same, the model's keys keep delegates without a `key` function, and nothing is compared while the model's revision
+-- stands still. modelFns(v) returns those functions, or nil for any other model.
+local function modelFns(model)
+    if type(model) ~= "userdata" then return nil end
+    local mt = getmetatable(model)
+    return type(mt) == "table" and rawget(mt, "__imlui_model") or nil
+end
+
+-- The key function of a container: its `key` (a function) or, without one, the keys of a list model that has them
+-- (`fns` its modelFns; the second result is true then). nil: delegates are kept by index. `memo` (the container's
+-- state) keeps the model's key function, made once per model.
+local function keyFunction(self, model, fns, memo)
+    local keyFn = rawget(self, "key")
+    if type(keyFn) == "function" then return keyFn end
+    if fns ~= nil and fns.hasKeys(model) then
+        if memo.__keysOf ~= model then
+            local key = fns.key
+            memo.__keysOf, memo.__modelKey = model, function(_, i) return key(model, i) end
+        end
+        return memo.__modelKey, true
+    end
+    return nil
+end
 
 -- The key of `item` at index `i` (the container's `key` function, in the scope the container was built in). A nil
 -- or NaN key can't index a table: the item itself is the key then.
@@ -584,7 +612,9 @@ end
 -- Delegates by key: one is reused (also at another index) while an item with its key is in the model, so a model
 -- that returns fresh item tables every call doesn't rebuild them. In model order, `cache[i]` is the entry shown at
 -- index i; entries whose key went away are dropped.
-local function keyedChildren(self, model, n, keyFn, cache, list)
+-- `fresh`: the model is a C++ list model, whose items are new tables exactly when their rows changed, so an entry is
+-- kept only while its item is the same too.
+local function keyedChildren(self, model, n, keyFn, cache, list, fresh)
     local at = model and rawItem or numberItem
     local oldN = #list
     local i = 1
@@ -592,7 +622,7 @@ local function keyedChildren(self, model, n, keyFn, cache, list)
     while i <= n do
         local c = cache[i]
         local item = at(model, i)
-        if c == nil or c.key ~= keyOf(self, keyFn, item, i) then break end
+        if c == nil or c.key ~= keyOf(self, keyFn, item, i) or (fresh and c.item ~= item) then break end
         c.item = item
         i = i + 1
     end
@@ -615,6 +645,9 @@ local function keyedChildren(self, model, n, keyFn, cache, list)
             local c = byKey[k]
             if c ~= nil then
                 byKey[k] = c.nextSame
+                if fresh and c.item ~= item then c = nil end -- its row changed: a new delegate
+            end
+            if c ~= nil then
                 c.item = item
                 reused = reused + 1
             else
@@ -642,41 +675,54 @@ end
 --- its key is in the model (see keyedChildren).
 local function repeaterChildren(self)
     local model = resolve(self, self.model)
-    local n
+    local n, fns
     if type(model) == "number" then
         -- Items 1..n, without a table of them.
         n = model == model and math.max(0, math.floor(math.min(model, math.maxinteger))) or 0
         model = nil
     else
         model = model or EMPTY
+        fns = modelFns(model)
         n = #model
     end
     local cache = self.__cache
     if not cache then cache = {}; self.__cache = cache end
     local list = self.__list
     if not list then list = {}; self.__list = list end
-    local keyFn = rawget(self, "key")
-    if type(keyFn) == "function" then
+    local rawKey = rawget(self, "key")
+    if type(rawKey) ~= "function" then rawKey = false end
+    -- A list model at the revision, length and `key` of the last call: every delegate is what it was. (The revision
+    -- is read before any delegate is built: one that changes the model is seen on the next call.)
+    local rev = fns and fns.revision(model)
+    if fns ~= nil and self.__model == model and self.__revision == rev and self.__n == n and self.__key == rawKey then
+        return list
+    end
+    -- Remembered once the list is complete: after a delegate that raised, the next call finishes it.
+    self.__model = nil
+    local keyFn = keyFunction(self, model, fns, self)
+    if keyFn ~= nil then
         self.__counted = nil
-        return keyedChildren(self, model, n, keyFn, cache, list)
-    end
-    -- A count that didn't change: the items are 1..n again, and every cached delegate was built for its index.
-    if model == nil and self.__counted == n then return list end
-    self.__counted = nil
-    for i = 1, n do
-        local item
-        if model then item = model[i] else item = i end
-        local c = cache[i]
-        if not c or c.item ~= item or c.key ~= nil then
-            if c then dropped() end
-            c = buildDelegate(self, item, i, nil)
-            cache[i] = c
+        keyedChildren(self, model, n, keyFn, cache, list, fns ~= nil)
+    else
+        -- A count that didn't change: the items are 1..n again, and every cached delegate was built for its index.
+        if model == nil and self.__counted == n then return list end
+        self.__counted = nil
+        for i = 1, n do
+            local item
+            if model then item = model[i] else item = i end
+            local c = cache[i]
+            if not c or c.item ~= item or c.key ~= nil then
+                if c then dropped() end
+                c = buildDelegate(self, item, i, nil)
+                cache[i] = c
+            end
+            list[i] = c.node
         end
-        list[i] = c.node
+        if #list > n then dropped() end
+        for i = n + 1, #list do list[i] = nil; cache[i] = nil end
+        if model == nil then self.__counted = n end
     end
-    if #list > n then dropped() end
-    for i = n + 1, #list do list[i] = nil; cache[i] = nil end
-    if model == nil then self.__counted = n end
+    if fns ~= nil then self.__model, self.__revision, self.__n, self.__key = model, rev, n, rawKey end
     return list
 end
 
@@ -695,6 +741,8 @@ end
 -- the indices it shows, and only those are built. Each render calls __count(self), which resolves the model, and then
 -- __range(self, first, last) for the delegates of indices first..last. Built delegates are cached in self.__view:
 --   model, n      the model the last __count resolved (nil for a numeric model: the items are the indices), its length
+--   fns, revision a list model's functions (modelFns) and its revision at that __count; nil for any other model
+--   keyFn, rawKey the key function __range uses (keyFunction: `key`, or a list model's keys), and `key` itself
 --   pass          counts the __count calls; an entry's `pass` is the last one that showed it
 --   cache         [index] = entry, without a `key` function
 --   keyed         [key] = entry, with one; more entries with the same key are chained through `nextSame`
@@ -702,7 +750,8 @@ end
 -- An entry is { item, key, node, pass } (see buildDelegate). An entry the model no longer has is dropped as soon as
 -- that is known cheaply: an index past the end or whose item changed, and with a key, a key gone from a model of at
 -- most LIST_KEEP items. Beyond that the cache keeps at most max(LIST_KEEP, 4 x shown) entries, dropping the ones
--- shown longest ago.
+-- shown longest ago. With a list model, an entry is also dropped when its item isn't the row's any more (the row
+-- changed), and a pass at an unchanged revision drops nothing.
 local LIST_KEEP = 256
 
 -- The key a ListView caches an item's delegate under: keyOf, with one stand-in for an item that can't index a table
@@ -717,6 +766,7 @@ end
 -- One entry of a ListView's cache is gone (the caller unlinked it).
 local function dropEntry(st)
     st.built = st.built - 1
+    st.atIndex = nil
     dropped()
 end
 
@@ -761,12 +811,13 @@ end
 -- its length.
 local function listCount(self)
     local model = resolve(self, self.model)
-    local n
+    local n, fns
     if type(model) == "number" then
         n = model == model and math.max(0, math.floor(math.min(model, math.maxinteger))) or 0
         model = nil
     else
         model = model or EMPTY
+        fns = modelFns(model)
         n = #model
     end
     local st = rawget(self, "__view")
@@ -774,16 +825,26 @@ local function listCount(self)
         st = { cache = {}, keyed = {}, built = 0, pass = 0, shown = 0, n = 0 }
         rawset(self, "__view", st)
     end
-    local keyFn = rawget(self, "key")
-    if type(keyFn) == "function" then
+    local rawKey = rawget(self, "key")
+    if type(rawKey) ~= "function" then rawKey = false end
+    local keyFn, modelKeys = keyFunction(self, model, fns, st)
+    local rev = fns and fns.revision(model)
+    local stable = fns ~= nil and st.model == model and st.revision == rev and st.n == n and st.rawKey == rawKey
+    if stable then
+        -- A list model that didn't change since the last pass: every entry still is what it was, and at its index.
+    elseif keyFn ~= nil then
         for i in pairs(st.cache) do st.cache[i] = nil; dropEntry(st) end -- `key` was set since
         if n <= LIST_KEEP and st.built > 0 then
-            -- A small model: count its keys, and drop the entries past each key's count.
+            -- A small model: count its keys, and drop the entries past each key's count. (A model's own keys need no
+            -- item: its rows aren't converted for this.)
             local counts = {}
             for i = 1, n do
-                local item
-                if model then item = model[i] else item = i end
-                local k = viewKey(self, keyFn, item, i)
+                local k = modelKeys and fns.key(model, i) or nil
+                if k == nil then
+                    local item
+                    if model then item = model[i] else item = i end
+                    k = viewKey(self, keyFn, item, i)
+                end
                 counts[k] = (counts[k] or 0) + 1
             end
             filterKeyed(st, function(c)
@@ -807,7 +868,9 @@ local function listCount(self)
     end
     local limit = math.max(LIST_KEEP, 4 * st.shown)
     if st.built > limit then trimView(st, limit * 3 // 4) end
-    st.model, st.n = model, n
+    st.model, st.n, st.fns, st.keyFn, st.revision, st.rawKey = model, n, fns, keyFn, rev, rawKey
+    st.stable = stable
+    if not stable then st.atIndex = nil end
     st.pass = st.pass + 1
     st.shown = 0
     return n
@@ -819,15 +882,36 @@ local function listRange(self, first, last)
     local st = rawget(self, "__view")
     local out = {}
     if not st then return out end
-    local model, pass = st.model, st.pass
+    local model, pass, keyFn = st.model, st.pass, st.keyFn
     if last > st.n then last = st.n end
-    local keyFn = rawget(self, "key")
-    local keyed = type(keyFn) == "function"
+    -- A list model may have changed since __count (a delegate that edits it): its rows past the end are gone, and an
+    -- entry whose row changed (another item) is rebuilt.
+    local fresh = st.fns ~= nil
+    -- A stable pass (see listCount) whose model is still at that revision: the entry shown at an index last time is
+    -- the one for it now, found without reading the row or its key (atIndex: [index] = entry, keyed entries only;
+    -- emptied by any change).
+    local stable = false
+    if fresh then
+        local now = #model
+        if last > now then last = now end
+        stable = st.stable and st.fns.revision(model) == st.revision
+    end
+    local atIndex = st.atIndex
+    if atIndex == nil and keyFn ~= nil then
+        atIndex = {}
+        st.atIndex = atIndex
+    end
     for i = first, last do
-        local item
-        if model then item = model[i] else item = i end
         local c
-        if keyed then
+        if stable then
+            if keyFn ~= nil then c = atIndex[i] else c = st.cache[i] end
+            if c ~= nil and c.pass == pass then c = nil end
+        end
+        if c ~= nil then
+            -- kept as it is
+        elseif keyFn ~= nil then
+            local item
+            if model then item = model[i] else item = i end
             -- The first entry with the item's key that this pass hasn't shown yet (repeated keys get one each).
             local k = viewKey(self, keyFn, item, i)
             local tail
@@ -837,11 +921,26 @@ local function listRange(self, first, last)
                 c = buildDelegate(self, item, i, k)
                 st.built = st.built + 1
                 if tail then tail.nextSame = c else st.keyed[k] = c end
+            elseif fresh and c.item ~= item then
+                -- Its row changed: a new delegate takes the entry's place in the key's chain.
+                local nc = buildDelegate(self, item, i, k)
+                nc.nextSame, c.nextSame = c.nextSame, nil
+                if tail then tail.nextSame = nc else st.keyed[k] = nc end
+                dropped()
+                c = nc
             else
                 c.item = item
             end
+            atIndex[i] = c
         else
+            local item
+            if model then item = model[i] else item = i end
             c = st.cache[i]
+            if c ~= nil and fresh and c.item ~= item then
+                st.cache[i] = nil
+                dropEntry(st)
+                c = nil
+            end
             if c == nil then
                 c = buildDelegate(self, item, i, nil)
                 st.built = st.built + 1

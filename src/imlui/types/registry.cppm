@@ -91,7 +91,7 @@ public:
     TypeInfo& registerSingleton(std::string name, T& object) {
         auto info = std::make_unique<TypeInfo>(name);
         declareType<T>(*info);
-        return addSingleton(std::move(name), object, std::move(info), nullptr);
+        return addSingleton(std::move(name), object, std::move(info), nullptr, valuePusher<T>(*info));
     }
 
     /// Exposes `object` to Lua as the global `name` and keeps it alive as long as the registry (the Engine)
@@ -103,7 +103,9 @@ public:
         auto info = std::make_unique<TypeInfo>(name);
         declareType<T>(*info);
         ScriptObject& ref = *object;
-        return addSingleton(std::move(name), ref, std::move(info), std::shared_ptr<ScriptObject>{std::move(object)});
+        ValuePusher push = valuePusher<T>(*info);
+        return addSingleton(std::move(name), ref, std::move(info), std::shared_ptr<ScriptObject>{std::move(object)},
+                            std::move(push));
     }
 
     /// Installs the types and singletons into a new Lua state (before src/resources/imlui.lua is loaded). First calls
@@ -150,6 +152,21 @@ private:
         }
     }
 
+    /// Pushes a singleton that is a value (see valuePusher) as its global.
+    using ValuePusher = std::function<void(lua::State*, ScriptObject&)>;
+
+    /// A singleton whose type has a LuaConvert (a ListModel: imlui.types.list_model) is that value in Lua, its global
+    /// what LuaConvert<T>::push pushes, instead of an object with members. Records its Lua type for the definitions.
+    template <class T>
+    static ValuePusher valuePusher(TypeInfo& info) {
+        if constexpr (LuaPushable<T>) {
+            info.setValueType(luaTypeDescriber<T>());
+            return [](lua::State* state, ScriptObject& object) { LuaConvert<T>::push(state, static_cast<T&>(object)); };
+        } else {
+            return nullptr;
+        }
+    }
+
     struct Singleton {
         std::string name;
         ScriptObject* object;
@@ -160,6 +177,8 @@ private:
         ScriptObject::Handle life;
         /// An install() linked it: the next install() calls its scriptReloading().
         bool installed = false;
+        /// Set for a value singleton (valuePusher): its global is this value, not a box, and it is never linked.
+        ValuePusher pushValue;
     };
 
     /// sync() while rendering: an element already synced this frame isn't synced again while nothing that could
@@ -168,7 +187,7 @@ private:
 
     TypeInfo& addType(std::unique_ptr<TypeInfo> info);
     TypeInfo& addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info,
-                           std::shared_ptr<ScriptObject> owner);
+                           std::shared_ptr<ScriptObject> owner, ValuePusher pushValue);
 
     /// What Frames use to resolve typed children (Frame::Child::as): renderSync(node).
     Frame::InstanceLookup m_instances;
@@ -1052,7 +1071,7 @@ TypeInfo& TypeRegistry::addType(std::unique_ptr<TypeInfo> info) {
 }
 
 TypeInfo& TypeRegistry::addSingleton(std::string name, ScriptObject& object, std::unique_ptr<TypeInfo> info,
-                                     std::shared_ptr<ScriptObject> owner) {
+                                     std::shared_ptr<ScriptObject> owner, ValuePusher pushValue) {
     TypeInfo& ref = *info;
     m_infos.push_back(std::move(info));
     // The singleton this one replaces leaves the installed states: unlinked if it lives on (its notify() no longer
@@ -1063,7 +1082,8 @@ TypeInfo& TypeRegistry::addSingleton(std::string name, ScriptObject& object, std
     std::erase_if(m_singletons, [&](const Singleton& s) { return s.name == name; });
     auto defaults = std::make_shared<const TypeInfo::Defaults>(ref.captureDefaults(object));
     ScriptObject::Handle life = object.handle();
-    m_singletons.push_back({std::move(name), &object, &ref, std::move(owner), std::move(defaults), std::move(life)});
+    m_singletons.push_back({std::move(name), &object, &ref, std::move(owner), std::move(defaults), std::move(life),
+                            false, std::move(pushValue)});
     return ref;
 }
 
@@ -1229,6 +1249,17 @@ void TypeRegistry::install(lua::State* state) {
     pushRegistryTable(state, singletonsKey);
     for (Singleton& s : m_singletons) {
         s.installed = true;
+        if (s.pushValue) {
+            // A value singleton: its global is the value (a model's, which tracks the object's life itself).
+            if (s.life.alive())
+                s.pushValue(state, *s.object);
+            else
+                lua::pushnil(state);
+            lua::pushvalue(state, -1);
+            lua::setfield(state, top + 1, s.name.c_str());
+            lua::setglobal(state, s.name.c_str());
+            continue;
+        }
         Box* b = new (lua::newuserdata(state, sizeof(Box), 1)) Box{};
         const bool alive = s.life.alive(); // a by-reference singleton destroyed already: its global raises on access
         b->object = alive ? s.object : nullptr;
@@ -1272,7 +1303,7 @@ void TypeRegistry::install(lua::State* state) {
 
 void TypeRegistry::activate(lua::State* state) {
     for (const Singleton& s : m_singletons)
-        if (s.life.alive()) s.object->relink(state);
+        if (s.life.alive() && !s.pushValue) s.object->relink(state);
 }
 
 void TypeRegistry::detachState(lua::State* state) {

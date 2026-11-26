@@ -358,9 +358,9 @@ array children are used, like a `ScrollView`. It takes every `ScrollView` prop. 
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `model` | list, number, function or `bind` | — | Items; a number `n` means `1..n`. |
+| `model` | list, [C++ list model](lua-api.md#c-list-models), number, function or `bind` | — | Items; a number `n` means `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
-| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by index: see [Repeater](lua-api.md#repeater--model-delegate-). |
+| `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by index: see [Repeater](lua-api.md#repeater--model-delegate-). A list model's own keys are used without one. |
 | `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. |
 
 Item heights. With `itemHeight`, finding the items in view costs the same for any length. Without it, the items
@@ -390,6 +390,10 @@ What virtualization changes:
   has no `delegate`, and inside each delegate as in any stack.
 - With a `key`, items that share a key get one delegate each in the order they're shown, which can pair them up
   differently after scrolling.
+- With a [C++ list model](lua-api.md#c-list-models), only the rows of the delegates it builds are converted, a
+  frame reads nothing of a model that didn't change, a delegate is rebuilt when its row changed, and the model's
+  keys keep delegates without a `key`. Measured heights stay per index (the `ListView` doesn't see rows move): after
+  an insertion above the view, an index keeps the height of the row it held until it renders again.
 
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,
@@ -478,7 +482,7 @@ root. `visible = false` hides all of their children.
 
 | Element | Props (Lua side) |
 |---|---|
-| `Repeater` | `model` (list, number, function or `bind`), `delegate = function(item, index, ids)`, optional `key = function(item, index)`. See [Repeater](lua-api.md#repeater--model-delegate-). |
+| `Repeater` | `model` (list, [C++ list model](lua-api.md#c-list-models), number, function or `bind`), `delegate = function(item, index, ids)`, optional `key = function(item, index)`. See [Repeater](lua-api.md#repeater--model-delegate-). Over a list model, a frame does nothing while the model doesn't change, and only the delegates of changed rows are rebuilt (with keys: of new and changed rows). |
 | `If` | `condition`, array children, `otherwise` (one element). See [If](lua-api.md#if--condition-children-otherwise--element-). |
 | `Loader` | `item` (an element, or a function returning one). See [Loader](lua-api.md#loader--item-). |
 | `Responsive` | `compact`, `medium`, `expanded`, `large`, `extraLarge`: the element (or a function returning one, or `false`) for each window size class. See [Responsive](lua-api.md#responsive--compact-medium-expanded-large-extralarge-). |

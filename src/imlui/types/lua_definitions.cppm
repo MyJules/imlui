@@ -7,8 +7,9 @@
 //  * `types.lua`: generated from a TypeRegistry (luaTypeDefinitions): a `<Name>Props` class (what the constructor
 //    takes: every writable property as a value, a binding function or a `bind`, and the `on*` handlers) and a `<Name>`
 //    class (the element table: properties, handlers, methods) per element type, the constructor `<Name>(props)` (also
-//    as `ui.<Name>`), a class and a global per singleton, the named structs and enums the members use, and `connect`
-//    with an overload per type whose signal names are a `<Name>Signal` alias.
+//    as `ui.<Name>`), a class and a global per singleton (a typed global for a value singleton, a ListModel), the
+//    named structs and enums the members use, and `connect` with an overload per type whose signal names are a
+//    `<Name>Signal` alias.
 //
 // Member types come from LuaConvert (luaTypeOf<V>, recorded by TypeBuilder in TypeInfo), the hover docs from
 // TypeBuilder::doc (`---` lines above the classes, the constructor and each field). Output is deterministic: types and
@@ -212,6 +213,13 @@ std::string elementDefinitions(const std::string& name, const TypeInfo& info, Lu
 
 std::string singletonDefinitions(const std::string& name, const TypeInfo& info, LuaTypes& named,
                                  std::vector<Connectable>& connectables) {
+    if (const LuaTypes::Describe value = info.valueType()) { // a value singleton (a ListModel): its global's type
+        std::string out = "-- " + name + " (singleton)\n\n";
+        out += docLines(info.doc());
+        out += "---@type " + value(named) + "\n";
+        out += name + " = nil\n\n";
+        return out;
+    }
     // Singleton handlers get no `self`: the singleton is a global anyway.
     const std::vector<Signal> signals = signalsOf(info, "", named);
     const std::string alias = name + "Signal";

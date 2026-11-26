@@ -124,6 +124,11 @@ public:
     [[nodiscard]] const Factory& factory() const;
     void setFactory(Factory factory);
 
+    /// For a singleton that is a value (a type with a LuaConvert, e.g. a ListModel): the LuaLS type of its global, for
+    /// the Lua definitions. nullptr: an object with members (the usual singleton).
+    [[nodiscard]] LuaTypes::Describe valueType() const;
+    void setValueType(LuaTypes::Describe type);
+
     /// Captures the nil-reset values of every property from `object`, just constructed.
     [[nodiscard]] Defaults captureDefaults(const ScriptObject& object) const;
     /// The nil-reset values of the type's elements: captured (captureDefaults) from `first`, the first instance
@@ -147,6 +152,7 @@ private:
     std::vector<Signal> m_signalDeclarations;
     Factory m_factory;
     mutable std::shared_ptr<const Defaults> m_sharedDefaults; ///< sharedDefaults(), once captured
+    LuaTypes::Describe m_valueType = nullptr;
 };
 
 } // namespace imlui
@@ -243,6 +249,9 @@ void TypeInfo::addSignal(std::string name, std::optional<std::vector<Param>> arg
 
 const TypeInfo::Factory& TypeInfo::factory() const { return m_factory; }
 void TypeInfo::setFactory(Factory factory) { m_factory = std::move(factory); }
+
+LuaTypes::Describe TypeInfo::valueType() const { return m_valueType; }
+void TypeInfo::setValueType(LuaTypes::Describe type) { m_valueType = type; }
 
 TypeInfo::Defaults TypeInfo::captureDefaults(const ScriptObject& object) const {
     Defaults out;

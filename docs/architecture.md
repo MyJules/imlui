@@ -258,6 +258,21 @@ extend to what `cull::outOfView` counts as in view (a view's height more while a
 item that `cull::held` (the active item, the nav focus, an open popup, a non-visual element) renders on the next
 frames at its place even out of range, up to 16 per list.
 
+**List models.** A C++ list model (`imlui.types.list_model`, see [List models](extending.md#list-models)) reaches Lua
+as one full userdata per model and state, found again through a weak-valued registry table keyed by the model's
+object id (so it never names a newer object at a reused address). It holds a raw pointer and the model's
+`ScriptObject::Handle` (whether the model still lives; nothing in C++ points back into the state), plus a
+`shared_ptr` when it was pushed from one. Its metatable's `__index` converts a row on demand, `__len` counts, and
+`__imlui_model` holds the functions the prelude calls directly (`count`, `revision`, `hasKeys`, `key`). The model
+keeps an id per row (`m_rowIds`, started on the first read), moved along by the notifications and renewed by
+`rowsChanged`/`reset`; the value's user value caches converted items by row id with weak values (collectable items
+only), so an unchanged row is the same table while a delegate holds it, wherever the row moved. The prelude's
+`repeaterChildren`, `listCount` and `listRange` tell a model from a list by that metatable (`modelFns`): an unchanged
+`revision()` (with the same length and `key`) returns the last list or skips the drop pass, and `__range` then finds
+each index's entry without reading the row or its key (`atIndex`); an entry whose item is no longer its row's is
+rebuilt (`fresh`); without a `key` function, the model's keys are the key (`keyFunction`), read without converting
+rows. A model singleton (a type with a `LuaConvert`) is installed as that value instead of a singleton box.
+
 A tree is walked at most `Renderer::maxDepth` (256) levels deep: each element rendered or asked for its intrinsic
 size or fill, and each inline container spliced in, is a level. Deeper is almost surely a cycle (`a[1] = b; b[1] = a`,
 a `Loader` that shows its own ancestor), which would overflow the native stack; the levels past it are skipped and
@@ -1089,6 +1104,8 @@ See [Registering C++ types](extending.md).
 | `imlui.types.future` | `Future<T>` / `Promise<T>` / `makePromise<T>(owner)`: a result settled once on the main thread (done, failed, cancelled), with progress before it (`Promise::progress`, coalesced into one posted apply per loop iteration; `Future::progress`/`onProgress`). Promises are thread-safe (settling is posted; the last copy dropped unsettled cancels; an owner token that stops cancels). Pushed to Lua as a prelude future (`ui.__futureLink`), linked through a `LuaFunction`, so settling after the state closed is a no-op; Lua's `cancel()` reaches C++ through a C closure holding a weak reference and stops the promise's token. Read from Lua (a `Future<T>` argument): the future's `__core` userdata gives a pushed future back; another is adopted (`ui.__futureAdopt`: a receiver C closure holding the state settles it, converting with `LuaConvert<T>`; its finalizer cancels it when the state closes) |
 | `imlui.types.task` | `Task`: the handle `runAsync(work, done[, fail])` returns: `cancel()` (stops the work's token; `done`/`fail` never run), `running()`, `cancelled()`; thread-safe, the end decided once by an atomic |
 | `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives; `stopToken()` stops when it dies), `cancelHandles()`, `runAsync(work, done[, fail]) -> Task` (work on the background pool with a token stopped by the object's death, a pool shutdown or the task's cancel; `done`/`fail` on the main thread through the handle, unless cancelled), `runAsync(work) -> Future<R>` (also stopped by the future's cancel; the object's death cancels the future; work taking a `Progress` reports to it); signals call the slot, then the listeners (`noteConnection()` turns on the dispatch through `imlui.lua.listeners`); `scriptReloading()` (virtual: a singleton's reload hook, called by `TypeRegistry::install`) |
+| `imlui.types.list_model` | `ListModel`: rows in C++ read lazily by Lua (`count`, `pushItem`, optional `key`), row-level notifications that keep per-row ids and bump `revision()`, its Lua value (a userdata per model and state: `__index`, `__len`, weak item cache by row id, `pushShared` for an owned model) and the `LuaConvert`s of models (see [List models](#children-and-inline-containers)) |
+| `imlui.types.vector_model` | `VectorModel<T>`: a `ListModel` over `std::vector<T>` whose edits notify (`append`, `insert`, `erase`, `set`, `update`, `move`, `sort`, `replace` matched by key or index); optional keys; `appender()`, a thread-safe batch applied once per loop iteration like `Live<T>` |
 | `imlui.types.live` | `Live<T>`: a property any thread `set()`s; one apply per loop iteration through the owner's handle (latest value, then `notify`); `writer()` for workers that may outlive the owner |
 | `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `pushId`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), `stackSize`, element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `widthIn`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
 | `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `contentFillsWidth(frame)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)`; the ticking list by id (`tickingElements()`, `findTicking(id)`) |

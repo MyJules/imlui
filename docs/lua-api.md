@@ -329,9 +329,9 @@ one of them hides all of its children.
 
 | Prop | Type | Meaning |
 |---|---|---|
-| `model` | list, number, function or `bind` | Items. A number `n` means items `1..n`. |
+| `model` | list, [C++ list model](#c-list-models), number, function or `bind` | Items. A number `n` means items `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | Builds the element for one item. `ids` is the delegate instance's own [id scope](#element-ids). |
-| `key` | `function(item, index) -> key` | *Optional.* Identifies an item: delegates are kept by key instead of per index (below). |
+| `key` | `function(item, index) -> key` | *Optional.* Identifies an item: delegates are kept by key instead of per index (below). A list model's own keys are used without one. |
 
 Delegate instances are **cached per index**. They are rebuilt only when the item at that index changes
 (`~=` comparison), so per-delegate state survives frames. Extra cached entries are dropped when the model shrinks.
@@ -364,6 +364,42 @@ Row { spacing = 8,
     end },
 }
 ```
+
+### C++ list models
+
+Rows that live in C++ come as a **list model** (`imlui::ListModel`, usually a `VectorModel<T>`: see
+[List models](extending.md#list-models)): a property of a singleton (`backend.logs`), a method's result
+(`backend:query("...")`, `view:rows()` on an element) or a singleton of its own (`logs`). Give it to a `Repeater` or `ListView` as its `model`,
+directly or from a function:
+
+```lua
+ListView { height = 400, model = backend.logs,
+    delegate = function(line) return ListItem { line.text, supportingText = line.level } end }
+Text { text = function() return #backend.logs .. " lines" end }
+```
+
+Scripts read it like a read-only list (a write raises an error):
+
+| Lua | |
+|---|---|
+| `model[i]` | Row `i` (1-based) as its Lua value (a struct is a table), `nil` out of range. A row is converted when it is first read; an unchanged row is the same table again while something (a delegate) holds it, and a changed row a new one. |
+| `#model`, `model:count()` | The number of rows, without converting any. |
+| `ipairs(model)` | The rows in order. |
+| `model:key(i)`, `model:hasKeys()` | Row `i`'s key (an integer or a string; `nil` without keys); whether the model has keys. |
+| `model:revision()` | A number that changes with every change of the model (`-1` once the model was destroyed). |
+
+The same model is the same value every time (`rawequal(backend.logs, backend.logs)`). Changes come from C++, row by
+row; each one renders a frame, so bindings that read the model (`#backend.logs`) follow. A model that was destroyed (its
+element was collected, its owner deleted) reads as empty, and a model of a singleton is read fresh by the script that
+a hot reload loads. What the containers do with one:
+
+- Only the rows they show are converted: a `ListView` of a hundred thousand rows converts the dozen in view.
+- While the model doesn't change, a frame reads none of its rows or keys.
+- A delegate is rebuilt when its row changed, with or without keys.
+- With **keys** (the model's, or a `key` function, which overrides them), delegates follow their rows: an insertion at
+  the top builds one delegate, a removal, move or sort none. Without keys, delegates are kept **per index** as for a
+  Lua list: an insertion at the top rebuilds the delegate of every index whose row moved (in a `ListView`, of the
+  ones built).
 
 ### `ListView`
 
