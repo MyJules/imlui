@@ -73,6 +73,9 @@ void openbase(State* state);
 CFunction atpanic(State* state, CFunction panicf);
 /// Sets the debug hook (lua_sethook), e.g. maskCount to run `hook` after every `count` instructions.
 void sethook(State* state, Hook hook, int mask, int count);
+/// The main thread of the state `state` belongs to (`state` itself unless it is a coroutine): it lives as long as the
+/// state, unlike a coroutine.
+State* mainthread(State* state);
 
 // ---------------------------------------------------------------- stack
 int gettop(State* state);
@@ -350,6 +353,12 @@ void close(State* state) {
 void openlibs(State* state) { luaL_openlibs(state); }
 CFunction atpanic(State* state, CFunction panicf) { return lua_atpanic(state, panicf); }
 void sethook(State* state, Hook hook, int mask, int count) { lua_sethook(state, hook, mask, count); }
+State* mainthread(State* state) {
+    lua_rawgeti(state, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+    State* main = lua_tothread(state, -1);
+    lua_pop(state, 1);
+    return main;
+}
 void openbase(State* state) {
     luaL_requiref(state, LUA_GNAME, luaopen_base, 1);
     lua_pop(state, 1);

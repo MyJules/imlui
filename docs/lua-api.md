@@ -161,6 +161,12 @@ their own constructors ([below](#dynamic-children)). Props and signals are in [E
 | binding | `text = function(self) return ... end` | Called on every read, every frame. Widget edits are ignored, because the function owns the value. |
 | two-way | `value = bind(s, "volume")` | Reads `s.volume`. Widget edits write `s.volume`. |
 
+A registered C++ type may declare a property that takes a function (a callback, `LuaFunction` in C++): there a
+function is the value itself, not a binding, and isn't called on reads. The same holds for method arguments:
+`backend:forEach(function(item) ... end)`. Tables passed to C++ (structs, maps, sequences) are read raw, without
+their metatables, and enums are passed as their names (`quality = "high"`). See
+[Value conversion](extending.md#value-conversion).
+
 ### Signals
 
 Signals are `on*` handlers called as `handler(self, ...)`, for example `onClicked(self)`,

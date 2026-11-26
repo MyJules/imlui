@@ -230,6 +230,7 @@ private:
         static_assert(std::is_invocable_v<const Setter&, T&, V&&>, "the setter must accept the getter's type");
         TypeInfo::Property p = readOnly<Getter>(std::move(name), getter);
         p.nullable = detail::isOptional<V>;
+        p.takesFunction = takesLuaFunction<V>();
         std::string where = m_info.name() + "." + p.name;
         p.assign = [getter, setter, where](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
             if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
