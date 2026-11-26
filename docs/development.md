@@ -438,6 +438,10 @@ On this target:
   member the prelude has (and nothing else), `writeLuaDefinitions` (unchanged files aren't rewritten) and the
   `--lua-defs` / `IMLUI_LUA_DEFS` options of `defaultConfig`. The ctest `lua_definitions.imlui_smoke_host`
   (`tests/lua_definitions_run.cmake`) runs the test host alone with both and checks the files.
+- `host_settings_test.cpp` covers `HostSettings`, the reload transaction `Engine::reloadNow` runs every load
+  through (the Engine itself needs a window and has no unit tests): a script's top-level `setZoomShortcuts(false)`
+  holds after the load and a reload, and a load that fails puts back the title, zoom, window size, zoom shortcuts,
+  culling and theme it set.
 - `log_test.cpp` covers `log::addFileSink`: a log file whose name is outside the ANSI code page, and a file that
   can't be opened reported as `false` without an exception.
 - `resource_manifest_test.cpp` covers resource manifests (`imlui.tools.resource_manifest`): glob patterns (their corners, and pathological ones
