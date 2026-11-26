@@ -1,6 +1,7 @@
 // TypeInfo: the type-erased description of a registered C++ type, filled in by TypeBuilder<T>
 // (properties, signals, methods, visual flag, factory) and used by TypeRegistry to bind it to Lua. The LuaLS types of
-// the members (LuaTypes::Describe) are kept for the generated Lua definitions (imlui.types.lua_definitions).
+// the members (LuaTypes::Describe) and the docs of the type and its members are kept for the generated Lua definitions
+// (imlui.types.lua_definitions).
 export module imlui.types.type_info;
 
 import std;
@@ -19,6 +20,8 @@ public:
 
     struct Property {
         std::string name;
+        /// What it is, for the Lua definitions (TypeBuilder::doc); "" when undocumented.
+        std::string doc;
         /// `name` as a lua::Key: the sync reads the property's field through it. Set by addProperty().
         std::optional<lua::Key> key;
         std::string_view typeName; ///< LuaConvert<V>::name, for error messages
@@ -58,6 +61,7 @@ public:
 
     struct Method {
         std::string name;
+        std::string doc; ///< for the Lua definitions; "" when undocumented
         /// Calls the method with the Lua arguments starting at `firstArg`. Returns the number of results
         /// pushed; raises a Lua error for a bad argument or a C++ exception.
         std::function<int(lua::State*, ScriptObject&, int firstArg)> call;
@@ -71,6 +75,7 @@ public:
         /// The arguments after `self`, when declared with types (TypeBuilder::signal<Args...>); for the Lua
         /// definitions only (emit() isn't checked against them). std::nullopt: not declared.
         std::optional<std::vector<Param>> args;
+        std::string doc; ///< for the Lua definitions; "" when undocumented
     };
 
     using Factory = std::function<std::unique_ptr<Element>()>;
@@ -78,6 +83,12 @@ public:
     explicit TypeInfo(std::string name);
 
     [[nodiscard]] const std::string& name() const;
+
+    /// What the type is, for the Lua definitions (TypeBuilder::doc); "" when undocumented.
+    [[nodiscard]] const std::string& doc() const;
+    void setDoc(std::string doc);
+    /// Sets the doc of the declared property, method or signal `name`. Returns false when there is none.
+    bool setMemberDoc(std::string_view name, std::string doc);
 
     [[nodiscard]] bool visual() const;
     void setVisual(bool visual);
@@ -125,6 +136,7 @@ private:
     void checkUnique(std::string_view name) const;
 
     std::string m_name;
+    std::string m_doc;
     bool m_visual = true;
     bool m_fillsWidth = false;
     std::function<bool(const ScriptObject&)> m_fillsWidthWhen;
@@ -146,6 +158,22 @@ namespace imlui {
 TypeInfo::TypeInfo(std::string name) : m_name{std::move(name)} {}
 
 const std::string& TypeInfo::name() const { return m_name; }
+
+const std::string& TypeInfo::doc() const { return m_doc; }
+void TypeInfo::setDoc(std::string doc) { m_doc = std::move(doc); }
+
+bool TypeInfo::setMemberDoc(std::string_view name, std::string doc) {
+    std::string* target = nullptr;
+    for (auto& p : m_properties)
+        if (p.name == name) target = &p.doc;
+    for (auto& m : m_methods)
+        if (m.name == name) target = &m.doc;
+    for (auto& s : m_signalDeclarations)
+        if (s.name == name) target = &s.doc;
+    if (!target) return false;
+    *target = std::move(doc);
+    return true;
+}
 
 bool TypeInfo::visual() const { return m_visual; }
 void TypeInfo::setVisual(bool visual) { m_visual = visual; }
@@ -210,7 +238,7 @@ void TypeInfo::addMethod(Method method) {
 void TypeInfo::addSignal(std::string name, std::optional<std::vector<Param>> args) {
     checkUnique(name);
     m_signals.push_back(name);
-    m_signalDeclarations.push_back({std::move(name), std::move(args)});
+    m_signalDeclarations.push_back({.name = std::move(name), .args = std::move(args), .doc = {}});
 }
 
 const TypeInfo::Factory& TypeInfo::factory() const { return m_factory; }

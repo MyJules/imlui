@@ -70,9 +70,9 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 
 - [Element types](#element-types): `Element`, `render(Frame&)`, the lifecycle hooks, custom layouts (layout boxes, the
   layout cache)
-- [Declaring members](#declaring-members): `TypeBuilder<T>`: properties, signals, methods, `nonVisual`,
-  `defaultProperty`, the size policy (`fillsWidth`), [intrinsic sizes](#intrinsic-sizes), aliases, subclasses
-  (`extends`)
+- [Declaring members](#declaring-members): `TypeBuilder<T>`: properties, signals, methods, docs (`doc`),
+  `nonVisual`, `defaultProperty`, the size policy (`fillsWidth`), [intrinsic sizes](#intrinsic-sizes), aliases,
+  subclasses (`extends`)
 - [Property sync](#property-sync): how Lua values reach the setters every frame
 - [Telling Lua about changes](#telling-lua-about-changes): `notify` and `emit`
 - [Singletons](#singletons)
@@ -81,7 +81,7 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
 - [Resources and the host config](#resources-and-the-host-config): mounts, the entry script
 - [Editor support: Lua definitions](#editor-support-lua-definitions): LuaLS `---@meta` files of the DSL and the
-  registered types, `--lua-defs <dir>`, the `luaType` hook
+  registered types, `--lua-defs <dir>`, hover docs, the `luaType` hook
 - [Testing elements](#testing-elements): the headless frame harness
 - [Threading and frame requests](#threading-and-frame-requests): `runAsync` (and its `Task`), [futures](#futures)
   (`Future<T>`, `Promise<T>`, progress, Lua futures as arguments), `Live<T>`, the background pool;
@@ -320,6 +320,39 @@ type.method("grow", imlui::overload<double>(&Shape::grow))              // doubl
     .property("size", imlui::constOverload<>(&Shape::size), imlui::overload<double>(&Shape::setSize));
 ```
 
+### Docs: `doc(text)`
+
+`doc(text)` documents what the call right before it declared, for the [Lua definitions](#editor-support-lua-definitions)
+(the editor shows it on hover and in completion): a property, signal or method, or the type itself as the **first**
+call in `declare()`:
+
+```cpp
+static void declare(imlui::TypeBuilder<Gauge>& type) {
+    type.doc("A gauge with a needle.")
+        .property("value", &Gauge::value, &Gauge::setValue)
+        .doc("The needle's position, 0..`max`.")
+        .property("max", &Gauge::max, &Gauge::setMax, 1.0)
+        .doc("The end of the scale.")
+        .signal<double>("onPeak", {"value"})
+        .doc("Called when the needle reaches `max`.")
+        .method("setRange", &Gauge::setRange, {"min", "max"})
+        .doc("Sets both ends of the scale.\n\n`min` must be below `max`.");
+}
+```
+
+- The text is Markdown; `\n` starts a line, `\n\n` a paragraph. `""` (or no `doc`) leaves it undocumented.
+- Misuse throws `std::invalid_argument` at registration: a second `doc` for the same thing, or a `doc` after a call
+  that declares no member (`extends`, `defaultProperty`, `nonVisual`, `fillsWidth`, ...: put the `doc` right after the
+  member).
+- The `on<Name>Changed` signal of a property is documented for you ("Called when `name` changes, with the new value.").
+  The common props (`id`, `visible`, `width`, ...) are documented once, in `ElementProps` and `Element`.
+- A [subclass](#subclasses-extendsbase) keeps its base's member docs; `docMember(name, text)` replaces one of them
+  (`type.extends<TextField>().docMember("text", "...")`, throws for an unknown name). The base's type doc isn't the
+  subclass's: document the subclass with `doc()` before `extends()`.
+
+Every built-in documents its type and members (`tests/element_docs_test.cpp` checks it, see
+[Adding an element](development.md#adding-an-element)).
+
 ### `nonVisual()`, `defaultProperty(name)` and `fillsWidth()`
 
 - `type.nonVisual()` makes the element take no layout space or spacing, like `Timer` or `Dialog`.
@@ -433,7 +466,7 @@ public:
 
 A subclass must have its own `declare(TypeBuilder<Sub>&)`: one inherited unchanged from the base takes
 `TypeBuilder<Base>&`, and `registerType<Sub>` rejects it at compile time instead of silently registering a type
-without members.
+without members. The inherited members keep their [docs](#docs-doctext); `docMember(name, text)` replaces one.
 
 ## Property sync
 
@@ -981,17 +1014,29 @@ declaration order, so they can be committed and diffed.
 
 ```lua
 -- types.lua (excerpt)
+---A gauge with a needle.
 ---@class GaugeProps: ElementProps
+---The needle's position, 0..`max`.
 ---@field value? number|(fun(self: Gauge): number?)|Binding
----@field onPeak? fun(self: Gauge, value: number)
----@field onValueChanged? fun(self: Gauge, value: number)
+---Called when the needle reaches `max`.
+---@field onPeak? (fun(self: Gauge, value: number))
+---Called when `value` changes, with the new value.
+---@field onValueChanged? (fun(self: Gauge, value: number))
 
+---A gauge with a needle.
 ---@class Gauge: Element
+---The needle's position, 0..`max`.
 ---@field value number
----@field onPeak? fun(self: Gauge, value: number)
----@field onValueChanged? fun(self: Gauge, value: number)
----@field setRange fun(self: Gauge, min: number, max: number)
+---Called when the needle reaches `max`.
+---@field onPeak? (fun(self: Gauge, value: number))
+---Called when `value` changes, with the new value.
+---@field onValueChanged? (fun(self: Gauge, value: number))
+---Sets both ends of the scale.
+---
+---`min` must be below `max`.
+---@field setRange (fun(self: Gauge, min: number, max: number))
 
+---A gauge with a needle.
 ---@param props? GaugeProps|number
 ---@return Gauge
 function Gauge(props) end
@@ -1028,6 +1073,12 @@ client use the same server and the same file.
   registration). An `std::optional` parameter is optional (`max?: number`).
 - **Constructors** take `<Name>Props`, or a value of the
   [default property](#nonvisual-defaultpropertyname-and-fillswidth) (`Gauge(0.5)`).
+- **Docs** ([`doc(text)`](#docs-doctext)): the type's above `---@class <Name>Props`, `---@class <Name>` and the
+  constructor; a member's as `---` lines above its `---@field` in each class it's in (the singleton's class too); the
+  change signals get "Called when `name` changes, with the new value.". Each line of the text is a `---` line (a `\r`,
+  trailing spaces and empty lines at the ends dropped, control characters made spaces); a line starting with `@` or
+  `|` gets a `\` first, so it isn't read as an annotation. Handler and method types are in parentheses,
+  `(fun(self: Gauge))`: LuaLS (3.19) drops the doc of the field after a line that ends in a bare `fun(...)`.
 - **`connect`** takes the signal names of the registered types (`ImluiSignal`), so a misspelled one is flagged.
 
 **Types of values.** Each `LuaConvert<T>` describes its values as a LuaLS type expression (`luaTypeOf<T>()`, module
@@ -1068,8 +1119,8 @@ language server reports them as undefined globals: reach them through `ui.ids` (
 and a delegate's `ids`, since an id can name any type), annotate a local (`---@type TextField` above `local nameField = ui.ids.nameField`), or disable `undefined-global`
 for UI scripts. Props an element reads raw from its table (`Table`'s `rows`, `menu`, a `Canvas`'s painter; sizes but
 the common `width`/`height`) aren't declared in C++, so they aren't in its classes (an unknown key in a constructor's
-table isn't flagged either). The built-in signals are declared without argument types (`...: any`):
-[Elements](elements.md) lists their arguments. `connect`'s overloads match the target's type loosely, so a signal of
+table isn't flagged either). Most built-in signals are declared without argument types yet (`...: any`; `Button`'s
+`onClicked` is typed): [Elements](elements.md) lists their arguments. `connect`'s overloads match the target's type loosely, so a signal of
 another type isn't always flagged. An element's class has what the C++ side holds (`nameField.text` is a `string`),
 though a field a script set to a binding function holds that function. `state(init)` returns a
 `table<string, any>` (a field initialized to `nil` would otherwise be typed `nil` for good), and `await(f)` unwraps a

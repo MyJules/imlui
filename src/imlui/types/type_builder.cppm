@@ -1,13 +1,17 @@
 // TypeBuilder<T>: declares what a C++ type exposes to Lua, from its static `declare()`:
 //
 //   static void declare(imlui::TypeBuilder<Gauge>& type) {
-//       type.property("value", &Gauge::value, &Gauge::setValue)   // read/write; nil resets to the initial value
+//       type.doc("A gauge needle.")                               // first: the type's doc
+//           .property("value", &Gauge::value, &Gauge::setValue)   // read/write; nil resets to the initial value
+//           .doc("The needle's position.")                        // the doc of the member declared right before
 //           .property("max", &Gauge::max, &Gauge::setMax, 1.0)     // read/write; nil resets to 1.0
 //           .property("peak", &Gauge::peak)                       // read-only
 //           .signal("onPeak")                                    // or typed: .signal<double>("onPeak", {"value"})
 //           .method("reset", &Gauge::reset)
 //           .method("setRange", &Gauge::setRange, {"min", "max"}); // parameter names for the Lua definitions
 //   }
+//
+// The docs are for the Lua definitions (the editor's hover text): Markdown, several lines allowed.
 //
 // Getters are anything std::invoke can call with a `const T&` (usually `V (T::*)() const`), setters
 // anything it can call with `(T&, V)`. V must have a LuaConvert<V> specialization. Methods are member
@@ -124,6 +128,39 @@ public:
         static_assert(std::derived_from<T, ScriptObject>, "TypeBuilder<T>: T must derive from imlui::ScriptObject");
     }
 
+    /// Documents (for the Lua definitions: Markdown, several lines allowed) the property, signal or method declared by
+    /// the call right before, or the type itself when it is the first call in declare():
+    /// `type.doc("A gauge.").property("value", ...).doc("The needle's position.")`. Anything else throws
+    /// std::invalid_argument at registration: a second doc() for the same thing, or one after a call that declares
+    /// no member (extends, defaultProperty, nonVisual, fillsWidth, ...). "" leaves it undocumented.
+    TypeBuilder& doc(std::string text) {
+        switch (m_docTarget) {
+        case DocTarget::Type:
+            // A base's declare() run by extends<Base>() documents the base, not this type.
+            if (!m_inherited) m_info.setDoc(std::move(text));
+            break;
+        case DocTarget::Member:
+            m_info.setMemberDoc(m_lastMember, std::move(text));
+            break;
+        case DocTarget::None:
+            throw std::invalid_argument{m_info.name() +
+                                        ": doc() documents the member declared right before it (or the type, as the "
+                                        "first call in declare())"};
+        }
+        m_docTarget = DocTarget::None;
+        return *this;
+    }
+
+    /// Documents member `name`, declared earlier, replacing its doc: for a member a subclass inherits through
+    /// extends<Base>() (`type.extends<TextField>().docMember("text", "...")`). Throws std::invalid_argument when there
+    /// is no such property, signal or method.
+    TypeBuilder& docMember(std::string_view name, std::string text) {
+        if (!m_info.setMemberDoc(name, std::move(text)))
+            throw std::invalid_argument{m_info.name() + ": docMember(\"" + std::string{name} + "\"): no such member"};
+        m_docTarget = DocTarget::None;
+        return *this;
+    }
+
     /// A read/write property. The setter is called (by the property sync, or `obj.name = v` on a
     /// singleton) only when the converted value differs from the getter's. A nil value resets the property
     /// to its default: the getter's value right after the object was constructed (std::optional properties:
@@ -140,6 +177,7 @@ public:
                 });
             };
         }
+        declared(p.name);
         m_info.addProperty(std::move(p));
         return *this;
     }
@@ -155,6 +193,7 @@ public:
         TypeInfo::Property p = readWrite(std::move(name), getter, setter);
         auto shared = std::make_shared<const V>(std::forward<D>(defaultValue));
         p.captureDefault = [shared](const ScriptObject&) -> std::shared_ptr<const void> { return shared; };
+        declared(p.name);
         m_info.addProperty(std::move(p));
         return *this;
     }
@@ -162,6 +201,7 @@ public:
     /// A read-only property: readable from Lua (singletons, notify write-back), never synced.
     template <class Getter>
     TypeBuilder& property(std::string name, Getter getter) {
+        declared(name);
         m_info.addProperty(readOnly<Getter>(std::move(name), getter));
         return *this;
     }
@@ -169,6 +209,7 @@ public:
     /// Declares a signal (an `on*` handler name), emitted with ScriptObject::emit(name, args...). Its arguments are
     /// unknown to the Lua definitions (`fun(self, ...: any)`).
     TypeBuilder& signal(std::string name) {
+        declared(name);
         m_info.addSignal(std::move(name));
         return *this;
     }
@@ -179,6 +220,7 @@ public:
     template <class... Args>
     TypeBuilder& signal(std::string name, std::vector<std::string> argNames = {}) {
         auto args = detail::params<std::remove_cvref_t<Args>...>(m_info.name() + "." + name, argNames);
+        declared(name);
         m_info.addSignal(std::move(name), std::move(args));
         return *this;
     }
@@ -205,24 +247,28 @@ public:
                 },
                 where);
         };
+        declared(m.name);
         m_info.addMethod(std::move(m));
         return *this;
     }
 
     /// Declares the members of base class `Base` (its `declare(TypeBuilder<Base>&)`) on this type, for a
     /// subclass that extends its base: `TextArea::declare` calls `type.extends<TextField>()`, then adds its
-    /// own members.
+    /// own members. They keep the base's docs (docMember() replaces one); the base's type doc isn't this type's
+    /// (document the subclass with doc() before extends()).
     template <class Base>
         requires(std::derived_from<T, Base> && !std::same_as<T, Base>)
     TypeBuilder& extends() {
-        TypeBuilder<Base> base{m_info};
+        TypeBuilder<Base> base{m_info, typename TypeBuilder<Base>::Inherited{}};
         Base::declare(base);
+        m_docTarget = DocTarget::None;
         return *this;
     }
 
     /// The element takes no layout space (like Timer or Dialog).
     TypeBuilder& nonVisual() {
         m_info.setVisual(false);
+        m_docTarget = DocTarget::None;
         return *this;
     }
 
@@ -230,6 +276,7 @@ public:
     /// child a share of its free width instead of letting it run to the row's edge.
     TypeBuilder& fillsWidth() {
         m_info.setFillsWidth(true);
+        m_docTarget = DocTarget::None;
         return *this;
     }
 
@@ -241,18 +288,36 @@ public:
         m_info.setFillsWidthWhen([predicate](const ScriptObject& o) {
             return static_cast<bool>(std::invoke(predicate, static_cast<const T&>(o)));
         });
+        m_docTarget = DocTarget::None;
         return *this;
     }
 
     /// The property set by a positional first value that isn't a child: `Gauge { 0.5 }`.
     TypeBuilder& defaultProperty(std::string name) {
         m_info.setDefaultProperty(std::move(name));
+        m_docTarget = DocTarget::None;
         return *this;
     }
 
     [[nodiscard]] TypeInfo& info() { return m_info; }
 
 private:
+    template <class>
+    friend class TypeBuilder; // extends<Base>() makes an inherited TypeBuilder<Base>
+
+    /// What doc() documents: the type (nothing declared yet), the member declared last, or nothing (it throws).
+    enum class DocTarget { Type, Member, None };
+
+    struct Inherited {};
+    /// The builder extends<>() runs a base's declare() with: its type doc isn't the subclass's.
+    TypeBuilder(TypeInfo& info, Inherited) : TypeBuilder{info} { m_inherited = true; }
+
+    /// Member `name` was declared: a doc() right after documents it.
+    void declared(const std::string& name) {
+        m_lastMember = name;
+        m_docTarget = DocTarget::Member;
+    }
+
     template <class Getter>
     using ValueOf = std::remove_cvref_t<std::invoke_result_t<const Getter&, const T&>>;
 
@@ -315,6 +380,9 @@ private:
     }
 
     TypeInfo& m_info;
+    DocTarget m_docTarget = DocTarget::Type;
+    std::string m_lastMember;
+    bool m_inherited = false;
 };
 
 } // namespace imlui

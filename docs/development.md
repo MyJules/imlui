@@ -130,9 +130,13 @@ private:
 module :private;
 
 void Rating::declare(TypeBuilder<Rating>& type) {
-    type.property("value", &Rating::value, &Rating::setValue)
+    type.doc("A row of stars to rate with.")
+        .property("value", &Rating::value, &Rating::setValue)
+        .doc("The number of filled stars, 0..`count`.")
         .property("count", &Rating::count, &Rating::setCount)
-        .signal("onChanged");
+        .doc("The number of stars.")
+        .signal<int>("onChanged", {"value"})
+        .doc("Called when the user picks a value.");
 }
 
 void Rating::render(Frame&) {
@@ -166,7 +170,12 @@ shadow it. The type registry is installed before the DSL loads, so `BUILTIN` con
 C++ instances too.
 
 **4. Docs.** Add the element to [Elements](elements.md) and the README element table, and try it in a real window
-(see [Trying changes in an app](#trying-changes-in-an-app)).
+(see [Trying changes in an app](#trying-changes-in-an-app)). Document it in `declare()` for the editor's hover text
+([`doc(text)`](extending.md#docs-doctext)): the type and every property, signal and method, condensed from its
+Elements section (the common props are documented already), with typed signals (`signal<Args...>(name, {"names"})`)
+and named method parameters. Add its name (and its aliases') to `documentedTypes` in `tests/element_docs_test.cpp`,
+which then requires it to stay complete; `imlui_tests --gtest_filter=ElementDocs.*` prints what every built-in still
+leaves undocumented.
 
 **5. Tests.** A test file `tests/elements_<family>_test.cpp` renders it through the
 [headless frame harness](#the-headless-frame-harness): defaults, props reaching the instance, `nil` resets, two-way

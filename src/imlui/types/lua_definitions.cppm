@@ -10,8 +10,9 @@
 //    as `ui.<Name>`), a class and a global per singleton, the named structs and enums the members use, and `connect`
 //    with an overload per type whose signal names are a `<Name>Signal` alias.
 //
-// Member types come from LuaConvert (luaTypeOf<V>, recorded by TypeBuilder in TypeInfo). Output is deterministic:
-// types and singletons sorted by name, members in declaration order.
+// Member types come from LuaConvert (luaTypeOf<V>, recorded by TypeBuilder in TypeInfo), the hover docs from
+// TypeBuilder::doc (`---` lines above the classes, the constructor and each field). Output is deterministic: types and
+// singletons sorted by name, members in declaration order.
 export module imlui.types.lua_definitions;
 
 import std;
@@ -46,6 +47,33 @@ namespace fs = std::filesystem;
 namespace {
 
 std::string describe(LuaTypes::Describe d, LuaTypes& named) { return d ? d(named) : std::string{"any"}; }
+
+/// `text` as LuaLS description lines, `---` and a line of it each (put right above what they describe: a `---@class`,
+/// a `---@field`, a function's annotations); "" for no text. Empty lines at its start and end are dropped, a `\r` and
+/// trailing spaces too, other control characters (a tab too) become spaces. A line whose text starts with `@` or `|`
+/// gets a `\` before it (Markdown shows the character alone), so LuaLS doesn't read an annotation or an alias value.
+std::string docLines(std::string_view text) {
+    std::vector<std::string> lines{std::string{}};
+    for (const char c : text) {
+        if (c == '\n')
+            lines.emplace_back();
+        else if (c != '\r')
+            lines.back() += static_cast<unsigned char>(c) < 0x20 || c == 0x7f ? ' ' : c;
+    }
+    for (std::string& line : lines) {
+        while (line.ends_with(' '))
+            line.pop_back();
+        const std::size_t first = line.find_first_not_of(' ');
+        if (first != std::string::npos && (line[first] == '@' || line[first] == '|')) line.insert(first, "\\");
+    }
+    const auto nonEmpty = [](const std::string& line) { return !line.empty(); };
+    const auto begin = std::ranges::find_if(lines, nonEmpty);
+    const auto end = std::ranges::find_if(lines.rbegin(), lines.rend(), nonEmpty).base();
+    std::string out;
+    for (auto it = begin; it < end; ++it)
+        out += "---" + *it + "\n";
+    return out;
+}
 
 /// "name: type" for a fun() parameter list; an optional type makes the parameter optional ("limit?: integer").
 std::string param(std::string_view name, const std::string& type) {
@@ -85,6 +113,7 @@ std::string methodType(const std::string& self, const TypeInfo::Method& m, LuaTy
 struct Signal {
     std::string name;
     std::string type; ///< the handler's fun() type
+    std::string doc;
 };
 
 /// The declared signals and the properties' change signals (a declared one of the same name wins), in that order.
@@ -92,12 +121,33 @@ std::vector<Signal> signalsOf(const TypeInfo& info, const std::string& self, Lua
     std::vector<Signal> out;
     std::set<std::string, std::less<>> seen;
     for (const TypeInfo::Signal& s : info.signalDeclarations())
-        if (seen.insert(s.name).second) out.push_back({s.name, handler(self, s.args, named)});
+        if (seen.insert(s.name).second) out.push_back({s.name, handler(self, s.args, named), s.doc});
     for (const TypeInfo::Property& p : info.properties()) {
         std::string name = luaui::changedSignal(p.name);
         if (!seen.insert(name).second) continue;
-        out.push_back({std::move(name), handler(self, std::vector<TypeInfo::Param>{{"value", p.luaType}}, named)});
+        out.push_back({std::move(name), handler(self, std::vector<TypeInfo::Param>{{"value", p.luaType}}, named),
+                       "Called when `" + p.name + "` changes, with the new value."});
     }
+    return out;
+}
+
+/// A `---@field` line with its doc above it.
+std::string field(const std::string& doc, const std::string& declaration) {
+    return docLines(doc) + "---@field " + declaration + "\n";
+}
+
+/// The fields of an element's or singleton's class: properties, handlers, methods. Handler and method types are in
+/// parentheses (in the props class too): after a line that ends in a bare `fun(...)`, LuaLS (3.19) looks for its
+/// return type on the next line and loses the doc there.
+std::string memberFields(const std::string& self, const TypeInfo& info, const std::vector<Signal>& signals,
+                         LuaTypes& named) {
+    std::string out;
+    for (const TypeInfo::Property& p : info.properties())
+        out += field(p.doc, p.name + " " + describe(p.luaType, named));
+    for (const Signal& s : signals)
+        out += field(s.doc, s.name + "? " + LuaTypes::grouped(s.type));
+    for (const TypeInfo::Method& m : info.methods())
+        out += field(m.doc, m.name + " " + LuaTypes::grouped(methodType(self, m, named)));
     return out;
 }
 
@@ -135,25 +185,24 @@ std::string elementDefinitions(const std::string& name, const TypeInfo& info, Lu
         connectables.push_back({name, alias, "fun(self: " + name + ", ...: any)"});
     }
 
+    const std::string doc = docLines(info.doc());
+    out += doc;
     out += "---@class " + name + "Props: ElementProps\n";
     for (const TypeInfo::Property& p : info.properties())
-        if (p.assign) out += "---@field " + p.name + "? " + propType(name, p, describe(p.luaType, named)) + "\n";
+        if (p.assign) out += field(p.doc, p.name + "? " + propType(name, p, describe(p.luaType, named)));
     for (const Signal& s : signals)
-        out += "---@field " + s.name + "? " + s.type + "\n";
+        out += field(s.doc, s.name + "? " + LuaTypes::grouped(s.type));
     out += "\n";
 
+    out += doc;
     out += "---@class " + name + ": Element\n";
-    for (const TypeInfo::Property& p : info.properties())
-        out += "---@field " + p.name + " " + describe(p.luaType, named) + "\n";
-    for (const Signal& s : signals)
-        out += "---@field " + s.name + "? " + s.type + "\n";
-    for (const TypeInfo::Method& m : info.methods())
-        out += "---@field " + m.name + " " + methodType(name, m, named) + "\n";
+    out += memberFields(name, info, signals, named);
     out += "\n";
 
     std::string props = name + "Props";
     if (const TypeInfo::Property* p = info.findProperty(info.defaultProperty()))
         props += "|" + LuaTypes::grouped(LuaTypes::required(describe(p->luaType, named)));
+    out += doc;
     out += "---@param props? " + props + "\n";
     out += "---@return " + name + "\n";
     out += "function " + name + "(props) end\n";
@@ -172,13 +221,9 @@ std::string singletonDefinitions(const std::string& name, const TypeInfo& info, 
         out += "\n";
         connectables.push_back({name, alias, "fun(...: any)"});
     }
+    out += docLines(info.doc());
     out += "---@class " + name + "\n";
-    for (const TypeInfo::Property& p : info.properties())
-        out += "---@field " + p.name + " " + describe(p.luaType, named) + "\n";
-    for (const Signal& s : signals)
-        out += "---@field " + s.name + "? " + s.type + "\n";
-    for (const TypeInfo::Method& m : info.methods())
-        out += "---@field " + m.name + " " + methodType(name, m, named) + "\n";
+    out += memberFields(name, info, signals, named);
     out += name + " = {}\n\n";
     return out;
 }

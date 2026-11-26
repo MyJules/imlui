@@ -48,12 +48,22 @@ module :private;
 namespace imlui {
 
 void Button::declare(TypeBuilder<Button>& type) {
-    type.property("text", &Button::text, &Button::setText)
+    type.doc("A Material 3 button: a label with an optional leading icon, in one of the emphasis `variant`s.\n"
+             "`Button { \"OK\" }` sets `text`. `menu = Menu { ... }` opens that menu under the button on a click.\n"
+             "Natural size: as wide as the label (at least 48dp), 40dp high (a FAB 56dp).")
+        .property("text", &Button::text, &Button::setText)
+        .doc("The label (`labelLarge`). The positional value: `Button { \"OK\" }`.")
         .property("variant", &Button::variant, &Button::setVariant)
+        .doc("The Material emphasis: `\"filled\"` (default), `\"tonal\"`, `\"outlined\"`, `\"text\"`, `\"elevated\"` "
+             "or `\"fab\"` (a `primaryContainer` FAB: a 56dp square with an empty `text`, else an extended FAB).")
         .property("icon", &Button::icon, &Button::setIcon)
+        .doc("A leading Material icon name (18dp, 24dp on a FAB); `\"\"` for none.")
         .property("font", &Button::font, &Button::setFont)
+        .doc("A font the theme declares (`\"mono\"`, `\"medium\"`, ...) for the label, as on `Text`; `\"\"`: the "
+             "style's own face.")
         .defaultProperty("text")
-        .signal("onClicked");
+        .signal<>("onClicked")
+        .doc("Called when the button is clicked.");
 }
 
 void Button::render(Frame& frame) {

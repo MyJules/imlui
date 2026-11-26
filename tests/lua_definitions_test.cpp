@@ -1,5 +1,6 @@
 // Tests for the Lua language-server definitions (imlui.types.lua_types, imlui.types.lua_definitions): the LuaLS type
-// expressions of LuaConvert types, the generated types.lua of a small registry (golden), that the files are valid Lua,
+// expressions of LuaConvert types, the generated types.lua of a small registry (golden, with docs), the docs a
+// TypeBuilder records (TypeBuilder::doc, docMember, inherited through extends), that the files are valid Lua,
 // that the hand-written prelude definitions (src/resources/definitions/imlui.lua) cover every `ui` member, the files
 // writeLuaDefinitions() writes, and the `--lua-defs` / IMLUI_LUA_DEFS options of defaultConfig().
 #include <gtest/gtest.h>
@@ -19,6 +20,7 @@ import imlui.types.lua_types;
 import imlui.types.registry;
 import imlui.types.script_object;
 import imlui.types.type_builder;
+import imlui.types.type_info;
 import imlui.ui.elements.builtin;
 import imlui.test.headless_frame;
 import imlui.test.scoped_env;
@@ -105,7 +107,11 @@ std::string luaType() {
 class Gauge final : public Element {
 public:
     static void declare(TypeBuilder<Gauge>& type) {
-        type.property("value", &Gauge::value, &Gauge::setValue)
+        // Docs: several lines and paragraphs, Markdown, lines LuaLS would read as annotations (`@`, `|`), a CR,
+        // trailing blanks and empty lines at the ends; "" is no doc.
+        type.doc("A gauge.\n\nIt has a *needle*; see `value`.")
+            .property("value", &Gauge::value, &Gauge::setValue)
+            .doc("The needle's position.\r\n@see `max`\n  | 100% |  \n")
             .property("limit", &Gauge::limit, &Gauge::setLimit)
             .property("tags", &Gauge::tags, &Gauge::setTags)
             .property("range", &Gauge::range, &Gauge::setRange)
@@ -117,8 +123,11 @@ public:
             .property("peak", &Gauge::peak)
             .signal("onPeak")
             .signal<double, const std::string&>("onMoved", {"to", "why"})
+            .doc("Moved by the user: `to` is the new value, `why` \"drag\" or \"key\".")
             .method("reset", &Gauge::reset)
+            .doc("")
             .method("setBounds", &Gauge::setBounds, {"min", "max"})
+            .doc("\n\nSets both ends\tat once. -- not a comment end: ]]\n\n")
             .method("points", &Gauge::points)
             .method("forEach", &Gauge::forEach)
             .defaultProperty("value");
@@ -168,15 +177,58 @@ public:
     void render(Frame&) override {}
 };
 
+/// A base class and a subclass that extends it: the subclass inherits the members' docs, replaces one, has a type doc
+/// of its own and documents its own members.
+class Dial : public Element {
+public:
+    static void declare(TypeBuilder<Dial>& type) {
+        type.doc("A dial.")
+            .property("angle", &Dial::angle, &Dial::setAngle)
+            .doc("The angle, in degrees.")
+            .signal<>("onTurned")
+            .doc("Turned by the user.")
+            .method("spin", &Dial::spin)
+            .doc("Spins it once.");
+    }
+    void render(Frame&) override {}
+    [[nodiscard]] double angle() const { return m_angle; }
+    void setAngle(double v) { m_angle = v; }
+    void spin() { m_angle += 360; }
+
+private:
+    double m_angle = 0;
+};
+
+class FineDial final : public Dial {
+public:
+    static void declare(TypeBuilder<FineDial>& type) {
+        type.doc("A dial with a fine scale.")
+            .extends<Dial>()
+            .docMember("angle", "The angle, in tenths of a degree.")
+            .property("step", &FineDial::step, &FineDial::setStep)
+            .doc("The scale's step.");
+    }
+    [[nodiscard]] int step() const { return m_step; }
+    void setStep(int v) { m_step = v; }
+
+private:
+    int m_step = 1;
+};
+
 class Lab final : public ScriptObject {
 public:
     static void declare(TypeBuilder<Lab>& type) {
-        type.property("load", &Lab::load, &Lab::setLoad)
+        type.doc("The lab backend.")
+            .property("load", &Lab::load, &Lab::setLoad)
+            .doc("The load, 0..1.")
             .signal<int>("onTick", {"n"})
+            .doc("Every tick.")
             .method("fetch", &Lab::fetch, {"url"})
+            .doc("Fetches `url`.")
             .method("idle", &Lab::idle)
             .method("opaque", &Lab::opaque)
-            .method("tagged", &Lab::tagged);
+            .method("tagged", &Lab::tagged)
+            .doc("Returns `t`:\n- unchanged\n- as it is"); // the last field before `lab = {}`
     }
     [[nodiscard]] double load() const { return m_load; }
     void setLoad(double v) { m_load = v; }
@@ -217,11 +269,85 @@ constexpr std::string_view goldenTypes = R"lua(---@meta _
 function Blank(props) end
 ui.Blank = Blank
 
+-- Dial
+
+---@alias DialSignal "onTurned"|"onAngleChanged"
+
+---A dial.
+---@class DialProps: ElementProps
+---The angle, in degrees.
+---@field angle? number|(fun(self: Dial): number?)|Binding
+---Turned by the user.
+---@field onTurned? (fun(self: Dial))
+---Called when `angle` changes, with the new value.
+---@field onAngleChanged? (fun(self: Dial, value: number))
+
+---A dial.
+---@class Dial: Element
+---The angle, in degrees.
+---@field angle number
+---Turned by the user.
+---@field onTurned? (fun(self: Dial))
+---Called when `angle` changes, with the new value.
+---@field onAngleChanged? (fun(self: Dial, value: number))
+---Spins it once.
+---@field spin (fun(self: Dial))
+
+---A dial.
+---@param props? DialProps
+---@return Dial
+function Dial(props) end
+ui.Dial = Dial
+
+-- FineDial
+
+---@alias FineDialSignal "onTurned"|"onAngleChanged"|"onStepChanged"
+
+---A dial with a fine scale.
+---@class FineDialProps: ElementProps
+---The angle, in tenths of a degree.
+---@field angle? number|(fun(self: FineDial): number?)|Binding
+---The scale's step.
+---@field step? integer|(fun(self: FineDial): integer?)|Binding
+---Turned by the user.
+---@field onTurned? (fun(self: FineDial))
+---Called when `angle` changes, with the new value.
+---@field onAngleChanged? (fun(self: FineDial, value: number))
+---Called when `step` changes, with the new value.
+---@field onStepChanged? (fun(self: FineDial, value: integer))
+
+---A dial with a fine scale.
+---@class FineDial: Element
+---The angle, in tenths of a degree.
+---@field angle number
+---The scale's step.
+---@field step integer
+---Turned by the user.
+---@field onTurned? (fun(self: FineDial))
+---Called when `angle` changes, with the new value.
+---@field onAngleChanged? (fun(self: FineDial, value: number))
+---Called when `step` changes, with the new value.
+---@field onStepChanged? (fun(self: FineDial, value: integer))
+---Spins it once.
+---@field spin (fun(self: FineDial))
+
+---A dial with a fine scale.
+---@param props? FineDialProps
+---@return FineDial
+function FineDial(props) end
+ui.FineDial = FineDial
+
 -- Gauge
 
 ---@alias GaugeSignal "onPeak"|"onMoved"|"onValueChanged"|"onLimitChanged"|"onTagsChanged"|"onRangeChanged"|"onModeChanged"|"onSeriesChanged"|"onEitherChanged"|"onFormatterChanged"|"onTintChanged"|"onPeakChanged"
 
+---A gauge.
+---
+---It has a *needle*; see `value`.
 ---@class GaugeProps: ElementProps
+---The needle's position.
+---\@see `max`
+---  \| 100% |
 ---@field value? number|(fun(self: Gauge): number?)|Binding
 ---@field limit? integer|(fun(self: Gauge): integer?)|Binding
 ---@field tags? table<string, number>|(fun(self: Gauge): table<string, number>?)|Binding
@@ -231,20 +357,37 @@ ui.Blank = Blank
 ---@field either? integer|string|(fun(self: Gauge): (integer|string)?)|Binding
 ---@field formatter? function|Binding
 ---@field tint? Color|(fun(self: Gauge): Color?)|Binding
----@field onPeak? fun(self: Gauge, ...: any)
----@field onMoved? fun(self: Gauge, to: number, why: string)
----@field onValueChanged? fun(self: Gauge, value: number)
----@field onLimitChanged? fun(self: Gauge, value?: integer)
----@field onTagsChanged? fun(self: Gauge, value: table<string, number>)
----@field onRangeChanged? fun(self: Gauge, value: [number, number])
----@field onModeChanged? fun(self: Gauge, value: "fast"|"slow")
----@field onSeriesChanged? fun(self: Gauge, value: Series)
----@field onEitherChanged? fun(self: Gauge, value: integer|string)
----@field onFormatterChanged? fun(self: Gauge, value?: function)
----@field onTintChanged? fun(self: Gauge, value: Color)
----@field onPeakChanged? fun(self: Gauge, value: number)
+---@field onPeak? (fun(self: Gauge, ...: any))
+---Moved by the user: `to` is the new value, `why` "drag" or "key".
+---@field onMoved? (fun(self: Gauge, to: number, why: string))
+---Called when `value` changes, with the new value.
+---@field onValueChanged? (fun(self: Gauge, value: number))
+---Called when `limit` changes, with the new value.
+---@field onLimitChanged? (fun(self: Gauge, value?: integer))
+---Called when `tags` changes, with the new value.
+---@field onTagsChanged? (fun(self: Gauge, value: table<string, number>))
+---Called when `range` changes, with the new value.
+---@field onRangeChanged? (fun(self: Gauge, value: [number, number]))
+---Called when `mode` changes, with the new value.
+---@field onModeChanged? (fun(self: Gauge, value: "fast"|"slow"))
+---Called when `series` changes, with the new value.
+---@field onSeriesChanged? (fun(self: Gauge, value: Series))
+---Called when `either` changes, with the new value.
+---@field onEitherChanged? (fun(self: Gauge, value: integer|string))
+---Called when `formatter` changes, with the new value.
+---@field onFormatterChanged? (fun(self: Gauge, value?: function))
+---Called when `tint` changes, with the new value.
+---@field onTintChanged? (fun(self: Gauge, value: Color))
+---Called when `peak` changes, with the new value.
+---@field onPeakChanged? (fun(self: Gauge, value: number))
 
+---A gauge.
+---
+---It has a *needle*; see `value`.
 ---@class Gauge: Element
+---The needle's position.
+---\@see `max`
+---  \| 100% |
 ---@field value number
 ---@field limit integer?
 ---@field tags table<string, number>
@@ -255,23 +398,38 @@ ui.Blank = Blank
 ---@field formatter function?
 ---@field tint Color
 ---@field peak number
----@field onPeak? fun(self: Gauge, ...: any)
----@field onMoved? fun(self: Gauge, to: number, why: string)
----@field onValueChanged? fun(self: Gauge, value: number)
----@field onLimitChanged? fun(self: Gauge, value?: integer)
----@field onTagsChanged? fun(self: Gauge, value: table<string, number>)
----@field onRangeChanged? fun(self: Gauge, value: [number, number])
----@field onModeChanged? fun(self: Gauge, value: "fast"|"slow")
----@field onSeriesChanged? fun(self: Gauge, value: Series)
----@field onEitherChanged? fun(self: Gauge, value: integer|string)
----@field onFormatterChanged? fun(self: Gauge, value?: function)
----@field onTintChanged? fun(self: Gauge, value: Color)
----@field onPeakChanged? fun(self: Gauge, value: number)
----@field reset fun(self: Gauge)
----@field setBounds fun(self: Gauge, min: number, max?: number)
----@field points fun(self: Gauge): { x: number, y: number }[]
----@field forEach fun(self: Gauge, arg1: function): integer
+---@field onPeak? (fun(self: Gauge, ...: any))
+---Moved by the user: `to` is the new value, `why` "drag" or "key".
+---@field onMoved? (fun(self: Gauge, to: number, why: string))
+---Called when `value` changes, with the new value.
+---@field onValueChanged? (fun(self: Gauge, value: number))
+---Called when `limit` changes, with the new value.
+---@field onLimitChanged? (fun(self: Gauge, value?: integer))
+---Called when `tags` changes, with the new value.
+---@field onTagsChanged? (fun(self: Gauge, value: table<string, number>))
+---Called when `range` changes, with the new value.
+---@field onRangeChanged? (fun(self: Gauge, value: [number, number]))
+---Called when `mode` changes, with the new value.
+---@field onModeChanged? (fun(self: Gauge, value: "fast"|"slow"))
+---Called when `series` changes, with the new value.
+---@field onSeriesChanged? (fun(self: Gauge, value: Series))
+---Called when `either` changes, with the new value.
+---@field onEitherChanged? (fun(self: Gauge, value: integer|string))
+---Called when `formatter` changes, with the new value.
+---@field onFormatterChanged? (fun(self: Gauge, value?: function))
+---Called when `tint` changes, with the new value.
+---@field onTintChanged? (fun(self: Gauge, value: Color))
+---Called when `peak` changes, with the new value.
+---@field onPeakChanged? (fun(self: Gauge, value: number))
+---@field reset (fun(self: Gauge))
+---Sets both ends at once. -- not a comment end: ]]
+---@field setBounds (fun(self: Gauge, min: number, max?: number))
+---@field points (fun(self: Gauge): { x: number, y: number }[])
+---@field forEach (fun(self: Gauge, arg1: function): integer)
 
+---A gauge.
+---
+---It has a *needle*; see `value`.
 ---@param props? GaugeProps|number
 ---@return Gauge
 function Gauge(props) end
@@ -281,26 +439,36 @@ ui.Gauge = Gauge
 
 ---@alias labSignal "onTick"|"onLoadChanged"
 
+---The lab backend.
 ---@class lab
+---The load, 0..1.
 ---@field load number
----@field onTick? fun(n: integer)
----@field onLoadChanged? fun(value: number)
----@field fetch fun(self: lab, url: string): Future<Series>
----@field idle fun(self: lab): Future<nil>
----@field opaque fun(self: lab, arg1: any): any
----@field tagged fun(self: lab, arg1: Tagged): Tagged
+---Every tick.
+---@field onTick? (fun(n: integer))
+---Called when `load` changes, with the new value.
+---@field onLoadChanged? (fun(value: number))
+---Fetches `url`.
+---@field fetch (fun(self: lab, url: string): Future<Series>)
+---@field idle (fun(self: lab): Future<nil>)
+---@field opaque (fun(self: lab, arg1: any): any)
+---Returns `t`:
+---- unchanged
+---- as it is
+---@field tagged (fun(self: lab, arg1: Tagged): Tagged)
 lab = {}
 
 -- connect
 
 ---Every signal name of the registered types and singletons (`connect` raises for any other).
----@alias ImluiSignal GaugeSignal|labSignal
+---@alias ImluiSignal DialSignal|FineDialSignal|GaugeSignal|labSignal
 
 ---Adds a listener to a signal of a C++ element or singleton: `fn` runs whenever `target` emits `signal`, after its handler.
 ---@param target Element|table
 ---@param signal ImluiSignal
 ---@param fn function
 ---@return fun() disconnect
+---@overload fun(target: Dial, signal: DialSignal, fn: fun(self: Dial, ...: any)): fun()
+---@overload fun(target: FineDial, signal: FineDialSignal, fn: fun(self: FineDial, ...: any)): fun()
 ---@overload fun(target: Gauge, signal: GaugeSignal, fn: fun(self: Gauge, ...: any)): fun()
 ---@overload fun(target: lab, signal: labSignal, fn: fun(...: any)): fun()
 function connect(target, signal, fn) end
@@ -406,11 +574,64 @@ TEST(LuaDefinitions, GoldenTypesFile) {
     registry.registerType<Gauge>("Gauge");
     registry.registerType<Blank>("Blank");
     registry.registerType<Blank>("not-a-name");
+    registry.registerType<Dial>("Dial");
+    registry.registerType<FineDial>("FineDial");
     registry.registerSingleton("lab", std::make_shared<Lab>());
     const std::string text = luaTypeDefinitions(registry);
     EXPECT_EQ(text, goldenTypes);
     EXPECT_EQ(compileError(text, "types.lua"), "");
     EXPECT_EQ(luaTypeDefinitions(registry), text); // deterministic
+}
+
+TEST(LuaDefinitions, TypeBuilderRecordsTheDocs) {
+    TypeRegistry registry;
+    const TypeInfo& gauge = registry.registerType<Gauge>("Gauge");
+    EXPECT_EQ(gauge.doc(), "A gauge.\n\nIt has a *needle*; see `value`.");
+    EXPECT_EQ(gauge.findProperty("value")->doc, "The needle's position.\r\n@see `max`\n  | 100% |  \n");
+    EXPECT_EQ(gauge.findProperty("limit")->doc, "");
+    EXPECT_EQ(gauge.findMethod("setBounds")->doc, "\n\nSets both ends\tat once. -- not a comment end: ]]\n\n");
+    EXPECT_EQ(gauge.signalDeclarations()[1].doc, R"(Moved by the user: `to` is the new value, `why` "drag" or "key".)");
+
+    // The subclass: its own type doc (not the base's), the base's member docs, one of them replaced, its own.
+    const TypeInfo& dial = registry.registerType<Dial>("Dial");
+    const TypeInfo& fine = registry.registerType<FineDial>("FineDial");
+    EXPECT_EQ(dial.doc(), "A dial.");
+    EXPECT_EQ(fine.doc(), "A dial with a fine scale.");
+    EXPECT_EQ(dial.findProperty("angle")->doc, "The angle, in degrees.");
+    EXPECT_EQ(fine.findProperty("angle")->doc, "The angle, in tenths of a degree.");
+    EXPECT_EQ(fine.findMethod("spin")->doc, "Spins it once.");
+    EXPECT_EQ(fine.signalDeclarations().at(0).doc, "Turned by the user.");
+    EXPECT_EQ(fine.findProperty("step")->doc, "The scale's step.");
+}
+
+namespace {
+
+/// A type whose declare() misuses doc() the way `Kind` says.
+enum class Misuse { Twice, AfterDefaultProperty, AfterExtends, AfterNonVisual, UnknownMember };
+
+template <Misuse Kind>
+class Misdocumented final : public Dial {
+public:
+    static void declare(TypeBuilder<Misdocumented>& type) {
+        if constexpr (Kind == Misuse::Twice) type.property("x", &Misdocumented::x).doc("X.").doc("X again.");
+        if constexpr (Kind == Misuse::AfterDefaultProperty)
+            type.property("x", &Misdocumented::x).defaultProperty("x").doc("X?");
+        if constexpr (Kind == Misuse::AfterExtends) type.template extends<Dial>().doc("The last member of Dial?");
+        if constexpr (Kind == Misuse::AfterNonVisual) type.doc("Doc.").nonVisual().doc("Doc again?");
+        if constexpr (Kind == Misuse::UnknownMember) type.docMember("nope", "No such member.");
+    }
+    [[nodiscard]] int x() const { return 0; }
+};
+
+} // namespace
+
+TEST(LuaDefinitions, DocThatDocumentsNothingThrows) {
+    TypeRegistry registry;
+    EXPECT_THROW(registry.registerType<Misdocumented<Misuse::Twice>>("A"), std::invalid_argument);
+    EXPECT_THROW(registry.registerType<Misdocumented<Misuse::AfterDefaultProperty>>("B"), std::invalid_argument);
+    EXPECT_THROW(registry.registerType<Misdocumented<Misuse::AfterExtends>>("C"), std::invalid_argument);
+    EXPECT_THROW(registry.registerType<Misdocumented<Misuse::AfterNonVisual>>("D"), std::invalid_argument);
+    EXPECT_THROW(registry.registerType<Misdocumented<Misuse::UnknownMember>>("E"), std::invalid_argument);
 }
 
 TEST(LuaDefinitions, BuiltInsAndPreludeAreValidLua) {
@@ -428,11 +649,14 @@ TEST(LuaDefinitions, BuiltInsAndPreludeAreValidLua) {
         EXPECT_NE(types.find("function " + name + "(props) end\nui." + name + " = " + name + "\n"), std::string::npos)
             << name;
     }
-    // A sample: Button's text, its declared signal and the change signal of a property.
+    // A sample: Button's text, its declared signal and the change signal of a property, with their docs.
     EXPECT_NE(types.find("---@field text? string|(fun(self: Button): string?)|Binding\n"), std::string::npos);
-    EXPECT_NE(types.find("---@field onClicked? fun(self: Button, ...: any)\n"), std::string::npos);
-    EXPECT_NE(types.find("---@field onTextChanged? fun(self: Button, value: string)\n"), std::string::npos);
-    EXPECT_NE(types.find("---@field restart fun(self: Timer)\n"), std::string::npos);
+    EXPECT_NE(types.find("---Called when the button is clicked.\n---@field onClicked? (fun(self: Button))\n"),
+              std::string::npos);
+    EXPECT_NE(types.find("---Called when `text` changes, with the new value.\n"
+                         "---@field onTextChanged? (fun(self: Button, value: string))\n"),
+              std::string::npos);
+    EXPECT_NE(types.find("---@field restart (fun(self: Timer))\n"), std::string::npos);
 }
 
 // The hand-written prelude definitions keep up with the prelude: every member of `ui` (but the internal `__*` ones)
