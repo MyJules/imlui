@@ -1,6 +1,7 @@
 // ScriptObject::runAsync (imlui.types.script_object) and Handle::stopToken: the work runs on the background pool, the
 // result reaches `done` on the main thread, a dead object stops the work's token and never gets `done`, exceptions go
-// to `fail` or the error list, results and callables may be move-only, and an element's `done` writes back to Lua.
+// to `fail` or the error list, results and callables may be move-only, an element's `done` writes back to Lua, and the
+// Task it returns cancels the job.
 #include <gtest/gtest.h>
 
 import std;
@@ -9,6 +10,7 @@ import imlui.lua.errors;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.script_object;
+import imlui.types.task;
 import imlui.types.type_builder;
 import imlui.ui.background;
 import imlui.ui.main_thread;
@@ -292,4 +294,133 @@ TEST_F(RunAsyncTest, ClosingTheStateStopsAnElementsWork) {
     shutdownBackground(std::chrono::seconds{10});
     EXPECT_TRUE(sawStop);
     runPosted();
+}
+
+// ---- Task: the handle runAsync(work, done[, fail]) returns
+
+TEST_F(RunAsyncTest, TaskRunsUntilDone) {
+    test::PostWaiter posts;
+    Owner owner;
+    EXPECT_FALSE(Task{}.running());
+    EXPECT_FALSE(Task{}.cancel());
+    std::optional<bool> runningInDone;
+    Task task;
+    task = owner.runAsync([] { return 1; }, [&](int) { runningInDone = task.running(); });
+    EXPECT_TRUE(task.running());
+    ASSERT_TRUE(posts.runUntil([&] { return runningInDone.has_value(); }));
+    EXPECT_FALSE(*runningInDone); // ended right before done ran
+    EXPECT_FALSE(task.running());
+    EXPECT_FALSE(task.cancel()); // after done: nothing to cancel
+    EXPECT_FALSE(task.cancelled());
+}
+
+// Cancelled while the work waits in the queue (every worker busy): the work never runs, done never runs.
+TEST_F(RunAsyncTest, TaskCancelledBeforeTheWorkStarts) {
+    const std::size_t threads = backgroundThreadLimit();
+    std::latch busy{static_cast<std::ptrdiff_t>(threads)};
+    std::latch release{1};
+    for (std::size_t i = 0; i < threads; ++i)
+        runInBackground([&](std::stop_token) {
+            busy.count_down();
+            release.wait();
+        });
+    busy.wait();
+
+    Owner owner;
+    std::latch jobGone{1};
+    std::atomic<bool> ran = false;
+    bool done = false;
+    const Task task =
+        owner.runAsync([&ran, probe = std::make_shared<DestroyProbe>(jobGone)] { ran = true; }, [&] { done = true; });
+    EXPECT_TRUE(task.cancel());
+    EXPECT_FALSE(task.cancel());
+    EXPECT_TRUE(task.cancelled());
+    EXPECT_FALSE(task.running());
+    release.count_down();
+    jobGone.wait(); // the work was skipped and the job dropped
+    shutdownBackground(std::chrono::seconds{10});
+    runPosted();
+    EXPECT_FALSE(ran);
+    EXPECT_FALSE(done);
+}
+
+// Cancelled while the work runs: its token stops, and done never runs although the object lives.
+TEST_F(RunAsyncTest, TaskCancelledWhileWorkingStopsTheToken) {
+    Owner owner;
+    std::latch started{1};
+    std::atomic<bool> sawStop = false;
+    bool done = false;
+    const Task task = owner.runAsync(
+        [&](std::stop_token stop) {
+            started.count_down();
+            sawStop = waitForStop(stop);
+            return 1;
+        },
+        [&](int) { done = true; });
+    started.wait();
+    EXPECT_TRUE(task.running());
+    EXPECT_TRUE(task.cancel());
+    shutdownBackground(std::chrono::seconds{10}); // joins: the work returned
+    EXPECT_TRUE(sawStop);
+    runPosted();
+    EXPECT_FALSE(done);
+}
+
+// The work finished and posted its continuation, then the task was cancelled: neither done nor fail runs, and an
+// exception isn't reported either.
+TEST_F(RunAsyncTest, TaskCancelledAfterTheWorkSkipsDoneAndFail) {
+    test::PostWaiter posts;
+    Owner owner;
+    bool called = false;
+    const Task ok = owner.runAsync([] { return 1; }, [&](int) { called = true; });
+    const Task failing = owner.runAsync([]() -> int { throw std::runtime_error("x"); }, [&](int) { called = true; },
+                                        [&](std::string) { called = true; });
+    const Task reported = owner.runAsync([] { throw std::runtime_error("y"); }, [&] { called = true; });
+    ASSERT_TRUE(posts.waitForPosts(3));
+    EXPECT_TRUE(ok.cancel());
+    EXPECT_TRUE(failing.cancel());
+    EXPECT_TRUE(reported.cancel());
+    EXPECT_EQ(runPosted(), 3u);
+    EXPECT_FALSE(called);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A cancel from another thread: either it wins (done never runs) or done already ended the task (cancel is false).
+TEST_F(RunAsyncTest, TaskCancelFromAnotherThreadDecidesOnce) {
+    test::PostWaiter posts;
+    Owner owner;
+    for (int i = 0; i < 20; ++i) {
+        bool done = false;
+        const Task task = owner.runAsync([] { return 1; }, [&](int) { done = true; });
+        std::atomic<bool> cancelled = false;
+        std::thread canceller{[&] { cancelled = task.cancel(); }};
+        ASSERT_TRUE(posts.runUntil([&] { return !task.running(); }));
+        canceller.join();
+        shutdownBackground(std::chrono::seconds{10});
+        runPosted();
+        EXPECT_NE(done, cancelled.load());
+    }
+}
+
+// The object dies: the task ends (not cancelled) once the job is dropped.
+TEST_F(RunAsyncTest, TaskOfADeadObjectEnds) {
+    auto owner = std::make_unique<Owner>();
+    std::latch started{1};
+    const Task task = owner->runAsync(
+        [&](std::stop_token stop) {
+            started.count_down();
+            waitForStop(stop);
+        },
+        [] { ADD_FAILURE(); });
+    started.wait();
+    owner.reset();
+    shutdownBackground(std::chrono::seconds{10});
+    runPosted();
+    EXPECT_FALSE(task.running());
+    EXPECT_FALSE(task.cancelled());
+    EXPECT_FALSE(task.cancel());
+
+    Owner cancelled;
+    cancelled.cancelHandles();
+    EXPECT_FALSE(cancelled.runAsync([] {}, [] {}).running()); // nothing started
 }

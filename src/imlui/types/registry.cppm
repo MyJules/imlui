@@ -3,14 +3,21 @@
 // install(state) runs for every new Lua state (each hot reload) before the DSL loads, and sets up:
 //
 //  * `require("imlui.types")`: { names(), isType(name), attach(element), meta(name), tick(now), tickingCount(),
-//    parents }. The DSL's constructors call attach() for registered types, which creates the C++ instance right
-//    away and stores it in the element table as `__native`, a full userdata whose __gc deletes the instance. The
-//    table gets the metatable all elements of its type share (meta(name)): its __index finds the type's methods,
-//    so `element:reset()` works, and `element.parent` in `parents` (weak keys and values, filled by the DSL). The
-//    instance holds only a weak link back to the table, so collecting the table destroys the instance.
+//    listen(target, signal), setDispatch(fn), parents }. The DSL's constructors call attach() for registered types,
+//    which creates the C++ instance right away and stores it in the element table as `__native`, a full userdata whose
+//    __gc deletes the instance. The table gets the metatable all elements of its type share (meta(name)): its __index
+//    finds the type's methods, so `element:reset()` works, and `element.parent` in `parents` (weak keys and values,
+//    filled by the DSL). The instance holds only a weak link back to the table, so collecting the table destroys the
+//    instance.
 //  * one global per singleton: a userdata whose __index reads properties (getters) and methods, and
 //    whose __newindex writes properties (setters) and stores `on*` signal handlers.
 //  * a sentinel whose __gc detaches the singletons when the state closes.
+//
+// Before it links the singletons to the new state, install() calls ScriptObject::scriptReloading() on each one an
+// earlier state had: a new script is about to replace the one it served.
+//
+// Signal listeners (the DSL's `connect`, imlui.lua.listeners) live in Lua; listen(target, signal) checks the target and
+// the signal and marks the object (ScriptObject::noteConnection), setDispatch(fn) stores the DSL's dispatch function.
 //
 // One C++ type may be registered under several names (aliases: registerType<Column>("Column") and
 // registerType<Column>("Item")). Each name is its own type to Lua; an instance belongs to the name it was
@@ -42,6 +49,7 @@ import std;
 import lua;
 import imgui;
 import imlui.lua.errors;
+import imlui.lua.listeners;
 import imlui.lua.node;
 import imlui.theme.theme;
 import imlui.ui.layout_box;
@@ -98,7 +106,8 @@ public:
         return addSingleton(std::move(name), ref, std::move(info), std::shared_ptr<ScriptObject>{std::move(object)});
     }
 
-    /// Installs the types and singletons into a new Lua state (before src/resources/imlui.lua is loaded).
+    /// Installs the types and singletons into a new Lua state (before src/resources/imlui.lua is loaded). First calls
+    /// ScriptObject::scriptReloading() on every live singleton an earlier install() linked (an exception is reported).
     void install(lua::State* state);
     /// Points the singletons back at `state`, which was installed before (after a failed reload).
     void activate(lua::State* state);
@@ -147,6 +156,8 @@ private:
         std::shared_ptr<const TypeInfo::Defaults> defaults; ///< captured at registration
         /// Whether `object` still lives: a by-reference singleton may be destroyed while registered.
         ScriptObject::Handle life;
+        /// An install() linked it: the next install() calls its scriptReloading().
+        bool installed = false;
     };
 
     /// sync() while rendering: an element already synced this frame isn't synced again while nothing that could
@@ -915,6 +926,59 @@ int libAttach(lua::State* state) {
         "imlui.types.attach");
 }
 
+/// Whether `signal` is the change signal of a property of `info` (what notify() emits): "onValueChanged".
+bool isChangeSignal(const TypeInfo& info, std::string_view signal) {
+    if (!signal.starts_with("on") || !signal.ends_with("Changed")) return false;
+    return std::ranges::any_of(info.properties(),
+                               [&](const TypeInfo::Property& p) { return luaui::changedSignal(p.name) == signal; });
+}
+
+/// listen(target, signal) -> true | false, why: the DSL's connect() calls it before it adds a listener. `target` is an
+/// element table of a registered type (its instance is created now if it has none yet) or a singleton global, and
+/// `signal` one of its declared signals or a property's change signal. Then the object calls its listeners from now on
+/// (ScriptObject::noteConnection).
+int libListen(lua::State* state) {
+    return luaui::catchCxx(
+        state,
+        [&] {
+            const auto fail = [&](const std::string& why) {
+                lua::pushboolean(state, false);
+                lua::pushstring(state, why);
+                return 2;
+            };
+            Box* b = nullptr;
+            if (lua::istable(state, 1)) {
+                b = selfBox(state, 1);
+                if (!b) {
+                    lua::rawgetfield(state, 1, "__type");
+                    const TypeInfo* info =
+                        lua::isstring(state, -1) ? upvalueRegistry(state)->find(lua::tostring(state, -1)) : nullptr;
+                    lua::pop(state);
+                    if (info) b = attachInstance(state, 1, *info);
+                }
+            } else {
+                b = boxAt(state, 1);
+            }
+            ScriptObject* object = b ? liveObject(*b) : nullptr;
+            if (!object || !b->type || object->luaState() != state)
+                return fail("the target is not an element of a C++ type or a singleton");
+            const std::string_view signal = lua::tostring(state, 2);
+            if (!b->type->hasSignal(signal) && !isChangeSignal(*b->type, signal))
+                return fail(b->type->name() + " has no signal '" + std::string{signal} + "'");
+            object->noteConnection();
+            lua::pushboolean(state, true);
+            return 1;
+        },
+        "imlui.types.listen");
+}
+
+/// setDispatch(fn): the DSL's dispatch function, which ScriptObject::emit and notify call for the listeners.
+int libSetDispatch(lua::State* state) {
+    if (!lua::isfunction(state, 1)) lua::error(state, "imlui.types.setDispatch: function expected");
+    luaui::setListenerDispatch(state, 1);
+    return 0;
+}
+
 /// tick(now): calls Element::tick(now) on the ticking elements of this state, each synced first, so a Timer
 /// on a page that isn't rendered still fires and sees its current property values. ui.__tick calls it at
 /// the start of every frame.
@@ -1081,6 +1145,14 @@ Element* TypeRegistry::renderSync(const Node& node) const {
 }
 
 void TypeRegistry::install(lua::State* state) {
+    // First: the singletons are still linked to the previous script's state (if it is open), and nothing of the new
+    // state exists yet.
+    for (Singleton& s : m_singletons) {
+        if (!s.installed || !s.life.alive()) continue;
+        ScriptObject* object = s.object;
+        luaui::reportCxx([object] { object->scriptReloading(); }, s.name, ".scriptReloading()");
+    }
+
     lua::checkstack(state, 16);
     const int top = lua::gettop(state);
 
@@ -1125,9 +1197,10 @@ void TypeRegistry::install(lua::State* state) {
     lua::settop(state, top);
 
     // require("imlui.types")
-    lua::createtable(state, 0, 7);
-    const lua::CFunction lib[] = {&libNames, &libIsType, &libAttach, &libMeta, &libTick, &libTickingCount};
-    const char* libNamesList[] = {"names", "isType", "attach", "meta", "tick", "tickingCount"};
+    lua::createtable(state, 0, 9);
+    const lua::CFunction lib[] = {&libNames, &libIsType,       &libAttach, &libMeta,
+                                  &libTick,  &libTickingCount, &libListen, &libSetDispatch};
+    const char* libNamesList[] = {"names", "isType", "attach", "meta", "tick", "tickingCount", "listen", "setDispatch"};
     for (std::size_t i = 0; i < std::size(lib); ++i) {
         lua::pushlightuserdata(state, this);
         lua::pushcclosure(state, lib[i], 1);
@@ -1143,7 +1216,8 @@ void TypeRegistry::install(lua::State* state) {
 
     // Singletons: a global userdata each, kept alive by the registry as well.
     pushRegistryTable(state, singletonsKey);
-    for (const Singleton& s : m_singletons) {
+    for (Singleton& s : m_singletons) {
+        s.installed = true;
         Box* b = new (lua::newuserdata(state, sizeof(Box), 1)) Box{};
         const bool alive = s.life.alive(); // a by-reference singleton destroyed already: its global raises on access
         b->object = alive ? s.object : nullptr;

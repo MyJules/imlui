@@ -25,6 +25,7 @@
   Signals are on* handlers called as handler(self, ...):
     onClicked(self)  onToggled(self, checked)  onMoved(self, value)
     onTextChanged(self, text)  onAccepted(self, text)  onActivated(self, index, text)
+  connect(element, "onClicked", fn) adds more listeners (see ui.connect).
 
   Indices (currentIndex, currentRow, ...) are 1-based, like everything in Lua.
 ]]
@@ -431,6 +432,101 @@ function ui.component(fn)
         return root
     end
 end
+
+-------------------------------------------------------------------------------
+-- Signals: several listeners
+-------------------------------------------------------------------------------
+
+-- connections[target] = { [signal] = { record... } }, in connect order. Weak keys: a connection never keeps its
+-- target (an element table, a singleton global) alive, also when its function refers to the target. A record is
+-- { fn } for a connection made at app level. One made in a component instance or delegate scope belongs to the scope:
+-- its record is weak-valued, { [2] = scope }, and its function (which runs in the scope, so holds it) is
+-- ownedFns[scope][record], an ephemeron: once nothing else holds the scope (its elements are gone), the connection
+-- goes with it. Disconnecting empties the record, so a dispatch that took it already skips it.
+local connections = setmetatable({}, { __mode = "k" })
+local ownedFns = setmetatable({}, { __mode = "k" })
+local WEAK_VALUES = { __mode = "v" }
+
+-- The function of a connection record; nil once it was disconnected or its scope was collected.
+local function listenerOf(rec)
+    local fn = rec[1]
+    if fn ~= nil then return fn end
+    local scope = rec[2]
+    local fns = scope ~= nil and ownedFns[scope] or nil
+    return fns and fns[rec]
+end
+
+--- Calls fn with the arguments of `signal` whenever `target` emits it: a C++ element (typed or built-in) as
+--- fn(self, ...), a singleton as fn(...), like its `on*` handler. The signal is one the type declares or a property's
+--- `on<Name>Changed`. After the handler, in connect order; each listener's error is reported, and the others still
+--- run. A listener connected during a dispatch runs from the next one on; one disconnected during it doesn't run.
+--- Returns a function that disconnects it (calling it again does nothing). Made inside a component instance or
+--- delegate, the listener runs in its scope and is dropped with it (when its elements are collected).
+function ui.connect(target, signal, fn)
+    if type(signal) ~= "string" then error("connect: signal name expected, got " .. type(signal), 2) end
+    if type(fn) ~= "function" then error("connect: function expected, got " .. type(fn), 2) end
+    if types == nil then error("connect: no C++ types (the library runs without an engine)", 2) end
+    local ok, why = types.listen(target, signal)
+    if not ok then error("connect: " .. why, 2) end
+    local scope = scopes[#scopes]
+    local rec
+    if scope == nil then
+        rec = { fn }
+    else
+        rec = setmetatable({ [2] = scope }, WEAK_VALUES)
+        local fns = ownedFns[scope]
+        if fns == nil then
+            fns = {}
+            ownedFns[scope] = fns
+        end
+        fns[rec] = function(...) return inScope(scope, fn, ...) end
+    end
+    local signals = connections[target]
+    if signals == nil then
+        signals = {}
+        connections[target] = signals
+    end
+    local list = signals[signal]
+    if list == nil then
+        list = {}
+        signals[signal] = list
+    end
+    for i = #list, 1, -1 do -- the records of collected scopes
+        if listenerOf(list[i]) == nil then table.remove(list, i) end
+    end
+    list[#list + 1] = rec
+    return function()
+        rec[1] = nil
+        local owner = rec[2]
+        if owner ~= nil then
+            rec[2] = nil
+            local fns = ownedFns[owner]
+            if fns ~= nil then fns[rec] = nil end
+        end
+        removeFrom(list, rec)
+    end
+end
+
+-- dispatch(target, signal, ...): ScriptObject::emit and notify call it after the handler, once the object has had a
+-- listener (imlui.lua.listeners). Calls the listeners connected when it starts. Returns whether one ran without an
+-- error.
+local function dispatch(target, signal, ...)
+    local signals = connections[target]
+    local list = signals and signals[signal]
+    local n = list and #list or 0
+    if n == 0 then return false end
+    local taken = n == 1 and list or table.move(list, 1, n, 1, {}) -- one listener: its record is read before it runs
+    local ran = false
+    for i = 1, n do
+        local fn = listenerOf(taken[i])
+        if fn ~= nil then
+            local ok, err = xpcall(fn, debug.traceback, ...)
+            if ok then ran = true else ui.reportError(tostring(err)) end
+        end
+    end
+    return ran
+end
+if types ~= nil then types.setDispatch(dispatch) end
 
 -------------------------------------------------------------------------------
 -- Dynamic children: Repeater, ListView, If, Loader
@@ -987,16 +1083,26 @@ end
 -------------------------------------------------------------------------------
 
 -- A future is a value that arrives later. Its table holds `state` ("pending", "done", "failed", "cancelled"), `value`
--- (the first value, once done) and `error` (once failed; "cancelled" once cancelled), which bindings read like any
--- field. Internal fields: __values (table.pack of every value), __handlers (functions called with the future when it
--- settles), __cancel (what cancel() also stops: a C++ job, a timer, an async function), __handled (something takes its
--- outcome: an awaiter, next/catch, all, a C++ handler), __resolvable (made by future()), __trace (a Lua error's
--- traceback, for the report).
+-- (the first value, once done), `error` (once failed; "cancelled" once cancelled) and `progress` (the last progress
+-- reported while pending, or nil), which bindings read like any field. Internal fields: __values (table.pack of every
+-- value), __handlers (functions called with the future when it settles), __onProgress (functions called with each
+-- progress), __consumers (how many handlers take its outcome: next/catch, await, all, a C++ future), __cancel (what
+-- cancel() also stops: a C++ job, a timer, an async function), __waiting (the future a next/catch future waits on,
+-- released when it is cancelled), __handled (something takes its outcome: an awaiter, next/catch, all, a C++
+-- handler), __resolvable (made by future()), __core (the C++ future it was pushed from or read into: a userdata C++
+-- reads back), __trace (a Lua error's traceback, for the report).
 --
 -- Handlers run synchronously when a future settles: an awaiting coroutine resumes inside the resolve(), the timer or
 -- the posted C++ function that settled it, inside a frame or outside one. Settling requests a frame.
+--
+-- Cancellation flows down and, when nothing else waits, up: a cancelled future cancels the futures next/catch made
+-- from it (their handlers don't run: cancelling isn't an error), and an await on it raises "cancelled". Cancelling a
+-- future that waits on others (next/catch, an async function, all) releases them: each one nothing else consumes is
+-- cancelled too (release).
 local FUTURE_METHODS = {}
 local FUTURE = { __index = FUTURE_METHODS, __name = "future" }
+-- C++ tells a Lua future (a method argument of type imlui::Future<T>) by this metatable.
+debug.getregistry()["imlui.future"] = FUTURE
 
 local function isFuture(v) return getmetatable(v) == FUTURE end
 local function newFuture() return setmetatable({ state = "pending" }, FUTURE) end
@@ -1030,6 +1136,8 @@ local function settle(f, state, ...)
         if state == "failed" and not f.__handled then unhandled[#unhandled + 1] = f end
     end
     f.__cancel = nil
+    f.__waiting = nil
+    f.__onProgress = nil
     local handlers = f.__handlers
     f.__handlers = nil
     native.requestFrame(0)
@@ -1039,9 +1147,10 @@ local function settle(f, state, ...)
     return true
 end
 
--- Calls fn(f) once `f` settled: now when it is. Marks the outcome handled.
+-- Calls fn(f) once `f` settled: now when it is. Marks the outcome handled and counts a consumer.
 local function onSettle(f, fn)
     f.__handled = true
+    f.__consumers = (f.__consumers or 0) + 1
     if f.state ~= "pending" then return fn(f) end
     local handlers = f.__handlers
     if handlers == nil then
@@ -1051,8 +1160,33 @@ local function onSettle(f, fn)
     handlers[#handlers + 1] = fn
 end
 
--- Settles `g` the way `f` settles.
+-- A consumer of pending `f` no longer needs it: cancels `f` once no consumer is left.
+local function release(f)
+    if f.state ~= "pending" then return end
+    local n = (f.__consumers or 1) - 1
+    f.__consumers = n
+    if n <= 0 then FUTURE_METHODS.cancel(f) end
+end
+
+-- Reports `value` as the progress of pending `f`: sets f.progress, calls the onProgress handlers. Returns whether it
+-- did.
+local function reportProgress(f, value)
+    if f.state ~= "pending" then return false end
+    f.progress = value
+    native.requestFrame(0)
+    local list = f.__onProgress
+    if list then
+        for i = 1, #list do
+            if f.state ~= "pending" then break end -- a handler settled it
+            protectedCall(list[i], value)
+        end
+    end
+    return true
+end
+
+-- Settles `g` the way `f` settles (and waits on it: cancelling `g` releases `f`).
 local function follow(g, f)
+    if g.state == "pending" then g.__waiting = f end
     onSettle(f, function()
         if f.state == "done" then
             settle(g, "done", table.unpack(f.__values, 1, f.__values.n))
@@ -1092,9 +1226,11 @@ local function checkHandler(fn, method, what)
     end
 end
 
---- f:next(onValue, onError) -> future. When `f` is done, onValue(values...); when it failed or was cancelled,
---- onError(error). The new future settles with what the handler returns (a future it returns is followed), or fails
---- with what it raises. A missing handler passes the outcome on. Handlers run in the scope they were set in.
+--- f:next(onValue, onError) -> future. When `f` is done, onValue(values...); when it failed, onError(error). The new
+--- future settles with what the handler returns (a future it returns is followed), or fails with what it raises. A
+--- missing handler passes the outcome on. When `f` is cancelled, so is the new future (no handler runs). Cancelling
+--- the new future releases what it waits on (`f`, or the future a handler returned): cancelled unless something else
+--- consumes it. Handlers run in the scope they were set in.
 function FUTURE_METHODS:next(onValue, onError)
     checkFuture(self, "next")
     checkHandler(onValue, "next", "onValue")
@@ -1102,6 +1238,7 @@ function FUTURE_METHODS:next(onValue, onError)
     if onValue then onValue = inCurrentScope(onValue) end
     if onError then onError = inCurrentScope(onError) end
     local g = newFuture()
+    g.__waiting = self
     onSettle(self, function(f)
         if f.state == "done" then
             if onValue then
@@ -1109,6 +1246,8 @@ function FUTURE_METHODS:next(onValue, onError)
             else
                 follow(g, f)
             end
+        elseif f.state == "cancelled" then
+            settle(g, "cancelled", "cancelled")
         elseif onError then
             settleWith(g, xpcall(onError, keepTrace, f.error))
         else
@@ -1125,16 +1264,43 @@ function FUTURE_METHODS:catch(onError)
     return self:next(nil, onError)
 end
 
---- f:cancel() -> boolean. Settles a pending future as cancelled (error "cancelled") and stops what it waits on: the C++
---- work behind it, a sleep's timer, an async function (and the future it awaits), all()'s inputs. A future from next()
---- doesn't cancel its source. False when `f` already settled.
+--- f:cancel() -> boolean. Settles a pending future as cancelled (error "cancelled"), which cancels the futures next()
+--- made from it, and stops what it waits on: the C++ work behind it, a sleep's timer, an async function (and the
+--- future it awaits, released), all()'s inputs (released), next()'s source (released). False when `f` already settled.
 function FUTURE_METHODS:cancel()
     checkFuture(self, "cancel")
     if self.state ~= "pending" then return false end
-    local stop = self.__cancel
+    local stop, waiting = self.__cancel, self.__waiting
     settle(self, "cancelled", "cancelled")
     if stop then protectedCall(stop) end
+    if waiting then protectedCall(release, waiting) end
     return true
+end
+
+--- f:onProgress(fn) -> f. Calls fn(progress) at each progress `f` reports from now until it settles (a C++ job's,
+--- coalesced to at most one per loop iteration, or f:report()). The current one is f.progress. fn runs in the scope
+--- onProgress was called in.
+function FUTURE_METHODS:onProgress(fn)
+    checkFuture(self, "onProgress")
+    if type(fn) ~= "function" then error("onProgress: a function expected, got " .. type(fn), 2) end
+    if self.state == "pending" then
+        local list = self.__onProgress
+        if list == nil then
+            list = {}
+            self.__onProgress = list
+        end
+        list[#list + 1] = inCurrentScope(fn)
+    end
+    return self
+end
+
+--- f:report(progress) -> boolean: reports the progress (a number, by convention 0..1) of a future made by future().
+--- False when it already settled.
+function FUTURE_METHODS:report(value)
+    checkFuture(self, "report")
+    if not rawget(self, "__resolvable") then error("report: only a future made by future() takes progress", 2) end
+    if type(value) ~= "number" then error("report: a number expected, got " .. type(value), 2) end
+    return reportProgress(self, value)
 end
 
 --- f:resolve(values...) / f:reject(error) -> boolean: settle a future made by future(). False when it already settled.
@@ -1191,7 +1357,7 @@ end
 
 --- async(fn) -> function. Calling the result runs fn(...) in a new coroutine, which may `await`, and returns a future
 --- of fn's results right away (when fn first awaits). An error fn raises fails the future. Cancelling the future
---- stops the coroutine where it waits (its to-be-closed variables are closed) and cancels the future it awaits.
+--- stops the coroutine where it waits (its to-be-closed variables are closed) and releases the future it awaits.
 --- The coroutine runs in the scope async's result was called in, like a timer.
 function ui.async(fn)
     if type(fn) ~= "function" then error("async: a function expected, got " .. type(fn), 2) end
@@ -1204,7 +1370,7 @@ function ui.async(fn)
             tasks[task.co] = nil
             local waiting = task.waiting
             task.waiting = nil
-            if waiting then waiting:cancel() end
+            if waiting then release(waiting) end
             if coroutine.status(task.co) == "suspended" then coroutine.close(task.co) end
         end
         step(task, ...)
@@ -1246,7 +1412,7 @@ end
 
 --- all({f1, f2, ...}) -> future of the list of their values (the first value of each), in order. Fails or is cancelled
 --- like the first input that fails or is cancelled. Values that aren't futures are taken as they are. Cancelling it
---- cancels the inputs.
+--- releases the inputs (each one nothing else consumes is cancelled).
 function ui.all(list)
     if type(list) ~= "table" then error("all: a list of futures expected, got " .. type(list), 2) end
     local n = list.n or #list
@@ -1276,7 +1442,7 @@ function ui.all(list)
         else
             f.__cancel = function()
                 for i = 1, n do
-                    if isFuture(list[i]) then list[i]:cancel() end
+                    if isFuture(list[i]) then release(list[i]) end
                 end
             end
         end
@@ -1286,14 +1452,18 @@ end
 
 -- C++ futures (imlui::Future<T>, module imlui.types.future) push through this: a new future and its link, which C++
 -- keeps (a LuaFunction) and calls on the main thread to settle it: link("done", value), link("failed", message,
--- handled), link("cancelled"); link() returns the future. `canceller` (a C function) cancels the C++ side when the
--- script cancels. A settlement passed after it applies at once.
-function ui.__futureLink(canceller, ...)
+-- handled), link("cancelled"), link("progress", value); link() returns the future. `canceller` (a C function) cancels
+-- the C++ side when the script cancels; `core` (a userdata) lets C++ read the future back as itself. A settlement
+-- passed after it applies at once.
+function ui.__futureLink(canceller, core, ...)
     local f = newFuture()
     f.__cancel = canceller
+    f.__core = core
     local function link(kind, ...)
         if kind == nil then return f end
-        if kind == "failed" then
+        if kind == "progress" then
+            reportProgress(f, (...))
+        elseif kind == "failed" then
             local err, handled = ...
             if handled then f.__handled = true end
             settle(f, "failed", err)
@@ -1305,6 +1475,36 @@ function ui.__futureLink(canceller, ...)
     end
     if select("#", ...) > 0 then link(...) end
     return f, link
+end
+
+-- A Lua future read into C++ (a method argument of type imlui::Future<T>) that wasn't pushed from C++: the C++ future
+-- follows it through `receiver` (a C function): receiver("done", values...), receiver("failed", message),
+-- receiver("cancelled"), receiver("progress", value). Returns the link C++ keeps: link() returns the future,
+-- link("cancelled") cancels it. `core` is set as f.__core unless it has one.
+function ui.__futureAdopt(f, core, receiver)
+    if f.__core == nil then f.__core = core end
+    if f.state == "pending" then
+        local list = f.__onProgress
+        if list == nil then
+            list = {}
+            f.__onProgress = list
+        end
+        list[#list + 1] = function(value) receiver("progress", value) end
+        if f.progress ~= nil then receiver("progress", f.progress) end
+    end
+    onSettle(f, function()
+        if f.state == "done" then
+            receiver("done", table.unpack(f.__values, 1, f.__values.n))
+        elseif f.state == "failed" then
+            receiver("failed", display(f.error))
+        else
+            receiver("cancelled")
+        end
+    end)
+    return function(kind)
+        if kind == nil then return f end
+        if kind == "cancelled" then FUTURE_METHODS.cancel(f) end
+    end
 end
 
 --- Called by the engine at the start of every frame. Returns the seconds until

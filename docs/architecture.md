@@ -559,7 +559,8 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
 2. Creates a new `lua_State`, opens the standard libraries, registers `imlui.native` (a `package.preload`
    entry) and the Canvas painter metatable, and installs the registered C++ types and singletons
    (`TypeRegistry::install`: the `imlui.types` library the DSL constructors use, methods tables, singleton
-   globals).
+   globals). Before it links a singleton that an earlier state had, `install` calls its `scriptReloading()`, while
+   the singleton is still linked to the old state: it stops work started for the old script.
 3. Registers the resource loader (`luaui::registerResources`): the `imlui.resource` library and a
    `package.searchers` entry that finds modules in `imlui:/`. `package.path` keeps Lua's default, for plain Lua
    libraries; imlui's own files never go through it.
@@ -569,7 +570,9 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
 5. On failure (syntax error, runtime error, or a non-table return), it closes the new state, points the
    singletons back at the old one, restores the previous theme and keeps the old UI. On success, it replaces the
    old state and applies the window title and size (size only if it changed since the last load). Closing a
-   state destroys the C++ instances of its elements and detaches the singletons from it.
+   state destroys the C++ instances of its elements and detaches the singletons from it. Handlers and listeners
+   (`connect`) live in the state, so they go with it, and come back with the old state after a failure. A failed
+   reload has run the `scriptReloading()` hooks already: the old script keeps running without the work they stopped.
 
 The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`,
 which walks each mount once through `Mount::listFiles`) and for every resource a Lua state read or loaded. Only directory mounts report times; files in immutable mounts
@@ -1013,6 +1016,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind`, `toFloat` (a Lua number narrowed safely) |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
+| `imlui.lua.listeners` | `setListenerDispatch` (the DSL's `connect` dispatch, at a registry key), `callListeners` (what `ScriptObject::emit`/`notify` call after the slot), `changedSignal` (`"value"` -> `"onValueChanged"`) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |
 | `imlui.lua.native` | `NativeHooks` (quit, reload, title, zoom, window size) and `registerNative`: the `imlui.native` Lua library |
@@ -1074,14 +1078,16 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.types.lua_convert` | `LuaConvert<T>`: C++ to Lua value conversion and back (bool, arithmetic, strings, `Color`, `optional`, `vector`, string-keyed `map`/`unordered_map`, `pair`/`tuple`, `variant`/`monostate`; enums through `EnumNames<E>`, structs through `LuaFields<T>` + `field()`; names for error messages built at compile time; user-extensible); `takesLuaFunction<T>()` |
 | `imlui.types.lua_function` | `LuaFunction`: a copyable, main-thread handle to a Lua function (a registry reference); `call(args...)` / `call<R>(args...)` convert through `LuaConvert` and report errors; expires when its state closes (a per-state liveness token: a registry userdata whose finalizer clears it), so a stale handle is a no-op; its `LuaConvert` (`takesFunction`: an element property of the type gets the function, not a binding's value) |
-| `imlui.types.future` | `Future<T>` / `Promise<T>` / `makePromise<T>(owner)`: a result settled once on the main thread (done, failed, cancelled). Promises are thread-safe (settling is posted; the last copy dropped unsettled cancels; an owner token that stops cancels). Pushed to Lua as a prelude future (`ui.__futureLink`), linked through a `LuaFunction`, so settling after the state closed is a no-op; Lua's `cancel()` reaches C++ through a C closure holding a weak reference and stops the promise's token |
-| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives; `stopToken()` stops when it dies), `cancelHandles()`, `runAsync(work, done[, fail])` (work on the background pool with a token stopped by the object's death or a pool shutdown; `done`/`fail` on the main thread through the handle), `runAsync(work) -> Future<R>` (also stopped by the future's cancel; the object's death cancels the future) |
+| `imlui.types.progress` | `Progress`: a thread-safe, copyable progress reporter (`report(double)`) that `runAsync(work)` hands to work taking it; `Promise::reporter()` makes one |
+| `imlui.types.future` | `Future<T>` / `Promise<T>` / `makePromise<T>(owner)`: a result settled once on the main thread (done, failed, cancelled), with progress before it (`Promise::progress`, coalesced into one posted apply per loop iteration; `Future::progress`/`onProgress`). Promises are thread-safe (settling is posted; the last copy dropped unsettled cancels; an owner token that stops cancels). Pushed to Lua as a prelude future (`ui.__futureLink`), linked through a `LuaFunction`, so settling after the state closed is a no-op; Lua's `cancel()` reaches C++ through a C closure holding a weak reference and stops the promise's token. Read from Lua (a `Future<T>` argument): the future's `__core` userdata gives a pushed future back; another is adopted (`ui.__futureAdopt`: a receiver C closure holding the state settles it, converting with `LuaConvert<T>`; its finalizer cancels it when the state closes) |
+| `imlui.types.task` | `Task`: the handle `runAsync(work, done[, fail])` returns: `cancel()` (stops the work's token; `done`/`fail` never run), `running()`, `cancelled()`; thread-safe, the end decided once by an atomic |
+| `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives; `stopToken()` stops when it dies), `cancelHandles()`, `runAsync(work, done[, fail]) -> Task` (work on the background pool with a token stopped by the object's death, a pool shutdown or the task's cancel; `done`/`fail` on the main thread through the handle, unless cancelled), `runAsync(work) -> Future<R>` (also stopped by the future's cancel; the object's death cancels the future; work taking a `Progress` reports to it); signals call the slot, then the listeners (`noteConnection()` turns on the dispatch through `imlui.lua.listeners`); `scriptReloading()` (virtual: a singleton's reload hook, called by `TypeRegistry::install`) |
 | `imlui.types.live` | `Live<T>`: a property any thread `set()`s; one apply per loop iteration through the owner's handle (latest value, then `notify`); `writer()` for workers that may outlive the owner |
 | `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `pushId`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), `stackSize`, element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `widthIn`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
 | `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `contentFillsWidth(frame)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)`; the ticking list by id (`tickingElements()`, `findTicking(id)`) |
 | `imlui.types.type_info` | `TypeInfo`: the type-erased member table (properties, methods, signals, factory, visual flag, fills-width policy) |
 | `imlui.types.type_builder` | `TypeBuilder<T>`: `property`, `signal`, `method`, `nonVisual`, `defaultProperty`, `fillsWidth`/`fillsWidthWhen` (an unset width fills; a `Row` shares space with it), `extends<Base>` (a subclass's declaration extends its base's) |
-| `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state; the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`, `fillsWidth`, `intrinsicSize`, `elementId`; the layout answers memoized per frame), so the renderer renders every element through it |
+| `imlui.types.registry` | `TypeRegistry`: registered types (by name) and singletons; `install` into each Lua state (first calling the singletons' `scriptReloading()`; `imlui.types.listen`/`setDispatch` for `connect`); the property sync; the ticking; implements `Renderer::Types` (`kind`, `renderElement`, `fillsWidth`, `intrinsicSize`, `elementId`; the layout answers memoized per frame), so the renderer renders every element through it |
 
 ### Resources (`src/imlui/resources/`)
 
