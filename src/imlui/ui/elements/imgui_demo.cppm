@@ -34,7 +34,10 @@ module :private;
 namespace imlui {
 
 void ImGuiDemo::declare(TypeBuilder<ImGuiDemo>& type) {
-    type.property("open", &ImGuiDemo::open, &ImGuiDemo::setOpen).nonVisual();
+    type.doc("Dear ImGui's demo window, for debugging. Non-visual.")
+        .property("open", &ImGuiDemo::open, &ImGuiDemo::setOpen)
+        .doc("Two-way. Shows the window (`true`); closing it writes `false`.")
+        .nonVisual();
 }
 
 void ImGuiDemo::render(Frame&) {

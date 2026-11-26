@@ -56,11 +56,23 @@ module :private;
 namespace imlui {
 
 void ApplicationWindow::declare(TypeBuilder<ApplicationWindow>& type) {
-    type.property("title", &ApplicationWindow::title, &ApplicationWindow::setTitle)
+    type.doc("The root element: fills the native window, with no decoration, and stacks its children (raw `spacing`, "
+             "`align`). Non-visual.\n"
+             "Raw `width` / `height`: the native window's size in dp, applied at load when both are > 0. Raw "
+             "`menuBar = MenuBar { ... }`: a menu bar at the top.")
+        .property("title", &ApplicationWindow::title, &ApplicationWindow::setTitle)
+        .doc("The native window's title, applied every frame while the prop exists (so it can be a binding). "
+             "Without it, the last `ui.setTitle()` sticks, else `\"imlui\"`.")
         .property("color", &ApplicationWindow::color, &ApplicationWindow::setColor)
+        .doc("The background. Unset: the theme's window background (`surface`).")
         .property("padding", &ApplicationWindow::padding, &ApplicationWindow::setPadding)
+        .doc("The content padding (dp), 24 by default.")
         .property("scrollable", &ApplicationWindow::scrollable, &ApplicationWindow::setScrollable)
+        .doc("`false` hides the scrollbar.")
         .property("imageCacheBudget", &ApplicationWindow::imageCacheBudget, &ApplicationWindow::setImageCacheBudget)
+        .doc("Bytes of decoded image pixels (4 per pixel) the image cache keeps; `0`: no limit (a negative value reads "
+             "as 0). Applied every frame while the prop exists; without it the cache keeps its default, 256 MiB. Over "
+             "the budget, the images drawn least recently are evicted and decoded again when next drawn.")
         .nonVisual();
 }
 

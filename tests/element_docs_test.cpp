@@ -24,6 +24,35 @@ constexpr bool requireEveryBuiltin = false;
 /// The built-ins documented completely, by Lua name (an alias is a type of its own: list it too).
 const std::set<std::string, std::less<>> documentedTypes{
     "Button",
+    // family A: windows, layout, progress/data/drawing, non-visual
+    "ApplicationWindow",
+    "Window",
+    "Dialog",
+    "Snackbar",
+    "ImGuiDemo",
+    "Column",
+    "Item",
+    "Row",
+    "Grid",
+    "ScrollView",
+    "ListView",
+    "Card",
+    "TabBar",
+    "Tab",
+    "Section",
+    "Expander",
+    "TreeNode",
+    "Repeater",
+    "If",
+    "Loader",
+    "Responsive",
+    "ProgressBar",
+    "CircularProgress",
+    "BusyIndicator",
+    "Plot",
+    "Table",
+    "Canvas",
+    "Timer",
 };
 
 /// What `info` leaves undocumented: "the type", ".prop", ".onSignal", ":method".

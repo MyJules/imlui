@@ -55,10 +55,17 @@ constexpr int maxColumns = 511; // BeginTable() asserts columns < IMGUI_TABLE_MA
 } // namespace
 
 void Grid::declare(TypeBuilder<Grid>& type) {
+    type.doc("A table-based grid: the children fill the cells left to right, `columns` per row, in columns of equal "
+             "width. A hidden child keeps its empty cell; non-visual children take none.\n"
+             "Natural size: fills the available width (raw `width`). Raw `cull = false` renders every cell (by "
+             "default rows out of view are skipped).");
     type.fillsWidth(); // an unset width fills
     type.property("columns", &Grid::columns, &Grid::setColumns)
+        .doc("The column count (2), 1 to 511 (ImGui's table limit): a larger value is reported and capped.")
         .property("spacing", &Grid::spacing, &Grid::setSpacing)
-        .property("border", &Grid::border, &Grid::setBorder);
+        .doc("The gap between cells (dp), 8 by default.")
+        .property("border", &Grid::border, &Grid::setBorder)
+        .doc("Draws cell borders (`false`).");
 }
 
 void Grid::render(Frame& frame) {

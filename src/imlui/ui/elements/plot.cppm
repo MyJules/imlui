@@ -62,15 +62,27 @@ module :private;
 namespace imlui {
 
 void Plot::declare(TypeBuilder<Plot>& type) {
+    type.doc("A line or bar chart with a grid, a gradient area and a hover readout.\n"
+             "Natural size: fills the available width, 160dp high (raw `width`, `height`).");
     type.fillsWidth(); // an unset width fills
     type.property("values", &Plot::values, &Plot::setValues)
+        .doc("The data. Non-finite values (NaN, inf) are gaps: no point, bar or readout, and the automatic range "
+             "ignores them.")
         .property("kind", &Plot::kind, &Plot::setKind)
+        .doc("`\"lines\"` (default), `\"bars\"` or `\"histogram\"` (the same as bars).")
         .property("fill", &Plot::fill, &Plot::setFill)
+        .doc("A gradient area under the lines (`true`).")
         .property("title", &Plot::title, &Plot::setTitle)
+        .doc("The chart title. Unset: `label`.")
         .property("label", &Plot::label, &Plot::setLabel)
+        .doc("The chart title when `title` isn't set.")
         .property("color", &Plot::color, &Plot::setColor)
+        .doc("The series color. Unset: `primary`.")
         .property("min", &Plot::min, &Plot::setMin)
-        .property("max", &Plot::max, &Plot::setMax);
+        .doc("The bottom of the range. Setting `min` or `max` fixes the range (the other defaults to 0 or 1); both "
+             "unset: an automatic range, which includes 0 for bars.")
+        .property("max", &Plot::max, &Plot::setMax)
+        .doc("The top of the range. Setting `min` or `max` fixes the range (the other defaults to 0 or 1).");
 }
 
 void Plot::render(Frame& frame) {

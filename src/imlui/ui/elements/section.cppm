@@ -49,12 +49,20 @@ module :private;
 namespace imlui {
 
 void Section::declare(TypeBuilder<Section>& type) {
+    type.doc("A collapsible header (48dp, 64dp with supporting text) whose children are indented 16dp while expanded "
+             "(`Expander` is an alias of `Section`).\n"
+             "`Section { \"Advanced\" }` sets `text`. Natural size: fills the available width (raw `width`).");
     type.fillsWidth(); // an unset width fills
     type.property("title", &Section::title, &Section::setTitle)
+        .doc("The header text (`titleMedium`). Unset: `text`.")
         .property("text", &Section::text, &Section::setText)
+        .doc("The title when `title` isn't set. The positional value: `Section { \"Advanced\" }`.")
         .property("supportingText", &Section::supportingText, &Section::setSupportingText)
+        .doc("A second header line; `\"\"` for none.")
         .property("expanded", &Section::expanded, &Section::setExpanded)
-        .signal("onToggled")
+        .doc("Two-way. Whether it is open (`true`).")
+        .signal<bool>("onToggled", {"expanded"})
+        .doc("Called when the user opens or closes it, with the new state.")
         .defaultProperty("text");
 }
 

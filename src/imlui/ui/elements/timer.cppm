@@ -77,12 +77,25 @@ module :private;
 namespace imlui {
 
 void Timer::declare(TypeBuilder<Timer>& type) {
-    type.property("interval", &Timer::interval, &Timer::setInterval)
+    type.doc("A timer that fires `onTriggered` every `interval` ms. Non-visual.\n"
+             "It ticks even when it isn't rendered (a hidden page, a `visible = false` parent), from its creation "
+             "until it's collected or the script reloads: use `running = false` to stop it. Periods don't drift; a "
+             "frame more than a period late fires once.")
+        .property("interval", &Timer::interval, &Timer::setInterval)
+        .doc("The period in ms (1000), > 0. Another value is reported, and the timer doesn't fire until it gets a "
+             "valid one.")
         .property("running", &Timer::running, &Timer::setRunning)
+        .doc("Two-way. Whether it runs (`true`); starting it (again) restarts the period. A one-shot writes `false` "
+             "back when it fires. Props sync once per frame: to restart within a frame, use `restart()`.")
         .property("repeat", &Timer::repeat, &Timer::setRepeat)
+        .doc("`false` fires once (a one-shot). A Lua keyword: write `[\"repeat\"] = false`.")
         .property("triggeredOnStart", &Timer::triggeredOnStart, &Timer::setTriggeredOnStart)
+        .doc("Also fires when it starts running (`false`).")
         .method("restart", &Timer::restart)
-        .signal("onTriggered")
+        .doc("Starts the period over now (and fires if `triggeredOnStart`), running or not; a stopped timer gets "
+             "`running = true`.")
+        .signal<>("onTriggered")
+        .doc("Called every `interval` ms while running.")
         .nonVisual();
 }
 

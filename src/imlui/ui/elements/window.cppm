@@ -77,17 +77,36 @@ module :private;
 namespace imlui {
 
 void Window::declare(TypeBuilder<Window>& type) {
-    type.property("open", &Window::open, &Window::setOpen)
+    type.doc("A floating ImGui window with Material surface colors (`surfaceContainerLow`, an `outlineVariant` "
+             "border) that stacks its children (raw `spacing`, `align`). Non-visual.\n"
+             "Each `Window` element is its own ImGui window: it keeps its position and size when the title changes. "
+             "Raw `menuBar = MenuBar { ... }`: a menu bar.")
+        .property("open", &Window::open, &Window::setOpen)
+        .doc("Two-way. `false` hides the window. While the prop is present the window has a close button, which writes "
+             "`open = false` (then `onClosed`).")
         .property("title", &Window::title, &Window::setTitle)
+        .doc("The title bar's text, `\"Window\"` by default.")
         .property("x", &Window::x, &Window::setX)
+        .doc("The position's x (dp), applied when the window first appears; 60 by default.")
         .property("y", &Window::y, &Window::setY)
+        .doc("The position's y (dp), applied when the window first appears; 60 by default.")
         .property("width", &Window::width, &Window::setWidth)
+        .doc("The width in dp (a plain number: no fill values), applied when the window first appears if `width` or "
+             "`height` is > 0. With `autoResize`, the minimum width; a fill inside is this wide (240dp when unset).")
         .property("height", &Window::height, &Window::setHeight)
+        .doc("The height in dp (a plain number), applied when the window first appears if `width` or `height` is > 0. "
+             "With `autoResize`, the minimum height.")
         .property("autoResize", &Window::autoResize, &Window::setAutoResize)
+        .doc("Fits the window to its content every frame: it grows and shrinks back with it. Unset: `true` when "
+             "neither `width` nor `height` is set.")
         .property("titleBar", &Window::titleBar, &Window::setTitleBar)
+        .doc("Shows the title bar (`true`).")
         .property("resizable", &Window::resizable, &Window::setResizable)
+        .doc("The user can resize the window (`true`).")
         .property("movable", &Window::movable, &Window::setMovable)
-        .signal("onClosed")
+        .doc("The user can move the window (`true`).")
+        .signal<>("onClosed")
+        .doc("Called after the close button wrote `open = false`.")
         .nonVisual();
 }
 

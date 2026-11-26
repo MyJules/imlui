@@ -43,8 +43,12 @@ module :private;
 namespace imlui {
 
 void ProgressBar::declare(TypeBuilder<ProgressBar>& type) {
-    type.property("value", &ProgressBar::value, &ProgressBar::setValue)
-        .property("indeterminate", &ProgressBar::indeterminate, &ProgressBar::setIndeterminate);
+    type.doc("A Material 3 linear progress indicator, with a gap and a stop indicator.\n"
+             "Natural size: 240dp wide (raw `width`).")
+        .property("value", &ProgressBar::value, &ProgressBar::setValue)
+        .doc("The progress, 0..1 (0). Clamped; NaN (`done / total` with `total == 0`) shows 0.")
+        .property("indeterminate", &ProgressBar::indeterminate, &ProgressBar::setIndeterminate)
+        .doc("Animates instead of showing `value` (`false`).");
 }
 
 void ProgressBar::render(Frame& frame) {
