@@ -27,6 +27,9 @@ public:
         std::function<Assign(lua::State*, int, ScriptObject&)> assign;
         /// True when nil is a value of the property (std::optional): nil is then synced as std::nullopt.
         bool nullable = false;
+        /// True when a Lua function is a value of the property (LuaFunction): the sync then passes a function field on
+        /// as the value instead of calling it as a binding.
+        bool takesFunction = false;
         /// The value nil resets the property to, captured for an object right after its construction:
         /// the declared default (TypeBuilder::property(name, get, set, defaultValue)), or else a copy of
         /// the getter's value. Empty for read-only and nullable properties, and for value types that

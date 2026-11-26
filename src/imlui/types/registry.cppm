@@ -335,8 +335,9 @@ std::uint64_t fingerprint(lua::State* state, int tbl, const TypeInfo& info) {
 /// something else while the table itself doesn't change, so that a sync must read them again although the fingerprint
 /// matches: a binding (a function, called every sync), a bind or any other table (a nested table changed in place: a
 /// bind's source, a color, a model), a userdata (its contents), and, when the table has a metatable of its own, any
-/// field the table doesn't hold (its __index answers). A nil, boolean, number or string is static: its property
-/// converts the same way until the table's field is written, which the fingerprint sees.
+/// field the table doesn't hold (its __index answers). A nil, boolean, number or string, and a function a property
+/// takes as its value (LuaFunction), is static: its property converts the same way until the table's field is
+/// written, which the fingerprint sees.
 void collectDynamicFields(lua::State* state, int tbl, const TypeInfo& info, std::vector<std::uint32_t>& out) {
     out.clear();
     lua::checkstack(state, 2);
@@ -354,7 +355,10 @@ void collectDynamicFields(lua::State* state, int tbl, const TypeInfo& info, std:
         case lua::Type::String: break;
         // (The default property's positional [1] is passed on unresolved, by identity: in the fingerprint.)
         case lua::Type::Nil: dynamic = ownMeta; break;
-        default: dynamic = true; break; // functions, tables (binds), userdata, threads
+        // A function is a binding, called every sync, unless the property takes functions: then it is the value itself,
+        // as static as a string.
+        case lua::Type::Function: dynamic = !p.takesFunction; break;
+        default: dynamic = true; break; // tables (binds), userdata, threads
         }
         if (dynamic) out.push_back(static_cast<std::uint32_t>(i));
     }
@@ -470,7 +474,11 @@ void resetProperty(const Box& b, std::size_t index) {
 void syncProperty(lua::State* state, const Node& node, Box& b, std::size_t index) {
     const TypeInfo& info = *b.type;
     const TypeInfo::Property& p = info.properties()[index];
-    node.push(*p.key);
+    // A property that takes functions (LuaFunction) gets a function field as its value: not called as a binding.
+    if (!p.takesFunction || node.pushRaw(*p.key) != lua::Type::Function) {
+        if (p.takesFunction) lua::pop(state);
+        node.push(*p.key);
+    }
     if (lua::isnil(state, -1) && p.name == info.defaultProperty()) {
         lua::pop(state);
         lua::rawgeti(state, node.index(), 1); // `Gauge { 0.5 }`: a positional value that isn't a child

@@ -76,7 +76,8 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 - [Property sync](#property-sync): how Lua values reach the setters every frame
 - [Telling Lua about changes](#telling-lua-about-changes): `notify` and `emit`
 - [Singletons](#singletons)
-- [Value conversion](#value-conversion): `LuaConvert<T>` and your own types
+- [Value conversion](#value-conversion): `LuaConvert<T>`, enums and structs, your own types, Lua callbacks
+  (`LuaFunction`)
 - [Lifetime](#lifetime) and [hot reload](#hot-reload)
 - [Resources and the host config](#resources-and-the-host-config): mounts, the entry script
 - [Testing elements](#testing-elements): the headless frame harness
@@ -574,8 +575,67 @@ results, and signal arguments. Built in:
 | `imlui::Color` | color spec | Reads a role name, `"role/alpha"`, hex or `{r, g, b, a}`, like every color prop. Pushes `"#RRGGBB[AA]"`. |
 | `std::optional<T>` | `nil` or `T` | A method argument that is left out reads as `nil` too, so trailing optional parameters may be omitted. |
 | `std::vector<T>` | sequence | Every element must convert. |
+| `std::map<std::string, T>`, `std::unordered_map<std::string, T>` | table with string keys | Every key must be a string (a number key fails, so `{ "a" }` is no map) and every value convert. |
+| `std::pair<A, B>`, `std::tuple<Ts...>` | sequence `{a, b, ...}` | Element *i* converts as the *i*-th type. A longer sequence fails; a missing trailing element is `nil` (a `std::optional` element takes it). |
+| `std::variant<Ts...>` | any alternative | Pushes the active alternative. Reads the **first** alternative whose check passes, so list the specific ones first: `bool` takes every value, `std::string` takes numbers, an integer takes numeric strings. |
+| `std::monostate` | `nil` | The empty alternative of a variant. |
+| an enum with [`EnumNames<E>`](#enums-and-structs) | one of its names | Pushes the name. Reads the names only (case-sensitive): an integer or an unknown name fails. A value without a name pushes its underlying integer, which doesn't read back. |
+| a struct with [`LuaFields<T>`](#enums-and-structs) | table | One key per field. A missing field keeps its default (see below). |
+| [`imlui::LuaFunction`](#lua-functions-luafunction) | function | A callback the script hands to C++. |
 
-Add your own by specializing it (in your module, in namespace `imlui`):
+They compose: a `std::vector` of structs whose fields are maps of variants converts, and so does a method taking a
+`std::optional<LuaFunction>`. Tables are read raw (no `__index`), so a check never runs Lua code. Each type has a
+`name` for error messages, built at compile time from its parts: `bad argument #1 to 'Plot:setSeries'
+({[string] = {x, y}...} expected, got string)`, `Plot.quality: 'low'|'high' expected, got number`.
+
+### Enums and structs
+
+Both are opt-in: specialize a trait in namespace `imlui` (in your module, next to the type). Macros can't be
+exported from a module, so the traits are plain templates.
+
+```cpp
+enum class Quality { Low, High };
+struct Vec2 { double x = 0, y = 0; bool operator==(const Vec2&) const = default; };
+struct Series {
+    std::string label = "series";
+    std::vector<Vec2> points;
+    std::optional<double> max;       // a missing field reads as std::nullopt
+    Quality quality = Quality::High; // a missing field keeps this default
+    bool operator==(const Series&) const = default;
+};
+
+template <> struct imlui::EnumNames<Quality> {
+    static constexpr std::pair<Quality, std::string_view> values[] = {{Quality::Low, "low"}, {Quality::High, "high"}};
+};
+template <> struct imlui::LuaFields<Vec2> {
+    static constexpr std::tuple fields{imlui::field("x", &Vec2::x), imlui::field("y", &Vec2::y)};
+};
+template <> struct imlui::LuaFields<Series> {
+    static constexpr std::string_view name = "Series"; // optional: errors say "Series", not "{label, points, ...}"
+    static constexpr std::tuple fields{imlui::field("label", &Series::label), imlui::field("points", &Series::points),
+                                       imlui::field("max", &Series::max), imlui::field("quality", &Series::quality)};
+};
+
+type.property("series", &Plot::series, &Plot::setSeries); // const Series& series() const; void setSeries(Series)
+```
+
+```lua
+Plot { series = { label = "cpu", points = { { x = 0, y = 1 }, { x = 1, y = 3 } }, quality = "low" } }
+```
+
+- `EnumNames<E>::values` lists `{value, "name"}` pairs. An optional `name` replaces the default error name
+  (`'low'|'high'`).
+- `LuaFields<T>::fields` is a tuple of `imlui::field("key", &T::member)` (an `imlui::LuaField<T, M>`). An optional
+  `name` replaces the default error name (`{x, y}`). `T` must be default-constructible.
+- **Missing fields.** Reading starts from `T{}`. A missing (`nil`) field keeps its default member value, like an
+  element property that is `nil`; a missing `std::optional` field reads as `std::nullopt`. A field that is present
+  but doesn't convert fails the check, which rejects the whole value like any other mismatch. Keys that aren't
+  fields are ignored. Pushing writes every field; a `std::nullopt` field stays absent.
+- Give structs an `operator==`, so the property sync can skip unchanged values.
+
+### Your own types
+
+Specialize `LuaConvert` itself for anything else (in your module, in namespace `imlui`):
 
 ```cpp
 struct Vec2 { double x = 0, y = 0; bool operator==(const Vec2&) const = default; };
@@ -606,6 +666,65 @@ struct imlui::LuaConvert<Vec2> {
 `push` pushes exactly one value. `check` must not raise errors or leave anything on the stack, and `get` is only
 called after `check` returned true. Leave out `check`/`get` for a push-only type. Give the type an `operator==`
 so the sync can skip unchanged values.
+
+### Lua functions: `LuaFunction`
+
+`imlui::LuaFunction` (module `imlui.types.lua_function`) is a C++ handle to a Lua function. A property, method
+argument or result, struct field or signal argument of that type takes a function from the script.
+
+```cpp
+type.method("forEach", &Backend::forEach)                       // int forEach(const imlui::LuaFunction& fn)
+    .property("filter", &Backend::filter, &Backend::setFilter); // std::optional<imlui::LuaFunction>
+
+int Backend::forEach(const imlui::LuaFunction& fn) {
+    int n = 0;
+    for (const Item& item : m_items) {
+        ++n;
+        if (fn.call<bool>(item) == false) break; // std::optional<bool>: nullopt after an error or a non-boolean
+    }
+    return n;
+}
+```
+
+```lua
+backend:forEach(function(item) print(item.name); return item.name ~= "stop" end)
+backend.filter = function(item) return item.size > 10 end
+Chart { formatter = function(v) return ("%.1f"):format(v) end } -- a LuaFunction property: not a binding
+```
+
+| Member | What |
+|---|---|
+| `call(args...)` | Calls the function with `args` converted by `LuaConvert`. Returns whether it ran without an error (`false` when expired). |
+| `call<R>(args...)` | The same, returning the first result as `std::optional<R>`: `std::nullopt` when expired, after an error, or when the result doesn't convert (reported: `LuaFunction: integer expected as the result, got string`). |
+| `expired()`, `explicit operator bool` | Whether the handle is empty or its Lua state is closing or closed. |
+| `push(state)` | Pushes the function, or `nil` when expired or when `state` is another Lua state. `LuaConvert` uses it. |
+| `operator==` | The same Lua function in the same state (copies, or two handles taken from one function). |
+
+- **Errors.** A Lua error in the function (with its traceback) and a C++ exception while converting the arguments
+  go to the error overlay, like a handler's, and never propagate to the caller. A call doesn't request a frame (it
+  may run during a render, as a comparator, say): call `imlui::requestFrame()` when the callback changed what is
+  shown and nothing else asks for a frame.
+- **Properties.** On an element, a function is normally a [binding](lua-api.md#property-values), called every
+  frame. A property whose type takes functions (`LuaFunction`, or an `optional`/`variant` holding one) gets the
+  function itself as its value instead, and syncs it like a plain value: the setter runs again only when the field
+  is set to another function.
+- **Lifetime.** The handle never keeps its Lua state alive and never dangles. Each state carries a liveness token
+  (a userdata in its registry, whose finalizer runs when [hot reload](#hot-reload) or shutdown closes the state,
+  before Lua frees anything), and every handle holds its state's token. Once the state is closing or closed, the
+  handle is expired: calling it does nothing and returns `false`/`std::nullopt`, pushing it pushes `nil`
+  (`backend.filter` reads `nil` after a reload until the new script sets it again), and destroying it doesn't
+  touch the state. While the state lives, the last copy's destructor releases the function's registry reference.
+  An element holding a handle is destroyed with its state; whichever finalizer runs first, both orders are safe.
+- **Threads.** Main thread only, like everything that touches Lua: take, copy, call and destroy handles there (the
+  copies share one reference without a lock, and the last one releases it on the state). A worker hands its result
+  back with `handle.post`, whose function calls the handle the object keeps:
+
+  ```cpp
+  std::thread{[h = handle(), this, input] {    // no LuaFunction copy on the worker
+      Result r = compute(input);
+      h.post([this, r] { m_onDone.call(r); }); // main thread, only while `this` lives
+  }}.detach();
+  ```
 
 ## Lifetime
 
@@ -676,7 +795,8 @@ children and remembers the last one's rect, to know where to click) and `test::R
 On reload the engine creates a new Lua state and calls `TypeRegistry::install(state)` before the DSL loads. The
 types, methods tables and singleton globals are set up again, so registered types keep working after every
 reload. When the old state closes, every element instance in it is destroyed (`destroyed()` first), and the
-singletons are re-linked to the new state. Singleton handlers (`backend.onTick = ...`) belong to a state, so the
+singletons are re-linked to the new state. `LuaFunction` handles taken from the old state expire (calls become
+no-ops; see [Lua functions](#lua-functions-luafunction)). Singleton handlers (`backend.onTick = ...`) belong to a state, so the
 reloaded script sets them again. If the new script fails to load, the engine keeps the old state and points
 the singletons back at it.
 
@@ -920,7 +1040,8 @@ skeleton.
 
 | Module | Contents |
 |---|---|
-| `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations; the `LuaPushable` / `LuaReadable` concepts |
+| `imlui.types.lua_convert` | `LuaConvert<T>` and its built-in specializations (scalars, strings, `Color`, `optional`, `vector`, string-keyed maps, `pair`/`tuple`, `variant`/`monostate`); `EnumNames<E>`, `LuaFields<T>` with `field(key, &T::member)`; the `LuaPushable` / `LuaReadable` concepts, `takesLuaFunction<T>()` |
+| `imlui.types.lua_function` | `LuaFunction`: a handle to a Lua function (`call(args...)`, `call<R>(args...)`, `expired()`, `push`), expired once its state closes; its `LuaConvert` |
 | `imlui.types.script_object` | `ScriptObject`: `notify`, `emit`, `handle()` (`ScriptObject::Handle`: `alive()`, `post(fn)`, for worker threads), `cancelHandles()`, the Lua link (`luaState`, `pushSelf`, `attach`/`relink`/`detach`, used by the registry) |
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
