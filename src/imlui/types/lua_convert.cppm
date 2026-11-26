@@ -140,9 +140,12 @@ constexpr LuaTypes::Describe luaTypeDescriber() {
 [[nodiscard]] std::string luaMismatchOf(std::string_view typeName, std::string_view why);
 
 /// Opt-in names for an enum, which then converts to and from its names as strings. Specialize it with a constexpr
-/// list of {value, "name"} pairs, and optionally a `name` for error messages (the default lists the names):
+/// list of {value, "name"} pairs, and optionally a `name` for error messages and the Lua definitions (the default
+/// lists the names) and a `doc` for the definitions (the hover text of the `---@alias`):
 ///
 ///   template <> struct imlui::EnumNames<Quality> {
+///       static constexpr std::string_view name = "Quality";
+///       static constexpr std::string_view doc = "How carefully it is drawn.";
 ///       static constexpr std::pair<Quality, std::string_view> values[] = {{Quality::Low, "low"},
 ///                                                                          {Quality::High, "high"}};
 ///   };
@@ -151,29 +154,49 @@ constexpr LuaTypes::Describe luaTypeDescriber() {
 template <class E>
 struct EnumNames;
 
-/// A struct field of LuaFields<T>: its Lua key and member pointer. Made by imlui::field().
+/// A struct field of LuaFields<T>: its Lua key, member pointer and doc. Made by imlui::field().
 template <class T, class M>
 struct LuaField {
     const char* name; ///< NUL-terminated (a string literal)
     M T::* member;
+    /// What the field is, for the Lua definitions (the `---` lines above its `---@field`); "" when undocumented.
+    std::string_view description;
+
+    /// This field with `text` as its doc, for the Lua definitions: `imlui::field("x", &Vec2::x).doc("Across, dp.")`.
+    [[nodiscard]] constexpr LuaField doc(std::string_view text) const {
+        LuaField out = *this;
+        out.description = text;
+        return out;
+    }
 };
 
-/// A field of LuaFields<T>::fields: `imlui::field("x", &Vec2::x)`.
+/// A field of LuaFields<T>::fields: `imlui::field("x", &Vec2::x)`, documented with `.doc("...")`.
 template <class T, class M>
 constexpr LuaField<T, M> field(const char* name, M T::* member) {
-    return {name, member};
+    return {name, member, {}};
 }
 
 /// Opt-in field list for a struct, which then converts to and from a table with those keys. Specialize it with a
-/// constexpr tuple of fields, and optionally a `name` for error messages (the default lists the keys, "{x, y}"):
+/// constexpr tuple of fields, and optionally a `name` for error messages and the Lua definitions (the default lists
+/// the keys, "{x, y}"), a `doc` for the definitions and `outputOnly` (see below):
 ///
 ///   template <> struct imlui::LuaFields<Vec2> {
-///       static constexpr std::tuple fields{imlui::field("x", &Vec2::x), imlui::field("y", &Vec2::y)};
+///       static constexpr std::string_view name = "Vec2";
+///       static constexpr std::string_view doc = "A point, in dp.";
+///       static constexpr std::tuple fields{imlui::field("x", &Vec2::x).doc("Across."),
+///                                          imlui::field("y", &Vec2::y).doc("Down.")};
 ///   };
 ///
 /// T must be default-constructible. Reading starts from T{}: a missing (nil) field keeps its default member value,
 /// except a std::optional field, which reads nil as std::nullopt. A present field of the wrong type fails check().
 /// Keys that aren't fields are ignored. Pushing writes every field (a std::nullopt one stays absent).
+///
+/// In the Lua definitions a named struct is a `---@class` with the docs as hover text. Its fields are required
+/// (`---@field id integer`) when the generator sees the struct only going to Lua (a result, a signal argument, a
+/// read-only property, a model's rows: LuaTypes::Flow::Output), else optional (`---@field id? integer`), since a
+/// table from Lua may leave fields out; a std::optional field is optional either way. `static constexpr bool
+/// outputOnly = true;` makes them required wherever the struct is used (one that reaches Lua some way the generator
+/// can't see).
 template <class T>
 struct LuaFields;
 
@@ -658,7 +681,9 @@ struct LuaConvert<E> {
         if constexpr (requires { std::string_view{EnumNames<E>::name}; }) {
             const std::string_view alias = EnumNames<E>::name;
             if (LuaTypes::isIdentifier(alias)) {
-                if (types.claim(alias)) types.define(alias, "---@alias " + std::string{alias} + " " + names + "\n");
+                if (types.claim(alias))
+                    types.define(alias, LuaTypes::docLines(enumDoc()) + "---@alias " + std::string{alias} + " " +
+                                            names + "\n");
                 return std::string{alias};
             }
         }
@@ -684,6 +709,12 @@ struct LuaConvert<E> {
     }
 
 private:
+    static constexpr std::string_view enumDoc() {
+        if constexpr (requires { std::string_view{EnumNames<E>::doc}; })
+            return EnumNames<E>::doc;
+        else
+            return {};
+    }
     static std::optional<E> find(lua::State* s, int idx) {
         if (lua::type(s, idx) != lua::Type::String) return std::nullopt;
         const std::string_view text = lua::tostring(s, idx);
@@ -703,22 +734,22 @@ struct LuaConvert<T> {
             return lua_convert_detail::builtName<lua_convert_detail::StructName<T>>;
     }();
     /// A `---@class` with a field per LuaField when LuaFields<T> has a `name` that is an identifier, else an inline
-    /// table type ("{ x: number, y: number }"). The class's fields are optional: a missing one keeps its default.
+    /// table type ("{ x: number, y: number }"). The class's fields are required when the struct is output only (see
+    /// LuaFields), else optional: a missing one keeps its default. Records the use in the current flow (LuaTypes::use)
+    /// and describes the fields in it, so the structs inside get it too (Output for an `outputOnly` one).
     static std::string luaType(LuaTypes& types) {
         if constexpr (requires { std::string_view{LuaFields<T>::name}; }) {
             const std::string_view cls = LuaFields<T>::name;
             if (LuaTypes::isIdentifier(cls)) {
-                if (types.claim(cls)) {
-                    std::string decl = "---@class " + std::string{cls} + "\n";
-                    std::apply(
-                        [&](const auto&... f) {
-                            ((decl += "---@field " + std::string{f.name} + "? " +
-                                      std::string{LuaTypes::required(fieldLuaType(f, types))} + "\n"),
-                             ...);
-                        },
-                        LuaFields<T>::fields);
-                    types.define(cls, std::move(decl));
-                }
+                const LuaTypes::Flow outer = types.flow();
+                if constexpr (declaredOutputOnly()) types.setFlow(LuaTypes::Flow::Output);
+                const bool newUse = types.use(cls);
+                if (types.claim(cls))
+                    types.define(cls, declaration(cls, types));
+                else if (newUse) // a use in another flow: the structs inside get it too
+                    std::apply([&](const auto&... f) { (static_cast<void>(fieldLuaType(f, types)), ...); },
+                               LuaFields<T>::fields);
+                types.setFlow(outer);
                 return std::string{cls};
             }
         }
@@ -762,6 +793,37 @@ struct LuaConvert<T> {
     }
 
 private:
+    static constexpr bool declaredOutputOnly() {
+        if constexpr (requires { bool{LuaFields<T>::outputOnly}; })
+            return LuaFields<T>::outputOnly;
+        else
+            return false;
+    }
+    static constexpr std::string_view structDoc() {
+        if constexpr (requires { std::string_view{LuaFields<T>::doc}; })
+            return LuaFields<T>::doc;
+        else
+            return {};
+    }
+    /// The `---@class` of named struct `cls`: its doc, and a `---@field` with its doc per field.
+    static std::string declaration(std::string_view cls, LuaTypes& types) {
+        const bool required = declaredOutputOnly() || types.outputOnly(cls);
+        std::string decl = LuaTypes::docLines(structDoc()) + "---@class " + std::string{cls} + "\n";
+        std::apply([&](const auto&... f) { ((decl += fieldDeclaration(f, required, types)), ...); },
+                   LuaFields<T>::fields);
+        return decl;
+    }
+    /// "---@field name type", or "name? type" when it is optional (not `required`, or a std::optional field). A
+    /// function type is in parentheses: after a line that ends in a bare `fun(...)`, LuaLS (3.19) looks for its return
+    /// type on the next line and loses the doc there.
+    template <class C, class M>
+    static std::string fieldDeclaration(const LuaField<C, M>& f, bool required, LuaTypes& types) {
+        const std::string type = fieldLuaType(f, types);
+        const bool optional = !required || type.ends_with('?');
+        std::string shown{LuaTypes::required(type)};
+        if (shown.starts_with("fun(")) shown = LuaTypes::grouped(shown);
+        return LuaTypes::docLines(f.description) + "---@field " + f.name + (optional ? "? " : " ") + shown + "\n";
+    }
     template <class C, class M>
     static std::string fieldLuaType(const LuaField<C, M>&, LuaTypes& types) {
         return luaTypeOf<M>(types);
