@@ -9,6 +9,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
 
 export namespace imlui {
@@ -17,7 +18,7 @@ export namespace imlui {
 ///
 /// Props:   title = "Window", open = true, x = 60, y = 60, width = 0, height = 0, autoResize = unset,
 ///          titleBar = true, resizable = true, movable = true
-/// Raw:     menuBar (a MenuBar), spacing, align
+/// Raw:     menuBar (a MenuBar), spacing, align, cull
 /// Signals: onClosed(self)
 /// Two-way: open
 ///
@@ -78,9 +79,8 @@ namespace imlui {
 
 void Window::declare(TypeBuilder<Window>& type) {
     type.doc("A floating ImGui window with Material surface colors (`surfaceContainerLow`, an `outlineVariant` "
-             "border) that stacks its children (raw `spacing`, `align`). Non-visual.\n"
-             "Each `Window` element is its own ImGui window: it keeps its position and size when the title changes. "
-             "Raw `menuBar = MenuBar { ... }`: a menu bar.")
+             "border) that stacks its children. Non-visual.\n"
+             "Each `Window` element is its own ImGui window: it keeps its position and size when the title changes.")
         .property("open", &Window::open, &Window::setOpen)
         .doc("Two-way. `false` hides the window. While the prop is present the window has a close button, which writes "
              "`open = false` (then `onClosed`).")
@@ -107,7 +107,10 @@ void Window::declare(TypeBuilder<Window>& type) {
         .doc("The user can move the window (`true`).")
         .signal<>("onClosed")
         .doc("Called after the close button wrote `open = false`.")
+        .rawProperty("menuBar", "Element|false")
+        .doc("A `MenuBar { ... }` below the title bar.")
         .nonVisual();
+    rawStackProps(type);
 }
 
 void Window::render(Frame& frame) {

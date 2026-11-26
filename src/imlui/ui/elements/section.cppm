@@ -9,13 +9,14 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 
 export namespace imlui {
 
 /// A collapsible header whose children are indented while expanded (also registered as Expander).
 ///
 /// Props:   title = unset (the text), text = "" (positional), supportingText = "", expanded = true
-/// Raw:     width
+/// Raw:     width; spacing, align, cull (its children are stacked with them)
 /// Signals: onToggled(self, expanded)
 /// Two-way: expanded
 class Section final : public Element {
@@ -64,6 +65,7 @@ void Section::declare(TypeBuilder<Section>& type) {
         .signal<bool>("onToggled", {"expanded"})
         .doc("Called when the user opens or closes it, with the new state.")
         .defaultProperty("text");
+    rawStackProps(type);
 }
 
 void Section::render(Frame& frame) {

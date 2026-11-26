@@ -12,6 +12,7 @@ import imlui.lua.node;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.types.type_info;
 
 export namespace imlui {
 
@@ -73,10 +74,8 @@ void uncheckRadioPeers(const luaui::Node& n) {
 
 void RadioButton::declare(TypeBuilder<RadioButton>& type) {
     type.doc("A Material 3 radio button with an optional label. A click sets `checked` to `true` (two-way); "
-             "only a `group` sets it back to `false`.\n"
-             "`group = <any value>` (Lua side, read when the element is created): the RadioButtons with the same "
-             "`group` act as one, a click writes `checked = false` to the others (a function binding is left alone). "
-             "Or derive `checked` from state and set that state in `onClicked`.\n"
+             "only a `group` sets it back to `false`. Or derive `checked` from state and set that state in "
+             "`onClicked`.\n"
              "`RadioButton { \"Small\" }` sets `text`. Natural size: the ring and its label, 40dp high.")
         .property("text", &RadioButton::text, &RadioButton::setText)
         .doc("The label. The positional value: `RadioButton { \"Small\" }`.")
@@ -85,6 +84,9 @@ void RadioButton::declare(TypeBuilder<RadioButton>& type) {
         .defaultProperty("text")
         .signal<>("onClicked")
         .doc("Called when the button is clicked (after `checked` and the group were updated).");
+    type.rawProperty("group", "string|number|boolean|table", RawRead::ValueOnly)
+        .doc("Lua side, read when the element is created. The RadioButtons with the same `group` value act as one: a "
+             "click writes `checked = false` to the others (through their `bind`s; a function binding is left alone).");
 }
 
 void RadioButton::render(Frame& frame) {

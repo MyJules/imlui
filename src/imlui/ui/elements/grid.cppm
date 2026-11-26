@@ -57,15 +57,17 @@ constexpr int maxColumns = 511; // BeginTable() asserts columns < IMGUI_TABLE_MA
 void Grid::declare(TypeBuilder<Grid>& type) {
     type.doc("A table-based grid: the children fill the cells left to right, `columns` per row, in columns of equal "
              "width. A hidden child keeps its empty cell; non-visual children take none.\n"
-             "Natural size: fills the available width (raw `width`). Raw `cull = false` renders every cell (by "
-             "default rows out of view are skipped).");
+             "Natural size: fills the available width (raw `width`).");
     type.fillsWidth(); // an unset width fills
     type.property("columns", &Grid::columns, &Grid::setColumns)
         .doc("The column count (2), 1 to 511 (ImGui's table limit): a larger value is reported and capped.")
         .property("spacing", &Grid::spacing, &Grid::setSpacing)
         .doc("The gap between cells (dp), 8 by default.")
         .property("border", &Grid::border, &Grid::setBorder)
-        .doc("Draws cell borders (`false`).");
+        .doc("Draws cell borders (`false`).")
+        .rawProperty<bool>("cull")
+        .doc("`false` renders every cell. By default (`true`) a row of cells out of view is skipped like a stack's "
+             "child: its height is kept, and the last row always renders.");
 }
 
 void Grid::render(Frame& frame) {

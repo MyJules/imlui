@@ -1,7 +1,7 @@
 // TypeInfo: the type-erased description of a registered C++ type, filled in by TypeBuilder<T>
-// (properties, signals, methods, visual flag, factory) and used by TypeRegistry to bind it to Lua. The LuaLS types of
-// the members (LuaTypes::Describe) and the docs of the type and its members are kept for the generated Lua definitions
-// (imlui.types.lua_definitions).
+// (properties, signals, methods, raw properties, visual flag, factory) and used by TypeRegistry to bind it to Lua. The
+// LuaLS types of the members (LuaTypes::Describe) and the docs of the type and its members are kept for the generated
+// Lua definitions (imlui.types.lua_definitions).
 export module imlui.types.type_info;
 
 import std;
@@ -12,6 +12,16 @@ import imlui.types.element;
 import imlui.types.lua_types;
 
 export namespace imlui {
+
+/// How an element reads a raw property (TypeBuilder::rawProperty), which decides what a script may give it.
+enum class RawRead {
+    /// Through luaui::Node (Node::push, number(), string(), Frame::size, Frame::withElementProp): a plain value, a
+    /// binding function or a `bind()`, like a declared property.
+    Bindable,
+    /// The field itself (Node::pushRaw, Frame::attachMenu, the Lua constructor): a function there is never called
+    /// as a binding.
+    ValueOnly,
+};
 
 class TypeInfo {
 public:
@@ -78,6 +88,18 @@ public:
         std::string doc; ///< for the Lua definitions; "" when undocumented
     };
 
+    /// A prop the element reads straight from its table (luaui::Node, Frame::size, Frame::withElementProp, the Lua
+    /// constructor) rather than through a C++ property: declared (TypeBuilder::rawProperty) for the Lua definitions
+    /// only. The registry never syncs, resets, pushes or assigns it.
+    struct RawProperty {
+        std::string name;
+        std::string doc; ///< for the Lua definitions; "" when undocumented
+        /// The LuaLS type of its values: luaTypeOf<V> (rawProperty<V>), else `luaTypeText`.
+        LuaTypes::Describe luaType = nullptr;
+        std::string luaTypeText; ///< an explicit LuaLS type expression (rawProperty(name, luaType))
+        RawRead read = RawRead::Bindable;
+    };
+
     using Factory = std::function<std::unique_ptr<Element>()>;
 
     explicit TypeInfo(std::string name);
@@ -87,7 +109,7 @@ public:
     /// What the type is, for the Lua definitions (TypeBuilder::doc); "" when undocumented.
     [[nodiscard]] const std::string& doc() const;
     void setDoc(std::string doc);
-    /// Sets the doc of the declared property, method or signal `name`. Returns false when there is none.
+    /// Sets the doc of the declared property, raw property, method or signal `name`. Returns false when there is none.
     bool setMemberDoc(std::string_view name, std::string doc);
 
     [[nodiscard]] bool visual() const;
@@ -111,6 +133,8 @@ public:
     [[nodiscard]] const std::vector<std::string>& signals() const;
     /// The signals with their declared argument types, in declaration order (the same names as signals()).
     [[nodiscard]] const std::vector<Signal>& signalDeclarations() const;
+    /// The raw properties, in declaration order: for the Lua definitions only (see RawProperty).
+    [[nodiscard]] const std::vector<RawProperty>& rawProperties() const;
     [[nodiscard]] const Property* findProperty(std::string_view name) const;
     [[nodiscard]] const Method* findMethod(std::string_view name) const;
     [[nodiscard]] bool hasSignal(std::string_view name) const;
@@ -119,6 +143,7 @@ public:
     void addProperty(Property property);
     void addMethod(Method method);
     void addSignal(std::string name, std::optional<std::vector<Param>> args = std::nullopt);
+    void addRawProperty(RawProperty property);
 
     /// Element types have a factory; singleton types don't.
     [[nodiscard]] const Factory& factory() const;
@@ -145,6 +170,7 @@ private:
     std::vector<Method> m_methods;
     std::vector<std::string> m_signals;
     std::vector<Signal> m_signalDeclarations;
+    std::vector<RawProperty> m_rawProperties;
     Factory m_factory;
     mutable std::shared_ptr<const Defaults> m_sharedDefaults; ///< sharedDefaults(), once captured
 };
@@ -170,6 +196,8 @@ bool TypeInfo::setMemberDoc(std::string_view name, std::string doc) {
         if (m.name == name) target = &m.doc;
     for (auto& s : m_signalDeclarations)
         if (s.name == name) target = &s.doc;
+    for (auto& r : m_rawProperties)
+        if (r.name == name) target = &r.doc;
     if (!target) return false;
     *target = std::move(doc);
     return true;
@@ -198,6 +226,7 @@ const std::vector<TypeInfo::Property>& TypeInfo::properties() const { return m_p
 const std::vector<TypeInfo::Method>& TypeInfo::methods() const { return m_methods; }
 const std::vector<std::string>& TypeInfo::signals() const { return m_signals; }
 const std::vector<TypeInfo::Signal>& TypeInfo::signalDeclarations() const { return m_signalDeclarations; }
+const std::vector<TypeInfo::RawProperty>& TypeInfo::rawProperties() const { return m_rawProperties; }
 
 const TypeInfo::Property* TypeInfo::findProperty(std::string_view name) const {
     for (const auto& p : m_properties)
@@ -220,7 +249,8 @@ bool TypeInfo::hasSignal(std::string_view name) const {
 void TypeInfo::checkUnique(std::string_view name) const {
     // A clash would make one member unreachable (methods are looked up through the element table's
     // metatable, so a method named like a property would be read as that property's binding).
-    if (findProperty(name) || findMethod(name) || hasSignal(name))
+    const bool raw = std::ranges::any_of(m_rawProperties, [&](const RawProperty& r) { return r.name == name; });
+    if (findProperty(name) || findMethod(name) || hasSignal(name) || raw)
         throw std::invalid_argument{m_name + ": member '" + std::string{name} + "' is declared twice"};
 }
 
@@ -239,6 +269,11 @@ void TypeInfo::addSignal(std::string name, std::optional<std::vector<Param>> arg
     checkUnique(name);
     m_signals.push_back(name);
     m_signalDeclarations.push_back({.name = std::move(name), .args = std::move(args), .doc = {}});
+}
+
+void TypeInfo::addRawProperty(RawProperty property) {
+    checkUnique(property.name);
+    m_rawProperties.push_back(std::move(property));
 }
 
 const TypeInfo::Factory& TypeInfo::factory() const { return m_factory; }

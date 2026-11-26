@@ -7,13 +7,14 @@ import std;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 
 export namespace imlui {
 
 /// One tab of a TabBar; a Tab outside a TabBar renders its content inline.
 ///
 /// Props:   title = "Tab", icon = ""
-/// Raw:     spacing, align (the TabBar stacks the content with them)
+/// Raw:     spacing, align, cull (the TabBar stacks the content with them)
 class Tab final : public Element {
 public:
     static void declare(TypeBuilder<Tab>& type);
@@ -38,12 +39,13 @@ module :private;
 namespace imlui {
 
 void Tab::declare(TypeBuilder<Tab>& type) {
-    type.doc("One tab of a `TabBar`: its header and its content, stacked with raw `spacing` / `align`. "
+    type.doc("One tab of a `TabBar`: its header and its content, stacked with `spacing` / `align`. "
              "`visible = false` hides the tab and its header; outside a `TabBar` it renders its content inline.")
         .property("title", &Tab::title, &Tab::setTitle)
         .doc("The header's label, `\"Tab\"` by default.")
         .property("icon", &Tab::icon, &Tab::setIcon)
         .doc("The header's Material icon name; `\"\"` for none.");
+    rawStackProps(type);
 }
 
 void Tab::render(Frame& frame) { frame.renderStack(); }

@@ -52,7 +52,9 @@ Each element has a short description, a props table, then **Signals** and **Two-
 - Any prop can be a plain value, a binding function or a `bind(...)`
   ([property values](lua-api.md#property-values)). A binding that returns `nil` resets the prop to its default.
 - Props marked *raw* aren't C++ properties: the element reads them straight from its table while rendering
-  (sizes, element-valued props, a few presence checks). They take the same three forms.
+  (sizes, element-valued props, a few presence checks). They take the same three forms, except `menu` (the
+  `Menu` itself, never a binding) and `RadioButton`'s `group` (read once, on the Lua side). The editor's
+  [Lua definitions](extending.md#editor-support-lua-definitions) know them too.
 - Signal handlers get `self` first: `onToggled = function(self, checked) ... end`. A handler runs after the prop
   it reports on has been written back.
 - Indices (`currentIndex`, `currentRow`, ...) are 1-based.
@@ -99,14 +101,13 @@ anchored Material dropdown (at least 112dp wide) under the button. See [Menu](#m
 
 ### Stacking containers
 
-Elements that stack their children top to bottom (`ApplicationWindow`, `Window`, `Dialog`, `Column`,
-`ScrollView`, `ListView`, `Card`, `Tab`, `ModalNavigationDrawer`) also take:
+Elements that stack their children top to bottom (`ApplicationWindow`, `Window`, `Dialog`, `Column` (`Item`),
+`ScrollView`, `ListView`, `Card`, `Section` (`Expander`, while expanded), `Tab`, `ModalNavigationDrawer`) also take:
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView` and `Card`; *raw* on the others. |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it; a fill-minus child (`width = -40`) is the stack's width less 40dp, and `align` places it in the stack (centered: 20dp on each side). |
-
+| `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView`, `ListView` and `Card`; *raw* on the others. |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it; a fill-minus child (`width = -40`) is the stack's width less 40dp, and `align` places it in the stack (centered: 20dp on each side). Declared like `spacing`. |
 | `cull` | bool | `true` | *Raw.* `false` renders every child, also those out of view. By default a child out of view whose size is known is skipped and only its size is laid out (its bindings don't run); positions and the scroll range are the same either way. See [Culling](architecture.md#culling); `ui.setCulling(false)` turns it off everywhere. |
 
 Non-visual children are rendered in place and don't count for the spacing. Children that hold the item being edited

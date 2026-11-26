@@ -161,6 +161,9 @@ types.registerType<Rating>("Rating");
   `Frame::Child` handles (`child.render()`, `child.expectedWidth()`, `child.as<T>()`) for custom layout.
   `frame.attachMenu(clicked)` supports a `menu` prop. `frame.node()` reaches raw Lua. See
   [Registering C++ types](extending.md#element-types) for the whole `Frame`.
+- A prop `render()` reads from the table itself (`frame.size("size")`, an element prop, `menu`, a lazily read table)
+  is declared with [`type.rawProperty`](extending.md#raw-properties) for the editor; a stacking container calls
+  `rawStackProps(type)` for `spacing`, `align` and `cull`.
 - `type.nonVisual()` for elements that take no layout space (windows, timers); `setTicking(true)` for elements
   that act while they aren't rendered ([ticking elements](extending.md#ticking-elements)).
 
@@ -171,7 +174,7 @@ C++ instances too.
 
 **4. Docs.** Add the element to [Elements](elements.md) and the README element table, and try it in a real window
 (see [Trying changes in an app](#trying-changes-in-an-app)). Document it in `declare()` for the editor's hover text
-([`doc(text)`](extending.md#docs-doctext)): the type and every property, signal and method, condensed from its
+([`doc(text)`](extending.md#docs-doctext)): the type and every property, raw property, signal and method, condensed from its
 Elements section (the common props are documented already), with typed signals (`signal<Args...>(name, {"names"})`)
 and named method parameters. `tests/element_docs_test.cpp` requires every built-in to be documented completely, so
 a new element (or a new member of one) fails `ElementDocs.BuiltinsAreDocumented` until it has its docs; the failure

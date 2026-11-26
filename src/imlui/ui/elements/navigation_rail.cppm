@@ -75,6 +75,9 @@ void NavigationRail::declare(TypeBuilder<NavigationRail>& type) {
         .property("align", &NavigationRail::align, &NavigationRail::setAlign)
         .doc("Where the destinations sit in the height below the header while they fit: `\"top\"` (default), "
              "`\"center\"` or `\"bottom\"`.");
+    type.rawProperty("header", "Element|false")
+        .doc("An element fixed at the top, centered and not scrolled (a menu `IconButton`, a FAB: "
+             "`Button { variant = \"fab\" }`). It's in drawer style, not a rail destination.");
 }
 
 void NavigationRail::render(Frame& frame) {

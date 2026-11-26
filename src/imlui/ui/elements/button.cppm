@@ -9,6 +9,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.types.type_info;
 
 export namespace imlui {
 
@@ -49,7 +50,7 @@ namespace imlui {
 
 void Button::declare(TypeBuilder<Button>& type) {
     type.doc("A Material 3 button: a label with an optional leading icon, in one of the emphasis `variant`s.\n"
-             "`Button { \"OK\" }` sets `text`. `menu = Menu { ... }` opens that menu under the button on a click.\n"
+             "`Button { \"OK\" }` sets `text`.\n"
              "Natural size: as wide as the label (at least 48dp), 40dp high (a FAB 56dp).")
         .property("text", &Button::text, &Button::setText)
         .doc("The label (`labelLarge`). The positional value: `Button { \"OK\" }`.")
@@ -64,6 +65,8 @@ void Button::declare(TypeBuilder<Button>& type) {
         .defaultProperty("text")
         .signal<>("onClicked")
         .doc("Called when the button is clicked.");
+    type.rawProperty("menu", "Element|false", RawRead::ValueOnly)
+        .doc("A `Menu { ... }` opened under the button on a click, as an anchored dropdown (at least 112dp wide).");
 }
 
 void Button::render(Frame& frame) {

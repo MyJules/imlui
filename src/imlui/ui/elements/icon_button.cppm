@@ -9,6 +9,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.types.type_info;
 
 export namespace imlui {
 
@@ -57,8 +58,7 @@ namespace imlui {
 void IconButton::declare(TypeBuilder<IconButton>& type) {
     type.doc("A Material 3 icon button: a 40dp icon container in a 48dp touch target.\n"
              "`IconButton { \"menu\" }` sets `text`, the icon name unless `icon` is set. With `checked` in the table "
-             "(any value, even a binding that returns `nil`) it is a toggle: a click flips `checked` (two-way). "
-             "`menu = Menu { ... }` opens that menu under the button on a click.\n"
+             "(any value, even a binding that returns `nil`) it is a toggle: a click flips `checked` (two-way).\n"
              "Natural size: 48dp square.")
         .property("text", &IconButton::text, &IconButton::setText)
         .doc("The icon name when `icon` isn't set. The positional value: `IconButton { \"menu\" }`.")
@@ -76,6 +76,8 @@ void IconButton::declare(TypeBuilder<IconButton>& type) {
         .defaultProperty("text")
         .signal<>("onClicked")
         .doc("Called when the button is clicked (after a toggle flipped `checked`).");
+    type.rawProperty("menu", "Element|false", RawRead::ValueOnly)
+        .doc("A `Menu { ... }` opened under the button on a click, as an anchored dropdown (at least 112dp wide).");
 }
 
 void IconButton::render(Frame& frame) {

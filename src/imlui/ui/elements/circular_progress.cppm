@@ -47,13 +47,14 @@ namespace imlui {
 
 void CircularProgress::declare(TypeBuilder<CircularProgress>& type) {
     type.doc("A Material 3 circular progress indicator.\n"
-             "Natural size: 48dp across (raw `size`: the diameter).")
+             "Natural size: `size` across (48dp).")
         .property("value", &CircularProgress::value, &CircularProgress::setValue)
         .doc("The progress, 0..1 (0). Clamped; NaN shows 0.")
         .property("indeterminate", &CircularProgress::indeterminate, &CircularProgress::setIndeterminate)
         .doc("Spins instead of showing `value` (`false`).")
         .property("thickness", &CircularProgress::thickness, &CircularProgress::setThickness)
         .doc("The stroke width (dp), 4 by default.");
+    type.rawProperty<double>("size").doc("The diameter (dp); unset (or not > 0): 48dp.");
 }
 
 void CircularProgress::render(Frame& frame) {

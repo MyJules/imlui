@@ -43,6 +43,7 @@ export import imlui.ui.elements.slider;
 export import imlui.ui.elements.snackbar;
 export import imlui.ui.elements.spacer;
 export import imlui.ui.elements.spin_box;
+export import imlui.ui.elements.stack_props;
 export import imlui.ui.elements.switch_toggle;
 export import imlui.ui.elements.tab;
 export import imlui.ui.elements.tab_bar;

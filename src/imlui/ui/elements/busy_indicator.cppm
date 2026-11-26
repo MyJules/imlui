@@ -44,11 +44,12 @@ namespace imlui {
 
 void BusyIndicator::declare(TypeBuilder<BusyIndicator>& type) {
     type.doc("An indeterminate circular indicator.\n"
-             "Natural size: 48dp across (raw `size`: the diameter), also while not running.")
+             "Natural size: `size` across (48dp), also while not running.")
         .property("running", &BusyIndicator::running, &BusyIndicator::setRunning)
         .doc("Spins while `true` (default); while `false` nothing is drawn but the space is kept.")
         .property("thickness", &BusyIndicator::thickness, &BusyIndicator::setThickness)
         .doc("The stroke width (dp), 4 by default.");
+    type.rawProperty<double>("size").doc("The diameter (dp); unset (or not > 0): 48dp.");
 }
 
 void BusyIndicator::render(Frame& frame) {

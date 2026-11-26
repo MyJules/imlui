@@ -178,7 +178,8 @@ public:
 };
 
 /// A base class and a subclass that extends it: the subclass inherits the members' docs, replaces one, has a type doc
-/// of its own and documents its own members.
+/// of its own and documents its own members. Raw properties: one typed by its C++ type, one by a LuaLS expression and
+/// read as the value itself (no binding), one undocumented (whose binding returns a type that starts with a group).
 class Dial : public Element {
 public:
     static void declare(TypeBuilder<Dial>& type) {
@@ -188,7 +189,12 @@ public:
             .signal<>("onTurned")
             .doc("Turned by the user.")
             .method("spin", &Dial::spin)
-            .doc("Spins it once.");
+            .doc("Spins it once.")
+            .rawProperty<std::optional<double>>("size")
+            .doc("The diameter (dp).")
+            .rawProperty("knob", "Element|false", RawRead::ValueOnly)
+            .doc("An element drawn on the knob.")
+            .rawProperty<std::vector<std::variant<int, std::string>>>("marks");
     }
     void render(Frame&) override {}
     [[nodiscard]] double angle() const { return m_angle; }
@@ -205,6 +211,7 @@ public:
         type.doc("A dial with a fine scale.")
             .extends<Dial>()
             .docMember("angle", "The angle, in tenths of a degree.")
+            .docMember("size", "The fine dial's diameter (dp).")
             .property("step", &FineDial::step, &FineDial::setStep)
             .doc("The scale's step.");
     }
@@ -277,6 +284,11 @@ ui.Blank = Blank
 ---@class DialProps: ElementProps
 ---The angle, in degrees.
 ---@field angle? number|(fun(self: Dial): number?)|Binding
+---The diameter (dp).
+---@field size? number|(fun(self: Dial): number?)|Binding
+---An element drawn on the knob.
+---@field knob? Element|false
+---@field marks? (integer|string)[]|(fun(self: Dial): ((integer|string)[]?))|Binding
 ---Turned by the user.
 ---@field onTurned? (fun(self: Dial))
 ---Called when `angle` changes, with the new value.
@@ -286,6 +298,11 @@ ui.Blank = Blank
 ---@class Dial: Element
 ---The angle, in degrees.
 ---@field angle number
+---The diameter (dp).
+---@field size? number
+---An element drawn on the knob.
+---@field knob? Element|false
+---@field marks? (integer|string)[]
 ---Turned by the user.
 ---@field onTurned? (fun(self: Dial))
 ---Called when `angle` changes, with the new value.
@@ -309,6 +326,11 @@ ui.Dial = Dial
 ---@field angle? number|(fun(self: FineDial): number?)|Binding
 ---The scale's step.
 ---@field step? integer|(fun(self: FineDial): integer?)|Binding
+---The fine dial's diameter (dp).
+---@field size? number|(fun(self: FineDial): number?)|Binding
+---An element drawn on the knob.
+---@field knob? Element|false
+---@field marks? (integer|string)[]|(fun(self: FineDial): ((integer|string)[]?))|Binding
 ---Turned by the user.
 ---@field onTurned? (fun(self: FineDial))
 ---Called when `angle` changes, with the new value.
@@ -322,6 +344,11 @@ ui.Dial = Dial
 ---@field angle number
 ---The scale's step.
 ---@field step integer
+---The fine dial's diameter (dp).
+---@field size? number
+---An element drawn on the knob.
+---@field knob? Element|false
+---@field marks? (integer|string)[]
 ---Turned by the user.
 ---@field onTurned? (fun(self: FineDial))
 ---Called when `angle` changes, with the new value.
@@ -569,6 +596,22 @@ TEST(LuaTypes, MethodParameterNamesMustMatchTheArity) {
     EXPECT_THROW(registry.registerSingleton("bad", bad), std::invalid_argument);
 }
 
+TEST(LuaTypes, RawPropertyNamesAreUniqueAndNeedAType) {
+    class Clash final : public ScriptObject {
+    public:
+        static void declare(TypeBuilder<Clash>& type) { type.signal("onX").rawProperty<bool>("onX"); }
+    };
+    class Untyped final : public ScriptObject {
+    public:
+        static void declare(TypeBuilder<Untyped>& type) { type.rawProperty("x", ""); }
+    };
+    TypeRegistry registry;
+    Clash clash;
+    Untyped untyped;
+    EXPECT_THROW(registry.registerSingleton("clash", clash), std::invalid_argument);
+    EXPECT_THROW(registry.registerSingleton("untyped", untyped), std::invalid_argument);
+}
+
 TEST(LuaDefinitions, GoldenTypesFile) {
     TypeRegistry registry;
     registry.registerType<Gauge>("Gauge");
@@ -602,6 +645,14 @@ TEST(LuaDefinitions, TypeBuilderRecordsTheDocs) {
     EXPECT_EQ(fine.findMethod("spin")->doc, "Spins it once.");
     EXPECT_EQ(fine.signalDeclarations().at(0).doc, "Turned by the user.");
     EXPECT_EQ(fine.findProperty("step")->doc, "The scale's step.");
+    // Raw properties: declared for the definitions only, not as properties; inherited, their doc replaceable.
+    ASSERT_EQ(dial.rawProperties().size(), 3u);
+    EXPECT_EQ(dial.findProperty("size"), nullptr);
+    EXPECT_EQ(dial.rawProperties()[0].doc, "The diameter (dp).");
+    EXPECT_EQ(dial.rawProperties()[1].read, RawRead::ValueOnly);
+    EXPECT_EQ(dial.rawProperties()[2].doc, "");
+    EXPECT_EQ(fine.rawProperties()[0].doc, "The fine dial's diameter (dp).");
+    EXPECT_EQ(fine.rawProperties()[1].doc, "An element drawn on the knob.");
 }
 
 namespace {

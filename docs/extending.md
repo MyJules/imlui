@@ -70,7 +70,7 @@ A complete, runnable version is described in [A complete example](#a-complete-ex
 
 - [Element types](#element-types): `Element`, `render(Frame&)`, the lifecycle hooks, custom layouts (layout boxes, the
   layout cache)
-- [Declaring members](#declaring-members): `TypeBuilder<T>`: properties, signals, methods, docs (`doc`),
+- [Declaring members](#declaring-members): `TypeBuilder<T>`: properties, raw properties, signals, methods, docs (`doc`),
   `nonVisual`, `defaultProperty`, the size policy (`fillsWidth`), [intrinsic sizes](#intrinsic-sizes), aliases,
   subclasses (`extends`)
 - [Property sync](#property-sync): how Lua values reach the setters every frame
@@ -234,7 +234,9 @@ The common props keep working on typed elements without being declared, exactly 
 the renderer skips the element when `visible` is false, wraps it in `BeginDisabled` when `enabled` is false, in an
 ImGui group when it's visual, and in `PushID`, and shows `tooltip` after it. `id` registers the element for lookup
 by name, and sizes are read with `frame.size("width")` / `frame.size("height")` (or resolved to pixels with
-`frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`), the type's fill policy applied.
+`frame.resolvedWidth(natural)` / `frame.resolvedHeight(natural)`), the type's fill policy applied. Any other prop you
+read from the table yourself (`frame.size("size")`, an element prop) is declared with
+[`rawProperty`](#raw-properties), for the editor.
 
 ## Declaring members
 
@@ -262,6 +264,39 @@ type.property("value", &Gauge::value, &Gauge::setValue)       // read/write
   as the fourth argument,
   `property(name, getter, setter, defaultValue)`. An `std::optional<T>` property takes no default: `nil` is
   `std::nullopt`. A value type that can't be copied keeps its current value on `nil`.
+
+### Raw properties
+
+Some props are better read straight from the element table while rendering than synced into the instance: a size
+(`frame.size("size")`), an element (`frame.withElementProp("header", ...)`, `frame.attachMenu`), a big table read
+lazily (only a `Table`'s rows in view), a value the Lua constructor reads. Declare them for the
+[Lua definitions](#editor-support-lua-definitions) with `rawProperty`, so the editor completes, checks and documents
+them like the others:
+
+```cpp
+type.rawProperty<double>("size")                                // type from LuaConvert<double>: number
+    .doc("The diameter (dp); unset: 48dp.")
+    .rawProperty("header", "Element|false")                     // a LuaLS type expression
+    .doc("An element fixed at the top.")
+    .rawProperty("menu", "Element|false", imlui::RawRead::ValueOnly) // read with node().pushRaw: never a binding
+    .doc("A `Menu` opened on click.");
+```
+
+- A raw property is **declaration only**: no getter, no setter, never synced, reset or written back, no change
+  signal, nothing in `TypeInfo::properties()` (it's in `rawProperties()`). The element keeps reading it however it
+  did, and runtime behavior doesn't change.
+- Its type is `luaTypeOf<V>` (`rawProperty<V>(name)`, any `LuaConvert` type) or the LuaLS expression you give
+  (`rawProperty(name, luaType)`), for values no C++ type describes. Type an element prop `Element` (a component's
+  result is an `Element`, so `Menu` would flag `menu = FileMenu {}`), and add `|false` when `false` turns it off.
+- `RawRead` (module `imlui.types.type_info`) says what a script may give it: `RawRead::Bindable` (the default) when
+  the element reads it through `luaui::Node` (`push`, `number`, `string`, `boolean`, `Frame::size`,
+  `withElementProp`), which resolves bindings: a value, a binding function or a `bind()`, like a property;
+  `RawRead::ValueOnly` when it takes the field itself (`pushRaw`, `attachMenu`, the Lua constructor).
+- It takes a [`doc`](#docs-doctext), shares the one namespace of member names, and is inherited by
+  [`extends<Base>()`](#subclasses-extendsbase) (`docMember` replaces its doc).
+- The stacking containers' `spacing`, `align` and `cull` (read by `Frame::renderStack`) are declared with
+  `rawStackProps(type)` / `rawCullProp(type)` (module `imlui.ui.elements.stack_props`): call them in your own
+  stacking element's `declare` too.
 
 ### Signals
 
@@ -323,7 +358,7 @@ type.method("grow", imlui::overload<double>(&Shape::grow))              // doubl
 ### Docs: `doc(text)`
 
 `doc(text)` documents what the call right before it declared, for the [Lua definitions](#editor-support-lua-definitions)
-(the editor shows it on hover and in completion): a property, signal or method, or the type itself as the **first**
+(the editor shows it on hover and in completion): a property, raw property, signal or method, or the type itself as the **first**
 call in `declare()`:
 
 ```cpp
@@ -1064,6 +1099,8 @@ client use the same server and the same file.
 - **Properties**: their `LuaConvert` type (below). A read-only one is in the element class only, not in the props.
   An `std::optional<T>` is `T?`; a binding may always return `nil` (that resets the prop). A property that takes
   functions (`LuaFunction`) takes a function as its value, not as a binding.
+- **[Raw properties](#raw-properties)**: optional fields of both classes (`menu? Element|false`): in the props as a
+  value, a binding or a `bind` (`RawRead::Bindable`) or the value alone (`RawRead::ValueOnly`); no change signal.
 - **Signals**: `on*` fields of both classes, and of the singleton's class. `type.signal("onPeak")` doesn't say its
   arguments, so the handler is `fun(self: Gauge, ...: any)`; declare them with
   `type.signal<double>("onPeak", {"value"})` (the types after `self`, and optionally their names) to get
@@ -1119,10 +1156,11 @@ Without one, its `name` is used when it is a LuaLS built-in type (`number`, `str
 **What LuaLS isn't told.** Free names that are element ids (`nameField.text` at app level) aren't declared, so the
 language server reports them as undefined globals: reach them through `ui.ids` (an `Ids`: `table<string, any>`, like a component's
 and a delegate's `ids`, since an id can name any type), annotate a local (`---@type TextField` above `local nameField = ui.ids.nameField`), or disable `undefined-global`
-for UI scripts. Props an element reads raw from its table (`Table`'s `rows`, `menu`, a `Canvas`'s painter; sizes but
-the common `width`/`height`) aren't declared in C++, so they aren't in its classes (an unknown key in a constructor's
-table isn't flagged either). Most built-in signals are declared without argument types yet (`...: any`; `Button`'s
-`onClicked` is typed): [Elements](elements.md) lists their arguments. `connect`'s overloads match the target's type loosely, so a signal of
+for UI scripts. An unknown key in a constructor's table isn't flagged (LuaLS allows extra fields in a table literal),
+and neither is a prop a parent reads from a child of any type (a `TabBar` reads the `title` and `icon` of a child that
+isn't a `Tab`): only the child's own class is known. The fields imlui sets for itself (`__type`, `__base`,
+`__radioGroup`, ...) aren't declared. A binding function's result isn't checked against the prop's type (LuaLS checks
+the function, not the table it returns). `connect`'s overloads match the target's type loosely, so a signal of
 another type isn't always flagged. An element's class has what the C++ side holds (`nameField.text` is a `string`),
 though a field a script set to a binding function holds that function. `state(init)` returns a
 `table<string, any>` (a field initialized to `nil` would otherwise be typed `nil` for good), and `await(f)` unwraps a
@@ -1566,8 +1604,8 @@ skeleton.
 | `imlui.ui.main_thread` | `post(fn)`: hand work to the main thread from any thread; `runPosted`, `clearPosted`, `postedCount`, `setPostWakeHandler` (used by the engine) |
 | `imlui.types.frame` | `Frame`: the render-time context; `Frame::Child`: a child handle |
 | `imlui.types.element` | `Element`: `render`, `intrinsicSize`, `contentFillsWidth`, `componentComplete`, `destroyed`, `tick` / `setTicking` |
-| `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in, with the members' Lua types |
-| `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal` (optionally typed: `signal<Args...>(name, argNames)`), `method` (optionally with parameter names), `nonVisual`, `defaultProperty`, `fillsWidth` / `fillsWidthWhen`, `extends` |
+| `imlui.types.type_info` | `TypeInfo`: the type-erased member table a `TypeBuilder` fills in, with the members' Lua types; `RawRead` |
+| `imlui.types.type_builder` | `TypeBuilder<T>`: `property` (with an optional default), `signal` (optionally typed: `signal<Args...>(name, argNames)`), `method` (optionally with parameter names), `rawProperty`, `nonVisual`, `defaultProperty`, `fillsWidth` / `fillsWidthWhen`, `extends` |
 | `imlui.types.lua_types` | `LuaTypes`: the named types (`claim`, `define`) the Lua definitions declare, and helpers for type expressions (`fromName`, `grouped`, `optional`, `required`, `isIdentifier`, `quoted`) |
 | `imlui.types.lua_definitions` | `luaTypeDefinitions(registry)`, `writeLuaDefinitions(registry, dir, prelude)`, `luaPreludeDefinitions`: the LuaLS definitions |
 | `imlui.ui.layout_box` | Layout boxes (`imlui::layout`): `BoxScope`, `boxTo`, `regionBox`, `shrinkToFitBox`, `insetBox`, `pushBox`/`popBox`, `availableWidth`, `claimWidth`: the space a container gives its children |

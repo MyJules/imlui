@@ -5,10 +5,11 @@
 //    the `Element`, `ElementProps`, `Binding`, `Color` and `Future<T>` classes). Hand-written, shipped with the
 //    library's files as imlui:/definitions/imlui.lua (luaPreludeDefinitions) and copied as it is.
 //  * `types.lua`: generated from a TypeRegistry (luaTypeDefinitions): a `<Name>Props` class (what the constructor
-//    takes: every writable property as a value, a binding function or a `bind`, and the `on*` handlers) and a `<Name>`
-//    class (the element table: properties, handlers, methods) per element type, the constructor `<Name>(props)` (also
-//    as `ui.<Name>`), a class and a global per singleton, the named structs and enums the members use, and `connect`
-//    with an overload per type whose signal names are a `<Name>Signal` alias.
+//    takes: every writable property as a value, a binding function or a `bind`, the raw properties, and the `on*`
+//    handlers) and a `<Name>` class (the element table: properties, raw properties, handlers, methods) per element
+//    type, the constructor `<Name>(props)` (also as `ui.<Name>`), a class and a global per singleton, the named
+//    structs and enums the members use, and `connect` with an overload per type whose signal names are a
+//    `<Name>Signal` alias.
 //
 // Member types come from LuaConvert (luaTypeOf<V>, recorded by TypeBuilder in TypeInfo), the hover docs from
 // TypeBuilder::doc (`---` lines above the classes, the constructor and each field). Output is deterministic: types and
@@ -100,13 +101,32 @@ std::string handler(const std::string& self, const std::optional<std::vector<Typ
     return out + ")";
 }
 
+/// `expr` (grouped) as a fun() return type. LuaLS (3.19) drops the parentheses a return type starts with, so
+/// `fun(): (string|number)[][]` would read as `string|number[][]`: such a type gets another pair around it.
+std::string returnType(std::string_view expr) {
+    std::string out = LuaTypes::grouped(expr);
+    if (!out.starts_with('(')) return out;
+    int depth = 0;
+    std::size_t close = 0;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        if (out[i] == '(') ++depth;
+        if (out[i] == ')' && --depth == 0) {
+            close = i;
+            break;
+        }
+    }
+    const std::string_view rest = std::string_view{out}.substr(close + 1);
+    if (rest.empty() || rest == "?") return out; // the group is the whole type: dropping it changes nothing
+    return "(" + out + ")";
+}
+
 /// A method's field type: "fun(self: Gauge, min: number, max: number): Future<string>".
 std::string methodType(const std::string& self, const TypeInfo::Method& m, LuaTypes& named) {
     std::string out = "fun(self: " + self;
     for (const TypeInfo::Param& p : m.params)
         out += ", " + param(p.name, describe(p.type, named));
     out += ")";
-    if (m.result) out += ": " + LuaTypes::grouped(m.result(named));
+    if (m.result) out += ": " + returnType(m.result(named));
     return out;
 }
 
@@ -136,7 +156,13 @@ std::string field(const std::string& doc, const std::string& declaration) {
     return docLines(doc) + "---@field " + declaration + "\n";
 }
 
-/// The fields of an element's or singleton's class: properties, handlers, methods. Handler and method types are in
+/// The LuaLS type of raw property `p`'s values.
+std::string rawType(const TypeInfo::RawProperty& p, LuaTypes& named) {
+    return p.luaType ? p.luaType(named) : p.luaTypeText;
+}
+
+/// The fields of an element's or singleton's class: properties, raw properties (optional: the table holds them only
+/// when the script set them), handlers, methods. Handler and method types are in
 /// parentheses (in the props class too): after a line that ends in a bare `fun(...)`, LuaLS (3.19) looks for its
 /// return type on the next line and loses the doc there.
 std::string memberFields(const std::string& self, const TypeInfo& info, const std::vector<Signal>& signals,
@@ -144,6 +170,8 @@ std::string memberFields(const std::string& self, const TypeInfo& info, const st
     std::string out;
     for (const TypeInfo::Property& p : info.properties())
         out += field(p.doc, p.name + " " + describe(p.luaType, named));
+    for (const TypeInfo::RawProperty& p : info.rawProperties())
+        out += field(p.doc, p.name + "? " + std::string{LuaTypes::required(rawType(p, named))});
     for (const Signal& s : signals)
         out += field(s.doc, s.name + "? " + LuaTypes::grouped(s.type));
     for (const TypeInfo::Method& m : info.methods())
@@ -162,10 +190,18 @@ std::string signalAlias(const std::string& alias, const std::vector<Signal>& sig
 
 /// What a script may give a property in a constructor: the value, a binding (which may return nil to reset it) or a
 /// `bind`. A property whose type takes functions (LuaFunction) gets the function itself, never as a binding.
-std::string propType(const std::string& self, const TypeInfo::Property& p, const std::string& type) {
+std::string propType(const std::string& self, bool takesFunction, const std::string& type) {
     const std::string value{LuaTypes::required(type)};
-    if (p.takesFunction) return value + "|Binding";
-    return value + "|(fun(self: " + self + "): " + LuaTypes::grouped(LuaTypes::optional(value)) + ")|Binding";
+    if (takesFunction) return value + "|Binding";
+    return value + "|(fun(self: " + self + "): " + returnType(LuaTypes::optional(value)) + ")|Binding";
+}
+
+/// What a script may give a raw property: like a property's (propType) when the element reads it through luaui::Node,
+/// else only the value itself.
+std::string rawPropType(const std::string& self, const TypeInfo::RawProperty& p, LuaTypes& named) {
+    const std::string type = rawType(p, named);
+    if (p.read == RawRead::ValueOnly) return std::string{LuaTypes::required(type)};
+    return propType(self, false, type);
 }
 
 struct Connectable {
@@ -189,7 +225,9 @@ std::string elementDefinitions(const std::string& name, const TypeInfo& info, Lu
     out += doc;
     out += "---@class " + name + "Props: ElementProps\n";
     for (const TypeInfo::Property& p : info.properties())
-        if (p.assign) out += field(p.doc, p.name + "? " + propType(name, p, describe(p.luaType, named)));
+        if (p.assign) out += field(p.doc, p.name + "? " + propType(name, p.takesFunction, describe(p.luaType, named)));
+    for (const TypeInfo::RawProperty& p : info.rawProperties())
+        out += field(p.doc, p.name + "? " + rawPropType(name, p, named));
     for (const Signal& s : signals)
         out += field(s.doc, s.name + "? " + LuaTypes::grouped(s.type));
     out += "\n";

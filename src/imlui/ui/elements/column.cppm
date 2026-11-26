@@ -7,6 +7,7 @@ import imgui;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 import imlui.ui.item_size;
 import imlui.ui.layout_box;
 import imlui.ui.renderer;
@@ -63,6 +64,7 @@ void Column::declare(TypeBuilder<Column>& type) {
         .property("align", &Column::align, &Column::setAlign)
         .doc("Each child's horizontal position by its width: `\"start\"` (default), `\"center\"` or `\"end\"`. A "
              "child that fills isn't moved.");
+    rawCullProp(type);
 }
 
 void Column::render(Frame& frame) {

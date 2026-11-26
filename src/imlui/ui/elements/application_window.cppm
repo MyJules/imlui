@@ -9,6 +9,7 @@ import imlui.image.image_cache;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
 
 export namespace imlui {
@@ -19,7 +20,7 @@ export namespace imlui {
 ///          color = unset (surface), padding = 24, scrollable = true,
 ///          imageCacheBudget = unset (bytes of decoded image pixels the image cache keeps, ImageCache::setBudget;
 ///          0: no limit; applied every frame while the prop exists, else the cache's 256 MiB default stands)
-/// Raw:     menuBar (a MenuBar), spacing, align; width, height (the initial window size, read by the engine)
+/// Raw:     menuBar (a MenuBar), spacing, align, cull; width, height (the initial window size, read by the engine)
 ///
 /// Without a `title` prop, the last ui.setTitle() (or "imlui") sticks.
 class ApplicationWindow final : public Element {
@@ -56,10 +57,8 @@ module :private;
 namespace imlui {
 
 void ApplicationWindow::declare(TypeBuilder<ApplicationWindow>& type) {
-    type.doc("The root element: fills the native window, with no decoration, and stacks its children (raw `spacing`, "
-             "`align`). Non-visual.\n"
-             "Raw `width` / `height`: the native window's size in dp, applied at load when both are > 0. Raw "
-             "`menuBar = MenuBar { ... }`: a menu bar at the top.")
+    type.doc("The root element: fills the native window, with no decoration, and stacks its children. Non-visual.\n"
+             "Raw `width` / `height`: the native window's size in dp, applied at load when both are > 0.")
         .property("title", &ApplicationWindow::title, &ApplicationWindow::setTitle)
         .doc("The native window's title, applied every frame while the prop exists (so it can be a binding). "
              "Without it, the last `ui.setTitle()` sticks, else `\"imlui\"`.")
@@ -73,7 +72,10 @@ void ApplicationWindow::declare(TypeBuilder<ApplicationWindow>& type) {
         .doc("Bytes of decoded image pixels (4 per pixel) the image cache keeps; `0`: no limit (a negative value reads "
              "as 0). Applied every frame while the prop exists; without it the cache keeps its default, 256 MiB. Over "
              "the budget, the images drawn least recently are evicted and decoded again when next drawn.")
+        .rawProperty("menuBar", "Element|false")
+        .doc("A `MenuBar { ... }` at the top of the window.")
         .nonVisual();
+    rawStackProps(type);
 }
 
 void ApplicationWindow::render(Frame& frame) {

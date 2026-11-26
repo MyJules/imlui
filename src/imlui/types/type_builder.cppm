@@ -8,7 +8,8 @@
 //           .property("peak", &Gauge::peak)                       // read-only
 //           .signal("onPeak")                                    // or typed: .signal<double>("onPeak", {"value"})
 //           .method("reset", &Gauge::reset)
-//           .method("setRange", &Gauge::setRange, {"min", "max"}); // parameter names for the Lua definitions
+//           .method("setRange", &Gauge::setRange, {"min", "max"}) // parameter names for the Lua definitions
+//           .rawProperty<double>("size");                       // read from the table by render(): definitions only
 //   }
 //
 // The docs are for the Lua definitions (the editor's hover text): Markdown, several lines allowed.
@@ -128,8 +129,8 @@ public:
         static_assert(std::derived_from<T, ScriptObject>, "TypeBuilder<T>: T must derive from imlui::ScriptObject");
     }
 
-    /// Documents (for the Lua definitions: Markdown, several lines allowed) the property, signal or method declared by
-    /// the call right before, or the type itself when it is the first call in declare():
+    /// Documents (for the Lua definitions: Markdown, several lines allowed) the property, raw property, signal or
+    /// method declared by the call right before, or the type itself when it is the first call in declare():
     /// `type.doc("A gauge.").property("value", ...).doc("The needle's position.")`. Anything else throws
     /// std::invalid_argument at registration: a second doc() for the same thing, or one after a call that declares
     /// no member (extends, defaultProperty, nonVisual, fillsWidth, ...). "" leaves it undocumented.
@@ -153,7 +154,7 @@ public:
 
     /// Documents member `name`, declared earlier, replacing its doc: for a member a subclass inherits through
     /// extends<Base>() (`type.extends<TextField>().docMember("text", "...")`). Throws std::invalid_argument when there
-    /// is no such property, signal or method.
+    /// is no such property, raw property, signal or method.
     TypeBuilder& docMember(std::string_view name, std::string text) {
         if (!m_info.setMemberDoc(name, std::move(text)))
             throw std::invalid_argument{m_info.name() + ": docMember(\"" + std::string{name} + "\"): no such member"};
@@ -204,6 +205,26 @@ public:
         declared(name);
         m_info.addProperty(readOnly<Getter>(std::move(name), getter));
         return *this;
+    }
+
+    /// Declares a raw property: a prop the element reads straight from its table while rendering (Frame::size,
+    /// Frame::node(), Frame::withElementProp, Frame::attachMenu) or that the Lua constructor reads, instead of through
+    /// a C++ property. It is for the Lua definitions only (the editor completes, checks and documents it, in
+    /// `<Name>Props` and `<Name>`): never synced, no setter or getter, no change signal. `V`'s LuaConvert gives its
+    /// type (luaTypeOf<V>): `.rawProperty<double>("size")`, `.rawProperty<std::optional<double>>("spacing")`. `read`
+    /// says whether the element reads it through luaui::Node (a value, a binding or a bind(): RawRead::Bindable) or
+    /// takes the field itself (RawRead::ValueOnly).
+    template <class V>
+    TypeBuilder& rawProperty(std::string name, RawRead read = RawRead::Bindable) {
+        return raw(
+            {.name = std::move(name), .doc = {}, .luaType = luaTypeDescriber<V>(), .luaTypeText = {}, .read = read});
+    }
+
+    /// The same with an explicit LuaLS type expression, for values no C++ type describes (an element, a table read
+    /// lazily): `.rawProperty("menu", "Element|false", RawRead::ValueOnly)`, `.rawProperty("rows", "any[][]")`.
+    TypeBuilder& rawProperty(std::string name, std::string luaType, RawRead read = RawRead::Bindable) {
+        return raw(
+            {.name = std::move(name), .doc = {}, .luaType = nullptr, .luaTypeText = std::move(luaType), .read = read});
     }
 
     /// Declares a signal (an `on*` handler name), emitted with ScriptObject::emit(name, args...). Its arguments are
@@ -316,6 +337,14 @@ private:
     void declared(const std::string& name) {
         m_lastMember = name;
         m_docTarget = DocTarget::Member;
+    }
+
+    TypeBuilder& raw(TypeInfo::RawProperty p) {
+        if (p.luaTypeText.empty() && !p.luaType)
+            throw std::invalid_argument{m_info.name() + ".rawProperty(\"" + p.name + "\"): no Lua type"};
+        declared(p.name);
+        m_info.addRawProperty(std::move(p));
+        return *this;
     }
 
     template <class Getter>

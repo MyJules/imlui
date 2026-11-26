@@ -1,11 +1,13 @@
 // Keeps the element reference from drifting: every built-in type registered by registerBuiltinTypes() (its declared
-// properties, signals, methods, default property and non-visual flag) must be described in docs/elements.md, and
-// its properties and signals listed in the doc comment of its class (src/imlui/ui/elements/*.cppm). The markdown and
+// properties, raw properties, signals, methods, default property and non-visual flag) must be described in
+// docs/elements.md, and its properties, raw properties and signals listed in the doc comment of its class
+// (src/imlui/ui/elements/*.cppm). The markdown and
 // the sources are read from the source tree (IMLUI_DOCS_DIR, IMLUI_ELEMENTS_DIR) and parsed simply:
 //
 //  * a type's section in elements.md is the text under the `##`/`###` heading that names it (`### Column / Item`),
 //    or, for a type without one, the table row that starts with it (the inline containers); a section that says it
-//    takes "every `ScrollView` prop" also counts that type's section;
+//    takes "every `ScrollView` prop" also counts that type's section, and so does "Stacking containers" (`spacing`,
+//    `align`, `cull`) for the types it lists;
 //  * a property is listed when it appears in backticks (`spacing`, or `x`, `y`), a signal or method when
 //    "`name(" does;
 //  * a type with a default property is in the "Positional strings" table; the "Non-visual elements" list holds
@@ -126,13 +128,18 @@ protected:
 TEST_F(ElementReference, ElementsMdDescribesEveryBuiltinType) {
     const std::vector<std::string> names = m_types.typeNames();
     ASSERT_GT(names.size(), 50u);
+    const Section* stacking = section("Stacking containers");
+    ASSERT_NE(stacking, nullptr);
     for (const std::string& name : names) {
         const TypeInfo& info = *m_types.find(name);
-        const std::string doc = docsFor(name);
+        std::string doc = docsFor(name);
         EXPECT_FALSE(doc.empty()) << name << ": no section or table row in elements.md";
         if (doc.empty()) continue;
+        if (stacking->body.find("`" + name + "`") != std::string::npos) doc += stacking->body;
         for (const TypeInfo::Property& p : info.properties())
             EXPECT_NE(doc.find("`" + p.name + "`"), std::string::npos) << name << ": property " << p.name;
+        for (const TypeInfo::RawProperty& p : info.rawProperties())
+            EXPECT_NE(doc.find("`" + p.name + "`"), std::string::npos) << name << ": raw property " << p.name;
         for (const std::string& signal : info.signals())
             EXPECT_NE(doc.find("`" + signal + "("), std::string::npos) << name << ": signal " << signal;
         for (const TypeInfo::Method& m : info.methods())
@@ -201,6 +208,8 @@ TEST_F(ElementReference, ClassDocCommentsListTheirMembers) {
         EXPECT_FALSE(doc.empty()) << cls << ": no /// doc comment above the class";
         for (const TypeInfo::Property& p : info->properties())
             EXPECT_TRUE(containsWord(doc, p.name)) << cls << " (" << name << "): property " << p.name;
+        for (const TypeInfo::RawProperty& p : info->rawProperties())
+            EXPECT_TRUE(containsWord(doc, p.name)) << cls << " (" << name << "): raw property " << p.name;
         for (const std::string& signal : info->signals())
             EXPECT_TRUE(containsWord(doc, signal)) << cls << " (" << name << "): signal " << signal;
         ++checked;

@@ -65,8 +65,7 @@ constexpr std::size_t maxColumns = 511; // BeginTable() asserts columns < IMGUI_
 
 void Table::declare(TypeBuilder<Table>& type) {
     type.doc("A Material data table: a 56dp header and selectable rows, in an outlined card.\n"
-             "Raw `rows`: a list of lists of cell values (converted to strings); only the rows in view are drawn and "
-             "read. Natural size: fills the available width (raw `width`), as tall as all its rows.");
+             "Natural size: fills the available width (raw `width`), as tall as all its `rows`.");
     type.fillsWidth(); // an unset width fills
     type.property("columns", &Table::columns, &Table::setColumns)
         .doc("The header labels; they set the column count (nothing is drawn without columns). At most 511 are shown.")
@@ -79,6 +78,10 @@ void Table::declare(TypeBuilder<Table>& type) {
         .signal<int>("onRowClicked", {"row"})
         .doc("Called when a row is clicked, with its 1-based index (after the rows are drawn: the handler may change "
              "`rows`).");
+    type.rawProperty("rows", "(string|number|boolean)[][]")
+        .doc("The rows: a list of lists of cell values, converted to strings (`nil` is empty). Read while rendering: "
+             "only the rows in view are drawn and read, so a long table costs what its visible rows do. A row that "
+             "isn't a list draws empty and is reported.");
 }
 
 void Table::render(Frame& frame) {

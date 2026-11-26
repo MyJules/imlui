@@ -9,6 +9,7 @@ import imlui.ui.frame_request;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 
 export namespace imlui {
 
@@ -16,7 +17,7 @@ export namespace imlui {
 ///
 /// Props:   open = false, title = "", icon = ""
 /// Raw:     width (unset: 280-560dp, fitting the content; a fill inside is the minimum or the title's width),
-///          spacing, align
+///          spacing, align, cull
 /// Signals: onClosed(self)
 /// Two-way: open
 ///
@@ -55,7 +56,7 @@ namespace imlui {
 
 void Dialog::declare(TypeBuilder<Dialog>& type) {
     type.doc("A Material basic dialog: modal, centered over a scrim, with `extraLarge` corners and a `headlineSmall` "
-             "title; Escape closes it. It stacks its children (raw `spacing`, `align`). Non-visual.\n"
+             "title; Escape closes it. It stacks its children. Non-visual.\n"
              "Raw `width`: a fixed width; unset, 280-560dp fitting the content. A dialog opened from another's content "
              "shows above it; of sibling dialogs one shows at a time (the others wait, still `open`).")
         .property("open", &Dialog::open, &Dialog::setOpen)
@@ -67,6 +68,7 @@ void Dialog::declare(TypeBuilder<Dialog>& type) {
         .signal<>("onClosed")
         .doc("Called when the dialog closes (after `open = false` is written back).")
         .nonVisual();
+    rawStackProps(type);
 }
 
 namespace {

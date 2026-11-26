@@ -1,7 +1,8 @@
 // The hover docs of the built-in element types (TypeBuilder::doc, shown by the editor through the Lua definitions):
 // every built-in registered by registerBuiltinTypes() (and every built-in singleton) documents the type and each
-// declared property, signal and method. The `on<Name>Changed` signals of properties are documented automatically, the
-// common props in ElementProps. A new built-in, or a new member of one, fails here until it has its doc.
+// declared property, raw property, signal and method. The `on<Name>Changed` signals of properties are documented
+// automatically, the common props in ElementProps. A new built-in, or a new member of one, fails here until it has its
+// doc.
 #include <gtest/gtest.h>
 
 import std;
@@ -20,6 +21,8 @@ std::vector<std::string> undocumented(const TypeInfo& info) {
     if (info.doc().empty()) out.emplace_back("the type");
     for (const TypeInfo::Property& p : info.properties())
         if (p.doc.empty()) out.push_back("." + p.name);
+    for (const TypeInfo::RawProperty& p : info.rawProperties())
+        if (p.doc.empty()) out.push_back("." + p.name + " (raw)");
     for (const TypeInfo::Signal& s : info.signalDeclarations())
         if (s.doc.empty()) out.push_back("." + s.name);
     for (const TypeInfo::Method& m : info.methods())

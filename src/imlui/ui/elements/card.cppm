@@ -9,6 +9,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
 
 export namespace imlui {
@@ -75,6 +76,7 @@ void Card::declare(TypeBuilder<Card>& type) {
         .doc("The gap between visible children (dp). Unset: ImGui's item spacing.")
         .property("align", &Card::align, &Card::setAlign)
         .doc("Each child's horizontal position by its width: `\"start\"` (default), `\"center\"` or `\"end\"`.");
+    rawCullProp(type);
 }
 
 void Card::render(Frame& frame) {

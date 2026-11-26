@@ -10,6 +10,7 @@ import imlui.ui.navigation_scope;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.elements.stack_props;
 
 export namespace imlui {
 
@@ -17,7 +18,7 @@ export namespace imlui {
 /// or pressing Escape closes it: `open` becomes false, then `onClosed` fires. Non-visual.
 ///
 /// Props:   open = false, width = 360 (dp)
-/// Raw:     spacing, align
+/// Raw:     spacing, align, cull
 /// Signals: onClosed(self)
 /// Two-way: open
 ///
@@ -67,6 +68,7 @@ void ModalNavigationDrawer::declare(TypeBuilder<ModalNavigationDrawer>& type) {
         .signal<>("onClosed")
         .doc("Called when the scrim or Escape closes the drawer, after `open` was updated.")
         .nonVisual();
+    rawStackProps(type);
 }
 
 void ModalNavigationDrawer::render(Frame& frame) {
