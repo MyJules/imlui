@@ -737,6 +737,18 @@ TEST_F(TypesTest, CollectingTheElementDestroysTheInstance) {
     EXPECT_EQ(counters.destroyedHook, 3);
 }
 
+// A box's __gc called by a script on a userdata that isn't a box does nothing to it (boxAt checks the size and tag).
+TEST_F(TypesTest, ABoxFinalizerIgnoresForeignValues) {
+    run(R"(
+        keep = Probe {}
+        getmetatable(keep.__native).__gc(io.stdout)
+        getmetatable(backend).__gc(io.stdout)
+        assert(keep:add(1, 2) == 3 and backend.level == 0.5)
+        io.stdout:write("") -- untouched
+    )");
+    EXPECT_EQ(counters.destructed, 0);
+}
+
 TEST_F(TypesTest, RawTablesGetAnInstanceOnFirstSync) {
     run(R"(raw = { __type = "Probe", value = 4 })");
     Probe* p = sync("raw");
@@ -935,6 +947,19 @@ TEST_F(TypesTest, FailedReloadReactivatesTheOldState) {
     m_types.activate(m_state);
     m_backend.setLevel(0.9);
     run("assert(old == 0.9)");
+}
+
+// Engine::reload closes a state whose script failed and then calls detachState with it (for a state that failed
+// before install()): detachState only compares, so the closed state isn't read (ASan reports a read of it), and the
+// singletons linked to the old state stay linked.
+TEST_F(TypesTest, DetachingAClosedStateDoesntTouchItOrTheLiveOne) {
+    lua::State* failed = newUiState(m_types);
+    lua::close(failed);
+    m_types.activate(m_state);
+    m_types.detachState(failed);
+    EXPECT_EQ(m_backend.luaState(), m_state);
+    m_types.detachState(m_state);
+    EXPECT_EQ(m_backend.luaState(), nullptr);
 }
 
 TEST_F(TypesTest, ClosingTheStateDetachesSingletons) {

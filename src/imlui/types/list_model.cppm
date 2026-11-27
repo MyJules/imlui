@@ -197,13 +197,33 @@ void pushCacheMeta(lua::State* state) {
     lua::setfield(state, lua::registryIndex, cacheMetaKey);
 }
 
+/// The tag whose address a model value holds in its first bytes, before its ModelRef. A value is recognized by its
+/// size and this tag, like the registry's boxes (boxAt), not by its metatable: a script can reach the metatable's __gc
+/// (debug.getmetatable) and call it on anything, and `debug.setmetatable` gives any userdata the metatable, but no Lua
+/// code can write this address into a userdata's bytes. It also reads no table: refAt runs for every `#model`.
+constexpr char modelTag = 0;
+constexpr std::size_t refOffset = std::max(sizeof(const void*), alignof(ModelRef));
+constexpr std::size_t refUserdataSize = refOffset + sizeof(ModelRef);
+// Lua aligns a userdata's memory for LUAI_MAXALIGN: 8 bytes.
+static_assert(alignof(ModelRef) <= 8 && refOffset % alignof(ModelRef) == 0);
+
+/// Pushes a new model value's userdata (with its user value for the item cache) and returns its empty ModelRef.
+ModelRef* newRef(lua::State* state) {
+    auto* p = static_cast<std::byte*>(lua::newuserdata(state, refUserdataSize, 1));
+    const void* tag = &modelTag;
+    std::memcpy(p, &tag, sizeof tag);
+    return std::construct_at(static_cast<ModelRef*>(static_cast<void*>(p + refOffset)));
+}
+
 /// The ModelRef at `idx`, or nullptr when the value isn't a model's.
 ModelRef* refAt(lua::State* state, int idx) {
-    if (lua::type(state, idx) != lua::Type::UserData || lua::getmetatable(state, idx) == 0) return nullptr;
-    lua::getfield(state, lua::registryIndex, metaKey);
-    const bool ours = lua::rawequal(state, -1, -2);
-    lua::pop(state, 2);
-    return ours ? static_cast<ModelRef*>(lua::touserdata(state, idx)) : nullptr;
+    if (lua::type(state, idx) != lua::Type::UserData ||
+        lua::rawlen(state, idx) != static_cast<lua::Integer>(refUserdataSize))
+        return nullptr;
+    auto* p = static_cast<std::byte*>(lua::touserdata(state, idx));
+    const void* tag = nullptr;
+    std::memcpy(&tag, p, sizeof tag); // a foreign userdata of this size holds anything: read its first bytes as bytes
+    return tag == &modelTag ? std::launder(static_cast<ModelRef*>(static_cast<void*>(p + refOffset))) : nullptr;
 }
 
 /// The live model of the value at `idx` (a method's self); nullptr when it is gone. Raises for another value.
@@ -317,10 +337,11 @@ int modelKey(lua::State* state) {
 }
 
 int modelGc(lua::State* state) {
-    if (lua::type(state, 1) != lua::Type::UserData) return 0;
-    auto* ref = static_cast<ModelRef*>(lua::touserdata(state, 1));
-    // Left as an empty ModelRef: a finalized value that is still reachable (resurrected) reads as a dead model. A
-    // shared owner may destroy the model here; it holds nothing of this state.
+    ModelRef* ref = refAt(state, 1); // a script may call it, on anything (getmetatable hides it, debug doesn't)
+    if (!ref) return 0;
+    // Left as an empty ModelRef: a finalized value that is still reachable (resurrected), or one whose __gc a script
+    // called, reads as a dead model, and a second call does nothing. A shared owner may destroy the model here; it
+    // holds nothing of this state.
     const std::shared_ptr<ListModel> owner = std::move(ref->owner);
     std::destroy_at(ref);
     std::construct_at(ref);
@@ -339,7 +360,7 @@ int modelToString(lua::State* state) {
 void pushMeta(lua::State* state) {
     if (lua::getfield(state, lua::registryIndex, metaKey) == lua::Type::Table) return;
     lua::pop(state);
-    lua::createtable(state, 0, 8);
+    lua::createtable(state, 0, 9);
     const int meta = lua::gettop(state);
     lua::createtable(state, 0, 4); // methods
     const int methods = meta + 1;
@@ -351,6 +372,12 @@ void pushMeta(lua::State* state) {
     }
     lua::pushvalue(state, methods);
     lua::setfield(state, meta, "__imlui_model");
+    // What getmetatable(model) returns: only `__imlui_model` (the prelude reads it), not the metamethods (a script
+    // calling __gc would finalize a value that is still in use).
+    lua::createtable(state, 0, 1);
+    lua::pushvalue(state, methods);
+    lua::setfield(state, -2, "__imlui_model");
+    lua::setfield(state, meta, "__metatable");
     lua::pushcclosure(state, &modelIndex, 1); // the methods table is its upvalue
     lua::setfield(state, meta, "__index");
     lua::pushcfunction(state, &modelLen);
@@ -380,7 +407,7 @@ void pushValue(lua::State* state, const ListModel& model, std::shared_ptr<ListMo
     }
     lua::pop(state);
     // The userdata first, then what it holds: a memory error leaves no half-made value behind.
-    auto* ref = new (lua::newuserdata(state, sizeof(ModelRef), 1)) ModelRef{};
+    ModelRef* ref = newRef(state);
     const int ud = lua::gettop(state);
     pushMeta(state);
     lua::setmetatable(state, ud);

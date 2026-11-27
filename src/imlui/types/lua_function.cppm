@@ -152,7 +152,13 @@ constexpr const char* lifeKey = "imlui.LuaFunction.life";
 /// an empty pointer, which a later lifeOf() (a finalizer that runs after this one) reads as "closing".
 int LuaFunction::lifeGc(lua::State* state) {
     using LifePtr = std::shared_ptr<Life>;
-    auto* p = static_cast<LifePtr*>(lua::touserdata(state, 1));
+    // Only the token itself: a script that reached this function (debug.getregistry, debug.getmetatable) may call it
+    // on any userdata, and the registry still holds the token while lua_close runs the finalizers.
+    lua::getfield(state, lua::registryIndex, lifeKey);
+    const bool token =
+        lua::rawequal(state, 1, -1) && lua::rawlen(state, 1) == static_cast<lua::Integer>(sizeof(LifePtr));
+    lua::pop(state);
+    auto* p = token ? static_cast<LifePtr*>(lua::touserdata(state, 1)) : nullptr;
     if (p && *p) {
         (*p)->alive = false;
         p->reset();
@@ -171,9 +177,11 @@ std::shared_ptr<LuaFunction::Life> LuaFunction::lifeOf(lua::State* state) {
     lua::pop(state);
     // The metatable first: once the userdata holds the pointer it must get its finalizer without another allocation
     // (which could raise) in between.
-    lua::createtable(state, 0, 1);
+    lua::createtable(state, 0, 2);
     lua::pushcfunction(state, &lifeGc);
     lua::setfield(state, -2, "__gc");
+    lua::pushboolean(state, false);
+    lua::setfield(state, -2, "__metatable");
     auto life = std::make_shared<Life>(Life{lua::mainthread(state), true});
     void* memory = lua::newuserdata(state, sizeof(LifePtr));
     std::construct_at(static_cast<LifePtr*>(memory), life);

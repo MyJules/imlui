@@ -113,7 +113,9 @@ public:
     void install(lua::State* state);
     /// Points the singletons back at `state`, which was installed before (after a failed reload).
     void activate(lua::State* state);
-    /// Detaches the singletons linked to `state`. Runs automatically when an installed state closes.
+    /// Detaches the singletons linked to `state`, which must be a main thread (what lua::newstate returned). Runs
+    /// automatically when an installed state closes. `state` is only compared, never touched, so it may be a state
+    /// that was closed already (the engine calls it after closing a state whose script failed to load).
     void detachState(lua::State* state);
 
     [[nodiscard]] const TypeInfo* find(std::string_view name) const;
@@ -708,9 +710,10 @@ int singletonNewIndex(lua::State* state) {
     Box* b = boxAt(state, 1);
     if (!b || !liveObject(*b)) raiseDeadSingleton(state, b);
     if (lua::type(state, 2) != lua::Type::String) lua::error(state, "singleton keys are strings");
-    const std::string key{lua::tostring(state, 2)};
+    // A view of the key (arg 2 keeps the string alive): a property write is a lookup, the strings are for the errors.
+    const std::string_view key = lua::tostring(state, 2);
     if (const TypeInfo::Property* p = b->type->findProperty(key)) {
-        if (!p->assign) lua::error(state, b->type->name() + "." + key + " is read-only");
+        if (!p->assign) lua::error(state, b->type->name() + "." + std::string{key} + " is read-only");
         if (lua::isnil(state, 3) && !p->nullable)
             resetProperty(*b, static_cast<std::size_t>(p - b->type->properties().data()));
         else if (p->assign(state, 3, *b->object) == TypeInfo::Assign::TypeMismatch)
@@ -718,7 +721,7 @@ int singletonNewIndex(lua::State* state) {
         return 0;
     }
     if (!key.starts_with("on") || !(lua::isfunction(state, 3) || lua::isnil(state, 3)))
-        lua::error(state, b->type->name() + " has no property '" + key + "'" +
+        lua::error(state, b->type->name() + " has no property '" + std::string{key} + "'" +
                               (key.starts_with("on") ? " (signal handlers must be functions)" : ""));
     lua::getiuservalue(state, 1, 1); // signal handlers
     lua::pushvalue(state, 2);
@@ -735,7 +738,9 @@ int singletonToString(lua::State* state) {
 
 int sentinelGc(lua::State* state) {
     auto* registry = static_cast<TypeRegistry*>(lua::touserdata(state, lua::upvalueindex(1)));
-    registry->detachState(state);
+    // lua_close runs it on the main thread, but its state is alive here, so the main thread is cheap to make sure of
+    // (detachState only compares, and the singletons hold main threads).
+    registry->detachState(lua::mainthread(state));
     return 0;
 }
 
@@ -1011,11 +1016,18 @@ int libSetDispatch(lua::State* state) {
 /// the start of every frame.
 /// The loop of libTick. An exception from a tick() is reported, and the other elements still tick.
 void tickElements(lua::State* state, double now) {
-    for (const std::uint64_t id : Element::tickingElements()) {
+    // The ids are taken once, so an element that starts ticking in this loop ticks from the next frame on. They go into
+    // a buffer kept between frames; a nested call (a tick() that runs imlui.types.tick) finds it taken (moved out,
+    // empty) and uses its own.
+    static std::vector<std::uint64_t> scratch;
+    std::vector<std::uint64_t> ids = std::move(scratch);
+    Element::tickingElements(ids);
+    lua::State* const main = lua::mainthread(state);
+    for (const std::uint64_t id : ids) {
         // A handler that ran in this loop may have destroyed this element (or a GC step collected it), and created
         // another one at its address: the id finds only this element, alive and still ticking.
         Element* e = Element::findTicking(id);
-        if (!e || e->luaState() != lua::mainthread(state)) continue;
+        if (!e || e->luaState() != main) continue;
         const int top = lua::gettop(state);
         if (!e->pushSelf()) continue; // the element table is being collected
         // The table is on the stack now, so the element can't be collected while it syncs and ticks.
@@ -1027,6 +1039,8 @@ void tickElements(lua::State* state, double now) {
         }
         lua::settop(state, top);
     }
+    // Not on an exception (catchCxx reports it): the next frame then allocates a buffer again.
+    scratch = std::move(ids);
 }
 
 int libTick(lua::State* state) {
@@ -1038,9 +1052,12 @@ int libTick(lua::State* state) {
 /// tickingCount(): the number of ticking elements of this state. ui.__tick collects garbage after a container
 /// dropped children only when there are some (a dropped Timer then stops right away).
 int libTickingCount(lua::State* state) {
+    static std::vector<std::uint64_t> scratch; // kept between frames, like tickElements'; this one calls no Lua
+    Element::tickingElements(scratch);
+    lua::State* const main = lua::mainthread(state);
     lua::Integer n = 0;
-    for (const std::uint64_t id : Element::tickingElements())
-        if (const Element* e = Element::findTicking(id); e && e->luaState() == lua::mainthread(state)) ++n;
+    for (const std::uint64_t id : scratch)
+        if (const Element* e = Element::findTicking(id); e && e->luaState() == main) ++n;
     lua::pushinteger(state, n);
     return 1;
 }
@@ -1298,8 +1315,10 @@ void TypeRegistry::activate(lua::State* state) {
 }
 
 void TypeRegistry::detachState(lua::State* state) {
+    // Compares only: `state` may be closed already (Engine::reload closes a failed state, then calls this), and
+    // lua::mainthread reads the state's registry. Callers pass the main thread, which is what ScriptObject keeps.
     for (const Singleton& s : m_singletons)
-        if (s.life.alive() && s.object->luaState() == lua::mainthread(state)) s.object->detach();
+        if (s.life.alive() && s.object->luaState() == state) s.object->detach();
 }
 
 } // namespace imlui

@@ -65,8 +65,10 @@ public:
 
     /// The ids (objectId()) of the ticking elements, in the order they started ticking (TypeRegistry runs them).
     [[nodiscard]] static std::vector<std::uint64_t> tickingElements();
+    /// tickingElements() into `out` (cleared first), so a loop that runs every frame reuses its buffer.
+    static void tickingElements(std::vector<std::uint64_t>& out);
     /// The ticking element with id `id`, or nullptr when it stopped ticking or died since the id was taken. Ids are
-    /// never reused, so an element created later at a dead one's address can't answer for it.
+    /// never reused, so an element created later at a dead one's address can't answer for it. O(1).
     [[nodiscard]] static Element* findTicking(std::uint64_t id);
 
 protected:
@@ -83,14 +85,36 @@ namespace imlui {
 
 namespace {
 
+// The ticking list, main thread only (like everything that touches Lua). Looked up by id on every tick (findTicking
+// runs twice per element and frame) and appended to in start order, so it is two structures:
+//  * `live`: id -> (element, sequence number), the elements ticking now;
+//  * `order`: (id, sequence number) in the order they started, with stale entries left in place by a stop.
+// An entry of `order` is live while `live` holds its id with the same sequence number: an element that stops and
+// starts again gets a new number (and a new entry at the end), so its old entry stays stale. Stopping is O(1); the
+// stale entries are swept when they outnumber the live ones (amortized O(1) per stop).
 struct Ticking {
-    std::uint64_t id;
     Element* element;
+    std::uint64_t sequence;
+};
+struct Entry {
+    std::uint64_t id;
+    std::uint64_t sequence;
 };
 
-std::vector<Ticking> ticking; // main thread only, like everything that touches Lua
+std::unordered_map<std::uint64_t, Ticking> live;
+std::vector<Entry> order;
+std::uint64_t nextSequence = 0;
 
-auto findId(std::uint64_t id) { return std::ranges::find(ticking, id, &Ticking::id); }
+bool isLive(const Entry& e) {
+    const auto it = live.find(e.id);
+    return it != live.end() && it->second.sequence == e.sequence;
+}
+
+/// Drops the stale entries of `order` once they are more than the live ones (and more than a few).
+void sweep() {
+    if (order.size() < 16 || order.size() - live.size() <= live.size()) return;
+    std::erase_if(order, [](const Entry& e) { return !isLive(e); });
+}
 
 } // namespace
 
@@ -102,28 +126,38 @@ void Element::componentComplete() {}
 void Element::destroyed() {}
 void Element::tick(double) {}
 
-bool Element::isTicking() const { return findId(objectId()) != ticking.end(); }
+bool Element::isTicking() const { return live.contains(objectId()); }
 
 std::vector<std::uint64_t> Element::tickingElements() {
     std::vector<std::uint64_t> ids;
-    ids.reserve(ticking.size());
-    for (const Ticking& t : ticking)
-        ids.push_back(t.id);
+    tickingElements(ids);
     return ids;
 }
 
+void Element::tickingElements(std::vector<std::uint64_t>& out) {
+    out.clear();
+    out.reserve(live.size());
+    for (const Entry& e : order)
+        if (isLive(e)) out.push_back(e.id);
+}
+
 Element* Element::findTicking(std::uint64_t id) {
-    const auto it = findId(id);
-    return it == ticking.end() ? nullptr : it->element;
+    const auto it = live.find(id);
+    return it == live.end() ? nullptr : it->second.element;
 }
 
 void Element::setTicking(bool on) {
-    const auto it = findId(objectId());
-    if (on && it == ticking.end()) {
-        ticking.push_back({objectId(), this});
+    const std::uint64_t id = objectId();
+    if (on) {
+        if (live.contains(id)) return;
+        // `order` first: if it throws (out of memory), `live` has no entry without its place in the order.
+        const std::uint64_t sequence = nextSequence++;
+        order.push_back({id, sequence});
+        live.emplace(id, Ticking{this, sequence});
         requestFrame(); // frames are on demand: nothing else would run the first tick()
+    } else if (live.erase(id) != 0) {
+        sweep();
     }
-    if (!on && it != ticking.end()) ticking.erase(it);
 }
 
 } // namespace imlui
