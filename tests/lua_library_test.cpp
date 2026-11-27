@@ -256,3 +256,167 @@ TEST_F(LuaLibraryTest, ParentLinksAndScopesWithoutRegisteredTypes) {
         assert(#reported == 0, tostring(reported[1]))
     )");
 }
+
+// A watcher, a frame callback and a timer set up while a delegate is built belong to its scope: a delegate rebuilt
+// again and again leaves none of them behind (they don't run, aren't kept, and don't keep the delegate's elements or
+// its scope alive). At app level they stay, as before.
+TEST_F(LuaLibraryTest, ScopedCallbacksGoWithTheirDelegate) {
+    run(R"(
+        ui.native.requestFrame = function() end
+        local s = ui.state { x = 0 }
+        local writes, frames, ticks, appWrites = 0, 0, 0, 0
+        ui.watch(s, "x", function() appWrites = appWrites + 1 end)
+        local aliveElements = setmetatable({}, { __mode = "k" })
+        local aliveScopes = setmetatable({}, { __mode = "k" })
+        local items = {}
+        local function refill() for i = 1, 10 do items[i] = { i } end end -- new items: every delegate is rebuilt
+        refill()
+        local list = ui.ListView { model = items, delegate = function(item, i, ids)
+            local t = ui.Text { text = tostring(item[1]) }
+            -- Each callback refers to the element: kept by them, the delegate would never be collected.
+            ui.watch(s, "x", function() writes = writes + 1; t.seen = true end)
+            ui.watch(s, "never", function() t.seen = true end) -- a key nobody writes: pruned as it grows
+            ui.onFrame(function() frames = frames + 1; t.seen = true end)
+            ui.setInterval(function() ticks = ticks + 1; t.seen = true end, 1)
+            aliveElements[t] = true
+            aliveScopes[ids] = true
+            return t
+        end }
+        -- Rebuilds every delegate `times` times, with a frame now and then (it drops the timers of collected scopes).
+        local function rebuild(times)
+            for round = 1, times do
+                refill()
+                list.__count(list)
+                list.__range(list, 1, 10)
+                if round % 50 == 0 then
+                    collectgarbage()
+                    ui.__tick(0)
+                end
+            end
+            collectgarbage()
+            collectgarbage()
+            ui.__tick(0)
+            collectgarbage()
+            writes, frames, ticks = 0, 0, 0
+        end
+        local function count(t)
+            local n = 0
+            for _ in pairs(t) do n = n + 1 end
+            return n
+        end
+        rebuild(50)
+        assert(count(aliveElements) == 10, count(aliveElements) .. " delegates alive")
+        assert(count(aliveScopes) == 10, count(aliveScopes) .. " delegate scopes alive")
+        s.x = 1
+        assert(writes == 10 and appWrites == 1, writes .. " watchers ran")
+        ui.__tick(1)
+        assert(frames == 10, frames .. " frame callbacks ran")
+        assert(ticks == 10, ticks .. " timers fired")
+
+        -- Many more rebuilds: what the dropped delegates set up doesn't pile up.
+        local before = collectgarbage("count")
+        rebuild(500)
+        local grown = collectgarbage("count") - before
+        assert(grown < 64, ("%.0f KB more after 500 rebuilds"):format(grown))
+        s.x = 2
+        ui.__tick(2)
+        assert(writes == 10 and frames == 10 and appWrites == 2, writes .. " watchers, " .. frames .. " frame callbacks")
+
+        -- Removing one by hand still works, and its scope's table lets it go.
+        local stop
+        local C = ui.component(function()
+            stop = ui.watch(s, "x", function() writes = writes + 1 end)
+            return ui.Text {}
+        end)
+        local keep = C {}
+        writes = 0
+        s.x = 3
+        assert(writes == 11, writes)
+        stop()
+        s.x = 4
+        assert(writes == 21, writes)
+        assert(keep ~= nil)
+    )");
+}
+
+// A Repeater's key that is nil or NaN falls back to the item; an item that is NaN (or nil) too has one stand-in key, so
+// it neither raises ("table index is NaN") nor rebuilds its delegate every call.
+TEST_F(LuaLibraryTest, RepeaterKeysThatCantIndexATable) {
+    run(R"(
+        local built = 0
+        local items = { 0/0, "a", 0/0 }
+        local rep = ui.Repeater { model = function() return items end, key = function(item) return item end,
+                                  delegate = function() built = built + 1; return ui.Text {} end }
+        local first = rep.__children(rep)
+        assert(#first == 3 and built == 3, built)
+        rep.__children(rep)
+        rep.__children(rep)
+        assert(built == 3, built .. " delegates built: rebuilt every call")
+        items = { "a", 0/0 }
+        local list = rep.__children(rep)
+        assert(#list == 2 and built == 3, built)
+        local nilKeys = ui.Repeater { model = { 0/0, 1 }, key = function() return nil end,
+                                      delegate = function() return ui.Text {} end }
+        assert(#nilKeys.__children(nilKeys) == 2)
+        assert(#reported == 0, tostring(reported[1]))
+    )");
+}
+
+// A keyed ListView over a plain Lua table counts the model's keys again only when an item changed: each render then
+// asks only for the keys of the items it shows. The list __range returns is reused by the next call.
+TEST_F(LuaLibraryTest, AKeyedListViewOverALuaTableCountsKeysOnlyWhenItemsChange) {
+    run(R"(
+        local calls = 0
+        local items = {}
+        for i = 1, 20 do items[i] = { id = i } end
+        local list = ui.ListView { model = items, key = function(item) calls = calls + 1; return item.id end,
+                                   delegate = function() return ui.Text {} end }
+        local function render(last)
+            list.__count(list)
+            return list.__range(list, 1, last or 5)
+        end
+        render()
+        render() -- counts the keys once, now that there are entries
+        calls = 0
+        for _ = 1, 10 do render() end
+        assert(calls == 50, calls .. " key calls: the keys were counted again")
+        assert(list.__view.atIndex == nil, "atIndex is for list models")
+
+        -- An item replaced: counted again, and the entry of the key that went away is dropped.
+        local three = list.__view.keyed[3]
+        assert(three ~= nil)
+        items[3] = { id = 99 }
+        calls = 0
+        render()
+        assert(calls > 5 and list.__view.keyed[3] == nil and list.__view.keyed[99] ~= nil, calls)
+        calls = 0
+        render()
+        assert(calls == 5, calls)
+
+        -- The same items behind another key function: counted again.
+        list.key = function(item) calls = calls + 1; return -item.id end
+        calls = 0
+        render()
+        assert(calls > 5 and list.__view.keyed[1] == nil and list.__view.keyed[-1] ~= nil, calls)
+
+        local a = render(5)
+        local b = render(3)
+        assert(a == b and #b == 3 and b[1] ~= nil)
+    )");
+}
+
+// A group's member set lives as long as its members: one per `group` value ever used would otherwise pile up.
+TEST_F(LuaLibraryTest, RadioGroupsGoWithTheirLastMember) {
+    run(R"(
+        for i = 1, 100 do ui.RadioButton { text = "x", group = "temp" .. i } end
+        local kept = ui.RadioButton { text = "kept", group = "kept" }
+        collectgarbage()
+        collectgarbage()
+        local n = 0
+        for _ in pairs(ui.__radioGroups) do n = n + 1 end
+        assert(n == 1, n .. " groups left")
+        assert(ui.__radioGroups.kept == kept.__radioGroup and kept.__radioGroup[kept])
+        local again = ui.RadioButton { text = "again", group = "kept" }
+        assert(again.__radioGroup == kept.__radioGroup)
+    )");
+}

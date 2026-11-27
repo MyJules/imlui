@@ -376,6 +376,29 @@ TEST_F(SignalsTest, AComponentsConnectionsGoWithIt) {
     expectNoErrors();
 }
 
+// A Repeater that rebuilds its delegates again and again: the listeners each one connected go with it, so a dispatch
+// runs the current delegates' only, and the dropped Meters are collected.
+TEST_F(SignalsTest, RebuiltDelegatesLeaveNoListenersBehind) {
+    run(R"(
+        hits = 0
+        items = {}
+        rep = Repeater { model = function() return items end, delegate = function()
+            local m = Meter {}
+            connect(sensor, "onPeak", function() hits = hits + 1; m:bump() end) -- holds its delegate's Meter
+            return m
+        end }
+        for _ = 1, 40 do
+            for i = 1, 5 do items[i] = { i } end -- new items: new delegates
+            rep.__children(rep)
+        end
+        collectgarbage(); collectgarbage()
+        sensor:peak(1)
+        assert(hits == 5, hits .. " listeners ran")
+    )");
+    EXPECT_EQ(metersAlive, 5);
+    expectNoErrors();
+}
+
 // ------------------------------------------------------------------ hot reload
 
 // Connections belong to their Lua state: a new state starts without them, a failed reload that goes back to the old

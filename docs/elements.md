@@ -391,7 +391,9 @@ What virtualization changes:
   its delegate function does happen when it first scrolls near the view, not when the model gets the item.
 - **Built delegates are cached**, so one that scrolls out and back is the same element with its state. Without a
   `key`, the delegate of an index is dropped when the item at that index changes or the model gets shorter; with a
-  `key`, when its key leaves a model of at most 256 items. Past that, the cache keeps at most
+  `key`, when its key leaves a model of at most 256 items (a Lua list's keys are counted again only when one of its
+  items is another value than at the last count, so change an item's key by replacing the item, not by editing the
+  table in place). Past that, the cache keeps at most
   max(256, 4 x the items shown) delegates and drops the ones shown longest ago: keep state that must outlive
   scrolling far away in the model, not in the delegate.
 - **Keyboard and gamepad navigation** reach the items that are built: while a nav move picks its target, the

@@ -584,8 +584,16 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
   registry lookup and one table lookup). The callers: `Node::push` (bindings), `Node::emit`, `ScriptObject::emit`
   and `notify` (typed signals, `on<Name>Changed`), `Canvas`'s `onPaint`. On the Lua side, `resolve` (`model`,
   `condition`, `Loader.item`, `Responsive` class functions) does the same with `scopeOf[self]`, and `setTimeout`,
-  `setInterval`, `watch` and `onFrame` wrap their callback in the scope active when they are called (no wrapper at
-  app level).
+  `setInterval`, `watch`, `onFrame` and `connect` run their callback in the scope active when they are called.
+- **Callbacks owned by a scope.** What holds those callbacks (the watcher lists, the frame callbacks, the timers,
+  the signal listeners) holds a record (`newRecord`), not the function. At app level the record is `{ fn }`. In a
+  scope it is weak-valued, `{ [2] = scope }`, and the function, which runs in the scope and so holds it, is
+  `ownedFns[scope][record]`, an ephemeron (weak keys): the scope is kept only by its elements (`scopeOf`), so once
+  they are collected the callback goes too, without pinning the elements it refers to. A record whose function is
+  gone is skipped and pruned: a timer at the next `ui.__tick`, a watcher or frame callback when its list is called,
+  and every list when it has doubled since it was last pruned (`addRecord`), so a delegate rebuilt over and over
+  (scrolling, a changed model, the cache trimming it) leaves nothing behind. Removing a callback (`stop()`,
+  `clearTimer`, a fired timeout, `disconnect`) empties its record.
   `ui.registerId` registers into the innermost scope, or into `ui.ids` (app level, checked with `ui.checkId`) when
   the stack is empty; only `ui.ids` is behind the free names (`ui.env`). Pushes pop through a to-be-closed
   variable (`local _ <close> = POP_SCOPE`), so a component or delegate that raises leaves the stack as it found it.
@@ -793,6 +801,9 @@ Lua sees resources in two ways (`imlui.lua.resources`):
 - Module search. `require("imlui")` and `require("a.b")` look in `imlui:/` (`a/b.lua`, then `a/b/init.lua`) through a
   `package.searchers` entry. `src/resources/imlui.lua` puts its own searcher in front of it, for components next to the
   entry script (`ui.__dir`). Chunks are named `@app:/main.lua`, so errors and tracebacks read `app:/main.lua:12: ...`.
+- Module files. A candidate counts when it reads as a file (a folder named `x.lua` doesn't stop the search before
+  `x/init.lua`), and the read is the one the chunk is loaded from. The script-folder searcher does the same through
+  `resource.loadModule(module, folder)`, then sets the chunk's `_ENV` to its `chunkEnv`.
 - Script environments. Every UI script loaded as a resource (the entry script by `ui.__load`, components by the
   searcher) runs in its own environment (`chunkEnv`): a proxy over `ui.env` whose `ui`, and free names `Image`,
   `theme`, `themeState` and `resource`, are the script's own versions, bound to its full name when it is loaded. So
@@ -802,6 +813,13 @@ Lua sees resources in two ways (`imlui.lua.resources`):
   before. Code that uses the plain `ui` table (`require("imlui")`, or code loaded from a string in `ui.env`) finds the
   calling script from the caller's chunk name on the stack instead, falls back to the main script, and raises a clear
   error for a relative `ui.resource` name in a tail call, the one case it can't resolve.
+- Free-name lookup cost. Bindings look free names up every frame, so the lookup is short. The script's `ui` is a chain
+  of tables (an empty proxy, its bound functions, `ui`): `ui.x` runs no function. The environment stays empty (each
+  assignment reaches `ui.env`) and reads go to a per-script cache table, then to one `__index` function that does the
+  whole lookup in order (a global a script assigned, `ui` and the bound functions, `ui`, the Lua globals, the app-level
+  ids, an implicit constructor). The cache holds `ui` and the bound functions, which only a global of the same name
+  can shadow: `ui.env`'s `__newindex` (a new global) removes that name from every cache. Everything else is looked up
+  each time, so the precedence is the same as without the cache.
 - `ui.resource.read`, `exists` and `url`, and `ui.theme { fonts = ... }`: relative names resolve as above (fonts in
   C++, `readFonts(state, idx, fonts, script)`, with the script passed as `native.setTheme`'s second argument).
 
@@ -915,7 +933,8 @@ exports:
 - `imlui::embedded::<name>::packages()`: a `std::vector<ResourcePackage>`, one per group in manifest order, each
   with its mount point, its `EmbeddedMount` (created on first use and shared) and, when the build has
   `IMLUI_DEV_PATHS=ON` (`imlui_rc --dev-paths`), the group's absolute `base` folder as the dev source folder ("" with
-  `OFF`, so a release binary holds no source paths) and its `selection`: the group's `files`, `include` and
+  `OFF`, so a release binary holds no source paths; the module's header comment names the manifest relative to the
+  output folder, so the module is the same in every checkout) and its `selection`: the group's `files`, `include` and
   `exclude`, plus the manifest's path in that folder when it lies there (nullopt without a source folder). Hosts
   pass it to `defaultConfig`.
 - `mount(Resources&)`: mounts every group's files at its mount point.
