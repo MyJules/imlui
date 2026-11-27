@@ -280,3 +280,37 @@ TEST_F(BoxTest, ColumnSidePaddingOverridesPadding) {
     EXPECT_FLOAT_EQ(lastSize("col").x, 84.0f);
     EXPECT_FLOAT_EQ(lastSize("col").y, 104.0f);
 }
+
+// ------------------------------------------------------------ hovered / onHoverChanged
+
+TEST_F(BoxTest, HoveredFollowsTheMouseOnTheElementsThatAsk) {
+    // `hovered = false` or an onHoverChanged handler asks for it; a card and the button inside are both hovered; a
+    // bind() gets the write; leaving clears them, and each change calls the handler once.
+    run(R"(
+        s = state { cardHover = false }
+        changes = {}
+        root = Column { spacing = 0,
+            Last { id = "card", Card { width = 300, hovered = bind(s, "cardHover"),
+                Button { id = "btn", "Inside", hovered = false,
+                    onHoverChanged = function(self, h) changes[#changes + 1] = h end } } },
+            Probe { id = "below", w = 300, h = 200, intrinsic = true } })");
+    renderWhileRequested("root");
+    const ImVec2 card = lastMin("card");
+    const auto moveTo = [&](float x, float y) {
+        ASSERT_EQ(m_h.run("native.injectMouse(" + std::to_string(x) + ", " + std::to_string(y) + ")"), "");
+        m_h.renderFrames("root", 3);
+    };
+    moveTo(card.x + 30.0f, card.y + 30.0f); // over the button, inside the card's padding
+    EXPECT_EQ(m_h.run("assert(s.cardHover == true, 'card') assert(btn.hovered == true, 'btn')"), "");
+    moveTo(card.x + 150.0f, probe("below").pos().y + 100.0f); // below the card
+    EXPECT_EQ(m_h.run("assert(s.cardHover == false, 'card') assert(btn.hovered == false, 'btn')"), "");
+    EXPECT_EQ(m_h.run("assert(#changes == 2 and changes[1] == true and changes[2] == false, #changes)"), "");
+}
+
+TEST_F(BoxTest, AnElementThatDoesntAskGetsNoHoveredField) {
+    run(R"(root = Column { Button { id = "plain", "Plain" } })");
+    m_h.renderFrame("root");
+    ASSERT_EQ(m_h.run("native.injectMouse(20, 20)"), "");
+    m_h.renderFrames("root", 3);
+    EXPECT_EQ(m_h.run("assert(rawget(plain, 'hovered') == nil)"), "");
+}

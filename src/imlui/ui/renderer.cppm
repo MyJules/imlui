@@ -22,6 +22,7 @@ import imlui.skin;
 import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.lua.node;
+import imlui.lua.value;
 import imlui.platform.stack;
 import imlui.ui.culling;
 import imlui.ui.layout_box;
@@ -464,6 +465,8 @@ private:
     bool pushChildren(const luaui::Node& node);
     /// render() from the element's ID scope on, for a known type; `key` its elementId().
     bool renderElement(const luaui::Node& node, Types::Kind kind, std::uint64_t key);
+    /// Keeps `hovered` (and calls `onHoverChanged(self, hovered)`) for the element whose group was just ended.
+    void trackHover(const luaui::Node& node);
 
     /// Culling's memo of a container's children, by an ImGui ID in the container's scope.
     struct CullMemo {
@@ -624,6 +627,8 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind, std::uint64_t key)
     if (visual) {
         ImGui::EndGroup();
         layout::recordSize(id, ImGui::GetItemRectSize(), m_provisional != provisional);
+        // Hover tracking, for the elements that ask (two raw lookups for the others).
+        if (n.has(luaui::keys::hovered) || n.has(luaui::keys::onHoverChanged)) trackHover(n);
     }
     // The text (a binding, often a formatted string) is read only while the element is hovered: the tooltip's own
     // delay, and the frames it asks for meanwhile, start there.
@@ -632,6 +637,22 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind, std::uint64_t key)
     if (disabled) ImGui::EndDisabled();
     ImGui::PopID();
     return true;
+}
+
+void Renderer::trackHover(const Node& n) {
+    // The mouse over the element's rect, in its window or a child window of it (a Card, a Box layer: so a card and
+    // the button inside it are both hovered), not under a popup, and also while an item inside is held down.
+    // (A disabled element is hovered too: the rect test doesn't look at item flags.)
+    constexpr ImGuiHoveredFlags windowFlags = ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_NoPopupHierarchy |
+                                              ImGuiHoveredFlags_AllowWhenBlockedByActiveItem;
+    const bool now =
+        ImGui::IsWindowHovered(windowFlags) && ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    if (now == n.boolean(luaui::keys::hovered, false)) return;
+    // Written like a widget's write-back (a bind() writes its source; a function binding keeps its own value), then
+    // the handler; the frame that shows the new state is asked for, as the bindings of this one have run.
+    n.set("hovered", luaui::Value{now});
+    n.emit("onHoverChanged", {luaui::Value{now}});
+    requestFrame();
 }
 
 std::uint64_t Renderer::elementId(const Node& node) { return m_types.elementId(node); }

@@ -36,6 +36,8 @@ inline const lua::Key width{"width"};
 inline const lua::Key height{"height"};
 inline const lua::Key fillWidth{"fillWidth"};
 inline const lua::Key cull{"cull"};
+inline const lua::Key hovered{"hovered"};
+inline const lua::Key onHoverChanged{"onHoverChanged"};
 inline const lua::Key children{"__children"};
 inline const lua::Key inlined{"__inline"};
 inline const lua::Key native{"__native"};
