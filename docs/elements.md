@@ -1064,7 +1064,8 @@ A swatch with the hex value. Clicking it opens a picker popup with a hue bar and
 | `alpha` | bool | `false` | Adds an alpha bar. Without it the color stays opaque, also when the hex field gets `#RGBA` or `#RRGGBBAA`. |
 
 The hex field applies a whole `#RRGGBB` or `#RRGGBBAA` as you type, and the short `#RGB` / `#RGBA` only when the edit
-ends (Enter, or the field loses focus), so typing `#123456` doesn't pass through `#112233` and `#11223344`.
+ends (Enter, or the field loses focus), so typing `#123456` doesn't pass through `#112233` and `#11223344`. The `#`
+may be left out there (the field holds hex digits only), unlike in a color spec.
 | `width` | size | `0` (natural) | *Raw.* |
 
 **Signals:** `onColorChanged(self, hex)`.

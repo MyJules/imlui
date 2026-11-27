@@ -99,13 +99,19 @@ void reapplyTheme();
 /// Looks up an ImGuiCol index by its name ("WindowBg", "Text", ...); -1 if unknown.
 [[nodiscard]] int imguiColorIndex(std::string_view name);
 
-/// Resolves a color spec: a role name ("primary"), a hex string ("#ff0000")
+/// Resolves a color spec: a role name ("primary"), a hex string ("#ff0000", the '#' required)
 /// or a role with alpha ("onSurface/0.6", the alpha a number in 0..1). Roles come from the current theme.
-/// nullopt when the spec is none of these (an unknown role, bad hex, an alpha that isn't a number in 0..1).
+/// nullopt when the spec is none of these (an unknown role, bad hex, an alpha that isn't a number in 0..1). A spec
+/// without '#' is always a role: "face" is an unknown role, not a color.
 [[nodiscard]] std::optional<Color> resolveColor(std::string_view spec);
 
 /// Like resolveColor(spec), but roles are looked up in `scheme`.
 [[nodiscard]] std::optional<Color> resolveColor(std::string_view spec, const Scheme& scheme);
+
+/// Why resolveColor(spec) has no color, for an error message: "unknown role 'pirmary'", "bad hex color '#12'",
+/// "bad alpha in 'primary/2' (a number in 0..1)", ... A word made of hex digits gets a hint ("unknown role 'face'
+/// (a hex color needs its '#': '#face')"). Empty when the spec is a color.
+[[nodiscard]] std::string colorSpecProblem(std::string_view spec);
 
 } // namespace imlui
 
@@ -490,7 +496,22 @@ std::optional<Color> resolveColor(std::string_view spec, const Scheme& scheme) {
         return c ? std::optional{c->withAlpha(alpha)} : std::nullopt;
     }
     if (const Color* c = findRole(scheme, spec)) return *c;
-    return parseHex(spec);
+    return std::nullopt; // an unknown role (hex needs its '#')
+}
+
+std::string colorSpecProblem(std::string_view spec) {
+    if (resolveColor(spec, Scheme{})) return {};
+    if (spec.empty()) return "an empty color spec";
+    const std::string quoted = "'" + std::string{spec} + "'";
+    if (spec.front() == '#') return "bad hex color " + quoted + " (#RGB, #RGBA, #RRGGBB or #RRGGBBAA)";
+    const std::string_view role = spec.substr(0, spec.find('/'));
+    if (!findRole(Scheme{}, role)) {
+        std::string problem = "unknown role '" + std::string{role} + "'";
+        if (role.size() == spec.size() && parseHex("#" + std::string{spec}))
+            problem += " (a hex color needs its '#': '#" + std::string{spec} + "')";
+        return problem;
+    }
+    return "bad alpha in " + quoted + " (a number in 0..1)";
 }
 
 } // namespace imlui

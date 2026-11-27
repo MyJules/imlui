@@ -1350,7 +1350,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.color` | `Color` (sRGB `r,g,b,a`), `mix`, `overlay`, `parseHex`, `toHex` |
+| `imlui.color` | `Color` (sRGB `r,g,b,a`), `mix`, `overlay`, `parseHex` (`#` required), `toHex` |
 | `imlui.color.oklch` | `Oklch`, `toOklch`, `fromOklch` (gamut mapped), `toneToOkL` |
 | `imlui.color.tonal_palette` | `TonalPalette { hue, chroma }` with `tone(t)` |
 
@@ -1365,7 +1365,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
-| `imlui.theme.theme` | `Theme` (+ `design`, `tokens`, `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `fluentTokensFor`, `resolveColor`, `imguiColorIndex`, `isStyleField`; the ImGui style mapping per preset and design (`applyMaterial`, `applyFluent`) |
+| `imlui.theme.theme` | `Theme` (+ `design`, `tokens`, `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `fluentTokensFor`, `resolveColor` (hex needs its `#`; a word is a role), `colorSpecProblem` (why a spec isn't a color: an unknown role, bad hex, a bad alpha), `imguiColorIndex`, `isStyleField`; the ImGui style mapping per preset and design (`applyMaterial`, `applyFluent`) |
 | `imlui.theme.skin_tokens` | `SkinTokens` (a flat design's metrics), `ButtonFill`, `fluentTokens()`, `materialTokens()`, the token table (`TokenInfo`, `TokenKind`, `tokenInfos`, `findToken`), `TokenValue`, `TokenOverride`, `tokenProblem`, `applyTokenOverrides`, `buttonFillName`/`buttonFillFromName` |
 | `imlui.theme.fluent_colors` | Namespace `imlui::fluent`: `Colors` (Fluent 2's brushes), `colorsFor(scheme, dark)`, `designName` (`"fluent"`) |
 | `imlui.theme.font_scope` | `FontScope`: RAII push/pop of a text style's font |

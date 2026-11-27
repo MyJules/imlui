@@ -37,7 +37,8 @@ constexpr Color overlay(Color base, Color layer, float opacity) {
     return c;
 }
 
-/// Parses "#RGB", "#RGBA", "#RRGGBB" or "#RRGGBBAA" (leading '#' optional).
+/// Parses "#RGB", "#RGBA", "#RRGGBB" or "#RRGGBBAA". The '#' is required: "face" or "add" is a word (a role name in a
+/// color spec), not a color.
 std::optional<Color> parseHex(std::string_view s);
 
 /// Formats as "#RRGGBB", or "#RRGGBBAA" when not opaque. Components are clamped to [0, 1] (clampUnit: NaN is 0).
@@ -54,7 +55,8 @@ ImU32 Color::u32() const { return ImGui::ColorConvertFloat4ToU32(vec4()); }
 Color Color::from(ImVec4 v) { return {v.x, v.y, v.z, v.w}; }
 
 std::optional<Color> parseHex(std::string_view s) {
-    if (!s.empty() && s.front() == '#') s.remove_prefix(1);
+    if (s.empty() || s.front() != '#') return std::nullopt;
+    s.remove_prefix(1);
     auto nib = [](char c) -> int {
         if (c >= '0' && c <= '9') return c - '0';
         if (c >= 'a' && c <= 'f') return c - 'a' + 10;

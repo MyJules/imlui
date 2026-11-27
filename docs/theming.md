@@ -288,8 +288,12 @@ Element color props (`color = ...`), Canvas painter colors and `color.*` functio
 |---|---|
 | role name | `"primary"` |
 | role with alpha (a number in 0..1; anything else, such as `"onSurface/O.6"` or `"primary/2"`, is an invalid color) | `"onSurface/0.6"` |
-| hex: `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA` (`#` optional) | `"#FF5722"`, `"#00000080"` |
+| hex: `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA` (the `#` is required) | `"#FF5722"`, `"#00000080"` |
 | table `{r, g, b[, a]}` in 0..1 (clamped to it; NaN reads as 0) | `{ 1, 0.34, 0.13, 1 }` |
+
+A string without `#` is always a role name, also when it is made of hex digits: `"face"` or `"00FF00"` is an unknown
+role, reported as one (`unknown role 'face' (a hex color needs its '#': '#face')`), not a color. So a mistyped role
+never passes for a color. (Hex without `#` used to be accepted.)
 
 Roles are resolved against the scheme **currently in effect**, so `color = "primary"` follows theme changes. The
 theme table itself (`seed`, `colors`, `imgui`) accepts the same specs, but there `colors` and `imgui` roles mean the

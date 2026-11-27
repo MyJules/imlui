@@ -235,6 +235,17 @@ TEST_F(ThemeTableTest, InvalidRoleColorIsReported) {
     EXPECT_EQ(t.scheme.primary, defaults.scheme.primary);
 }
 
+// Hex needs its '#': a value made of hex digits is a role name, and an unknown one is reported as such.
+TEST_F(ThemeTableTest, BareHexIsAnUnknownRole) {
+    Theme t = parse(R"(return { seed = "face", colors = { primary = "00FF00", secondary = "pirmary/0.5" } })");
+    EXPECT_TRUE(hasError("theme: invalid seed color 'face': unknown role 'face' (a hex color needs its '#': '#face')"));
+    EXPECT_TRUE(hasError("theme.colors.primary: invalid color: unknown role '00FF00' (a hex color needs its '#'"));
+    EXPECT_TRUE(hasError("theme.colors.secondary: invalid color: unknown role 'pirmary'"));
+    Theme defaults;
+    EXPECT_EQ(t.seed, defaults.seed);
+    EXPECT_EQ(t.scheme.primary, defaults.scheme.primary);
+}
+
 TEST_F(ThemeTableTest, UnknownImGuiColorIsReported) {
     Theme t = parse(R"(return { imgui = { NotAColor = "#FFFFFF" } })");
     EXPECT_TRUE(hasError("unknown ImGuiCol 'NotAColor'"));

@@ -110,8 +110,11 @@ ImGuiKey keyFromName(std::string_view name) {
 }
 
 Color argColor(lua::State* state, int idx) {
-    if (lua::type(state, idx) == lua::Type::String)
-        if (auto c = resolveColor(lua::tostring(state, idx))) return *c;
+    if (lua::type(state, idx) == lua::Type::String) {
+        const std::string_view spec = lua::tostring(state, idx);
+        if (auto c = resolveColor(spec)) return *c;
+        lua::error(state, "expected a color (hex string, role name or {r,g,b,a}), got " + colorSpecProblem(spec));
+    }
     if (lua::istable(state, idx))
         if (auto c = Node::colorFromTable(state, idx)) return *c;
     lua::error(state, "expected a color (hex string, role name or {r,g,b,a})");

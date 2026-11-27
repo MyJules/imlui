@@ -77,6 +77,12 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         if (lua::type(state, i) == lua::Type::Table) return Node::colorFromTable(state, i);
         return std::nullopt;
     };
+    // ": <why>" for a string that isn't a color spec (colorSpecProblem), else nothing.
+    auto problemOf = [&](int i) -> std::string {
+        if (lua::type(state, i) != lua::Type::String) return {};
+        const std::string problem = colorSpecProblem(lua::tostring(state, i));
+        return problem.empty() ? problem : ": " + problem;
+    };
 
     // A design names a registered skin; another one would draw Material while the theme claims something else.
     if (lua::getfield(state, idx, "design") != lua::Type::Nil) {
@@ -108,7 +114,7 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         if (auto c = colorAt(lua::gettop(state), theme().scheme))
             t.seed = *c;
         else
-            reportError("theme: invalid seed color '" + toDisplayString(state, -1) + "'");
+            reportError("theme: invalid seed color '" + toDisplayString(state, -1) + "'" + problemOf(lua::gettop(state)));
     }
     lua::pop(state);
     if (lua::getfield(state, idx, "dark") != lua::Type::Nil) t.dark = lua::toboolean(state, -1);
@@ -145,7 +151,7 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
             if (!target)
                 reportError("theme.colors: unknown role '" + role + "'");
             else if (!c)
-                reportError("theme.colors." + role + ": invalid color");
+                reportError("theme.colors." + role + ": invalid color" + problemOf(lua::gettop(state)));
             else
                 *target = *c;
             lua::pop(state);
@@ -170,7 +176,7 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
             if (ci < 0)
                 reportError("theme.imgui: unknown ImGuiCol '" + name + "'");
             else if (!c)
-                reportError("theme.imgui." + name + ": invalid color");
+                reportError("theme.imgui." + name + ": invalid color" + problemOf(lua::gettop(state)));
             else
                 t.imguiColors.emplace_back(ci, *c);
             lua::pop(state);
