@@ -72,6 +72,17 @@ inline constexpr int animateKeepFrames = 600;
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
 float stateLayer(ImGuiID id, bool hovered, bool active);
 
+/// ImGui::InvisibleButton that takes part in keyboard navigation (Tab and the arrows reach it, Space or Enter
+/// activates it), without ImGui's own nav rectangle: the control draws its focus indicator itself when focusVisible()
+/// (Material: focusRing()). Every skin's clickable controls are made of these.
+bool navButton(const char* id, ImVec2 size);
+/// Whether the last item has the keyboard nav focus and ImGui shows the nav cursor (after a key press, not after a
+/// click), and isn't disabled: a focus indicator shows for keyboard focus only.
+[[nodiscard]] bool focusVisible();
+/// Material 3's focus indicator around the control [a, b] whose corner radius is `radius` (pixels): a 3dp ring in
+/// `secondary`, 2dp outside the control. `corners`: the rounded ones (a segment of a segmented button).
+void focusRing(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, ImDrawFlags corners = ImDrawFlags_RoundCornersAll);
+
 /// Whether a popup is open over the current window now, or was at the end of the last frame (notePopupOver()).
 /// ImGui's keyboard nav closes the top popup on Escape in NewFrame, before the window under it sees the key: a
 /// window that closes on Escape (a Dialog, a drawer) checks this, so one press closes one popup. `flags` are
@@ -228,6 +239,25 @@ float animate(ImGuiID id, float target, float speed, float epsilon) {
 
 float stateLayer(ImGuiID id, bool hovered, bool active) {
     return animate(id + 0x5157, active ? 0.10f : (hovered ? 0.08f : 0.0f), 22.0f);
+}
+
+bool navButton(const char* id, ImVec2 size) {
+    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4{0, 0, 0, 0});
+    const bool clicked = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
+    ImGui::PopStyleColor();
+    return clicked;
+}
+
+bool focusVisible() {
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    return g.NavCursorVisible && g.NavId != 0 && g.NavId == ImGui::GetItemID() && !itemDisabled();
+}
+
+void focusRing(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, ImDrawFlags corners) {
+    const float thickness = std::max(1.0f, std::round(dp(3))), off = std::round(dp(2));
+    const float out = off + thickness;
+    strokeRoundRect(dl, {a.x - out, a.y - out}, {b.x + out, b.y + out}, radius + out, scheme().secondary, thickness,
+                    corners);
 }
 
 float itemWidth(float requested, float natural) {

@@ -50,10 +50,11 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
         const ImVec2 a{p.x + tw * static_cast<float>(i), p.y};
         ImGui::SetCursorScreenPos(a);
         ImGui::PushID(i);
-        if (ImGui::InvisibleButton("##tab", {tw, h}) && *current != i) { *current = i; changed = true; }
+        if (navButton("##tab", {tw, h}) && *current != i) { *current = i; changed = true; }
         const bool dis = itemDisabled();
         const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
         const ImGuiID tid = ImGui::GetItemID();
+        const bool focused = focusVisible();
         ImGui::PopID();
         const bool sel = i == *current;
         Color fg = dis ? disabledContent() : (sel ? (secondary ? s.onSurface : s.primary) : s.onSurfaceVariant);
@@ -74,6 +75,7 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
             if (ic) drawIcon(dl, t.icon, {x + dp(12), a.y + h * 0.5f}, 24.0f, fg);
             drawText(dl, TextStyle::TitleSmall, {x + iw, textTop(TextStyle::TitleSmall, a.y + h * 0.5f)}, fg, t.label);
         }
+        if (focused) focusRing(dl, a, {a.x + tw, a.y + h}, 0.0f);
         if (sel) {
             contentW = std::max(contentW, dp(24));
             const float left = tw * static_cast<float>(i);

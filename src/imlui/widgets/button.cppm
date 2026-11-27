@@ -92,10 +92,11 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
     const float rounding = fab ? dp(shape().large) : h * 0.5f;
 
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, {w, h});
+    bool clicked = navButton(label, {w, h});
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
 
     Color bg{0, 0, 0, 0}, fg = s.primary, border{0, 0, 0, 0};
     float elevation = 0.0f;
@@ -131,6 +132,7 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
         x += dp(iconSz) + gap;
     }
     if (!text.empty()) drawText(dl, TextStyle::LabelLarge, {x, textTop(TextStyle::LabelLarge, cy)}, fg, text);
+    if (focused) focusRing(dl, p, q, rounding);
     return clicked;
 }
 
@@ -139,10 +141,11 @@ bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v, 
     const Scheme& s = scheme();
     const float target = iconButtonSize().x, box = dp(40);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, iconButtonSize());
+    bool clicked = navButton(id, iconButtonSize());
     const bool dis = itemDisabled();
     ImGuiID iid = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
     const bool on = !toggle || selected;
 
     Color bg{0, 0, 0, 0}, fg = s.onSurfaceVariant, border{0, 0, 0, 0};
@@ -177,6 +180,7 @@ bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v, 
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
     if (layer > 0) fillCircle(dl, c, box * 0.5f, fg.withAlpha(layer));
     drawIcon(dl, iconName, c, 24.0f, fg);
+    if (focused) focusRing(dl, {c.x - box * 0.5f, c.y - box * 0.5f}, {c.x + box * 0.5f, c.y + box * 0.5f}, box * 0.5f);
     return clicked;
 }
 

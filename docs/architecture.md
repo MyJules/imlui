@@ -1229,7 +1229,7 @@ the file, so groups merge cleanly:
 `themeTokens()`, `themeColors()` (the cached defaults); the metrics `controlHeight`, `compactHeight`, `paddingX`,
 `gap` (with density), `controlRadius`, `overlayRadius`, `strokeWidth` (whole pixels), `iconSize` (dp, for
 `md::drawIcon`); `bodyStyle`; `State` (`Rest`, `Hover`, `Pressed`, `Disabled`), `ItemState` (`id`, `hovered`,
-`pressed`, `disabled`, `focused`), `itemState()`, `stateOf()`, `focusVisible()`, `invisibleButton()`; `Fill`
+`pressed`, `disabled`, `focused`), `itemState()`, `stateOf()`, `focusVisible()`, `invisibleButton()` (`md::focusVisible`, `md::navButton`); `Fill`
 (`Accent`, `Standard`, `Subtle`), `ControlColors` (`fill`, `stroke`, `bottomStroke`, `text`), `controlColors(look,
 fill, state)` (accent follows `buttonFill`); `drawControl(dl, a, b, radius, colors, stroke)`, `drawUnderline(dl, a,
 b, radius, color, width)`, `drawFocusRect(dl, a, b, radius, look)`; `Content` and `content(look, text, icon, style,
@@ -1379,12 +1379,12 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.widgets.common` | Shared helpers: `col`, `scheme()`, `shape()`, disabled colors, `animate`, `stateLayer`, `itemWidth`, `scopedWindowName` (and `scopedWindowId`, its allocation-free form without a title), text/icon/shadow drawing, the shape helpers (arcs rotate one point by a fixed step: one sincos per arc), all culled to the clip rect (`rectVisible`) |
+| `imlui.widgets.common` | Shared helpers: `col`, `scheme()`, `shape()`, disabled colors, `animate`, `stateLayer`, keyboard navigation (`navButton`, `focusVisible`, `focusRing`), `itemWidth`, `scopedWindowName` (and `scopedWindowId`, its allocation-free form without a title), text/icon/shadow drawing, the shape helpers (arcs rotate one point by a fixed step: one sincos per arc), all culled to the clip rect (`rectVisible`) |
 | `imlui.widgets.surface` | Surface stack (`pushSurface`, `popSurface`, `surfaceColor`) for cutouts on cards and dialogs |
 | `imlui.widgets.text` | `text`, `textSize`, `icon`, `iconSize`, `tooltip`, `divider` |
 | `imlui.widgets.button` | `button`, `buttonSize` (+ `ButtonVariant`), `iconButton`, `iconButtonSize` (+ `IconButtonVariant`) |
 | `imlui.widgets.selection` | `checkbox`, `radio`, `switchToggle`, `chip` (+ `ChipVariant`), `segmented` |
-| `imlui.widgets.slider` | `slider`, `sliderSize`; shared with the Fluent slider: `checkedSliderFormat` (an invalid format reported once), `snapToStep`, and the value logic `sliderRange` (+ `SliderRange`), `sliderDragTo`, `sliderFraction`, `sliderStops`, `sliderStopAt` |
+| `imlui.widgets.slider` | `slider`, `sliderSize`; shared with the Fluent slider: `checkedSliderFormat` (an invalid format reported once), `snapToStep`, and the value logic `sliderRange` (+ `SliderRange`), `sliderDragTo`, `sliderFraction`, `sliderStops`, `sliderStopAt`, and `sliderKeys` (the keyboard of a focused slider) |
 | `imlui.widgets.progress` | `progress` (linear), `circularProgress` |
 | `imlui.widgets.field` | Shared text-field plumbing (`FieldFrame`, decoration, background, supporting text) |
 | `imlui.widgets.text_field` | `textField` (+ `TextFieldOptions`, `TextFieldResult`: `changed`, `accepted` on Enter, `committed` when the input lost focus after an edit, `trailingClicked`) |

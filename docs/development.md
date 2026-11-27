@@ -76,7 +76,11 @@ the built-ins in `src/imlui/ui/elements/` are the examples (see
 (`export module imlui.widgets.<name>;`) and add it to the `imlui.widgets` umbrella. Draw it with ImGui primitives
 using `imlui.widgets.common`:
 
-- `InvisibleButton` for interaction.
+- `navButton(id, size)` for interaction: an `InvisibleButton` that keyboard navigation reaches (Tab, arrows; Space or
+  Enter activate it) without ImGui's nav rectangle. Right after it, `const bool focused = focusVisible();`, and
+  `if (focused) focusRing(dl, a, b, radius);` last, around what the state layer covers (Material's focus indicator,
+  shown for keyboard focus only). A plain `ImGui::InvisibleButton` only for what isn't a tab stop (a scrim, a text
+  field's trailing icon).
 - `scheme()` and `shape()` for colors and radii.
 - `stateLayer(id, hovered, active)` for the hover and press overlay.
 - `itemDisabled()` with `disabledContent()`/`disabledContainer()` for the disabled state.

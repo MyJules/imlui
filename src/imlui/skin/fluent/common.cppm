@@ -242,17 +242,9 @@ State stateOf(const ItemState& item) {
     return State::Rest;
 }
 
-bool focusVisible() {
-    const ImGuiContext& g = *ImGui::GetCurrentContext();
-    return g.NavCursorVisible && g.NavId != 0 && g.NavId == ImGui::GetItemID() && !md::itemDisabled();
-}
+bool focusVisible() { return md::focusVisible(); }
 
-bool invisibleButton(const char* id, ImVec2 size) {
-    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4{0, 0, 0, 0});
-    const bool clicked = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
-    ImGui::PopStyleColor();
-    return clicked;
-}
+bool invisibleButton(const char* id, ImVec2 size) { return md::navButton(id, size); }
 
 ControlColors controlColors(const Look& look, Fill fill, State state) {
     const Colors& c = look.colors;

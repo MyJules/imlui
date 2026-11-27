@@ -120,8 +120,9 @@ bool snackbar(std::string_view message, std::string_view action, float t, bool c
         // Text button in inversePrimary. An invisible button draws no label, so its ID needn't carry the action.
         ImVec2 bp = ImGui::GetCursorScreenPos();
         float bw = measure(TextStyle::LabelLarge, action).x + dp(24);
-        clicked = ImGui::InvisibleButton("###snack_action", {bw, dp(40)});
+        clicked = navButton("###snack_action", {bw, dp(40)});
         float layer = stateLayer(ImGui::GetItemID(), ImGui::IsItemHovered(), ImGui::IsItemActive());
+        if (focusVisible()) focusRing(dl, bp, {bp.x + bw, bp.y + dp(40)}, dp(20));
         if (layer > 0) fillRoundRect(dl, bp, {bp.x + bw, bp.y + dp(40)}, dp(20), s.inversePrimary.withAlpha(layer));
         drawTextV(dl, TextStyle::LabelLarge, bp.x + dp(12), bp.y + dp(20), s.inversePrimary.withAlpha(ease), action);
     }

@@ -49,10 +49,11 @@ bool listItem(const char* id, const ListItemOptions& o) {
     const ImVec2 size = listItemSize(o);
     const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, size);
+    bool clicked = navButton(id, size);
     const bool dis = itemDisabled();
     const ImGuiID iid = ImGui::GetItemID();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float rnd = dp(shape().medium);
     float st = animate(iid + 3, o.selected ? 1.0f : 0.0f, 18.0f);
@@ -85,6 +86,7 @@ bool listItem(const char* id, const ListItemOptions& o) {
     drawText(dl, TextStyle::BodyLarge, {x, y}, fg, o.headline);
     if (two) drawText(dl, TextStyle::BodyMedium, {x, y + hh}, sub, o.supporting);
     dl->PopClipRect();
+    if (focused) focusRing(dl, p, {p.x + w, p.y + h}, rnd);
     return clicked;
 }
 
@@ -94,11 +96,12 @@ bool expander(const char* id, std::string_view title, std::string_view supportin
     const ImVec2 size = expanderSize(supporting, width);
     const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, size);
+    bool clicked = navButton(id, size);
     if (clicked) *open = !*open;
     const bool dis = itemDisabled();
     const ImGuiID iid = ImGui::GetItemID();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float rnd = dp(shape().medium);
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
@@ -116,6 +119,7 @@ bool expander(const char* id, std::string_view title, std::string_view supportin
     }
     drawIcon(dl, *open ? "expand_less" : "expand_more", {p.x + w - dp(16) - dp(12), cy}, 24.0f,
              dis ? disabledContent() : s.onSurfaceVariant);
+    if (focused) focusRing(dl, p, {p.x + w, p.y + h}, rnd);
     return clicked;
 }
 

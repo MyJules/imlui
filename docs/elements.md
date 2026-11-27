@@ -827,6 +827,12 @@ Empty space.
 
 ## Buttons and selection controls
 
+Every clickable control (these, and `ListItem`, `Section`, `NavigationItem`, `TabBar` tabs, `SegmentedButton`
+segments, `ComboBox`, `ColorPicker`, a snackbar's action) takes part in keyboard navigation under every design: Tab
+and the arrow keys move the focus to it, Space or Enter activates it (the same signal as a click), and while the
+focus came from the keyboard it shows its design's focus indicator (Material's `secondary` ring, Fluent's focus
+rectangle).
+
 ### Button
 
 A Material button.
@@ -973,7 +979,10 @@ A one-line (56dp) or two-line (72dp) list item.
 
 ### Slider
 
-A 44dp-tall Material slider. A value label appears above the handle while you drag.
+A 44dp-tall Material slider. A value label appears above the handle while you drag. With the keyboard focus (Tab,
+or a click), Left/Right move it by `stepSize` (a hundredth of the range when continuous), PageDown/PageUp by a tenth
+of the range in whole steps, Home/End to `from`/`to`; each key press emits `onMoved` like a drag. Up/Down and Tab move
+the focus on; Space or Enter don't change the value.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
