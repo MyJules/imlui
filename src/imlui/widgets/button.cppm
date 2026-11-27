@@ -13,10 +13,8 @@ import imlui.widgets.common;
 
 export namespace imlui::md {
 
+/// A common button's emphasis; its Lua names ("filled", "tonal", ...) are in imlui.ui.enum_names.
 enum class ButtonVariant { Filled, Tonal, Outlined, Text, Elevated, Fab };
-
-/// "filled" (default), "tonal", "outlined", "text", "elevated", "fab".
-[[nodiscard]] ButtonVariant buttonVariant(std::string_view name);
 
 /// Common button. `iconName` is an optional leading Material icon.
 /// A FAB with an empty label is a regular 56dp FAB, otherwise extended.
@@ -45,15 +43,6 @@ bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v =
 module :private;
 
 namespace imlui::md {
-
-ButtonVariant buttonVariant(std::string_view name) {
-    if (name == "tonal") return ButtonVariant::Tonal;
-    if (name == "outlined") return ButtonVariant::Outlined;
-    if (name == "text") return ButtonVariant::Text;
-    if (name == "elevated") return ButtonVariant::Elevated;
-    if (name == "fab") return ButtonVariant::Fab;
-    return ButtonVariant::Filled;
-}
 
 namespace {
 

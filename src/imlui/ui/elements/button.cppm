@@ -11,6 +11,7 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.types.type_info;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
@@ -29,8 +30,8 @@ public:
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
-    [[nodiscard]] const std::string& variant() const; ///< "filled", "tonal", "outlined", "text", "elevated", "fab"
-    void setVariant(std::string variant);
+    [[nodiscard]] md::ButtonVariant variant() const;
+    void setVariant(md::ButtonVariant variant);
     [[nodiscard]] const std::string& icon() const; ///< optional leading Material icon
     void setIcon(std::string icon);
     [[nodiscard]] const std::string& font() const; ///< the label's font (see Text::font)
@@ -38,7 +39,7 @@ public:
 
 private:
     std::string m_text;
-    std::string m_variant = "filled";
+    md::ButtonVariant m_variant = md::ButtonVariant::Filled;
     std::string m_icon;
     std::string m_font;
 };
@@ -75,8 +76,7 @@ void Button::render(Frame& frame) {
     bool clicked = false;
     {
         FontFaceScope face{m_font};
-        clicked = skin().button(label.c_str(), md::buttonVariant(m_variant),
-                                {frame.size("width"), frame.resolvedHeight(0.0f)}, m_icon);
+        clicked = skin().button(label.c_str(), m_variant, {frame.size("width"), frame.resolvedHeight(0.0f)}, m_icon);
     }
     if (clicked) emit("onClicked");
     frame.attachMenu(clicked);
@@ -89,13 +89,13 @@ std::optional<ImVec2> Button::intrinsicSize(const Frame& frame, float maxWidth) 
     if (h < 0.0f) return std::nullopt;
     const std::string label = Frame::labelId(m_text, "btn");
     FontFaceScope face{m_font};
-    return skin().buttonSize(label.c_str(), md::buttonVariant(m_variant), {frame.widthIn(maxWidth), h}, m_icon);
+    return skin().buttonSize(label.c_str(), m_variant, {frame.widthIn(maxWidth), h}, m_icon);
 }
 
 const std::string& Button::text() const { return m_text; }
 void Button::setText(std::string text) { m_text = std::move(text); }
-const std::string& Button::variant() const { return m_variant; }
-void Button::setVariant(std::string variant) { m_variant = std::move(variant); }
+md::ButtonVariant Button::variant() const { return m_variant; }
+void Button::setVariant(md::ButtonVariant variant) { m_variant = variant; }
 const std::string& Button::icon() const { return m_icon; }
 void Button::setIcon(std::string icon) { m_icon = std::move(icon); }
 const std::string& Button::font() const { return m_font; }

@@ -60,6 +60,15 @@ struct imlui::EnumNames<Quality> {
     static constexpr std::pair<Quality, std::string_view> values[] = {{Quality::Low, "low"}, {Quality::High, "high"}};
 };
 
+/// A named enum with an alias: "hi" reads as High, which pushes "high".
+enum class Level { Low, High };
+template <>
+struct imlui::EnumNames<Level> {
+    static constexpr std::string_view name = "Level";
+    static constexpr std::pair<Level, std::string_view> values[] = {
+        {Level::Low, "low"}, {Level::High, "high"}, {Level::High, "hi"}};
+};
+
 template <>
 struct imlui::LuaFields<Vec2> {
     static constexpr std::tuple fields{field("x", &Vec2::x), field("y", &Vec2::y)};
@@ -189,6 +198,16 @@ TEST(LuaValuesTest, EnumsConvertByName) {
     EXPECT_EQ(lua::gettop(s.get()), 0);
 }
 
+// An alias reads as its value, which pushes the first name listed for it.
+TEST(LuaValuesTest, EnumAliasesReadBackAsTheFirstName) {
+    const LuaState s;
+    EXPECT_EQ(s.read<Level>("'hi'"), Level::High);
+    LuaConvert<Level>::push(s.get(), s.read<Level>("'hi'"));
+    EXPECT_EQ(lua::tostring(s.get(), -1), "high");
+    lua::pop(s.get());
+    EXPECT_EQ(lua::gettop(s.get()), 0);
+}
+
 // ------------------------------------------------------------------ structs
 
 TEST(LuaValuesTest, StructsRoundTripAndCompose) {
@@ -310,6 +329,9 @@ TEST(LuaValuesTest, MismatchesNameThePath) {
     const LuaState s;
     EXPECT_EQ(s.why<Quality>("'medium'"), R"('low'|'high' expected, got string "medium")");
     EXPECT_EQ(s.why<Quality>("3"), "'low'|'high' expected, got number");
+    // A named enum lists its names after its name.
+    EXPECT_EQ(s.why<Level>("'mid'"), R"(Level ('low'|'high'|'hi') expected, got string "mid")");
+    EXPECT_EQ(s.why<Level>("3"), "Level expected, got number");
     EXPECT_EQ(s.why<Quality>("'" + std::string(50, 'a') + "'"),
               "'low'|'high' expected, got string \"" + std::string(40, 'a') + "...\"");
     EXPECT_EQ(s.why<Segment>("5"), "Segment expected, got number");

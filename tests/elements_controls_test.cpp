@@ -14,6 +14,7 @@ import imlui.ui.elements.chip;
 import imlui.ui.elements.segmented_button;
 import imlui.ui.elements.list_item;
 import imlui.test.headless_frame;
+import imlui.widgets.button;
 
 using namespace imlui;
 
@@ -47,7 +48,7 @@ TEST_F(ControlsTest, ButtonDefaultsPositionalTextAndClick) {
     Button* b = m_h.instance<Button>("root");
     ASSERT_NE(b, nullptr);
     EXPECT_EQ(b->text(), "OK");
-    EXPECT_EQ(b->variant(), "filled");
+    EXPECT_EQ(b->variant(), md::ButtonVariant::Filled);
     EXPECT_EQ(b->icon(), "");
 
     click(20, 20);
@@ -56,11 +57,25 @@ TEST_F(ControlsTest, ButtonDefaultsPositionalTextAndClick) {
     run(R"(root.text = "Go"; root.variant = "tonal"; root.icon = "add")");
     b = m_h.instance<Button>("root");
     EXPECT_EQ(b->text(), "Go");
-    EXPECT_EQ(b->variant(), "tonal");
+    EXPECT_EQ(b->variant(), md::ButtonVariant::Tonal);
     EXPECT_EQ(b->icon(), "add");
     run("root.variant = nil");
-    EXPECT_EQ(m_h.instance<Button>("root")->variant(), "filled");
+    EXPECT_EQ(m_h.instance<Button>("root")->variant(), md::ButtonVariant::Filled);
     expectNoErrors();
+}
+
+// A variant is one of the ButtonVariant names: a typo is reported with the names, and the button keeps its variant.
+TEST_F(ControlsTest, ButtonReportsAnUnknownVariant) {
+    run(R"(root = Button { "OK", variant = "tonal" })");
+    m_h.renderFrame("root");
+    run(R"(root.variant = "tonla")");
+    m_h.renderFrame("root");
+    EXPECT_EQ(m_h.instance<Button>("root")->variant(), md::ButtonVariant::Tonal);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(
+                  R"(Button.variant: ButtonVariant ('filled'|'tonal'|'outlined'|'text'|'elevated'|'fab') expected, got string "tonla")"),
+              std::string::npos)
+        << luaui::errors()[0];
 }
 
 TEST_F(ControlsTest, ButtonOpensItsMenuOnClick) {
