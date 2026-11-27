@@ -10,10 +10,11 @@
 #     adds before or after imlui.
 #   - spdlog and GoogleTest: when the app already has them (the targets spdlog::spdlog, GTest::gtest_main exist when
 #     imlui is added), imlui uses the app's copy instead of building its own, so an executable links one copy.
-#   - GLFW is the exception: its CMakeLists.txt does a lot of platform work (X11 / Wayland protocol generation, Cocoa),
-#     so it's added with add_subdirectory and keeps its upstream target name `glfw`. When the app already has a target
-#     `glfw` (its own copy, or find_package(glfw3)), imlui uses it; an app that adds its own GLFW after imlui must
-#     check `if(NOT TARGET glfw)` first. An executable can only hold one GLFW anyway (its C symbols).
+#   - SDL3 is the exception: its CMakeLists.txt does a lot of platform work (the per-platform drivers, Wayland protocol
+#     generation, Cocoa), so it's added with add_subdirectory and keeps its upstream target names (`SDL3-static`,
+#     `SDL3_Headers`, the aliases `SDL3::SDL3`, `SDL3::SDL3-static`, `SDL3::Headers`). When the app already has the
+#     target `SDL3::SDL3` (its own copy, or find_package(SDL3)), imlui uses it; an app that adds its own SDL3 after imlui
+#     must check `if(NOT TARGET SDL3::SDL3)` first. An executable can only hold one SDL anyway (its C symbols).
 # A library taken from the app can't be part of an installed imlui package: IMLUI_INSTALL=ON then stops the configure.
 #
 # The libraries the modules need (their headers are in the wrappers' global module fragments) are part of an installed
@@ -118,7 +119,7 @@ add_library(imlui_ext_imgui STATIC
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/imlui_imgui_assert.cpp
 )
@@ -128,7 +129,7 @@ target_include_directories(imlui_ext_imgui PUBLIC
 target_compile_definitions(imlui_ext_imgui PUBLIC
     IMGUI_DISABLE_OBSOLETE_FUNCTIONS
     IMGUI_USER_CONFIG="imlui_imconfig.h")
-target_link_libraries(imlui_ext_imgui PUBLIC ext::glfw)
+target_link_libraries(imlui_ext_imgui PUBLIC ext::sdl3)
 find_package(OpenGL REQUIRED)
 target_link_libraries(imlui_ext_imgui PUBLIC OpenGL::GL)
 # Third-party code is not ours to scan for modules.
