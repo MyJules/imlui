@@ -115,6 +115,12 @@ struct Content {
 /// Draws `c` from x, centered vertically on `cy`, in `color`.
 void drawContent(ImDrawList* dl, const Content& c, float x, float cy, Color color, TextStyle style = bodyStyle);
 
+// -- (C2) flyouts
+
+/// Draws a flyout's background in [a, b] (a floating surface: a snackbar's InfoBar, a chart's readout): the opaque
+/// `flyout` fill and a `flyoutStroke` border of the stroke width. `radius` in pixels.
+void drawFlyout(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, const Look& look);
+
 } // namespace imlui::fluent
 
 module :private;
@@ -286,6 +292,13 @@ void drawContent(ImDrawList* dl, const Content& c, float x, float cy, Color colo
         x += c.iconPx + c.gap;
     }
     if (!c.text.empty()) md::drawText(dl, style, {x, md::textTop(style, cy)}, color, c.text);
+}
+
+// -- (C2) flyouts
+
+void drawFlyout(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, const Look& look) {
+    drawControl(dl, a, b, radius, {look.colors.flyout, look.colors.flyoutStroke, look.colors.flyoutStroke, {}},
+                strokeWidth(look));
 }
 
 } // namespace imlui::fluent

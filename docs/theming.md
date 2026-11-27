@@ -97,6 +97,15 @@ Fluent-drawn so far; the other controls are being added, and until then they dra
 | What | Fluent look |
 |---|---|
 | `Button` | 32dp high (`controlHeight`), `paddingX` on each side, 4dp corners (`controlRadius`). `filled` and `tonal` are Fluent's **accent** button (an accent outline with `tokens = { buttonFill = "outline" }`), `outlined` and `elevated` the **standard** button (a subtle neutral fill, a 1dp stroke with a darker bottom edge), `text` the **subtle** button (transparent at rest), `fab` an accent button 16dp taller with the overlay radius (square without a label). Hover and press change the fill (no state layer); disabled uses Fluent's disabled fills. Keyboard focus (Tab, arrows; Space or Enter clicks) shows Fluent's focus rectangle: a `focusStrokeWidth` outer stroke `focusOffset` outside the button and a thin inner one. A mouse click shows none. |
+| `Card` | WinUI's card: `elevated` (default) is the translucent `card` fill with a 1dp `cardStroke` (no shadow: Fluent marks elevation with the stroke), `filled` the `layer` fill without a stroke, `outlined` no fill of its own (the surface it is on) with a `divider` stroke. The overlay radius (`overlayRadius`, 8dp) unless `rounding` is set; `color` replaces the fill. The sizes are Material's (320dp natural width, the content plus `padding` on both sides): the tokens change the look, not the size. The fill it pushes as the surface is opaque (the card fill painted over what it is on). |
+| `Dialog` | WinUI's ContentDialog: the `smoke` dim behind it, the `layer` fill, a `flyoutStroke` border of the stroke width, the overlay radius, 24dp padding, 320-548dp wide (or `width`), the title in `titleLarge` 12dp above the content. An `icon` is centered above the title in the accent. Its buttons are its `Button` children, so Fluent buttons. Opening, closing (Escape closes the top-most popup only) and the shrink-to-fit content are Material's. |
+| Snackbar (`ui.snackbar`) | WinUI's informational InfoBar, floating at the bottom: the opaque `flyout` fill with a `flyoutStroke` border, the control radius, an accent `info` icon, the message in body text, the action a standard Fluent button, the close icon a subtle square button as high as a control. 48dp high, 20dp more per wrapped line; the width, the wrapping, the slide-in and the fade are Material's. |
+| `tooltip` | WinUI's ToolTip: the `flyout` fill with a `flyoutStroke` border, the control radius, 8dp x 6dp padding, `bodySmall` (Fluent's caption) in the primary text color, wrapping at 320dp. |
+| `Divider` | A 1dp `divider`-colored line (Material's size and insets). |
+| `Table` | `divider`-colored rules, the selected row in the `subtleHover` fill with primary text, `paddingX` cell padding, a header as high as a control (`controlHeight`); header cells in `titleSmall` (Fluent's body strong) in the secondary text color, body cells in body text; an `outlined` table sits in an outlined Fluent card. |
+| `Plot` | Material's chart (axis, sizes, gaps, hover) with the series in the accent (or `color`), divider-colored gridlines over a `controlStrongStroke` base line, axis labels in the secondary text color, bars with the control radius at the top, and a flyout for the hover readout. |
+| `TopAppBar` | WinUI's title/command bar: a 48dp top row (`small`, `center`); `medium` and `large` are 104dp and 128dp with the title below the row. The current surface's color, the title in the primary text color. |
+| `Separator`, `Link` | A separator's label in the secondary text color; a link in the accent text color (WinUI's HyperlinkButton). |
 | `ApplicationWindow` | Fluent's solid background (unless `imgui = { WindowBg = ... }` sets it). |
 | `Window` | A layer over the background, a 1dp divider-colored border, title bars of the background color. |
 | `ScrollView` | The overlay radius (8dp) when it has no `rounding`. |
@@ -160,11 +169,11 @@ module `imlui.theme.fluent_colors`). Fluent's neutral brushes are white or black
 | `subtle` / `subtleHover` / `subtlePressed` | transparent / white 6% / white 4% | transparent / black 4% / black 2% | text buttons, list rows, menu items |
 | `text` / `textSecondary` / `textTertiary` / `textDisabled` | white / 79% / 54% / 36% | black 90% / 61% / 45% / 36% | text |
 | `background` | `surfaceContainer` | `surfaceContainerLow` | the window background (Mica's solid fallback) |
-| `layer` | `background` 60% toward `surfaceContainerHigh` | `background` 50% toward white | content layers, `Window` |
+| `layer` | `background` 60% toward `surfaceContainerHigh` | `background` 50% toward white | content layers, `Window`, `Dialog`, a `filled` card |
 | `card` / `cardStroke` | white 5% / black 10% | white 70% / black 6% | cards |
-| `flyout` / `flyoutStroke` | `surfaceContainerHigh` / black 20% | `background` 60% toward white / black 6% | menus, popups, tooltips, dialogs |
-| `smoke` | black 30% | black 30% | the dim behind a modal |
-| `divider` | white 8% | black 8% | dividers, table rules |
+| `flyout` / `flyoutStroke` | `surfaceContainerHigh` / black 20% | `background` 60% toward white / black 6% | menus, popups, tooltips, the snackbar, a chart's readout; `flyoutStroke` also a dialog's border |
+| `smoke` | black 30% | black 30% | the dim behind a modal (`Dialog`) |
+| `divider` | white 8% | black 8% | dividers, table rules, chart gridlines, an `outlined` card's stroke |
 | `focusOuter` / `focusInner` | `text` / black 70% | `text` / white 70% | the keyboard focus rectangle |
 
 ## Scheme generation

@@ -1076,6 +1076,9 @@ fill, state)` (accent follows `buttonFill`); `drawControl(dl, a, b, radius, colo
 b, radius, color, width)`, `drawFocusRect(dl, a, b, radius, look)`; `Content` and `content(look, text, icon, style,
 iconDp)`, `drawContent(dl, content, x, cy, color, style)`.
 
+Added with the containers (group C2): `drawFlyout(dl, a, b, radius, look)`, a floating surface's background (the
+opaque `flyout` fill, a `flyoutStroke` border of the stroke width): the snackbar's InfoBar, a chart's readout.
+
 ## Repository layout
 
 imlui is a library repository; apps live in their own repositories and add it with `add_subdirectory` (a git
@@ -1224,7 +1227,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.card` | `beginCard`/`endCard` (+ `CardVariant`) |
 | `imlui.widgets.dialog` | `beginDialog`/`endDialog` |
 | `imlui.widgets.snackbar` | `snackbar` |
-| `imlui.widgets.chart` | `chart` (+ `ChartOptions`) |
+| `imlui.widgets.chart` | `chart` (+ `ChartOptions`), `chartSize`, `chartAxis` (+ `ChartAxis`: the y axis, shared with the Fluent chart) |
 | `imlui.widgets.table` | `tableHeaderCell`, `tableCell` |
 | `imlui.widgets` | Umbrella: `export import` of all widget modules |
 
@@ -1239,6 +1242,13 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout |
 | `imlui.skin.fluent.button` | `fluent::button`, `buttonSize`, `variantFill` |
 | `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding` |
+| `imlui.skin.fluent.card` | `fluent::beginCard`, `endCard`, `cardSize`, `cardColors` (+ `CardColors`): md's card child window and card stack, Fluent's colors and stroke |
+| `imlui.skin.fluent.dialog` | `fluent::beginDialog`, `endDialog` (WinUI's ContentDialog) |
+| `imlui.skin.fluent.snackbar` | `fluent::snackbar`, `snackbarLayout` (+ `SnackbarLayout`), `snackbarActionLabel` (WinUI's InfoBar) |
+| `imlui.skin.fluent.tooltip` | `fluent::tooltip` (WinUI's ToolTip) |
+| `imlui.skin.fluent.divider` | `fluent::divider`, `dividerSize` |
+| `imlui.skin.fluent.table` | `fluent::tableHeaderCell`, `tableCell` |
+| `imlui.skin.fluent.chart` | `fluent::chart`, `chartSize` |
 
 ### UI (`src/imlui/ui/`)
 

@@ -28,22 +28,24 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
 /// The size of chart() with the same options (`o.width` resolved like itemWidth(): 0 is the natural 320dp).
 [[nodiscard]] ImVec2 chartSize(const ChartOptions& o);
 
+/// The y axis of a chart: its value range (max > min as floats) and how many grid steps divide it.
+struct ChartAxis {
+    float min, max;
+    int divisions;
+};
+/// The y axis chart() draws for `values` with `o` (another skin's chart uses it too): `o.min`..`o.max`, or with
+/// `o.autoRange` a "nice" range around the finite values (from 0 for bars) in steps of 1, 2, 2.5 or 5 x 10^n.
+[[nodiscard]] ChartAxis chartAxis(const std::vector<float>& values, const ChartOptions& o);
+
 } // namespace imlui::md
 
 module :private;
 
 namespace imlui::md {
 
-namespace {
-
-struct AxisRange {
-    float min, max;
-    int divisions;
-};
-
-/// The value range of the y axis, always with max > min as floats. Computed in double: for large values a float
-/// `max = min + 1` doesn't change max, and the axis math would take log10(0).
-AxisRange axisRange(const std::vector<float>& values, const ChartOptions& o) {
+/// Computed in double: for large values a float `max = min + 1` doesn't change max, and the axis math would take
+/// log10(0).
+ChartAxis chartAxis(const std::vector<float>& values, const ChartOptions& o) {
     double lo = static_cast<double>(o.min), hi = static_cast<double>(o.max);
     if (o.autoRange) {
         lo = std::numeric_limits<double>::infinity();
@@ -82,8 +84,6 @@ AxisRange axisRange(const std::vector<float>& values, const ChartOptions& o) {
     return {mn, mx, divisions};
 }
 
-} // namespace
-
 ImVec2 chartSize(const ChartOptions& o) { return {itemWidth(o.width, dp(320)), o.height > 0 ? o.height : dp(160)}; }
 
 void chart(const char* id, const std::vector<float>& values, const ChartOptions& o) {
@@ -98,7 +98,7 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
     if (!rectVisible(dl, p, {p.x + w, p.y + h})) return;
     const Color c = o.color.value_or(s.primary);
 
-    const AxisRange axis = axisRange(values, o);
+    const ChartAxis axis = chartAxis(values, o);
     const float mn = axis.min, mx = axis.max;
     const int divisions = axis.divisions;
 
