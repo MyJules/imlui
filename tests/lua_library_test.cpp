@@ -429,10 +429,11 @@ TEST(LuaLibraryDebug, ScriptsGetTheWholeDebugLibraryOnlyWhenNativeSaysSo) {
         SCOPED_TRACE(flag);
         lua::State* state = lua::newstate();
         lua::openlibs(state);
-        const std::string boot = std::string{"package.path = '"} + IMLUI_RESOURCES_DIR + "/?.lua;' .. package.path\n" +
-                                 "package.preload['imlui.native'] = function() return { time = function() return 0 " +
-                                 "end, log = function() end, reportError = function(m) reported = m end, fullDebug = " + flag +
-                                 " } end\n" + R"(
+        const std::string boot =
+            std::string{"package.path = '"} + IMLUI_RESOURCES_DIR + "/?.lua;' .. package.path\n" +
+            "package.preload['imlui.native'] = function() return { time = function() return 0 " +
+            "end, log = function() end, reportError = function(m) reported = m end, fullDebug = " + flag + " } end\n" +
+            R"(
             local whole = debug
             local ui = require("imlui")
             local full = ui.native.fullDebug ~= false

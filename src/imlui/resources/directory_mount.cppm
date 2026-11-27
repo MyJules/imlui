@@ -72,8 +72,9 @@ private:
     using Cache = std::map<std::string, Cached, std::less<>>;
 
     /// What one folder holds for holdsSelected(), as of its modification time: whether a selected file is among its
-    /// own entries, and its subfolders (links included) otherwise. A file added deeper down changes only its own folder's
-    /// time, so the answer for a folder is its own entry and its subfolders' answers, each checked against its time.
+    /// own entries, and its subfolders (links included) otherwise. A file added deeper down changes only its own
+    /// folder's time, so the answer for a folder is its own entry and its subfolders' answers, each checked against its
+    /// time.
     struct Holding {
         ResourceTime time;
         ResourceTime listedAt; ///< when the entries were read (the file system's clock)

@@ -114,7 +114,8 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         if (auto c = colorAt(lua::gettop(state), theme().scheme))
             t.seed = *c;
         else
-            reportError("theme: invalid seed color '" + toDisplayString(state, -1) + "'" + problemOf(lua::gettop(state)));
+            reportError("theme: invalid seed color '" + toDisplayString(state, -1) + "'" +
+                        problemOf(lua::gettop(state)));
     }
     lua::pop(state);
     if (lua::getfield(state, idx, "dark") != lua::Type::Nil) t.dark = lua::toboolean(state, -1);

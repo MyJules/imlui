@@ -409,9 +409,8 @@ TEST(ScriptDebugLibrary, IsWholeInADevBuildAndTracebackAloneWhenShipped) {
     EXPECT_FALSE(luaui::fullDebugLibrary());
 #endif
     test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
-    const std::string full = luaui::fullDebugLibrary() ? "true" : "false";
-    EXPECT_EQ(h.run(R"(
-        local full = )" + full + R"(
+    const std::string mode = std::string{"local full = "} + (luaui::fullDebugLibrary() ? "true" : "false");
+    EXPECT_EQ(h.run(mode + R"(
         assert(require("debug") == debug)
         assert(type(debug.traceback) == "function" and debug.traceback("x"):find("stack traceback", 1, true))
         local names = {}

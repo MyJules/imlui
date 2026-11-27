@@ -576,8 +576,8 @@ TEST(DirectoryMount, ListsAndWalksLinkedFolders) {
         EXPECT_EQ(mount->list("a"), strings({"toB/", "x.lua"}));
         EXPECT_EQ(mount->list("a/toB"), strings({"y.lua"})); // toA leads back to `a`
         EXPECT_TRUE(mount->exists("shared/lib"));
-        const std::vector<std::string> all = {"a/toB/y.lua", "a/x.lua", "b/toA/x.lua", "b/y.lua", "main.lua",
-                                              "shared/lib/util.lua"};
+        const std::vector<std::string> all = {"a/toB/y.lua", "a/x.lua",  "b/toA/x.lua",
+                                              "b/y.lua",     "main.lua", "shared/lib/util.lua"};
         EXPECT_EQ(mount->listFiles(""), all);
         EXPECT_EQ(mount->listFiles("shared"), strings({"lib/util.lua"}));
         Resources res;

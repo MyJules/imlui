@@ -384,7 +384,8 @@ struct LuaConvert<Color> {
     }
     /// For a string, what's wrong with it ("Text.color: color expected, got unknown role 'pirmary'").
     static std::string mismatch(lua::State* s, int idx) {
-        if (lua::type(s, idx) == lua::Type::String) return "color expected, got " + colorSpecProblem(lua::tostring(s, idx));
+        if (lua::type(s, idx) == lua::Type::String)
+            return "color expected, got " + colorSpecProblem(lua::tostring(s, idx));
         return std::string{"color expected, got "} + lua::typeName(s, idx);
     }
 };
