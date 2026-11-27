@@ -10,10 +10,10 @@
 // What goes through the skin: a call that decides a look (a control's shape, colors, metrics or its natural size:
 // buttons, toggles, fields, menus, cards, dialogs, tooltips, dividers, ...; an element's chrome). What stays a direct
 // md:: call: drawing helpers that decide nothing (fillRoundRect, strokeRoundRect, fillCircle, strokeCircle, hLine,
-// vLine, drawIcon, text and icon items, itemWidth, scopedWindowName, the constants), the vocabulary parsers
-// (buttonVariant, chipVariant, ...), and the widgets' own stacks (pushSurface/popSurface/surfaceColor carry the color
-// an element chose; cardDepth/surfaceDepth and their restores undo a render pass an error cut short). The md:: widgets
-// keep calling each other inside (a snackbar's action is md::button): a skin overrides such a composite whole.
+// vLine, drawIcon, text and icon items, itemWidth, scopedWindowName, the constants) and the widgets' own stacks
+// (pushSurface/popSurface/surfaceColor carry the color an element chose; cardDepth/surfaceDepth and their restores undo
+// a render pass an error cut short). The md:: widgets keep calling each other inside (a snackbar's action is
+// md::button): a skin overrides such a composite whole.
 export module imlui.skin.base;
 
 import std;
@@ -45,6 +45,7 @@ import imlui.widgets.table;
 import imlui.widgets.tabs;
 import imlui.widgets.text;
 import imlui.widgets.text_field;
+import imlui.widgets.top_app_bar;
 
 export namespace imlui {
 
@@ -193,7 +194,7 @@ public:
     [[nodiscard]] virtual Color navigationBarColor() const;
     /// The NavigationRail's container color when it has no `color`.
     [[nodiscard]] virtual Color navigationRailColor() const;
-    [[nodiscard]] virtual TopAppBarChrome topAppBarChrome(std::string_view variant) const;
+    [[nodiscard]] virtual TopAppBarChrome topAppBarChrome(md::TopAppBarVariant variant) const;
     [[nodiscard]] virtual TableChrome tableChrome() const;
     /// A Separator's label color.
     [[nodiscard]] virtual Color separatorTextColor() const;
@@ -371,10 +372,12 @@ float Skin::scrollViewRounding() const { return dp(md::shape().medium); }
 Color Skin::navigationBarColor() const { return md::scheme().surfaceContainer; }
 Color Skin::navigationRailColor() const { return md::scheme().surface; }
 
-Skin::TopAppBarChrome Skin::topAppBarChrome(std::string_view variant) const {
+Skin::TopAppBarChrome Skin::topAppBarChrome(md::TopAppBarVariant variant) const {
     const float row = dp(64);
     return {.rowHeight = row,
-            .height = variant == "medium" ? dp(112) : variant == "large" ? dp(152) : row,
+            .height = variant == md::TopAppBarVariant::Medium  ? dp(112)
+                      : variant == md::TopAppBarVariant::Large ? dp(152)
+                                                               : row,
             .background = md::surfaceColor(),
             .title = md::scheme().onSurface};
 }

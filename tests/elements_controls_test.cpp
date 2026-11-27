@@ -15,6 +15,7 @@ import imlui.ui.elements.segmented_button;
 import imlui.ui.elements.list_item;
 import imlui.test.headless_frame;
 import imlui.widgets.button;
+import imlui.widgets.selection;
 
 using namespace imlui;
 
@@ -97,7 +98,7 @@ TEST_F(ControlsTest, IconButtonIsAToggleOnlyWhenCheckedIsPresent) {
         root = IconButton { icon = "favorite", onClicked = function() s.clicks = s.clicks + 1 end })");
     IconButton* b = m_h.instance<IconButton>("root");
     ASSERT_NE(b, nullptr);
-    EXPECT_EQ(b->variant(), "standard");
+    EXPECT_EQ(b->variant(), md::IconButtonVariant::Standard);
     EXPECT_FALSE(b->checked());
     EXPECT_FALSE(b->color().has_value());
     ASSERT_TRUE(b->icon().has_value());
@@ -252,7 +253,7 @@ TEST_F(ControlsTest, FilterChipTogglesAndEmitsTheNewState) {
                       onClicked = function(_, v) s.clicked[#s.clicked + 1] = v; s.onAtClick = s.on end })");
     Chip* c = m_h.instance<Chip>("root");
     ASSERT_NE(c, nullptr);
-    EXPECT_EQ(c->variant(), "filter");
+    EXPECT_EQ(c->variant(), md::ChipVariant::Filter);
     EXPECT_TRUE(c->checkable());
     EXPECT_EQ(c->icon(), "");
 

@@ -13,6 +13,7 @@ import imlui.theme.dpi;
 import imlui.theme.fluent_colors;
 import imlui.theme.theme;
 import imlui.widgets.surface;
+import imlui.widgets.top_app_bar;
 
 export namespace imlui::fluent {
 
@@ -31,9 +32,9 @@ export namespace imlui::fluent {
 
 // -- (C2) bars, tables, separators, links
 
-/// WinUI's title/command bar: a 48dp top row ("small", "center"); "medium" and "large" put the title below it in a
+/// WinUI's title/command bar: a 48dp top row (Small, Center); Medium and Large put the title below it in a
 /// bar of 104dp and 128dp. The current surface's color, the title in the primary text color.
-[[nodiscard]] Skin::TopAppBarChrome topAppBarChrome(const Look& look, std::string_view variant);
+[[nodiscard]] Skin::TopAppBarChrome topAppBarChrome(const Look& look, md::TopAppBarVariant variant);
 /// Divider-colored rules, the selected row in the subtle hover fill with primary text, `paddingX` cell padding, a
 /// header as high as a control.
 [[nodiscard]] Skin::TableChrome tableChrome(const Look& look);
@@ -71,12 +72,12 @@ Color navigationRailColor(const Look& look) { return look.colors.background; }
 
 // -- (C2) bars, tables, separators, links
 
-Skin::TopAppBarChrome topAppBarChrome(const Look& look, std::string_view variant) {
+Skin::TopAppBarChrome topAppBarChrome(const Look& look, md::TopAppBarVariant variant) {
     const float row = dp(48);
     return {.rowHeight = row,
-            .height = variant == "medium"  ? dp(104)
-                      : variant == "large" ? dp(128)
-                                           : row,
+            .height = variant == md::TopAppBarVariant::Medium  ? dp(104)
+                      : variant == md::TopAppBarVariant::Large ? dp(128)
+                                                               : row,
             .background = md::surfaceColor(),
             .title = look.colors.text};
 }

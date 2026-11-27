@@ -28,10 +28,8 @@ bool button(const char* label, ButtonVariant variant = ButtonVariant::Filled, Im
 /// The size of iconButton(): the 48dp touch target.
 [[nodiscard]] ImVec2 iconButtonSize();
 
+/// An icon button's emphasis; its Lua names ("standard", "filled", ...) are in imlui.ui.enum_names.
 enum class IconButtonVariant { Standard, Filled, Tonal, Outlined };
-
-/// "standard" (default), "filled", "tonal", "outlined".
-[[nodiscard]] IconButtonVariant iconButtonVariant(std::string_view n);
 
 /// Icon button (40dp container, 48dp touch target). `toggle` enables the
 /// selected/unselected look.
@@ -134,13 +132,6 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
     }
     if (!text.empty()) drawText(dl, TextStyle::LabelLarge, {x, textTop(TextStyle::LabelLarge, cy)}, fg, text);
     return clicked;
-}
-
-IconButtonVariant iconButtonVariant(std::string_view n) {
-    if (n == "filled") return IconButtonVariant::Filled;
-    if (n == "tonal") return IconButtonVariant::Tonal;
-    if (n == "outlined") return IconButtonVariant::Outlined;
-    return IconButtonVariant::Standard;
 }
 
 bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v, bool toggle, bool selected,
