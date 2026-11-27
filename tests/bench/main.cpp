@@ -13,7 +13,8 @@
 // The list-model scenarios (model, modelkey, luarows, luarowskey) show one ListView of `--rows` rows: a VectorModel
 // without and with keys, or a Lua list of row tables without and with a `key` function. They print the first frame,
 // the steady frames, the frame after one visible row changed and the frame after a row was inserted at the top, with
-// the number of delegates each of those built.
+// the number of delegates each of those built. modelend is `model` scrolled to the end, modelsparse the same with a
+// delegate only for every 10 000th row (nil for the others).
 //
 // Module-only translation unit (no #include).
 import std;
@@ -151,7 +152,8 @@ Result runScenario(const std::string& script, const std::string& scenario, int c
 // ------------------------------------------------------------ list-model scenarios
 
 bool isModelScenario(std::string_view name) {
-    return name == "model" || name == "modelkey" || name == "luarows" || name == "luarowskey";
+    return name == "model" || name == "modelkey" || name == "luarows" || name == "luarowskey" ||
+           name == "modelend" || name == "modelsparse";
 }
 
 /// The models of the list-model scenarios, a singleton: `models.plain` (no keys) and `models.keyed` (by id).
@@ -200,7 +202,12 @@ ModelResult runModelScenario(const std::string& scenario, const Options& options
     ModelResult r;
     r.scenario = scenario;
     r.rows = options.rows;
-    const bool isModel = scenario == "model" || scenario == "modelkey";
+    // modelend: `model` scrolled to the end, where a list that adds the items' heights up from the top pays for
+    // every row above the view. modelsparse: the same, with a delegate only for every 10 000th row (nil for the
+    // others, which take no space), so most of the list is long runs of rows without an item.
+    const bool atEnd = scenario == "modelend" || scenario == "modelsparse";
+    const bool sparse = scenario == "modelsparse";
+    const bool isModel = scenario == "model" || scenario == "modelkey" || atEnd;
     imlui::VectorModel<bench::Row>& model = scenario == "modelkey" ? models.keyedRows : models.plainRows;
 
     auto start = Clock::now();
@@ -215,20 +222,23 @@ ModelResult runModelScenario(const std::string& scenario, const Options& options
                              "detail = 'Second line of row ' .. i }} end",
                              options.rows));
     }
-    const std::string_view modelExpr = scenario == "model"      ? "models.plain"
-                                       : scenario == "modelkey" ? "models.keyed"
+    const std::string_view modelExpr = scenario == "modelkey" ? "models.keyed"
+                                       : isModel                ? "models.plain"
                                                                 : "function() return rows end";
     const std::string_view key = scenario == "luarowskey" ? "key = function(r) return r.id end," : "";
+    const std::string_view skip = sparse ? "if r.id % 10000 ~= 0 then return nil end" : "";
     check(h, std::format(R"(root = ListView {{ height = 700, spacing = 0, model = {}, {}
             delegate = function(r)
+                {}
                 models:built()
                 return ListItem {{ r.text, supportingText = r.detail, icon = "description" }}
             end }})",
-                         modelExpr, key));
+                         modelExpr, key, skip));
     r.buildMs = msSince(start);
     start = Clock::now();
     h.renderFrame("root");
     r.firstMs = msSince(start);
+    if (atEnd) check(h, "root:positionViewAtEnd()");
     h.renderFrames("root", options.warmup);
     check(h, "collectgarbage()");
     r.steady = summarize(timeFrames(h, options.frames));
@@ -321,8 +331,8 @@ Options parseArgs(int argc, char** argv) {
         }
     }
     if (o.scenarios.empty())
-        o.scenarios = {"tiles", "controls", "listview", "table",   "nested",
-                       "plots", "model",    "modelkey", "luarows", "luarowskey"};
+        o.scenarios = {"tiles",   "controls", "listview",   "table",    "nested",     "plots",
+                       "model",   "modelkey", "luarows",    "luarowskey", "modelend", "modelsparse"};
     return o;
 }
 

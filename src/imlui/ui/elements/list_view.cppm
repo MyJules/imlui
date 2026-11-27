@@ -83,12 +83,61 @@ private:
     static constexpr float unmeasured = -1.0f;
     static constexpr float noSpace = -2.0f;
 
+    /// Prefix sums over the items' steps, so where an index starts and which index is at a y are O(log n), not a walk
+    /// from index 0 (a million-row list scrolled to its end). A Fenwick tree whose nodes hold, for their range of
+    /// indices, the measured heights' sum, how many are measured and how many take space (measured or not). The
+    /// steps of a range are then `heights + (spaced - measured) * estimate + spaced * gap`: the estimate and the gap
+    /// apply arithmetically, so a new estimate (each measured height moves the average) or `spacing` needs no update.
+    class StepTree {
+    public:
+        /// Makes the tree hold `heights` (per index: a height, `unmeasured` or `noSpace`): O(n), or O(k log n) when
+        /// it held all but the last k of them (the model grew).
+        void assign(const std::vector<float>& heights);
+        /// Keeps the first `n` indices (the model shrank).
+        void truncate(std::size_t n);
+        /// Index `i` changed from `old` to `h`.
+        void update(std::size_t i, float old, float h);
+        /// Where index `i` starts: the steps of the indices before it.
+        [[nodiscard]] float top(std::size_t i, float gap, float estimate) const;
+        /// The last index (up to size()) whose top is at most `y`. Needs every step >= 0 (`gap` >= 0).
+        [[nodiscard]] std::size_t lastStartingBy(float y, float gap, float estimate) const;
+        /// The first index from `i` on that takes space (size() when none does): the end of a run of noSpace items.
+        [[nodiscard]] std::size_t nextSpaced(std::size_t i) const;
+        /// The last index before `i` that takes space, if any.
+        [[nodiscard]] std::optional<std::size_t> previousSpaced(std::size_t i) const;
+
+    private:
+        struct Node {
+            double heights = 0.0;
+            std::uint32_t measured = 0; // unsigned: a change's difference wraps, and the sums come out right
+            std::uint32_t spaced = 0;
+        };
+        [[nodiscard]] static Node entry(float h);
+        [[nodiscard]] static double value(const Node& sum, float gap, float estimate);
+        /// The sum of the indices before `i`.
+        [[nodiscard]] Node prefix(std::size_t i) const;
+        /// The largest i (up to size()) for which `fits(prefix(i))`, a predicate that holds up to some i.
+        template <class Fits>
+        [[nodiscard]] std::size_t descend(Fits fits) const;
+        [[nodiscard]] std::size_t size() const;
+        std::vector<Node> m_nodes; ///< 1-based (m_nodes[0] is unused): node j sums the indices (j - lowbit(j), j]
+    };
+
     /// Sets the height of index `i`; returns whether it changed by more than half a pixel.
     bool setHeight(std::size_t i, float h);
     /// The space index `i` takes, its gap below included.
     [[nodiscard]] float step(std::size_t i, float gap, float estimate) const;
     /// Where index `i` starts, from the top of the content.
     [[nodiscard]] float top(std::size_t i, float gap, float estimate) const;
+    /// When index `i` starts a run of more than longRunLength items known to take no space (before `to`): the
+    /// run's end. Such a run is visited only in part on a frame (spacelessProbe of its items, see renderContent).
+    [[nodiscard]] std::optional<std::size_t> longSpacelessRun(std::size_t i, std::size_t to) const;
+    /// The end of the range from `i` (before `to`) that holds no long run of noSpace items: what can be asked of
+    /// `__range` and rendered in one go.
+    [[nodiscard]] std::size_t spanEnd(std::size_t i, std::size_t to) const;
+    /// The part of the long run [s, e) visited on this frame: spacelessProbe items, from an offset that moves on
+    /// every frame that visits one, so every item of the run is checked again over a few frames.
+    [[nodiscard]] std::pair<std::size_t, std::size_t> spacelessWindowOf(std::size_t s, std::size_t e) const;
     /// The height of an item that wasn't measured: the measured ones' average, else a list item's.
     [[nodiscard]] float estimate(const Frame& frame) const;
     /// The scroll that puts index `i` where `mode` says in a view `viewHeight` tall scrolled to `scrollY`.
@@ -120,6 +169,16 @@ private:
     double m_measuredSum = 0.0;   ///< the measured heights' sum
     std::size_t m_measured = 0;   ///< how many are measured
     std::size_t m_spaceless = 0;  ///< how many take no space
+    StepTree m_steps;             ///< m_heights' prefix sums
+
+    /// A run of more items than this known to take no space (delegates that returned nil, hidden elements: a filter)
+    /// is not visited in full on every frame, which would cost as much as the run is long: spacelessProbe of its
+    /// items are (asked of `__range` and checked whether they take space now), at an offset (m_spacelessOffset) that
+    /// moves by as much on each frame that probes one. A shorter run is visited in full, as every other item in range.
+    /// The probe is small: the items it visits are new to the Lua side's delegate cache on most frames, so built.
+    static constexpr std::size_t longRunLength = 256;
+    static constexpr std::size_t spacelessProbe = 32;
+    std::size_t m_spacelessOffset = 0;
 
     float m_contentHeight = 0.0f;
     std::int64_t m_first = 0;
@@ -255,6 +314,7 @@ bool ListView::setHeight(std::size_t i, float h) {
         --m_spaceless;
     }
     slot = h;
+    m_steps.update(i, old, h);
     if (h >= 0.0f) {
         m_measuredSum += static_cast<double>(h);
         ++m_measured;
@@ -271,11 +331,159 @@ float ListView::step(std::size_t i, float gap, float estimate) const {
     return h == noSpace ? 0.0f : estimate + gap;
 }
 
-float ListView::top(std::size_t i, float gap, float estimate) const {
-    float y = 0.0f;
-    for (std::size_t j = 0; j < i; ++j)
-        y += step(j, gap, estimate);
-    return y;
+float ListView::top(std::size_t i, float gap, float estimate) const { return m_steps.top(i, gap, estimate); }
+
+std::optional<std::size_t> ListView::longSpacelessRun(std::size_t i, std::size_t to) const {
+    if (i >= to || m_heights[i] != noSpace) return std::nullopt;
+    const std::size_t e = std::min(to, m_steps.nextSpaced(i));
+    if (e - i <= longRunLength) return std::nullopt;
+    return e;
+}
+
+std::size_t ListView::spanEnd(std::size_t i, std::size_t to) const {
+    // Over the items that take space one by one, over a run of noSpace ones at once (the tree finds its end): the
+    // work is the items in range that take space, not the ones that don't.
+    std::size_t k = i;
+    while (k < to) {
+        if (m_heights[k] != noSpace) {
+            ++k;
+            continue;
+        }
+        const std::size_t e = std::min(to, m_steps.nextSpaced(k));
+        if (e - k > longRunLength) return k;
+        k = e;
+    }
+    return to;
+}
+
+std::pair<std::size_t, std::size_t> ListView::spacelessWindowOf(std::size_t s, std::size_t e) const {
+    const std::size_t from = s + m_spacelessOffset % (e - s);
+    return {from, std::min(e, from + spacelessProbe)};
+}
+
+// ------------------------------------------------------------ ListView::StepTree
+
+namespace {
+
+constexpr std::size_t lowbit(std::size_t j) { return j & (~j + 1); }
+
+} // namespace
+
+ListView::StepTree::Node ListView::StepTree::entry(float h) {
+    if (h >= 0.0f) return {static_cast<double>(h), 1, 1};
+    return h == noSpace ? Node{} : Node{0.0, 0, 1};
+}
+
+double ListView::StepTree::value(const Node& sum, float gap, float estimate) {
+    return sum.heights + static_cast<double>(sum.spaced - sum.measured) * static_cast<double>(estimate) +
+           static_cast<double>(sum.spaced) * static_cast<double>(gap);
+}
+
+std::size_t ListView::StepTree::size() const { return m_nodes.empty() ? 0 : m_nodes.size() - 1; }
+
+void ListView::StepTree::assign(const std::vector<float>& heights) {
+    const std::size_t old = size();
+    const std::size_t n = heights.size();
+    if (n < old) {
+        truncate(n);
+        return;
+    }
+    m_nodes.resize(n + 1);
+    if (n - old > old) {
+        // Mostly new: build it whole. Each node adds itself to its parent, which covers it.
+        std::ranges::fill(m_nodes, Node{});
+        for (std::size_t j = 1; j <= n; ++j) {
+            const Node e = entry(heights[j - 1]);
+            m_nodes[j].heights += e.heights;
+            m_nodes[j].measured += e.measured;
+            m_nodes[j].spaced += e.spaced;
+            if (const std::size_t parent = j + lowbit(j); parent <= n) {
+                m_nodes[parent].heights += m_nodes[j].heights;
+                m_nodes[parent].measured += m_nodes[j].measured;
+                m_nodes[parent].spaced += m_nodes[j].spaced;
+            }
+        }
+        return;
+    }
+    // A few appended: a new node j covers (j - lowbit(j), j], its own entry and the nodes that cover the rest, all
+    // before it, so already there.
+    for (std::size_t j = old + 1; j <= n; ++j) {
+        Node node = entry(heights[j - 1]);
+        for (std::size_t k = j - 1; k > j - lowbit(j); k -= lowbit(k)) {
+            node.heights += m_nodes[k].heights;
+            node.measured += m_nodes[k].measured;
+            node.spaced += m_nodes[k].spaced;
+        }
+        m_nodes[j] = node;
+    }
+}
+
+// A node only covers indices before it, so the first n nodes are the tree of the first n indices.
+void ListView::StepTree::truncate(std::size_t n) {
+    if (n < size()) m_nodes.resize(n + 1);
+}
+
+void ListView::StepTree::update(std::size_t i, float old, float h) {
+    const Node from = entry(old), to = entry(h);
+    const double heights = to.heights - from.heights;
+    const std::uint32_t measured = to.measured - from.measured, spaced = to.spaced - from.spaced; // may wrap
+    if (heights == 0.0 && measured == 0 && spaced == 0) return;
+    for (std::size_t j = i + 1; j < m_nodes.size(); j += lowbit(j)) {
+        m_nodes[j].heights += heights;
+        m_nodes[j].measured += measured;
+        m_nodes[j].spaced += spaced;
+    }
+}
+
+ListView::StepTree::Node ListView::StepTree::prefix(std::size_t i) const {
+    Node sum;
+    for (std::size_t j = std::min(i, size()); j > 0; j -= lowbit(j)) {
+        sum.heights += m_nodes[j].heights;
+        sum.measured += m_nodes[j].measured;
+        sum.spaced += m_nodes[j].spaced;
+    }
+    return sum;
+}
+
+template <class Fits>
+std::size_t ListView::StepTree::descend(Fits fits) const {
+    // From the top bit down: a node is taken when the prefix that ends with it still fits, so the prefixes taken
+    // grow, and end at the largest one that fits (the predicate holds up to some i and not after).
+    const std::size_t n = size();
+    std::size_t pos = 0;
+    Node acc;
+    for (std::size_t bit = std::bit_floor(std::max<std::size_t>(n, 1)); bit > 0; bit >>= 1) {
+        const std::size_t next = pos + bit;
+        if (next > n) continue;
+        const Node sum{acc.heights + m_nodes[next].heights, acc.measured + m_nodes[next].measured,
+                       acc.spaced + m_nodes[next].spaced};
+        if (!fits(sum)) continue;
+        pos = next;
+        acc = sum;
+    }
+    return pos;
+}
+
+float ListView::StepTree::top(std::size_t i, float gap, float estimate) const {
+    return static_cast<float>(value(prefix(i), gap, estimate));
+}
+
+std::size_t ListView::StepTree::lastStartingBy(float y, float gap, float estimate) const {
+    const double limit = static_cast<double>(y);
+    return descend([&](const Node& sum) { return value(sum, gap, estimate) <= limit; });
+}
+
+std::size_t ListView::StepTree::nextSpaced(std::size_t i) const {
+    // The indices [i, p) take no space while the count of those that do stays at the count before i.
+    const std::uint32_t before = prefix(i).spaced;
+    return descend([&](const Node& sum) { return sum.spaced <= before; });
+}
+
+std::optional<std::size_t> ListView::StepTree::previousSpaced(std::size_t i) const {
+    const std::uint32_t before = prefix(i).spaced;
+    if (before == 0) return std::nullopt;
+    // The last prefix with one spaced index fewer ends right before that index.
+    return descend([&](const Node& sum) { return sum.spaced < before; });
 }
 
 float ListView::estimate(const Frame& frame) const {
@@ -326,12 +534,19 @@ void ListView::renderContent(Frame& frame) {
     // view, the scroll divided by it, would divide by zero).
     const float fixedStep = fixed ? std::max(1.0f, *fixed + gap) : 0.0f;
     if (!fixed && m_heights.size() != n) {
-        // The model changed length: keep the heights of the indices that are still there.
-        if (n < m_heights.size()) {
-            for (std::size_t i = n; i < m_heights.size(); ++i)
-                setHeight(i, unmeasured);
+        // The model changed length (an insertion, a removal, a reset): keep the heights of the indices that are still
+        // there. The tree drops the ones past the end as they are, or appends the new ones.
+        for (std::size_t i = n; i < m_heights.size(); ++i) {
+            const float h = m_heights[i];
+            if (h >= 0.0f) {
+                m_measuredSum -= static_cast<double>(h);
+                --m_measured;
+            } else if (h == noSpace) {
+                --m_spaceless;
+            }
         }
         m_heights.resize(n, unmeasured);
+        m_steps.assign(m_heights);
     }
 
     // The view in content coordinates (0: the top of the first item).
@@ -428,11 +643,14 @@ void ListView::renderContent(Frame& frame) {
         return spaced ? std::max(0.0f, bottom - y) : noSpace;
     };
     // renderItem() for index `i`, remembering it when it holds what must keep rendering out of view (the culling
-    // rules: the active item, the nav focus, an open popup, a non-visual element).
+    // rules: the active item, the nav focus, an open popup, a non-visual element). On a whole pixel: ImGui truncates
+    // the cursor after each item, so an item's measured height (its group's bottom) depended on the fraction of the y
+    // it was placed at, which follows the estimate; the estimate moved with the heights measured, and the two could
+    // keep each other changing for frames (a list that follows its bottom lost it). Whole pixels measure the same.
     std::vector<std::size_t> pinned;
     const auto renderIndex = [&](std::size_t i, float y) -> float {
         const cull::Watch before = cull::watch();
-        const float h = renderItem(y);
+        const float h = renderItem(std::floor(y));
         if (cull::held(before) && pinned.size() < maxPinned) pinned.push_back(i);
         return h;
     };
@@ -440,42 +658,64 @@ void ListView::renderContent(Frame& frame) {
     const float est = fixed ? *fixed : estimate(frame);
     const auto stepOf = [&](std::size_t i) { return fixed ? fixedStep : step(i, gap, est); };
     bool changed = false;
+    bool windowed = false; // a long run of noSpace items was visited only in part (spacelessProbe)
     std::size_t first = 0, anchor = 0, end = 0; // rendered: [first, end); anchor: the first item in view
     float anchorTop = 0.0f;
     if (n > 0) {
-        // The first item in view, and the margin above it.
+        // The first item in view, and the margin above it. Measured: the last index that starts by the view's top,
+        // found in the step tree in O(log n). Its descent needs steps >= 0, which a negative `spacing` can break: then
+        // the walk from the top.
         if (fixed) {
             anchor = std::min(n - 1, static_cast<std::size_t>(std::max(0.0f, viewTop) / fixedStep));
             anchorTop = static_cast<float>(anchor) * fixedStep;
+        } else if (gap >= 0.0f) {
+            anchor = std::min(n - 1, m_steps.lastStartingBy(viewTop, gap, est));
+            anchorTop = top(anchor, gap, est);
         } else {
             while (anchor + 1 < n && anchorTop + stepOf(anchor) <= viewTop)
                 anchorTop += stepOf(anchor++);
         }
         // The margin, and more while a nav move scores items (cull::outOfView widens the view then): the item it
-        // lands on must be submitted.
+        // lands on must be submitted. A run of items that take no space adds nothing to it: stepped over at once.
         first = anchor;
         for (float above = 0.0f; first > 0;) {
             const float bottom = origin.y + anchorTop - above;
             if (above >= margin && cull::outOfView(bottom - stepOf(first - 1), bottom)) break;
+            if (!fixed && m_heights[first - 1] == noSpace) {
+                const std::optional<std::size_t> spaced = m_steps.previousSpaced(first);
+                first = spaced ? *spaced + 1 : 0;
+                continue;
+            }
             above += stepOf(--first);
         }
 
         // Above the anchor: placed by the heights known so far (out of view, so a wrong estimate isn't seen), and
-        // measured.
-        if (first < anchor && pushRange(node, first + 1, anchor)) {
-            const int list = lua::gettop(state);
-            float y = anchorTop;
-            for (std::size_t i = first; i < anchor; ++i)
-                y -= stepOf(i);
-            for (std::size_t i = first; i < anchor; ++i) {
-                const float before = stepOf(i);
-                lua::rawgeti(state, list, static_cast<lua::Integer>(i - first + 1));
-                const float h = renderIndex(i, origin.y + y);
-                lua::settop(state, list);
-                if (!fixed) changed = setHeight(i, h) || changed;
-                y += before;
+        // measured. In spans without long noSpace runs, and of each such run its window.
+        if (first < anchor) {
+            float y = fixed ? anchorTop - static_cast<float>(anchor - first) * fixedStep
+                            : anchorTop - (top(anchor, gap, est) - top(first, gap, est));
+            for (std::size_t i = first; i < anchor;) {
+                std::size_t from = i, to = anchor, next = anchor;
+                if (const std::optional<std::size_t> run = fixed ? std::nullopt : longSpacelessRun(i, anchor)) {
+                    std::tie(from, to) = spacelessWindowOf(i, *run); // the run's others take no space: y stays
+                    next = *run;
+                    windowed = true;
+                } else if (!fixed) {
+                    to = next = spanEnd(i, anchor);
+                }
+                if (!pushRange(node, from + 1, to)) break;
+                const int list = lua::gettop(state);
+                for (std::size_t k = from; k < to; ++k) {
+                    const float before = stepOf(k);
+                    lua::rawgeti(state, list, static_cast<lua::Integer>(k - from + 1));
+                    const float h = renderIndex(k, origin.y + y);
+                    lua::settop(state, list);
+                    if (!fixed) changed = setHeight(k, h) || changed;
+                    y += before;
+                }
+                lua::settop(state, list - 1);
+                i = next;
             }
-            lua::settop(state, list - 1);
         }
 
         // From the anchor down: one after the other, at the heights they render at, until past the view and the
@@ -484,13 +724,33 @@ void ListView::renderContent(Frame& frame) {
         end = anchor;
         const auto more = [&] { return y < limit || !cull::outOfView(y, y + 1.0f); };
         while (end < n && more()) {
+            if (const std::optional<std::size_t> run = fixed ? std::nullopt : longSpacelessRun(end, n)) {
+                // A long run of items that took no space: its window, and on after the run (or where the window's
+                // items, taking space now, filled the view).
+                const auto [from, to] = spacelessWindowOf(end, *run);
+                windowed = true;
+                if (!pushRange(node, from + 1, to)) break;
+                const int list = lua::gettop(state);
+                std::size_t k = from;
+                for (; k < to && more(); ++k) {
+                    lua::rawgeti(state, list, static_cast<lua::Integer>(k - from + 1));
+                    const float h = renderIndex(k, y);
+                    lua::settop(state, list);
+                    changed = setHeight(k, h) || changed;
+                    y += step(k, gap, est);
+                }
+                lua::settop(state, list - 1);
+                end = k < to ? k : *run;
+                continue;
+            }
             const float perItem = fixed ? fixedStep : std::max(1.0f, est + gap);
             // Past `limit` only while a nav move widens the view (see more()): by a view's height, so a page more.
             // The distance is positive either way; a negative one cast to size_t is undefined (in practice a huge
             // count that wraps, and a chunk that never advances).
             const float reach = y < limit ? limit - y : std::max(1.0f, viewHeight);
             const std::size_t want = static_cast<std::size_t>(std::ceil(reach / perItem)) + 1;
-            const std::size_t chunkEnd = std::min(n, end + want);
+            // Up to a long noSpace run, which the loop takes next (above).
+            const std::size_t chunkEnd = fixed ? std::min(n, end + want) : spanEnd(end, std::min(n, end + want));
             if (!pushRange(node, end + 1, chunkEnd)) break;
             const int list = lua::gettop(state);
             const std::size_t chunkFirst = end;
@@ -521,6 +781,9 @@ void ListView::renderContent(Frame& frame) {
     }
     lua::settop(state, stackTop);
     m_pinned = std::move(pinned);
+    // The next frame visits the long runs' next windows: an item in one that takes space now (a hidden item shown, a
+    // nil delegate rebuilt for a changed row) shows within the run's length / spacelessProbe rendered frames.
+    if (windowed) m_spacelessOffset += spacelessProbe;
 
     // The content's height by what is known now, and the scroll moved by as much as the anchor moved: items above it
     // that were measured at another height than assumed (or the estimate that changed) would otherwise shift what

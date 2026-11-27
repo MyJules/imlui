@@ -143,12 +143,12 @@ void TextField::render(Frame& frame) {
     o.error = m_error;
     o.width = frame.size("width");
     o.height = frame.resolvedHeight(0.0f);
-    std::string text = m_text;
-    const md::TextFieldResult res = skin().textField("##tf", text, o);
-    if (res.changed) {
-        m_text = std::move(text);
-        notify("text"); // writes the text back and emits onTextChanged(text)
-    }
+    // The field edits m_text in place, not a copy of it made every frame (a long text, many fields): ImGui writes the
+    // buffer only on an edit (and grows it through the resize callback), which `changed` reports, and the skins' text
+    // fields run no Lua, so nothing else touches m_text during the call. Lua runs after it: notify() and the signals
+    // (a handler may set `text` again; the sync assigns m_text, and the field shows it on the next frame).
+    const md::TextFieldResult res = skin().textField("##tf", m_text, o);
+    if (res.changed) notify("text"); // writes the text back and emits onTextChanged(text)
     if (res.accepted) emit("onAccepted", m_text);
     if (res.trailingClicked) emit("onTrailingClicked");
 }

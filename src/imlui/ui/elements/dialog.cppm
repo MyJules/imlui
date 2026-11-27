@@ -48,6 +48,12 @@ private:
     std::string m_icon;
     /// Open but waiting for a sibling dialog to close (see above).
     bool m_waiting = false;
+    /// The popup's window name (md::scopedWindowName: the title, and an ID from the element's scope), made again
+    /// only when the title or the scope (m_nameScope, the ID it hashes) changed: a dialog renders, closed too, on
+    /// every frame, and formatting the name allocates.
+    std::string m_name;
+    std::string m_nameTitle;
+    ImGuiID m_nameScope = 0;
 };
 
 } // namespace imlui
@@ -91,7 +97,12 @@ bool otherModalAtThisLevel(ImGuiID id) {
 
 void Dialog::render(Frame& frame) {
     bool open = m_open;
-    const std::string title = md::scopedWindowName(m_title, "dlg");
+    if (const ImGuiID scope = ImGui::GetID("dlg"); m_name.empty() || scope != m_nameScope || m_title != m_nameTitle) {
+        m_name = md::scopedWindowName(m_title, "dlg"); // its ID part is this same GetID("dlg")
+        m_nameScope = scope;
+        m_nameTitle = m_title;
+    }
+    const std::string& title = m_name;
     if (!open) {
         m_waiting = false;
     } else if (!ImGui::IsPopupOpen(title.c_str())) {
