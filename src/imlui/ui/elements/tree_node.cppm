@@ -50,11 +50,12 @@ void TreeNode::declare(TypeBuilder<TreeNode>& type) {
 }
 
 void TreeNode::render(Frame& frame) {
-    const std::string label = Frame::labelId(m_text, "tree");
     ImGuiTreeNodeFlags f = ImGuiTreeNodeFlags_SpanAvailWidth;
     if (m_expanded) f |= ImGuiTreeNodeFlags_DefaultOpen;
     const FontScope fs{TextStyle::BodyLarge};
-    if (ImGui::TreeNodeEx(label.c_str(), f)) {
+    // The ID of "<text>###tree" (ImGui hashes only from the "###"), and the text formatted into ImGui's own buffer:
+    // no label string built every frame, and the text may change without changing the ID.
+    if (ImGui::TreeNodeEx("###tree", f, "%s", m_text.c_str())) {
         frame.renderChildren();
         ImGui::TreePop();
     }

@@ -17,6 +17,7 @@ import imlui.ui.elements.canvas;
 import imlui.ui.frame_request;
 import imlui.test.headless_frame;
 import imlui.test.last_item_probe;
+import imlui.theme.theme;
 
 using namespace imlui;
 
@@ -306,6 +307,35 @@ TEST_F(DataTest, PainterIconOfAnyNumericSizeDrawsWithoutAborting) {
                 p:icon(50, 50, 42)
             end } })");
     frames(2);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A color role the painter draws with ("primary") follows a theme change: the painter keeps the colors it resolved
+// for the theme they were resolved under only.
+TEST_F(DataTest, PainterRoleColorsFollowTheTheme) {
+    run(R"(
+        root = Probe { Canvas { width = 40, height = 40,
+            onPaint = function(_, p) p:rect(0, 0, 40, 40, "primary") p:rect(0, 0, 4, 4, "primary/0.5") end } })");
+    const auto drawn = [&](ImU32 col) {
+        frames();
+        for (const ImDrawList* list : ImGui::GetDrawData()->CmdLists)
+            for (const auto& v : list->VtxBuffer)
+                if (v.col == col) return true;
+        return false;
+    };
+    const Theme before = theme();
+    EXPECT_TRUE(drawn(before.scheme.primary.u32()));
+    Theme other = before;
+    other.scheme.primary = Color{0.9f, 0.2f, 0.1f, 1.0f};
+    setTheme(other);
+    ASSERT_TRUE(applyPendingTheme());
+    const ImU32 now = theme().scheme.primary.u32();
+    EXPECT_NE(now, before.scheme.primary.u32());
+    EXPECT_TRUE(drawn(now));
+    EXPECT_TRUE(drawn(theme().scheme.primary.withAlpha(0.5f).u32()));
+    setTheme(before);
+    applyPendingTheme();
+    EXPECT_TRUE(drawn(before.scheme.primary.u32()));
     EXPECT_TRUE(luaui::errors().empty());
 }
 

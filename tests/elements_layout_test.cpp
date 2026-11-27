@@ -1746,8 +1746,9 @@ TEST_F(LayoutTest, AnElementAtARecycledAddressStartsFresh) {
     EXPECT_EQ(m_h.instance<Counter>("a")->count(), 3);
     const ImGuiID before = inspect->ids[0];
 
-    // The same table (same address) loses its instance; the next render gives it a new one.
-    run("rawset(a, '__native', nil) collectgarbage() collectgarbage()");
+    // The same table (same address) loses its instance (finalized, and `__native` dropped); the next render gives it a
+    // new one.
+    run("local n = rawget(a, '__native') debug.getmetatable(n).__gc(n) rawset(a, '__native', nil)");
     m_h.renderFrame("root");
     ASSERT_EQ(inspect->ids.size(), 1u);
     EXPECT_NE(inspect->ids[0], before);
@@ -1963,6 +1964,59 @@ TEST_F(LayoutTest, ComposedSizesSyncEachElementOncePerFrame) {
     for (const char* name : {"outer", "row", "inner", "text", "probe", "icon"})
         check(std::string{"counts."} + name + " == 2");
     EXPECT_LE(probe("p").queries() - queries, 2 * 2); // at most two widths a frame (the outer box's, the row's)
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// The props every pass over the children reads of each child before syncing it, `visible`, `width`, `fillWidth` and
+// `height`, run their bindings once a frame too: a Row's child is visited by the Row's passes (which fill, their sizes,
+// the render), by the fill and size questions of its parent's `align` and by the parent's own render. Lua that may
+// change tables running in between (a handler) makes the next pass run them again; a binding that returned false
+// (hidden) is no exception.
+TEST_F(LayoutTest, VisibleAndSizeBindingsRunOncePerFrame) {
+    run(R"(
+        counts = {}
+        function counted(name, value)
+            return function() counts[name] = (counts[name] or 0) + 1 return value end
+        end
+        root = Column { align = "center",
+                        Row { Probe { w = 20, intrinsic = true, visible = counted("visible", true),
+                                      width = counted("width", 30) },
+                              Probe { w = 10, intrinsic = true, fillWidth = counted("fill", true) },
+                              Spacer { height = counted("height", 6) },
+                              Probe { visible = counted("hidden", false) } } })");
+    m_h.renderFrames("root", 3);
+    run("counts = {}");
+    m_h.renderFrames("root", 2);
+    for (const char* name : {"visible", "width", "fill", "height", "hidden"})
+        check(std::string{"counts."} + name + " == 2");
+    run(R"(
+        counts = {}
+        mid = Column { Row { Writer { onRender = function() end }, Probe { visible = counted("mid", true) } } })");
+    m_h.renderFrames("mid", 3);
+    run("counts = {}");
+    m_h.renderFrame("mid");
+    check("counts.mid == 2"); // the Row's plan, then its render after the handler ran
+    // The memo keeps the tables of recent frames only: elements that come and go every frame don't make it grow.
+    run(R"(
+        churn = Row { Repeater { model = function() local t = {} for i = 1, 300 do t[i] = {} end return t end,
+                                 delegate = function() return Probe { visible = function() return true end } end } })");
+    m_h.renderFrames("churn", 20); // 6000 delegates, 300 a frame
+    EXPECT_LE(propMemoEntries(), 3000u);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A `tooltip` is read only while its element is hovered: a binding that formats the text doesn't run otherwise.
+TEST_F(LayoutTest, ATooltipIsReadOnlyWhileHovered) {
+    run(R"(
+        reads = 0
+        tipped = Probe { w = 40, h = 20, tooltip = function() reads = reads + 1 return "tip" end }
+        root = Column { Probe { w = 40, h = 20 }, tipped })");
+    m_h.renderFrames("root", 3);
+    check("reads == 0");
+    const ImVec2 at = probe("tipped").pos();
+    run("native.injectMouse(" + std::to_string(at.x + 5.0f) + ", " + std::to_string(at.y + 5.0f) + ")");
+    m_h.renderFrames("root", 2);
+    check("reads > 0");
     EXPECT_TRUE(luaui::errors().empty());
 }
 

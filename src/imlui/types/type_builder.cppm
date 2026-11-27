@@ -270,6 +270,20 @@ public:
         };
         declared(m.name);
         m_info.addMethod(std::move(m));
+        m_lastIsMethod = true;
+        return *this;
+    }
+
+    /// The method declared last (right before, or before its doc()) runs without syncing the element's properties
+    /// first. A call from a handler or a script otherwise syncs the element, since its bindings may read what that
+    /// Lua code just changed: for a method that only feeds the element data and reads none of its properties
+    /// (`plot:append(x)` in a loop of thousands), that sync is wasted. An element never synced yet is synced anyway
+    /// (componentComplete() comes first). Singletons are never synced. Throws std::invalid_argument when the member
+    /// declared last isn't a method.
+    TypeBuilder& unsynced() {
+        if (!m_lastIsMethod)
+            throw std::invalid_argument{m_info.name() + ": unsynced() follows the method() it applies to"};
+        m_info.setMethodSyncs(m_lastMember, false);
         return *this;
     }
 
@@ -283,6 +297,7 @@ public:
         TypeBuilder<Base> base{m_info, typename TypeBuilder<Base>::Inherited{}};
         Base::declare(base);
         m_docTarget = DocTarget::None;
+        m_lastIsMethod = false;
         return *this;
     }
 
@@ -337,6 +352,7 @@ private:
     void declared(const std::string& name) {
         m_lastMember = name;
         m_docTarget = DocTarget::Member;
+        m_lastIsMethod = false;
     }
 
     TypeBuilder& raw(TypeInfo::RawProperty p) {
@@ -361,9 +377,15 @@ private:
         p.takesFunction = takesLuaFunction<V>();
         std::string where = m_info.name() + "." + p.name;
         p.assign = [getter, setter, where](lua::State* s, int idx, ScriptObject& o) -> TypeInfo::Assign {
-            if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
+            T& self = static_cast<T&>(o);
             return detail::guarded(where, TypeInfo::Assign::Unchanged, [&] {
-                return store(getter, setter, static_cast<T&>(o), LuaConvert<V>::get(s, idx));
+                // Compared in place first (LuaConvert<V>::equals): an unchanged value, a table property synced every
+                // frame, isn't converted (and allocated) again only to compare equal.
+                if constexpr (LuaComparable<V>)
+                    if (LuaConvert<V>::equals(s, idx, std::invoke(getter, std::as_const(self))))
+                        return TypeInfo::Assign::Unchanged;
+                if (!LuaConvert<V>::check(s, idx)) return TypeInfo::Assign::TypeMismatch;
+                return store(getter, setter, self, LuaConvert<V>::get(s, idx));
             });
         };
         if constexpr (!detail::isOptional<V> && std::copy_constructible<V>) {
@@ -411,6 +433,7 @@ private:
     TypeInfo& m_info;
     DocTarget m_docTarget = DocTarget::Type;
     std::string m_lastMember;
+    bool m_lastIsMethod = false; ///< m_lastMember is a method (unsynced() applies)
     bool m_inherited = false;
 };
 

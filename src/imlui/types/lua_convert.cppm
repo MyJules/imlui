@@ -9,6 +9,7 @@
 //   static T get(lua::State*, int idx);            // Lua -> C++ (only called after check())
 //   static std::string mismatch(lua::State*, int idx); // optional: why check() failed (see below)
 //   static std::string luaType(LuaTypes&);         // optional: the LuaLS type expression (see below)
+//   static bool equals(lua::State*, int idx, const T&); // optional: in-place comparison (see below)
 //
 // Push-only types (std::string_view, const char*) leave out check/get. Built in: bool, integers, floats, strings,
 // Color, std::optional, std::vector, std::map / std::unordered_map with string keys, std::pair, std::tuple,
@@ -26,7 +27,15 @@
 // Tables are read raw (no metamethods), so check() never runs Lua code and never raises. A sequence (std::vector,
 // std::pair, std::tuple) is a table whose keys are all integers 1..n; a map's keys are all strings. So `{}` is both an
 // empty sequence and an empty map (a std::variant takes whichever alternative comes first), `{x = 1}` is no sequence
-// and `{1, 2}` no map.
+// and `{1, 2}` no map. Tables nested deeper than LuaNesting::maxDepth (200) levels fail check(): a table
+// that contains itself (a cycle) would otherwise recurse until the C++ stack overflows.
+//
+// In-place comparison. The property sync converts a value only to compare it with what the getter returns, so a table
+// property (a plot's 10k samples) would be converted, and allocated, every frame while it doesn't change. luaEquals<T>()
+// asks LuaConvert<T>::equals() first when the specialization has one: true only when check() would pass and get()
+// return a value equal to the one given, read without building it (false when unsure: the caller then converts as
+// usual). bool, numbers, strings, std::optional, std::vector, std::variant and LuaFunction have one; luaEquals falls
+// back to check() and get() for the others (structs, maps, tuples).
 //
 // Error messages. Where a value doesn't convert (a method argument, a property, a LuaFunction result), the message
 // comes from luaMismatch<T>(): LuaConvert<T>::mismatch() when the specialization has one, else
@@ -106,6 +115,24 @@ std::string luaMismatch(lua::State* s, int idx) {
         out += lua::typeName(s, idx);
         return out;
     }
+}
+
+/// Whether LuaConvert<T> compares in place (has equals()).
+template <class T>
+concept LuaComparable = requires(lua::State* s, int idx, const T& v) {
+    { LuaConvert<T>::equals(s, idx, v) } -> std::same_as<bool>;
+};
+
+/// Whether the value at `idx` converts to a value equal to `v` (see the module comment): LuaConvert<T>::equals() when
+/// the specialization has one, else check() and get() compared with ==. False when T can't be read or compared.
+template <class T>
+bool luaEquals(lua::State* s, int idx, const T& v) {
+    if constexpr (LuaComparable<T>)
+        return LuaConvert<T>::equals(s, idx, v);
+    else if constexpr (LuaReadable<T> && std::equality_comparable<T>)
+        return LuaConvert<T>::check(s, idx) && LuaConvert<T>::get(s, idx) == v;
+    else
+        return false;
 }
 
 /// The LuaLS type expression of T's values (see the module comment): LuaConvert<T>::luaType(types) or luaType() when
@@ -212,6 +239,26 @@ concept LuaStruct = std::is_class_v<T> && std::default_initializable<T> && requi
     { LuaFields<T>::fields };
 };
 
+/// Enters one table level of a check() or mismatch() while it lives (a count per thread). ok() is false past maxDepth:
+/// the table then fails check(). The built-in conversions of tables use it; a LuaConvert of your own that recurses into
+/// nested tables should too (see the module comment).
+class LuaNesting {
+public:
+    /// How deep check() and mismatch() follow nested tables.
+    static constexpr int maxDepth = 200;
+
+    LuaNesting();
+    ~LuaNesting();
+    LuaNesting(const LuaNesting&) = delete;
+    LuaNesting& operator=(const LuaNesting&) = delete;
+    LuaNesting(LuaNesting&&) = delete;
+    LuaNesting& operator=(LuaNesting&&) = delete;
+    [[nodiscard]] bool ok() const { return m_ok; }
+
+private:
+    bool m_ok;
+};
+
 template <>
 struct LuaConvert<bool> {
     static constexpr std::string_view name = "boolean";
@@ -220,6 +267,7 @@ struct LuaConvert<bool> {
     /// Lua truthiness: every value converts (nil and false are false).
     static bool check(lua::State*, int) { return true; }
     static bool get(lua::State* s, int idx) { return lua::toboolean(s, idx); }
+    static bool equals(lua::State* s, int idx, bool v) { return lua::toboolean(s, idx) == v; }
 };
 
 template <class T>
@@ -251,6 +299,7 @@ struct LuaConvert<T> {
         if (d >= static_cast<double>(std::numeric_limits<T>::max())) return std::numeric_limits<T>::max();
         return static_cast<T>(d);
     }
+    static bool equals(lua::State* s, int idx, T v) { return check(s, idx) && get(s, idx) == v; }
 };
 
 template <std::floating_point T>
@@ -275,6 +324,7 @@ struct LuaConvert<T> {
         else
             return static_cast<T>(lua::tonumber(s, idx));
     }
+    static bool equals(lua::State* s, int idx, T v) { return check(s, idx) && get(s, idx) == v; }
 };
 
 template <>
@@ -287,6 +337,14 @@ struct LuaConvert<std::string> {
     static std::string get(lua::State* s, int idx) {
         if (lua::type(s, idx) == lua::Type::Number) return lua::toStringAny(s, idx); // doesn't convert in place
         return std::string{lua::tostring(s, idx)};
+    }
+    /// Compares the Lua string's bytes, without a copy.
+    static bool equals(lua::State* s, int idx, const std::string& v) {
+        switch (lua::type(s, idx)) {
+        case lua::Type::String: return lua::tostring(s, idx) == v;
+        case lua::Type::Number: return lua::toStringAny(s, idx) == v;
+        default: return false;
+        }
     }
 };
 
@@ -342,6 +400,12 @@ struct LuaConvert<std::optional<T>> {
         return LuaConvert<T>::get(s, idx);
     }
     static std::string mismatch(lua::State* s, int idx) { return luaMismatch<T>(s, idx); }
+    static bool equals(lua::State* s, int idx, const std::optional<T>& v)
+        requires std::equality_comparable<T>
+    {
+        if (lua::isnoneornil(s, idx)) return !v.has_value();
+        return v.has_value() && luaEquals<T>(s, idx, *v);
+    }
 };
 
 } // namespace imlui
@@ -443,6 +507,9 @@ inline constexpr bool isOptional = false;
 template <class T>
 inline constexpr bool isOptional<std::optional<T>> = true;
 
+/// What mismatch() says past LuaNesting::maxDepth.
+[[nodiscard]] std::string tooDeep();
+
 /// The first key of the table at `tbl` (absolute) that isn't an integer in 1..max, described for a message
 /// (`key "x"`, `key 0`, `a boolean key`); empty when every key is one. Raw (lua::next): never runs Lua code.
 [[nodiscard]] std::string nonSequenceKey(lua::State* s, int tbl, lua::Integer max);
@@ -514,7 +581,8 @@ struct MapConvert {
     }
     /// Every key must be a string (a number key fails: `{ "a" }` is no map) and every value convert.
     static bool check(lua::State* s, int idx) {
-        if (!lua::istable(s, idx) || !lua::checkstack(s, 3)) return false;
+        const LuaNesting nesting;
+        if (!nesting.ok() || !lua::istable(s, idx) || !lua::checkstack(s, 3)) return false;
         idx = lua::absindex(s, idx);
         lua::pushnil(s);
         while (lua::next(s, idx) != 0) {
@@ -528,6 +596,8 @@ struct MapConvert {
     }
     /// The first key that isn't a string, or the first value that doesn't convert: `.x: number expected, got string`.
     static std::string mismatch(lua::State* s, int idx) {
+        const LuaNesting nesting;
+        if (!nesting.ok()) return tooDeep();
         if (!lua::istable(s, idx) || !lua::checkstack(s, 3)) return expectedGot(name, s, idx);
         idx = lua::absindex(s, idx);
         lua::pushnil(s);
@@ -581,7 +651,8 @@ struct TupleConvert {
             v);
     }
     static bool check(lua::State* s, int idx) {
-        if (!lua::istable(s, idx) || !lua::checkstack(s, 3)) return false;
+        const LuaNesting nesting;
+        if (!nesting.ok() || !lua::istable(s, idx) || !lua::checkstack(s, 3)) return false;
         idx = lua::absindex(s, idx);
         if (!sequenceKeys(s, idx, static_cast<lua::Integer>(sizeof...(Ts)))) return false;
         return [&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -589,6 +660,8 @@ struct TupleConvert {
         }(std::index_sequence_for<Ts...>{});
     }
     static std::string mismatch(lua::State* s, int idx) {
+        const LuaNesting nesting;
+        if (!nesting.ok()) return tooDeep();
         if (!lua::istable(s, idx) || !lua::checkstack(s, 3)) return expectedGot(name, s, idx);
         idx = lua::absindex(s, idx);
         if (std::string key = nonSequenceKey(s, idx, static_cast<lua::Integer>(sizeof...(Ts))); !key.empty())
@@ -630,7 +703,8 @@ struct LuaConvert<std::vector<T>> {
         }
     }
     static bool check(lua::State* s, int idx) {
-        if (!lua::istable(s, idx) || !lua::checkstack(s, 3)) return false;
+        const LuaNesting nesting;
+        if (!nesting.ok() || !lua::istable(s, idx) || !lua::checkstack(s, 3)) return false;
         idx = lua::absindex(s, idx);
         const lua::Integer n = lua::rawlen(s, idx);
         if (!lua_convert_detail::sequenceKeys(s, idx, n)) return false;
@@ -641,6 +715,8 @@ struct LuaConvert<std::vector<T>> {
     /// A key that isn't an index (`got table with key "x"`), or the first element that doesn't convert
     /// (`[3].x: number expected, got string`).
     static std::string mismatch(lua::State* s, int idx) {
+        const LuaNesting nesting;
+        if (!nesting.ok()) return lua_convert_detail::tooDeep();
         if (!lua::istable(s, idx) || !lua::checkstack(s, 3)) return lua_convert_detail::expectedGot(name, s, idx);
         idx = lua::absindex(s, idx);
         const lua::Integer n = lua::rawlen(s, idx);
@@ -660,6 +736,28 @@ struct LuaConvert<std::vector<T>> {
         for (lua::Integer i = 1; i <= n; ++i)
             out.push_back(lua_convert_detail::getElement<T>(s, idx, i));
         return out;
+    }
+    /// One pass over the table (lua::next), comparing each element in place: a sequence of exactly v.size() elements
+    /// (no holes), each equal to v's.
+    static bool equals(lua::State* s, int idx, const std::vector<T>& v)
+        requires std::equality_comparable<T>
+    {
+        if (!lua::istable(s, idx) || !lua::checkstack(s, 3)) return false;
+        idx = lua::absindex(s, idx);
+        const auto n = static_cast<lua::Integer>(v.size());
+        if (lua::rawlen(s, idx) != n) return false;
+        lua::Integer seen = 0;
+        lua::pushnil(s);
+        while (lua::next(s, idx) != 0) {
+            const lua::Integer k = lua::isinteger(s, -2) ? lua::tointeger(s, -2) : 0;
+            if (k < 1 || k > n || !luaEquals<T>(s, -1, v[static_cast<std::size_t>(k - 1)])) {
+                lua::pop(s, 2);
+                return false;
+            }
+            ++seen;
+            lua::pop(s);
+        }
+        return seen == n;
     }
 };
 
@@ -778,12 +876,15 @@ struct LuaConvert<T> {
     }
     /// A table whose fields convert (read raw). A missing (nil) field passes: it keeps its default.
     static bool check(lua::State* s, int idx) {
-        if (!lua::istable(s, idx) || !lua::checkstack(s, 2)) return false;
+        const LuaNesting nesting;
+        if (!nesting.ok() || !lua::istable(s, idx) || !lua::checkstack(s, 2)) return false;
         idx = lua::absindex(s, idx);
         return std::apply([&](const auto&... f) { return (checkField(s, idx, f) && ...); }, LuaFields<T>::fields);
     }
     /// The first present field that doesn't convert: `.from.x: number expected, got string`.
     static std::string mismatch(lua::State* s, int idx) {
+        const LuaNesting nesting;
+        if (!nesting.ok()) return lua_convert_detail::tooDeep();
         if (!lua::istable(s, idx) || !lua::checkstack(s, 2)) return lua_convert_detail::expectedGot(name, s, idx);
         idx = lua::absindex(s, idx);
         std::string why;
@@ -927,8 +1028,31 @@ struct LuaConvert<std::variant<Ts...>> {
         static_cast<void>((getAs<Ts>(s, idx, out) || ...));
         return out ? std::move(*out) : std::variant<Ts...>{};
     }
+    /// get() takes the first alternative whose check() passes: equal when none before v's alternative takes the value
+    /// and v's alternative compares equal to it.
+    static bool equals(lua::State* s, int idx, const std::variant<Ts...>& v)
+        requires(std::equality_comparable<Ts> && ...)
+    {
+        bool equal = false;
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            // `||` stops at v's alternative, or at an earlier one that takes the value.
+            static_cast<void>((equalsAt<I>(s, idx, v, equal) || ...));
+        }(std::index_sequence_for<Ts...>{});
+        return equal;
+    }
 
 private:
+    /// equals() at alternative I: returns true when it decided (`equal` set).
+    template <std::size_t I>
+    static bool equalsAt(lua::State* s, int idx, const std::variant<Ts...>& v, bool& equal) {
+        using A = std::variant_alternative_t<I, std::variant<Ts...>>;
+        if (v.index() == I) {
+            equal = luaEquals<A>(s, idx, std::get<I>(v));
+            return true;
+        }
+        return LuaConvert<A>::check(s, idx); // an earlier alternative takes it: not equal (`equal` stays false)
+    }
+
     template <class A>
     static bool getAs(lua::State* s, int idx, std::optional<std::variant<Ts...>>& out) {
         if (!LuaConvert<A>::check(s, idx)) return false;
@@ -954,6 +1078,15 @@ bool isIdentifier(std::string_view text) {
 
 } // namespace
 
+namespace {
+
+thread_local int nestingDepth = 0; ///< LuaNesting levels entered on this thread
+
+} // namespace
+
+LuaNesting::LuaNesting() : m_ok{++nestingDepth <= maxDepth} {}
+LuaNesting::~LuaNesting() { --nestingDepth; }
+
 std::string luaMismatchAt(std::string_view where, std::string_view why) {
     std::string out{where};
     if (where.empty()) {
@@ -973,6 +1106,10 @@ std::string luaMismatchOf(std::string_view typeName, std::string_view why) {
 } // namespace imlui
 
 namespace imlui::lua_convert_detail {
+
+std::string tooDeep() {
+    return "table nested more than " + std::to_string(LuaNesting::maxDepth) + " levels deep (a cycle?)";
+}
 
 std::string nonSequenceKey(lua::State* s, int tbl, lua::Integer max) {
     lua::pushnil(s);

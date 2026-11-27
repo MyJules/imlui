@@ -18,6 +18,7 @@ import imlui.theme.typography;
 import imlui.theme.icons;
 import imlui.ui.layout_box;
 import imlui.widgets.common;
+import imlui.widgets.dialog;
 import imlui.widgets.surface;
 import imlui.widgets.text;
 
@@ -43,7 +44,6 @@ namespace imlui::fluent {
 
 bool beginDialog(const Look& look, const char* title, bool* open, float width, std::string_view heroIcon) {
     const Colors& c = look.colors;
-    if (*open && !ImGui::IsPopupOpen(title)) ImGui::OpenPopup(title);
     const float stroke = strokeWidth(look);
     ImGui::PushStyleColor(ImGuiCol_PopupBg, c.layer.vec4());
     ImGui::PushStyleColor(ImGuiCol_Border, c.flyoutStroke.vec4());
@@ -52,28 +52,12 @@ bool beginDialog(const Look& look, const char* title, bool* open, float width, s
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {dp(dialogPadding), dp(dialogPadding)});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, stroke);
     ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, stroke);
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos({vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f}, ImGuiCond_Always,
-                            {0.5f, 0.5f});
     const float minW = width > 0 ? width : dp(dialogMinWidth), maxW = width > 0 ? width : dp(dialogMaxWidth);
-    ImGui::SetNextWindowSizeConstraints({minW, 0}, {maxW, vp->Size.y * 0.9f});
-    const bool shown = ImGui::BeginPopupModal(title, nullptr,
-                                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
-                                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+    // md's modal: opening, placing, and closing on `*open` or Escape (the top-most popup only).
+    const bool shown = md::beginModal(title, open, minW, maxW);
     ImGui::PopStyleVar(4);
     ImGui::PopStyleColor(3);
-    if (!shown) {
-        *open = false;
-        return false;
-    }
-    // Escape closes the top-most popup only (see md::beginDialog).
-    if (!*open || (ImGui::IsKeyPressed(ImGuiKey_Escape) && !md::popupOver(ImGuiPopupFlags_AnyPopupId))) {
-        *open = false;
-        ImGui::CloseCurrentPopup();
-        md::notePopupOver(ImGuiPopupFlags_AnyPopupId);
-        ImGui::EndPopup();
-        return false;
-    }
+    if (!shown || md::closeModalOnRequest(open)) return false;
     md::pushSurface(c.layer);
     const float pad = 2.0f * dp(dialogPadding);
     layout::pushBox(layout::shrinkToFitBox(minW - pad, maxW - pad));
@@ -93,11 +77,6 @@ bool beginDialog(const Look& look, const char* title, bool* open, float width, s
     return true;
 }
 
-void endDialog(const Look&) {
-    layout::popBox();
-    md::popSurface();
-    md::notePopupOver(ImGuiPopupFlags_AnyPopupId);
-    ImGui::EndPopup();
-}
+void endDialog(const Look&) { md::endDialog(); }
 
 } // namespace imlui::fluent

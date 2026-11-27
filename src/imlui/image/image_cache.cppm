@@ -18,12 +18,17 @@ export namespace imlui {
 /// name. Textures go through ImGui's texture list (ImTextureData, registered as a user texture): the renderer
 /// backend uploads a new one before the frame that first draws it and destroys it after it was released, so the
 /// cache makes no graphics API calls and works in a headless ImGui context. The texture takes the decoder's pixel
-/// buffer as it is (no copy, no zero-filled buffer of its own).
+/// buffer as it is (no copy, no zero-filled buffer of its own), and collect() frees that buffer once the backend has
+/// uploaded it (its status is OK), so an image costs its pixels once, on the GPU. (A backend that dropped its textures
+/// mid-run would have nothing to create them again from; imlui's destroys them only when it shuts down.)
 ///
 /// Decoding takes a frame's time and more for a large image (hundreds of ms for a photo), so with setAsync(true) it
-/// runs on the background pool (imlui.ui.background): get() returns an image that is loading() at once, the texture
-/// is made and registered on the main thread by a later get() or collect() once the pixels are there, and a frame is
-/// requested for it (imlui::post, then requestFrame()). Without it (the default) get() decodes before it returns.
+/// runs on the background pool's decode lane (imlui.ui.background, BackgroundLane::Decodes: its own workers, newest
+/// request first): get() returns an image that is loading() at once, the texture is made and registered on the main
+/// thread by a later get() or collect() once the pixels are there, and a frame is requested for it (imlui::post, then
+/// requestFrame(): one post for all the decodes that finish before the main thread takes their results). A decode whose
+/// image was dropped before it started (refresh(), clear(), the cache destroyed) skips its work. Without it (the
+/// default) get() decodes before it returns.
 ///
 /// The decoded images are kept within a byte budget (setBudget(), 4 bytes per pixel; failures and loading images count
 /// as 0): after each frame, collect() evicts the images drawn least recently until the cache fits, never one drawn in
@@ -70,7 +75,9 @@ public:
         int m_lastUsed = 0;         ///< the ImGui frame of the last get()
         std::size_t m_bytes = 0;    ///< the pixels' size; 0 on error and while loading
         std::uint64_t m_ticket = 0; ///< the background decode it waits for (loading); 0 when none
-        bool m_stale = false;       ///< its decode was dropped unrun (the pool shut down): refresh() drops it
+        /// Shared with that decode: cleared when the image is dropped, so a decode that hasn't started skips its work.
+        std::shared_ptr<std::atomic<bool>> m_wanted;
+        bool m_stale = false; ///< its decode was dropped unrun (the pool shut down): refresh() drops it
     };
 
     /// The default budget: 256 MiB of pixels.
@@ -119,9 +126,11 @@ public:
 
     /// Drops every image whose file changed since it was decoded (Resources::modified differs, or the file
     /// appeared or vanished), so the next get() decodes it again; an image still loading too (its result is then
-    /// ignored). Returns how many were dropped. The engine calls it with its hot-reload file checks. Call between
-    /// frames.
+    /// ignored). Returns how many were dropped. Call between frames.
     std::size_t refresh();
+    /// refresh() with the files' times read beforehand (off the main thread: the engine's hot-reload scan), by name;
+    /// the images whose names aren't in `times` are left as they are (they weren't asked about).
+    std::size_t refresh(const std::map<std::string, std::optional<ResourceTime>>& times);
     /// Drops every image (loading ones too). Call between frames.
     void clear();
     /// Takes the results of finished background decodes, deletes released textures that the backend has destroyed,
@@ -144,6 +153,12 @@ private:
     void finish(Image& image, bool found, DecodedImage decoded);
     /// Moves the finished background decodes into their images (those still waiting for them).
     void takeResults();
+    /// Frees the CPU pixels of the textures the backend has uploaded (m_uploading).
+    void freeUploadedPixels();
+    /// Sets the image's error, counting it in m_failures.
+    void fail(Image& image, std::string error);
+    /// True for an image counted in m_failures.
+    [[nodiscard]] static bool failed(const Image& image);
 
     using Images = std::map<std::string, Image, std::less<>>;
     /// Drops cached image `it`, releasing its texture. Returns the next one.
@@ -154,13 +169,16 @@ private:
 
     const Resources& m_resources;
     Images m_images;
-    std::vector<Texture> m_released;   ///< waiting for the backend to destroy them
+    std::vector<Texture> m_released; ///< waiting for the backend to destroy them
+    /// Textures waiting for the backend's upload, by image name: their CPU pixels are freed once it is done.
+    std::vector<std::pair<std::string, ImTextureData*>> m_uploading;
     ImGuiContext* m_context = nullptr; ///< where the textures are registered
     std::shared_ptr<Inbox> m_inbox;    ///< shared with the background decodes, which may outlive the cache
     std::uint64_t m_nextTicket = 1;
     std::size_t m_decodes = 0;
     std::size_t m_budget = defaultBudget;
-    std::size_t m_bytes = 0; ///< the sum of the cached images' m_bytes
+    std::size_t m_bytes = 0;    ///< the sum of the cached images' m_bytes
+    std::size_t m_failures = 0; ///< the cached images that failed (failed())
     bool m_async = false;
 };
 
@@ -191,8 +209,10 @@ struct ImageCache::Inbox {
 /// (a shutdown drops queued work), so the cache never waits for a decode that will never come.
 class ImageCache::DecodeJob {
 public:
-    DecodeJob(std::shared_ptr<Inbox> inbox, Resources resources, std::string name, std::uint64_t ticket)
-        : m_inbox{std::move(inbox)}, m_resources{std::move(resources)}, m_name{std::move(name)}, m_ticket{ticket} {}
+    DecodeJob(std::shared_ptr<Inbox> inbox, Resources resources, std::string name, std::uint64_t ticket,
+              std::shared_ptr<const std::atomic<bool>> wanted)
+        : m_inbox{std::move(inbox)}, m_resources{std::move(resources)}, m_name{std::move(name)}, m_ticket{ticket},
+          m_wanted{std::move(wanted)} {}
     DecodeJob(const DecodeJob&) = delete;
     DecodeJob& operator=(const DecodeJob&) = delete;
     DecodeJob(DecodeJob&&) = delete;
@@ -207,7 +227,8 @@ public:
     }
 
     void run(const std::stop_token& stop) {
-        if (stop.stop_requested()) {
+        // Stopped, or the image was dropped meanwhile (its result would be ignored): nothing to read or decode.
+        if (stop.stop_requested() || !m_wanted->load(std::memory_order_relaxed)) {
             deliver(false, {}, true);
             return;
         }
@@ -220,16 +241,20 @@ public:
 private:
     void deliver(bool found, DecodedImage decoded, bool cancelled) {
         m_delivered = true;
+        bool first = false;
         {
             std::scoped_lock lock{m_inbox->mutex};
+            first = m_inbox->results.empty();
             m_inbox->results.push_back({m_name, m_ticket, found, cancelled, std::move(decoded)});
             m_inbox->ready.store(true, std::memory_order_release);
         }
         // Wakes the loop (post() does) and asks for the frame that shows the image; requestFrame() is main-thread
-        // only, so it runs there. Nothing of the cache is captured: it may be gone by then. After the result is in
-        // the inbox (the frame it asks for finds it), before the decode counts as finished: waitForPending() returns
-        // only once the post is made.
-        post([] { requestFrame(); });
+        // only, so it runs there. Nothing of the cache is captured: it may be gone by then. Only the result that found
+        // the inbox empty posts: the frame it asks for takes the ones after it too, and the main thread empties the
+        // inbox (under the lock) before it takes them, so a result after that posts again. After the result is in the
+        // inbox (the frame it asks for finds it), before the decode counts as finished: waitForPending() returns only
+        // once the post is made.
+        if (first) post([] { requestFrame(); });
         {
             std::scoped_lock lock{m_inbox->mutex};
             --m_inbox->inFlight;
@@ -241,6 +266,7 @@ private:
     Resources m_resources;
     std::string m_name;
     std::uint64_t m_ticket;
+    std::shared_ptr<const std::atomic<bool>> m_wanted;
     bool m_delivered = false;
 };
 
@@ -271,20 +297,22 @@ ImageCache::ImageCache(const Resources& resources) : m_resources{resources}, m_i
 ImageCache::~ImageCache() {
     // The engine destroys its ImGui context (after the backend destroyed every registered texture) before the
     // cache, so there is nothing to unregister there. A context that is still current (tests) is cleaned up.
-    // Decodes still in flight keep the inbox; their results are freed with it.
-    for (auto& [name, image] : m_images)
+    // Decodes still in flight keep the inbox; their results are freed with it. Those that haven't started skip.
+    for (auto& [name, image] : m_images) {
+        if (image.m_wanted) image.m_wanted->store(false, std::memory_order_relaxed);
         if (image.m_texture) unregister(image.m_texture.get());
+    }
     for (auto& texture : m_released)
         unregister(texture.get());
 }
 
 void ImageCache::finish(Image& image, bool found, DecodedImage decoded) {
     if (!found) {
-        image.m_error = "image '" + image.m_name + "' not found";
+        fail(image, "image '" + image.m_name + "' not found");
         return;
     }
     if (!decoded.ok() || !decoded.pixels) {
-        image.m_error = "image '" + image.m_name + "': " + (decoded.error.empty() ? "no pixels" : decoded.error);
+        fail(image, "image '" + image.m_name + "': " + (decoded.error.empty() ? "no pixels" : decoded.error));
         return;
     }
     // The texture takes the decoder's buffer as its pixels: what ImTextureData::Create() sets up, without allocating
@@ -305,8 +333,31 @@ void ImageCache::finish(Image& image, bool found, DecodedImage decoded) {
     image.m_width = decoded.width;
     image.m_height = decoded.height;
     image.m_bytes = decoded.rgba.size();
+    m_uploading.emplace_back(image.m_name, texture.get());
     image.m_texture = std::move(texture);
     m_bytes += image.m_bytes;
+}
+
+bool ImageCache::failed(const Image& image) { return !image.m_error.empty() && !image.loading(); }
+
+void ImageCache::fail(Image& image, std::string error) {
+    const bool counted = failed(image);
+    image.m_error = std::move(error);
+    if (!counted && failed(image)) ++m_failures;
+}
+
+void ImageCache::freeUploadedPixels() {
+    std::erase_if(m_uploading, [this](const std::pair<std::string, ImTextureData*>& entry) {
+        const auto it = m_images.find(entry.first);
+        // Dropped meanwhile (its texture went with it), or replaced by a later decode with a texture of its own.
+        if (it == m_images.end() || it->second.m_texture.get() != entry.second) return true;
+        ImTextureData* texture = entry.second;
+        if (texture->Status != ImTextureStatus_OK) return false; // not uploaded yet
+        // On the GPU now: the backend reads Pixels only to create or update a texture, and nothing updates these.
+        DecodedImage::FreePixels{}(texture->Pixels);
+        texture->Pixels = nullptr;
+        return true;
+    });
 }
 
 void ImageCache::takeResults() {
@@ -323,10 +374,11 @@ void ImageCache::takeResults() {
         if (it == m_images.end() || it->second.m_ticket != r.ticket) continue;
         Image& image = it->second;
         image.m_ticket = 0;
+        image.m_wanted.reset();
         if (r.cancelled) {
             // Not this image's fault: kept as an error for now (the reference get() gave may still be in use this
             // frame), and refresh() drops it so it is decoded again.
-            image.m_error = "image '" + image.m_name + "': decoding was cancelled";
+            fail(image, "image '" + image.m_name + "': decoding was cancelled");
             image.m_stale = true;
             continue;
         }
@@ -337,6 +389,13 @@ void ImageCache::takeResults() {
 const ImageCache::Image& ImageCache::get(std::string_view name) {
     takeResults();
     const int frame = currentFrame();
+    // The keys are canonical names (or invalid names as given), and an Image element asks with the canonical name it
+    // was given back, so a name is looked up as it is first: normalizing it costs a few strings, every frame. A
+    // name that isn't canonical can't equal a key (its canonical form is the only valid name that does).
+    if (const auto it = m_images.find(name); it != m_images.end()) {
+        it->second.m_lastUsed = frame;
+        return it->second;
+    }
     const auto normalized = normalizeName(name);
     const std::string_view key = normalized ? std::string_view{*normalized} : name; // invalid: not found, as given
     if (const auto it = m_images.find(key); it != m_images.end()) {
@@ -357,8 +416,9 @@ const ImageCache::Image& ImageCache::get(std::string_view name) {
         }
         // Shared, as std::function needs a copyable callable; it hands in its result when it runs or, when the pool
         // drops it unrun, when it is destroyed.
-        auto job = std::make_shared<DecodeJob>(m_inbox, m_resources, image.m_name, image.m_ticket);
-        runInBackground([job = std::move(job)](std::stop_token stop) { job->run(stop); });
+        image.m_wanted = std::make_shared<std::atomic<bool>>(true);
+        auto job = std::make_shared<DecodeJob>(m_inbox, m_resources, image.m_name, image.m_ticket, image.m_wanted);
+        runInBackground([job = std::move(job)](std::stop_token stop) { job->run(stop); }, BackgroundLane::Decodes);
         return image;
     }
     const auto bytes = m_resources.read(key);
@@ -367,6 +427,7 @@ const ImageCache::Image& ImageCache::get(std::string_view name) {
 }
 
 bool ImageCache::contains(std::string_view name) const {
+    if (m_images.contains(name)) return true; // canonical already (see get())
     const auto normalized = normalizeName(name);
     return m_images.find(normalized ? std::string_view{*normalized} : name) != m_images.end();
 }
@@ -403,8 +464,11 @@ void ImageCache::setBudget(std::size_t bytes) { m_budget = bytes; }
 std::size_t ImageCache::bytes() const { return m_bytes; }
 
 ImageCache::Images::iterator ImageCache::drop(Images::iterator it) {
-    m_bytes -= it->second.m_bytes;
-    release(std::move(it->second.m_texture));
+    Image& image = it->second;
+    m_bytes -= image.m_bytes;
+    if (failed(image)) --m_failures;
+    if (image.m_wanted) image.m_wanted->store(false, std::memory_order_relaxed); // a decode not started yet skips
+    release(std::move(image.m_texture));
     return m_images.erase(it);
 }
 
@@ -421,21 +485,39 @@ std::size_t ImageCache::refresh() {
     return dropped;
 }
 
+std::size_t ImageCache::refresh(const std::map<std::string, std::optional<ResourceTime>>& times) {
+    std::size_t dropped = 0;
+    for (auto it = m_images.begin(); it != m_images.end();) {
+        const auto time = times.find(it->first);
+        if (!it->second.m_stale && (time == times.end() || time->second == it->second.m_modified)) {
+            ++it;
+            continue;
+        }
+        it = drop(it);
+        ++dropped;
+    }
+    return dropped;
+}
+
 void ImageCache::clear() {
-    for (auto& [name, image] : m_images)
-        release(std::move(image.m_texture));
-    m_images.clear();
+    for (auto it = m_images.begin(); it != m_images.end();)
+        it = drop(it);
     m_bytes = 0;
+    m_failures = 0;
 }
 
 void ImageCache::collect() {
     takeResults();
+    freeUploadedPixels();
     std::erase_if(m_released, [this](const Texture& texture) {
         if (texture->Status != ImTextureStatus_Destroyed) return false;
         unregister(texture.get());
         return true;
     });
     evict();
+    // A released texture is destroyed by the backend only in a frame that comes after the release (NewFrame marks it,
+    // the backend destroys it while drawing): ask for one, or it would wait for the next input.
+    if (!m_released.empty()) requestFrame();
 }
 
 void ImageCache::evict() {
@@ -458,15 +540,11 @@ void ImageCache::evict() {
 
     // Failures cost no pixels, but each is a name and a message: a script making up names (a missing frame of an
     // animation, a user's input) would grow the cache for ever.
-    const auto failed = [](const Image& image) { return !image.m_error.empty() && !image.loading(); };
-    std::size_t failures = 0;
-    for (const auto& [name, image] : m_images)
-        failures += failed(image) ? 1 : 0;
-    if (failures > maxFailures)
-        for (const auto& it : leastRecent(failed)) {
-            if (failures <= maxFailures) break;
-            drop(it);
-            --failures;
+    // m_failures is kept up to date as images fail and go, so the walk happens only when there are too many.
+    if (m_failures > maxFailures)
+        for (const auto& it : leastRecent([](const Image& image) { return failed(image); })) {
+            if (m_failures <= maxFailures) break;
+            drop(it); // counts it out of m_failures
         }
 }
 

@@ -12,6 +12,7 @@ import imlui.image.image_cache;
 import imlui.lua.errors;
 import imlui.resources;
 import imlui.resources.directory_mount;
+import imlui.resources.mount;
 import imlui.theme.dpi;
 import imlui.ui.background;
 import imlui.ui.frame_request;
@@ -74,12 +75,32 @@ std::string pngHeader(std::uint32_t width, std::uint32_t height) {
     be32(width);
     be32(height);
     png += std::string{"\x08\x06\x00\x00\x00", 5}; // 8 bits, RGBA, deflate, adaptive filters, not interlaced
-    be32(0); // the CRC: stb_image doesn't check it
+    be32(0);                                       // the CRC: stb_image doesn't check it
     be32(0);
     png += "IDAT";
     be32(0);
     return png;
 }
+
+/// A mount over tests/data that counts its reads.
+class CountingMount final : public Mount {
+public:
+    [[nodiscard]] std::optional<ResourceData> read(std::string_view path) const override {
+        ++m_reads;
+        return m_data.read(path);
+    }
+    [[nodiscard]] bool exists(std::string_view path) const override { return m_data.exists(path); }
+    [[nodiscard]] std::vector<std::string> list(std::string_view path) const override { return m_data.list(path); }
+    [[nodiscard]] std::optional<ResourceTime> modified(std::string_view path) const override {
+        return m_data.modified(path);
+    }
+    [[nodiscard]] std::string origin() const override { return "counting"; }
+    [[nodiscard]] int reads() const { return m_reads; }
+
+private:
+    DirectoryMount m_data{IMLUI_TEST_DATA_DIR};
+    mutable std::atomic<int> m_reads = 0;
+};
 
 } // namespace
 
@@ -324,6 +345,32 @@ TEST(ImageCache, RefreshDropsImagesWhoseFileChanged) {
     EXPECT_EQ(cache.decodeCount(), 4u);
 }
 
+// refresh(times): the times were read beforehand (the engine's background scan); only the images named are checked.
+TEST(ImageCache, RefreshWithTimesReadBeforehand) {
+    test::TempDir dir;
+    dir.write("a.png", asText(testFile("rgba_4x2.png")));
+    dir.write("b.png", asText(testFile("rgba_4x2.png")));
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(dir.path()));
+    ImageCache& cache = h.images();
+    EXPECT_TRUE(cache.get("app:/a.png").ready());
+    EXPECT_TRUE(cache.get("app:/b.png").ready());
+    EXPECT_FALSE(cache.get("app:/c.png").ready());
+    const auto timeOf = [&](const char* name) { return h.resources().modified(name); };
+    std::map<std::string, std::optional<ResourceTime>> times{{"app:/a.png", timeOf("app:/a.png")},
+                                                             {"app:/c.png", std::nullopt}};
+    EXPECT_EQ(cache.refresh(times), 0u) << "unchanged; b.png wasn't asked about";
+    dir.touch("b.png", 10);
+    EXPECT_EQ(cache.refresh(times), 0u) << "b.png still isn't asked about";
+    times["app:/b.png"] = timeOf("app:/b.png");
+    dir.write("c.png", asText(testFile("rgba_4x2.png")));
+    times["app:/c.png"] = timeOf("app:/c.png");
+    EXPECT_EQ(cache.refresh(times), 2u) << "b.png changed, c.png appeared";
+    EXPECT_TRUE(cache.contains("app:/a.png"));
+    EXPECT_FALSE(cache.contains("app:/b.png"));
+    EXPECT_FALSE(cache.contains("app:/c.png"));
+}
+
 TEST(ImageCache, KeepsUploadedTexturesUntilTheBackendDestroyedThem) {
     test::HeadlessFrame h;
     h.resources().mount("app:/", std::make_shared<DirectoryMount>(IMLUI_TEST_DATA_DIR));
@@ -343,6 +390,68 @@ TEST(ImageCache, KeepsUploadedTexturesUntilTheBackendDestroyedThem) {
     texture->SetTexID(imgui::invalidTextureId);
     texture->SetStatus(ImTextureStatus_Destroyed);
     cache.collect(); // deletes it (ASan would flag a leak or a use after free)
+}
+
+// Once the backend uploaded a texture (its status is OK), collect() frees the CPU copy of its pixels: an image costs
+// its pixels once. A texture released meanwhile asks for the frame in which the backend destroys it.
+TEST(ImageCache, FreesThePixelsOnceUploadedAndAsksForTheFrameThatDestroysReleasedTextures) {
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(IMLUI_TEST_DATA_DIR));
+    ImageCache& cache = h.images();
+    ImTextureData* texture = cache.get("app:/rgba_4x2.png").texture()._TexData;
+    ASSERT_NE(texture, nullptr);
+    cache.collect();
+    EXPECT_NE(texture->Pixels, nullptr) << "not uploaded yet: the backend still needs them";
+    texture->SetTexID(ImTextureID{42}); // pretend a backend uploaded it
+    texture->SetStatus(ImTextureStatus_OK);
+    cache.collect();
+    EXPECT_EQ(texture->Pixels, nullptr);
+    EXPECT_TRUE(cache.get("app:/rgba_4x2.png").ready());
+    EXPECT_EQ(cache.bytes(), 32u) << "still counted: the GPU holds them";
+
+    clearFrameRequests();
+    cache.clear();
+    cache.collect();
+    EXPECT_EQ(secondsUntilFrame(), 0.0) << "a frame for the backend to destroy the released texture";
+    texture->SetTexID(imgui::invalidTextureId);
+    texture->SetStatus(ImTextureStatus_Destroyed);
+    clearFrameRequests();
+    cache.collect(); // deletes it
+    EXPECT_GT(secondsUntilFrame(), 0.0) << "nothing left to destroy";
+    clearFrameRequests();
+}
+
+// A decode whose image was dropped before it started skips its work (it would be ignored): no read, no decode.
+TEST(ImageCache, SkipsADecodeNoLongerWanted) {
+    test::HeadlessFrame h;
+    auto mount = std::make_shared<CountingMount>();
+    h.resources().mount("app:/", mount);
+    ImageCache& cache = h.images();
+    cache.setAsync(true);
+    // Both decode workers busy, so the decode below waits in the queue.
+    std::latch started{static_cast<std::ptrdiff_t>(decodeThreadLimit)};
+    std::latch release{1};
+    for (std::size_t i = 0; i < decodeThreadLimit; ++i)
+        runInBackground(
+            [&](std::stop_token) {
+                started.count_down();
+                release.wait();
+            },
+            BackgroundLane::Decodes);
+    started.wait();
+    EXPECT_TRUE(cache.get("app:/rgba_4x2.png").loading());
+    cache.clear();
+    release.count_down();
+    ASSERT_TRUE(cache.waitForPending());
+    EXPECT_EQ(mount->reads(), 0);
+    EXPECT_FALSE(cache.contains("app:/rgba_4x2.png"));
+    // Asked for again: decoded.
+    const auto& again = cache.get("app:/rgba_4x2.png");
+    ASSERT_TRUE(cache.waitForPending());
+    EXPECT_TRUE(again.ready()) << again.error();
+    EXPECT_EQ(mount->reads(), 1);
+    clearPosted();
+    clearFrameRequests();
 }
 
 // The byte budget: after a frame, the images drawn least recently go until the cache fits, never one drawn in the
@@ -512,8 +621,9 @@ TEST(ImageCache, DecodesInTheBackground) {
     EXPECT_EQ(cache.bytes(), 32u);
     EXPECT_EQ(missing.error(), "image 'app:/missing.png' not found");
     EXPECT_EQ(cache.decodeCount(), 2u);
-    // Each finished decode asked for a frame, on the main thread.
-    EXPECT_EQ(postedCount(), 2u);
+    // The finished decodes asked for a frame, on the main thread: one post for both (the first result found the inbox
+    // empty, the second didn't).
+    EXPECT_EQ(postedCount(), 1u);
     runPosted();
     EXPECT_EQ(secondsUntilFrame(), 0.0);
     clearFrameRequests();

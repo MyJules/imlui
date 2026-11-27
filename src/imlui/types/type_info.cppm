@@ -78,6 +78,8 @@ public:
         /// For the Lua definitions: the parameters, and luaTypeOf<R> of the result (nullptr: none, `void`).
         std::vector<Param> params;
         LuaTypes::Describe result = nullptr;
+        /// Whether a call from Lua syncs the element's properties first (TypeBuilder::unsynced() clears it).
+        bool syncs = true;
     };
 
     struct Signal {
@@ -127,6 +129,8 @@ public:
     /// The property a positional first value sets: `Gauge { 0.5 }` with defaultProperty "value".
     [[nodiscard]] const std::string& defaultProperty() const;
     void setDefaultProperty(std::string name);
+    /// The index in properties() of the declared property defaultProperty() names; std::nullopt when there is none.
+    [[nodiscard]] std::optional<std::size_t> defaultPropertyIndex() const;
 
     [[nodiscard]] const std::vector<Property>& properties() const;
     [[nodiscard]] const std::vector<Method>& methods() const;
@@ -135,9 +139,12 @@ public:
     [[nodiscard]] const std::vector<Signal>& signalDeclarations() const;
     /// The raw properties, in declaration order: for the Lua definitions only (see RawProperty).
     [[nodiscard]] const std::vector<RawProperty>& rawProperties() const;
+    /// Lookups by name: one hash lookup (the members are indexed as they are added).
     [[nodiscard]] const Property* findProperty(std::string_view name) const;
     [[nodiscard]] const Method* findMethod(std::string_view name) const;
     [[nodiscard]] bool hasSignal(std::string_view name) const;
+    /// Sets Method::syncs of method `name`. Returns false when there is none.
+    bool setMethodSyncs(std::string_view name, bool syncs);
 
     /// Adds a member. A name may only be used once across properties, methods and signals.
     void addProperty(Property property);
@@ -163,7 +170,23 @@ public:
     [[nodiscard]] std::shared_ptr<const Defaults> sharedDefaults(const ScriptObject& first) const;
 
 private:
-    void checkUnique(std::string_view name) const;
+    /// What a name is: an entry of m_members.
+    struct Member {
+        enum class Kind : std::uint8_t { Property, Method, Signal, RawProperty };
+        Kind kind;
+        std::size_t index; ///< into the vector of its kind
+    };
+    /// Hashes std::string and std::string_view alike, so a lookup by a view builds no string.
+    struct NameHash {
+        using is_transparent = void;
+        std::size_t operator()(std::string_view name) const { return std::hash<std::string_view>{}(name); }
+    };
+
+    /// Adds `name` to m_members; throws std::invalid_argument when it is taken.
+    void addMember(const std::string& name, Member::Kind kind, std::size_t index);
+    [[nodiscard]] const Member* findMember(std::string_view name) const;
+    /// Updates m_defaultIndex from m_defaultProperty.
+    void resolveDefaultProperty();
 
     std::string m_name;
     std::string m_doc;
@@ -176,6 +199,9 @@ private:
     std::vector<std::string> m_signals;
     std::vector<Signal> m_signalDeclarations;
     std::vector<RawProperty> m_rawProperties;
+    /// Every member by name: what findProperty(), findMethod() and hasSignal() look up.
+    std::unordered_map<std::string, Member, NameHash, std::equal_to<>> m_members;
+    std::optional<std::size_t> m_defaultIndex; ///< defaultPropertyIndex()
     Factory m_factory;
     mutable std::shared_ptr<const Defaults> m_sharedDefaults; ///< sharedDefaults(), once captured
     LuaTypes::Describe m_valueType = nullptr;
@@ -226,7 +252,16 @@ void TypeInfo::setFillsWidthWhen(std::function<bool(const ScriptObject&)> predic
 }
 
 const std::string& TypeInfo::defaultProperty() const { return m_defaultProperty; }
-void TypeInfo::setDefaultProperty(std::string name) { m_defaultProperty = std::move(name); }
+void TypeInfo::setDefaultProperty(std::string name) {
+    m_defaultProperty = std::move(name);
+    resolveDefaultProperty();
+}
+std::optional<std::size_t> TypeInfo::defaultPropertyIndex() const { return m_defaultIndex; }
+
+void TypeInfo::resolveDefaultProperty() {
+    const Property* p = findProperty(m_defaultProperty);
+    m_defaultIndex = p ? std::optional{static_cast<std::size_t>(p - m_properties.data())} : std::nullopt;
+}
 
 const std::vector<TypeInfo::Property>& TypeInfo::properties() const { return m_properties; }
 const std::vector<TypeInfo::Method>& TypeInfo::methods() const { return m_methods; }
@@ -234,51 +269,60 @@ const std::vector<std::string>& TypeInfo::signals() const { return m_signals; }
 const std::vector<TypeInfo::Signal>& TypeInfo::signalDeclarations() const { return m_signalDeclarations; }
 const std::vector<TypeInfo::RawProperty>& TypeInfo::rawProperties() const { return m_rawProperties; }
 
+const TypeInfo::Member* TypeInfo::findMember(std::string_view name) const {
+    const auto it = m_members.find(name);
+    return it == m_members.end() ? nullptr : &it->second;
+}
+
 const TypeInfo::Property* TypeInfo::findProperty(std::string_view name) const {
-    for (const auto& p : m_properties)
-        if (p.name == name) return &p;
-    return nullptr;
+    const Member* m = findMember(name);
+    return m && m->kind == Member::Kind::Property ? &m_properties[m->index] : nullptr;
 }
 
 const TypeInfo::Method* TypeInfo::findMethod(std::string_view name) const {
-    for (const auto& m : m_methods)
-        if (m.name == name) return &m;
-    return nullptr;
+    const Member* m = findMember(name);
+    return m && m->kind == Member::Kind::Method ? &m_methods[m->index] : nullptr;
 }
 
 bool TypeInfo::hasSignal(std::string_view name) const {
-    for (const auto& s : m_signals)
-        if (s == name) return true;
-    return false;
+    const Member* m = findMember(name);
+    return m && m->kind == Member::Kind::Signal;
 }
 
-void TypeInfo::checkUnique(std::string_view name) const {
+bool TypeInfo::setMethodSyncs(std::string_view name, bool syncs) {
+    const Member* m = findMember(name);
+    if (!m || m->kind != Member::Kind::Method) return false;
+    m_methods[m->index].syncs = syncs;
+    return true;
+}
+
+void TypeInfo::addMember(const std::string& name, Member::Kind kind, std::size_t index) {
     // A clash would make one member unreachable (methods are looked up through the element table's
     // metatable, so a method named like a property would be read as that property's binding).
-    const bool raw = std::ranges::any_of(m_rawProperties, [&](const RawProperty& r) { return r.name == name; });
-    if (findProperty(name) || findMethod(name) || hasSignal(name) || raw)
-        throw std::invalid_argument{m_name + ": member '" + std::string{name} + "' is declared twice"};
+    if (!m_members.try_emplace(name, Member{.kind = kind, .index = index}).second)
+        throw std::invalid_argument{m_name + ": member '" + name + "' is declared twice"};
 }
 
 void TypeInfo::addProperty(Property property) {
-    checkUnique(property.name);
+    addMember(property.name, Member::Kind::Property, m_properties.size());
     property.key.emplace(property.name);
     m_properties.push_back(std::move(property));
+    if (m_properties.back().name == m_defaultProperty) resolveDefaultProperty();
 }
 
 void TypeInfo::addMethod(Method method) {
-    checkUnique(method.name);
+    addMember(method.name, Member::Kind::Method, m_methods.size());
     m_methods.push_back(std::move(method));
 }
 
 void TypeInfo::addSignal(std::string name, std::optional<std::vector<Param>> args) {
-    checkUnique(name);
+    addMember(name, Member::Kind::Signal, m_signals.size());
     m_signals.push_back(name);
     m_signalDeclarations.push_back({.name = std::move(name), .args = std::move(args), .doc = {}});
 }
 
 void TypeInfo::addRawProperty(RawProperty property) {
-    checkUnique(property.name);
+    addMember(property.name, Member::Kind::RawProperty, m_rawProperties.size());
     m_rawProperties.push_back(std::move(property));
 }
 

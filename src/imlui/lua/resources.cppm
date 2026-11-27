@@ -13,6 +13,8 @@ export namespace imlui::luaui {
 ///  * `require("imlui.resource")` is the native library behind `ui.resource`. Its functions take full names and
 ///    never raise: `resolve(base, name)`, `read(name)`, `load(name [, env])` (a text chunk named `@name`) and
 ///    `find(module, folder)` return the result or nil plus a message; `exists(name)` returns a boolean.
+///    `loadModule(module, folder)` is find and load with one read: the chunk (in the global environment) and its
+///    full name, nil and find's message when there is no such module, or false and load's message.
 ///  * a package.searchers entry, second after the preload searcher, finds modules in `imlui:/`: `imlui` is
 ///    `imlui:/imlui.lua`, `a.b` is `imlui:/a/b.lua` or `imlui:/a/b/init.lua`. src/resources/imlui.lua adds its
 ///    own entry in front of it for components next to the script.
@@ -80,17 +82,13 @@ int guarded(lua::State* state, const Work& work) {
 
 std::string quotedName(std::string_view name) { return "'" + std::string{name} + "'"; }
 
-/// Loads resource `name` as a text chunk named `@name`, with the table at `envIndex` (0: none) as its
-/// environment. Pushes the function, or nil and a message; returns the number of values pushed. Loading is
-/// protected (lua_load returns its errors), so only a memory error raises.
-int loadChunk(lua::State* state, const Context& ctx, std::string_view name, int envIndex) {
-    const auto canonical = normalizeName(name);
-    if (!canonical) return fail(state, "invalid resource name " + quotedName(name));
-    const auto code = ctx.resources->read(*canonical); // Lua copies the text it needs
-    if (!code) return fail(state, "resource " + quotedName(*canonical) + " not found");
-    remember(ctx, *canonical);
-    const std::string chunkName = "@" + *canonical;
-    if (lua::loadbufferx(state, code->text(), chunkName.c_str(), "t") != lua::ok) {
+/// Loads `code`, the text of resource `name` (a full, normalized name), as a text chunk named `@name`, with the
+/// table at `envIndex` (0: none) as its environment. Pushes the function, or nil and a message; returns the number
+/// of values pushed. Loading is protected (lua_load returns its errors), so only a memory error raises.
+int loadCode(lua::State* state, const Context& ctx, const std::string& name, const ResourceData& code, int envIndex) {
+    remember(ctx, name);
+    const std::string chunkName = "@" + name;
+    if (lua::loadbufferx(state, code.text(), chunkName.c_str(), "t") != lua::ok) { // Lua copies the text it needs
         lua::pushnil(state);
         lua::insert(state, -2); // nil, message
         return 2;
@@ -102,20 +100,37 @@ int loadChunk(lua::State* state, const Context& ctx, std::string_view name, int 
     return 1;
 }
 
-/// The full name of module `module` (`a.b`: `a/b.lua`, then `a/b/init.lua`) in `folder`, or nullopt; `tried`
-/// gets one line per name looked at, in the format package.searchers expects.
-std::optional<std::string> findModule(const Context& ctx, std::string_view module, std::string_view folder,
+/// loadCode for resource `name`, read now. Pushes the function, or nil and a message; returns the number of values
+/// pushed.
+int loadChunk(lua::State* state, const Context& ctx, std::string_view name, int envIndex) {
+    const auto canonical = normalizeName(name);
+    if (!canonical) return fail(state, "invalid resource name " + quotedName(name));
+    const auto code = ctx.resources->read(*canonical);
+    if (!code) return fail(state, "resource " + quotedName(*canonical) + " not found");
+    return loadCode(state, ctx, *canonical, *code, envIndex);
+}
+
+/// A module findModule found: its full name and its code.
+struct FoundModule {
+    std::string name;
+    ResourceData code;
+};
+
+/// Module `module` (`a.b`: `a/b.lua`, then `a/b/init.lua`) in `folder`, or nullopt; `tried` gets one line per name
+/// looked at, in the format package.searchers expects. A candidate counts when it reads as a file: a folder named
+/// `a/b.lua` doesn't stop the search before `a/b/init.lua`. The code is read once, for the search and the load.
+std::optional<FoundModule> findModule(const Context& ctx, std::string_view module, std::string_view folder,
                                       std::string& tried) {
     std::string path{module};
     for (char& c : path)
         if (c == '.') c = '/';
     for (const char* suffix : {".lua", "/init.lua"}) {
-        const auto name = resolveName(folder, path + suffix);
+        auto name = resolveName(folder, path + suffix);
         if (!name) {
             tried += "\n\tno resource " + quotedName(path + suffix) + " in " + quotedName(folder);
             continue;
         }
-        if (ctx.resources->exists(*name)) return name;
+        if (auto code = ctx.resources->read(*name)) return FoundModule{std::move(*name), std::move(*code)};
         tried += "\n\tno resource " + quotedName(*name);
     }
     return std::nullopt;
@@ -166,9 +181,27 @@ int findFn(lua::State* state) {
     const std::string_view folder = lua::tostring(state, 2);
     return guarded(state, [&] {
         std::string tried;
-        const auto name = findModule(context(state), module, folder, tried);
-        if (!name) return fail(state, tried);
-        return pushValues(state, {*name});
+        const auto found = findModule(context(state), module, folder, tried);
+        if (!found) return fail(state, tried);
+        return pushValues(state, {found->name});
+    });
+}
+
+int loadModuleFn(lua::State* state) {
+    const std::string_view module = lua::tostring(state, 1);
+    const std::string_view folder = lua::tostring(state, 2);
+    return guarded(state, [&] {
+        const Context ctx = context(state);
+        std::string tried;
+        const auto found = findModule(ctx, module, folder, tried);
+        if (!found) return fail(state, tried);
+        if (loadCode(state, ctx, found->name, found->code, 0) != 1) { // nil, message: false, message
+            lua::pushboolean(state, false);
+            lua::insert(state, -3);
+            lua::remove(state, -2);
+            return 2;
+        }
+        return pushValues(state, {found->name}) + 1;
     });
 }
 
@@ -177,12 +210,12 @@ int findFn(lua::State* state) {
 int search(lua::State* state, std::string_view module) {
     const Context ctx = context(state);
     std::string tried;
-    const auto name = findModule(ctx, module, "imlui:/", tried);
-    if (!name) return pushValues(state, {tried});
-    if (loadChunk(state, ctx, *name, 0) != 1) // nil, message (loadChunk's messages are strings)
-        lua::error(state, "error loading module " + quotedName(module) + " from " + quotedName(*name) + ":\n\t" +
-                              std::string{lua::tostring(state, -1)});
-    return pushValues(state, {*name}) + 1;
+    const auto found = findModule(ctx, module, "imlui:/", tried);
+    if (!found) return pushValues(state, {tried});
+    if (loadCode(state, ctx, found->name, found->code, 0) != 1) // nil, message (loadCode's messages are strings)
+        lua::error(state, "error loading module " + quotedName(module) + " from " + quotedName(found->name) +
+                              ":\n\t" + std::string{lua::tostring(state, -1)});
+    return pushValues(state, {found->name}) + 1;
 }
 
 int searcher(lua::State* state) {
@@ -200,7 +233,8 @@ constexpr struct {
     const char* name;
     lua::CFunction fn;
 } libraryFns[] = {
-    {"resolve", &resolveFn}, {"read", &readFn}, {"exists", &existsFn}, {"load", &loadFn}, {"find", &findFn},
+    {"resolve", &resolveFn}, {"read", &readFn}, {"exists", &existsFn},
+    {"load", &loadFn},       {"find", &findFn}, {"loadModule", &loadModuleFn},
 };
 
 void pushContext(lua::State* state, const Context& ctx) {

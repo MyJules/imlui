@@ -18,6 +18,7 @@ public:
     [[nodiscard]] std::vector<std::string> list(std::string_view path) const override;
     [[nodiscard]] std::optional<ResourceTime> modified(std::string_view path) const override;
     [[nodiscard]] std::string origin() const override;
+    [[nodiscard]] bool mayChange() const override;
 
 private:
     std::map<std::string, std::string, std::less<>> m_files;
@@ -45,6 +46,8 @@ bool MemoryMount::exists(std::string_view path) const {
     const auto it = m_files.lower_bound(folder);
     return it != m_files.end() && it->first.starts_with(folder);
 }
+
+bool MemoryMount::mayChange() const { return false; }
 
 std::vector<std::string> MemoryMount::list(std::string_view path) const {
     std::vector<std::string> out;

@@ -326,6 +326,31 @@ TEST(ResourceSelection, ContainsAndFolders) {
     EXPECT_TRUE(s.mayContainUnder("ui/deep/er"));
     EXPECT_FALSE(s.mayContainUnder("docs"));
     EXPECT_FALSE(ResourceSelection{}.mayContainUnder(""));
+    EXPECT_TRUE(s.matchesPatterns("ui/Card.lua"));
+    EXPECT_FALSE(s.matchesPatterns("a/b/listed.txt")) << "`files` aren't patterns";
+    EXPECT_FALSE(s.matchesPatterns("ui/x/Card.lua"));
+}
+
+// A DirectoryMount keeps its selection's `files` and `unmatched` sorted (a bisection per file instead of a scan of the
+// list): a long list in any order, with duplicates, selects exactly its files.
+TEST(DirectoryMount, LooksFilesUpInALongSelectionInAnyOrder) {
+    test::TempDir dir;
+    ResourceSelection selection{.include = {"*.lua"}, .unmatched = {"z.lua", "b.lua", "z.lua"}};
+    for (int i = 199; i >= 0; --i) {
+        const std::string name = "data/f" + std::to_string(i) + ".json";
+        dir.write(name, "{}");
+        if (i % 2 == 0) selection.files.push_back(name);
+    }
+    selection.files.push_back("data/f10.json");
+    for (const char* name : {"a.lua", "b.lua", "z.lua"})
+        dir.write(name, "return 1");
+    DirectoryMount mount{dir.path(), selection};
+    EXPECT_TRUE(mount.exists("data/f0.json"));
+    EXPECT_TRUE(mount.exists("data/f198.json"));
+    EXPECT_FALSE(mount.exists("data/f199.json"));
+    EXPECT_EQ(mount.list("data").size(), 100u);
+    EXPECT_EQ(mount.list(""), strings({"a.lua", "data/"}));
+    EXPECT_EQ(mount.listFiles("").size(), 101u);
 }
 
 // A changed file that can't be opened right now (an editor holding it without sharing while it saves) is served from
@@ -846,6 +871,68 @@ TEST_F(LuaResourcesTest, ModulesInImluiPrefixLoadInTheGlobalEnvironment) {
         local m = require("extra.mod")
         assert(m.env, "imlui:/ modules run in the global environment")
         assert(m.name == "extra.mod")
+    )");
+}
+
+// A folder named like a module's file (`x.lua/`) isn't the module: require goes on to `x/init.lua`, next to the script
+// and in imlui:/ alike.
+TEST_F(LuaResourcesTest, AFolderNamedLikeAModuleFileIsSkipped) {
+    m_dir.write("dirmod.lua/readme.txt", "not a module");
+    m_dir.write("dirmod/init.lua", "return { name = 'app init' }");
+    m_frame.resources().mount("imlui:/", memory({{"libmod.lua/readme.txt", "not a module"},
+                                                 {"libmod/init.lua", "return { name = 'imlui init' }"}}));
+    run(R"(
+        ui.__load("app:/main.lua")
+        assert(require("dirmod").name == "app init")
+        assert(require("libmod").name == "imlui init")
+    )");
+    EXPECT_TRUE(m_frame.loadedResources().contains("app:/dirmod/init.lua"));
+    EXPECT_TRUE(m_frame.loadedResources().contains("imlui:/libmod/init.lua"));
+}
+
+// loadModule finds and loads a module with one read: the chunk and its name, nil and the names it tried, or false and
+// the load error.
+TEST_F(LuaResourcesTest, LoadModuleFindsAndLoads) {
+    run(R"(
+        local r = require("imlui.resource")
+        local chunk, name = r.loadModule("pkg", "app:/")
+        assert(type(chunk) == "function" and name == "app:/pkg/init.lua", tostring(name))
+        assert(chunk().name == "pkg")
+        local none, tried = r.loadModule("Nope", "app:/")
+        assert(none == nil and tried:find("no resource 'app:/Nope.lua'", 1, true), tostring(tried))
+        assert(tried:find("no resource 'app:/Nope/init.lua'", 1, true), tried)
+        local bad, err = r.loadModule("Broken", "app:/")
+        assert(bad == false and err:find("app:/Broken.lua:1:", 1, true), tostring(err))
+    )");
+}
+
+// Free names in a resource script: `ui` and the functions bound to the script (Image, theme, ...) are cached, but a
+// global a script assigns takes precedence as soon as it exists, and again not once it's gone; ids, ui members and
+// globals are looked up each time.
+TEST_F(LuaResourcesTest, FreeNamesFollowGlobalsAssignedLater) {
+    m_dir.write("names.lua", R"(
+        return { image = function() return Image end, ui = function() return ui end,
+                 late = function() return lateGlobal end, id = function() return laterId end })");
+    m_dir.write("shadow.lua", "Image = 'shadowed'; lateGlobal = 1; return true");
+    run(R"(
+        ui.__load("app:/main.lua")
+        local env, plainUi = ui.env, ui
+        local names = require("names")
+        local bound = names.image()
+        assert(type(bound) == "function" and bound ~= ui.Image)
+        assert(names.image() == bound and names.ui().Image == bound and names.ui().state == ui.state)
+        assert(names.late() == nil and names.id() == nil)
+        require("shadow")
+        assert(names.image() == "shadowed", tostring(names.image()))
+        assert(names.late() == 1)
+        env.Image = nil
+        assert(names.image() == bound)
+        local t = Text { id = "laterId" }
+        assert(names.id() == t)
+        env.ui = "mine"
+        assert(names.ui() == "mine")
+        env.ui = nil
+        assert(names.ui().Image == bound and plainUi.ids.laterId == t)
     )");
 }
 

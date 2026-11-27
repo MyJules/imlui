@@ -33,6 +33,8 @@ struct ImageQuad {
 /// The quads that draw an image of `natural` size (image pixels) into the rect at `pos` of `size` pixels.
 /// `scale` (pixels per dp) is the tile size factor of FillMode::Tile.
 [[nodiscard]] std::vector<ImageQuad> placeImage(ImVec2 pos, ImVec2 size, ImVec2 natural, float scale, FillMode mode);
+/// The same into `quads` (emptied first): a render keeps the vector, so drawing an image allocates nothing.
+void placeImage(ImVec2 pos, ImVec2 size, ImVec2 natural, float scale, FillMode mode, std::vector<ImageQuad>& quads);
 
 } // namespace imlui
 
@@ -59,8 +61,15 @@ ImVec2 imageSize(ImVec2 natural, float scale, float width, float height) {
 }
 
 std::vector<ImageQuad> placeImage(ImVec2 pos, ImVec2 size, ImVec2 natural, float scale, FillMode mode) {
+    std::vector<ImageQuad> quads;
+    placeImage(pos, size, natural, scale, mode, quads);
+    return quads;
+}
+
+void placeImage(ImVec2 pos, ImVec2 size, ImVec2 natural, float scale, FillMode mode, std::vector<ImageQuad>& quads) {
+    quads.clear();
     const ImVec2 end{pos.x + size.x, pos.y + size.y};
-    if (size.x <= 0.0f || size.y <= 0.0f || natural.x <= 0.0f || natural.y <= 0.0f) return {};
+    if (size.x <= 0.0f || size.y <= 0.0f || natural.x <= 0.0f || natural.y <= 0.0f) return;
     switch (mode) {
     case FillMode::Stretch:
         break;
@@ -68,13 +77,15 @@ std::vector<ImageQuad> placeImage(ImVec2 pos, ImVec2 size, ImVec2 natural, float
         const float s = std::min(size.x / natural.x, size.y / natural.y);
         const ImVec2 drawn{natural.x * s, natural.y * s};
         const ImVec2 min{snap(pos.x + (size.x - drawn.x) * 0.5f), snap(pos.y + (size.y - drawn.y) * 0.5f)};
-        return {{min, {min.x + snap(drawn.x), min.y + snap(drawn.y)}}};
+        quads.push_back({min, {min.x + snap(drawn.x), min.y + snap(drawn.y)}});
+        return;
     }
     case FillMode::Crop: {
         const float s = std::max(size.x / natural.x, size.y / natural.y);
         const float fx = size.x / (natural.x * s); // the visible fraction of the texture
         const float fy = size.y / (natural.y * s);
-        return {{pos, end, {(1.0f - fx) * 0.5f, (1.0f - fy) * 0.5f}, {(1.0f + fx) * 0.5f, (1.0f + fy) * 0.5f}}};
+        quads.push_back({pos, end, {(1.0f - fx) * 0.5f, (1.0f - fy) * 0.5f}, {(1.0f + fx) * 0.5f, (1.0f + fy) * 0.5f}});
+        return;
     }
     case FillMode::Tile: {
         const ImVec2 tile{natural.x * scale, natural.y * scale};
@@ -82,7 +93,6 @@ std::vector<ImageQuad> placeImage(ImVec2 pos, ImVec2 size, ImVec2 natural, float
         const float columns = std::ceil(size.x / tile.x);
         const float rows = std::ceil(size.y / tile.y);
         if (columns * rows > static_cast<float>(maxTiles)) break;
-        std::vector<ImageQuad> quads;
         for (float y = 0.0f; y < size.y; y += tile.y) {
             const float h = std::min(tile.y, size.y - y);
             for (float x = 0.0f; x < size.x; x += tile.x) {
@@ -91,10 +101,10 @@ std::vector<ImageQuad> placeImage(ImVec2 pos, ImVec2 size, ImVec2 natural, float
                                  {w / tile.x, h / tile.y}});
             }
         }
-        return quads;
+        return;
     }
     }
-    return {{pos, end}};
+    quads.push_back({pos, end});
 }
 
 } // namespace imlui

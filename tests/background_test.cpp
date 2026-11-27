@@ -145,3 +145,49 @@ TEST_F(BackgroundTest, ShutdownWithoutAPoolDoesNothing) {
     shutdownBackground();
     EXPECT_EQ(backgroundTaskCount(), 0u);
 }
+
+// The decode lane has workers of its own: with every worker of the task lane busy, a decode still runs at once.
+TEST_F(BackgroundTest, DecodesDontWaitBehindTasks) {
+    const std::size_t threads = backgroundThreadLimit();
+    std::latch started{static_cast<std::ptrdiff_t>(threads)};
+    for (std::size_t i = 0; i < threads + 2; ++i) // every task worker busy, two more tasks queued
+        runInBackground([&](std::stop_token stop) {
+            started.count_down();
+            waitForStop(stop);
+        });
+    started.wait();
+    std::promise<void> decoded;
+    runInBackground([&](std::stop_token) { decoded.set_value(); }, BackgroundLane::Decodes);
+    EXPECT_EQ(decoded.get_future().wait_for(std::chrono::seconds{10}), std::future_status::ready);
+    shutdownBackground(std::chrono::seconds{10});
+}
+
+// The decode lane runs at most decodeThreadLimit decodes at once, the newest request first.
+TEST_F(BackgroundTest, DecodeLaneRunsTheNewestFirst) {
+    static_assert(decodeThreadLimit == 2);
+    std::latch started{2};
+    std::latch releaseFirst{1};
+    std::latch releaseSecond{1};
+    for (std::latch* release : {&releaseFirst, &releaseSecond})
+        runInBackground(
+            [&started, release](std::stop_token) {
+                started.count_down();
+                release->wait();
+            },
+            BackgroundLane::Decodes);
+    started.wait();
+    std::vector<int> order; // filled by one worker at a time (the other stays blocked)
+    std::latch finished{3};
+    for (int i = 0; i < 3; ++i)
+        runInBackground(
+            [&, i](std::stop_token) {
+                order.push_back(i);
+                finished.count_down();
+            },
+            BackgroundLane::Decodes);
+    EXPECT_EQ(backgroundTaskCount(), 5u);
+    releaseSecond.count_down(); // one worker drains the queue alone
+    finished.wait();
+    releaseFirst.count_down();
+    EXPECT_EQ(order, (std::vector<int>{2, 1, 0}));
+}

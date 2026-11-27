@@ -6,7 +6,8 @@
 //    settle period), and while animations, timers or scripts request frames
 //  * keeps the UI scaled to the monitor DPI times the user zoom
 //  * hot-reloads when a .lua resource in a mutable mount (a directory) changes; a changed image is decoded again
-//    without a reload
+//    without a reload. The files are scanned on the background pool every 400 ms, and not at all when no mount can
+//    change (only embedded files and .pak archives)
 //  * exposes `imlui.native` to Lua (theme, colors, time, quit, ...)
 //  * owns the TypeRegistry: C++ element types and singletons registered with registerType<T>() and
 //    registerSingleton(), installed into every new Lua state
@@ -116,6 +117,11 @@ public:
     int run();
 
 private:
+    /// run() with the window created: loads the script and runs the frame loop until quit.
+    void runWindow(const platform::Window::Config& wc);
+    /// Undoes what runWindow() set up (wake handlers, timers, posts, the Lua state, the window, the background pool).
+    /// run() calls it however the loop leaves; a second call does nothing harmful.
+    void shutdown();
     /// One complete frame. Also called from inside event processing while
     /// the window is being resized.
     void renderFrame();
@@ -130,11 +136,10 @@ private:
     void renderTree();
     void drawErrors();
 
-    /// Sets m_reload when a watched resource changed (checked at most every 400 ms; see resourcesChanged).
+    /// Starts a scan of the watched files on the background pool every 400 ms, and takes the result of the last one:
+    /// drops the changed images and sets m_reload when a watched resource changed (see resourcesChanged).
     void checkForChanges();
-    /// The times of every .lua file in the mounted prefixes and of every resource Lua has loaded or read.
-    [[nodiscard]] FileSnapshot scanFiles() const;
-    /// Takes m_snapshot (and m_snapshotTime) now.
+    /// Takes m_snapshot (and m_snapshotTime) now, on the main thread (the first one, before the loop).
     void takeSnapshot();
     void reloadNow();
     /// Applies the root element's width/height/title to the native window.
@@ -163,6 +168,11 @@ private:
     float m_wheelZoom = 0.0f;  ///< Ctrl + wheel notches not yet turned into zoom steps
     FileSnapshot m_snapshot;
     ResourceTime m_snapshotTime; ///< when the scan of m_snapshot started
+    struct ScanInbox;
+    /// Where the background scan leaves its result; shared with it (it may finish after the Engine is gone).
+    std::shared_ptr<ScanInbox> m_scanInbox;
+    bool m_scanning = false; ///< a background scan runs: the loop waits for its post, not for the next check
+    bool m_watching = false; ///< hot reload is on and some mount's files may change (Resources::mayChange)
     /// The resources the current Lua state read or loaded, and the current theme's fonts: watched for hot reload.
     /// Each load starts a set of its own (its state holds a pointer to it, see registerResources), which replaces this
     /// one when the load succeeds: a file the script no longer reads stops being watched. Never null.
@@ -205,9 +215,35 @@ void closeState(lua::State* state) {
     if (state) lua::close(state);
 }
 
+/// The times of every .lua file in the mounted prefixes and of every name in `watched` (what Lua has loaded or read,
+/// the theme's fonts). Any thread: Resources is safe to read from any.
+FileSnapshot scanFiles(const Resources& res, const std::set<std::string>& watched) {
+    FileSnapshot out;
+    for (const auto& prefix : res.prefixes())
+        for (auto& name : res.listRecursive(prefix + ":/"))
+            if (name.ends_with(".lua")) out.emplace(std::move(name), std::nullopt);
+    for (const auto& name : watched)
+        out.emplace(name, std::nullopt);
+    for (auto& [name, time] : out)
+        time = res.modified(name);
+    return out;
+}
+
 } // namespace
 
-Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
+/// One background scan's result: the watched files' times, and the cached images' (ImageCache::refresh).
+struct Engine::ScanInbox {
+    struct Result {
+        FileSnapshot files;
+        std::map<std::string, std::optional<ResourceTime>> images;
+        ResourceTime takenAt; ///< when the scan started
+        bool ok = false;      ///< false: the scan failed (out of memory) or was dropped; nothing to compare
+    };
+    std::mutex mutex;
+    std::optional<Result> result; ///< guarded by `mutex`: set when the scan ended
+};
+
+Engine::Engine(EngineConfig config) : m_config{std::move(config)}, m_scanInbox{std::make_shared<ScanInbox>()} {
     registerBuiltinTypes(m_types);
     m_renderer.setImages(&m_images);
     m_images.setAsync(true); // decodes on the background pool: a large image no longer stalls a frame
@@ -253,8 +289,33 @@ int Engine::run() {
         log::error("failed to create the window");
         return 1;
     }
-    // Keep drawing while the OS blocks the loop (live window resize).
-    m_window.setRefreshCallback([this] { renderFrame(); });
+    {
+        // However the loop leaves (an exception too), shutdown() tears down what it set up: the window (and with it the
+        // ImGui context and the backend's textures) before ~Engine destroys the image cache, whose textures the
+        // backend's shutdown still walks; the wake handlers before the window goes.
+        struct Shutdown {
+            Engine& engine;
+            ~Shutdown() { engine.shutdown(); }
+        } shutdown{*this};
+        runWindow(wc);
+    }
+    // A smoke run (exitAfterFrames) fails when the script reported an error.
+    if (m_config.exitAfterFrames > 0 && !luaui::errors().empty()) {
+        log::error("exiting after {} frames with script errors", m_framesRendered);
+        return 1;
+    }
+    return 0;
+}
+
+void Engine::runWindow(const platform::Window::Config& wc) {
+    // Keep drawing while the OS blocks the loop (live window resize, a modal loop on Windows): the refresh callback
+    // runs only inside waitEvents(), outside any frame, so the posted functions and due C++ timers run first, as the
+    // loop would (they would stall for as long as the drag lasts otherwise).
+    m_window.setRefreshCallback([this] {
+        runPosted();
+        runDueMainTimers();
+        renderFrame();
+    });
     // Moved to a monitor with another DPI: the next frame re-applies the theme.
     m_window.setContentScaleCallback([](float scale) {
         setContentScale(scale);
@@ -277,7 +338,9 @@ int Engine::run() {
     if (applyPendingTheme()) watchThemeFonts();
     syncTitleBar();
     m_window.show();
-    takeSnapshot();
+    // Embedded files and .pak archives never change: with nothing else mounted, there is nothing to poll for.
+    m_watching = m_config.hotReload && m_config.resources.mayChange();
+    if (m_watching) takeSnapshot();
     m_lastCheck = std::chrono::steady_clock::now();
 
     // On-demand rendering: sleep in waitEvents() until input arrives or the next
@@ -303,22 +366,33 @@ int Engine::run() {
         const bool input = m_window.waitEvents(wait);
         setLoopAwake(true);
         if (input) requestFramesFor(settleSeconds);
-        runPosted(); // may notify() and so request a frame
+        runPosted();        // may notify() and so request a frame
         runDueMainTimers(); // likewise (a delay() settling)
         if (secondsUntilFrame() <= 0.0) {
             renderFrame();
             if (m_config.exitAfterFrames > 0 && ++m_framesRendered >= m_config.exitAfterFrames) m_quit = true;
         }
     }
-    setPostWakeHandler({}); // before the window goes: a worker may be inside the handler until this returns
-    clearMainTimers();      // still waiting: dropped, like the posts (a capture may post)
-    clearPosted();          // still queued: dropped (they may refer to the Lua state closed below)
+}
+
+void Engine::shutdown() {
+    setPostWakeHandler({}); // before the window goes: waits for a worker inside the handler
+    // Still waiting: dropped, like the posts (a capture may post). Before the state closes: a dropped delay cancels
+    // itself, which may resume a coroutine in it.
+    clearMainTimers();
+    clearPosted(); // still queued: dropped (they may refer to the Lua state closed below)
     setFrameWakeHandler({});
-    clearFrameRequests();
     setMinFrameInterval(0.0);
     log::info("shutting down");
     closeState(m_state);
     m_state = nullptr;
+    // What the dropped timers resumed (and the state's finalizers) may have added timers, posts and frame requests:
+    // dropped too, or the next run() (tests run several) would start with them.
+    clearMainTimers();
+    clearPosted();
+    clearFrameRequests();
+    m_window.setRefreshCallback({});
+    m_window.setContentScaleCallback({});
     m_window.destroy();
     clearFontLibrary();
     // The background pool: tokens stopped, queued tasks dropped, workers joined (or detached after a second). After
@@ -326,12 +400,10 @@ int Engine::run() {
     // were already stopped by their deaths. What they posted meanwhile is dropped (their objects are dead or unused).
     shutdownBackground();
     clearPosted();
-    // A smoke run (exitAfterFrames) fails when the script reported an error.
-    if (m_config.exitAfterFrames > 0 && !luaui::errors().empty()) {
-        log::error("exiting after {} frames with script errors", m_framesRendered);
-        return 1;
-    }
-    return 0;
+    clearMainTimers();
+    // A scan still in flight (or dropped by the shutdown) is forgotten: a new inbox for the next run().
+    m_scanning = false;
+    m_scanInbox = std::make_shared<ScanInbox>();
 }
 
 // ------------------------------------------------------------ frame
@@ -429,7 +501,8 @@ void Engine::handleZoomShortcuts() {
 }
 
 double Engine::secondsUntilFileCheck() const {
-    if (!m_config.hotReload) return std::numeric_limits<double>::infinity();
+    // A scan in flight posts when it is done, which wakes the loop.
+    if (!m_watching || m_scanning) return std::numeric_limits<double>::infinity();
     const std::chrono::duration<double> since = std::chrono::steady_clock::now() - m_lastCheck;
     return std::max(0.0, fileCheckSeconds - since.count());
 }
@@ -493,34 +566,54 @@ void Engine::drawErrors() {
 // ------------------------------------------------------------ loading
 
 void Engine::checkForChanges() {
-    if (!m_config.hotReload) return;
-    auto now = std::chrono::steady_clock::now();
-    if (now - m_lastCheck < std::chrono::duration<double>(fileCheckSeconds)) return;
-    m_lastCheck = now;
-    // A changed image is decoded again at its next use; no reload needed.
-    if (m_images.refresh() > 0) requestFramesFor(settleSeconds);
-    const FileSnapshot before = std::move(m_snapshot);
-    const ResourceTime beforeTakenAt = m_snapshotTime;
-    takeSnapshot();
-    if (resourcesChanged(before, m_snapshot, *m_loaded, beforeTakenAt)) m_reload = true;
+    if (!m_watching) return;
+    if (m_scanning) {
+        std::optional<ScanInbox::Result> result;
+        {
+            std::scoped_lock lock{m_scanInbox->mutex};
+            result.swap(m_scanInbox->result);
+        }
+        if (!result) return; // still running
+        m_scanning = false;
+        m_lastCheck = std::chrono::steady_clock::now(); // the next scan 400 ms after this one ended
+        if (!result->ok) return;
+        // A changed image is decoded again at its next use; no reload needed.
+        if (m_images.refresh(result->images) > 0) requestFramesFor(settleSeconds);
+        if (resourcesChanged(m_snapshot, result->files, *m_loaded, m_snapshotTime)) m_reload = true;
+        m_snapshot = std::move(result->files);
+        m_snapshotTime = result->takenAt;
+        return;
+    }
+    if (std::chrono::steady_clock::now() - m_lastCheck < std::chrono::duration<double>(fileCheckSeconds)) return;
+    // Off the main thread: listing a directory mount walks its folders and checks every file against its selection,
+    // and timing every watched file is a stat each. The scan works on copies (the mounts are shared and safe from any
+    // thread) and leaves its result in the inbox; its post wakes the loop, whose next checkForChanges() takes it.
+    m_scanning = true;
+    runInBackground([inbox = m_scanInbox, res = m_config.resources, watched = *m_loaded,
+                     images = m_images.names()](std::stop_token stop) {
+        ScanInbox::Result result;
+        result.takenAt = ResourceTime::clock::now(); // before the scan: an edit during it counts as after
+        try {
+            if (!stop.stop_requested()) {
+                result.files = scanFiles(res, watched);
+                for (const auto& name : images)
+                    result.images.emplace(name, res.modified(name));
+                result.ok = true;
+            }
+        } catch (const std::exception& e) { // out of memory: no result this time, the next scan tries again
+            log::error("hot reload: scanning the files failed: {}", e.what());
+        }
+        {
+            std::scoped_lock lock{inbox->mutex};
+            inbox->result = std::move(result);
+        }
+        imlui::post([] {}); // wakes the loop (the free function: Engine::post would need `this`)
+    });
 }
 
 void Engine::takeSnapshot() {
     m_snapshotTime = ResourceTime::clock::now(); // before the scan: an edit during it counts as after
-    m_snapshot = scanFiles();
-}
-
-FileSnapshot Engine::scanFiles() const {
-    const Resources& res = m_config.resources;
-    FileSnapshot out;
-    for (const auto& prefix : res.prefixes())
-        for (auto& name : res.listRecursive(prefix + ":/"))
-            if (name.ends_with(".lua")) out.emplace(std::move(name), std::nullopt);
-    for (const auto& name : *m_loaded)
-        out.emplace(name, std::nullopt);
-    for (auto& [name, time] : out)
-        time = res.modified(name);
-    return out;
+    m_snapshot = scanFiles(m_config.resources, *m_loaded);
 }
 
 void Engine::reloadNow() {

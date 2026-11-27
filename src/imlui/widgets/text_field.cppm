@@ -26,6 +26,7 @@ struct TextFieldOptions {
 struct TextFieldResult {
     bool changed = false;
     bool accepted = false;         ///< Enter pressed (single line)
+    bool committed = false;        ///< the input lost focus (Enter, Tab, a click elsewhere) after an edit
     bool trailingClicked = false;  ///< trailing icon clicked
 };
 
@@ -137,11 +138,15 @@ TextFieldResult textField(const char* id, std::string& value, const TextFieldOpt
     } else {
         flags |= ImGuiInputTextFlags_EnterReturnsTrue;
         ImGui::SetNextItemWidth(f.inputW);
-        std::string hint{(!o.placeholder.empty() && (!hasLabel || focused)) ? o.placeholder : std::string_view{}};
+        // ImGui takes a C string; one buffer, reused (the UI runs on one thread), saves an allocation per field and
+        // frame.
+        static std::string hint;
+        hint.assign((!o.placeholder.empty() && (!hasLabel || focused)) ? o.placeholder : std::string_view{});
         res.accepted = ImGui::InputTextWithHint("##input", hint.c_str(), value.data(), value.capacity() + 1, flags,
                                                 field::inputResizeCallback, &value);
         res.changed = ImGui::IsItemEdited();
     }
+    res.committed = ImGui::IsItemDeactivatedAfterEdit();
     const bool active = ImGui::IsItemActive();
     const bool dis = itemDisabled();
     bool hovered = ImGui::IsItemHovered();

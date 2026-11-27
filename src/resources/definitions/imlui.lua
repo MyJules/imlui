@@ -3,7 +3,8 @@
 -- script, as free names and as `ui.*`. Not loaded at run time: an app writes it, with types.lua (the element types and
 -- singletons it registered from C++), into a folder by running with `--lua-defs <dir>`, and points the editor's
 -- `workspace.library` at that folder (docs/extending.md, "Editor support: Lua definitions").
--- Hand-written: keep it in step with the prelude (lua_definitions_test.cpp checks that every `ui` member is here).
+-- Hand-written: keep it in step with the prelude (lua_definitions_test.cpp checks that every `ui` member is here, or,
+-- for `connect` and the element constructors, which depend on the registered types, in the generated types.lua).
 
 ---The `ui` table: everything below, plus the element constructors (types.lua). Its members are also free names.
 ---@class ui
@@ -582,6 +583,7 @@ function culling() end
 ---@field injectMouse fun(x: number, y: number, down?: boolean, wheel?: number)
 ---@field injectKey fun(key: string, down: boolean, ctrl?: boolean, shift?: boolean, alt?: boolean)
 ---@field reportError fun(message: string)
+---@field setScopeHooks fun(scopes: table, callIn: fun(scope: table|false, fn: function, ...: any): ...) Internal: called once by the prelude.
 native = {}
 
 -------------------------------------------------------------------------------

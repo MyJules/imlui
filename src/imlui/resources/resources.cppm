@@ -40,6 +40,9 @@ public:
     [[nodiscard]] std::optional<ResourceTime> modified(std::string_view name) const;
     /// Where `name` comes from (`directory 'E:/app' main.lua`), for logs; "" when no mount has it.
     [[nodiscard]] std::string origin(std::string_view name) const;
+    /// True when a mount's files may change while the program runs (Mount::mayChange: a directory): only then is
+    /// there anything for a hot reload to look for.
+    [[nodiscard]] bool mayChange() const;
 
     /// The mounted prefixes (`app`, `imlui`), in the order they were first mounted.
     [[nodiscard]] std::vector<std::string> prefixes() const;
@@ -190,6 +193,10 @@ std::string Resources::origin(std::string_view name) const {
     for (const Hit& hit : covering(*parsed))
         if (hit.mount->exists(hit.path)) return hit.mount->origin() + (hit.path.empty() ? "" : " " + hit.path);
     return {};
+}
+
+bool Resources::mayChange() const {
+    return std::ranges::any_of(m_mounts, [](const Entry& e) { return e.mount->mayChange(); });
 }
 
 std::vector<std::string> Resources::prefixes() const {

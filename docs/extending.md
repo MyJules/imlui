@@ -541,7 +541,10 @@ other state that changes between frames.
 is synced when something needs it:
 
 - before a **method called from Lua** runs on it (`cpu:reset()`), so an element that never rendered still sees
-  its Lua values on its first method call;
+  its Lua values on its first method call. A method that reads none of the element's properties can skip that
+  sync: declare it `.method("append", &Plot::append).unsynced()` (it still syncs an element never synced yet, so
+  `componentComplete()` comes first). A handler that calls such a method thousands of times in a loop then doesn't
+  sync the element each time;
 - when a **parent or another element** asks for it: `Frame::Child::as<T>()` and `TypeRegistry::sync(node)`.
 
 While a frame renders, an element is synced **once**: a layout that asks a child whether it fills, for its intrinsic
@@ -836,7 +839,17 @@ struct imlui::LuaConvert<Vec2> {
 
 `push` pushes exactly one value. `check` must not raise errors or leave anything on the stack, and `get` is only
 called after `check` returned true. Leave out `check`/`get` for a push-only type. Give the type an `operator==`
-so the sync can skip unchanged values.
+so the sync can skip unchanged values. A `check` that recurses into nested tables should count the levels
+(`const imlui::LuaNesting nesting; if (!nesting.ok()) return false;`, as the built-in ones do: past
+`LuaNesting::maxDepth`, 200 levels, it fails), or a table that contains
+itself overflows the C++ stack.
+
+Optionally, compare in place with `static bool equals(lua::State*, int idx, const T& v)`: true only when `check`
+would pass and `get` return a value equal to `v` (false when unsure), read without building the value. The property
+sync asks it first, so a property whose Lua value didn't change (a table re-read every frame) isn't converted, and
+allocated, again only to compare equal. Strings, numbers, `bool`, `std::optional`, `std::vector`, `std::variant` and
+`LuaFunction` have one; `imlui::luaEquals<T>(s, idx, v)` uses it, or `check`/`get` and `==` for a type without one
+(a struct's fields, inside a vector of structs).
 
 Optionally, say *why* a value doesn't convert with `static std::string mismatch(lua::State*, int idx)`. It is only
 called after `check` returned false, and like `check` must not raise or leave anything on the stack. Return
@@ -1113,7 +1126,9 @@ a model owned by an element dies with it, and a value whose model died reads as 
 **Element instances** belong to Lua:
 
 - The DSL constructor (`Gauge { ... }`) creates the C++ instance **immediately**, through the default
-  constructor, and stores it in the element table as `__native`, a full userdata with a `__gc` metamethod. The
+  constructor, and stores it in the element table as `__native`, a full userdata with a `__gc` metamethod (hidden
+  from `getmetatable`). The userdata lives exactly as long as the table: a script that drops or overwrites
+  `__native` gets the same instance back at the next query, never a second one. The
   element table gets the metatable all elements of the type share (`require("imlui.types").meta(name)`), whose
   `__index` finds the type's methods, which is how `cpu:reset()` works, and the read-only
   [`parent`](lua-api.md#selfparent). Property reads from C++ (`Node`) skip a shared metatable: they read the table
@@ -2035,6 +2050,13 @@ theme { design = "square" }
 - **Use the drawing helpers.** `md::fillRoundRect`, `strokeRoundRect`, `drawTextV`, `drawIcon`, `md::scheme()`, the
   disabled colors and the rest of `imlui.widgets.common` decide no look, so they're shared by every skin (and cull
   off-screen drawing for you). Colors come from the scheme's roles, so `theme { colors = ... }` works under any skin.
+- **Reuse the behaviour, draw your own look.** Where a control has rules beyond its drawing, the `md::` module
+  exports them for other skins (the Fluent skin draws with them): `md::spinBoxApply`/`spinStepSize` (a spin box's
+  value), `md::sliderRange`/`sliderDragTo`/`sliderFraction`/`sliderStops`/`sliderStopAt` (a slider's drag, snap and
+  ticks), `md::colorPickerBody` (a color field's popup content, with your hex box), `md::beginModal`/
+  `closeModalOnRequest` (a dialog's open and close rules), `md::beginModalDrawerWindow`/`beginModalDrawerSheet` (a
+  modal drawer's slide, window and dismissal), and `md::drawChart` with a `ChartPalette` (a chart in your colors).
+  Your controls then behave like the built-in ones, edge cases included.
 - **Your own elements** can draw controls with `imlui::skin().button(...)` instead of `md::button(...)`, so they
   follow the design too.
 

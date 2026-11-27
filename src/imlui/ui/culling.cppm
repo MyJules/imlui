@@ -64,6 +64,8 @@ void noteNonVisual();
 void pin(ImGuiID id);
 /// Whether pin(id) was called on this frame or the last.
 [[nodiscard]] bool pinned(ImGuiID id);
+/// How many pins are remembered (tests: old ones are dropped).
+[[nodiscard]] std::size_t pinCount();
 
 } // namespace imlui::cull
 
@@ -76,9 +78,14 @@ namespace {
 bool on = true;
 std::uint64_t nonVisualCount = 0;
 
+/// The pins are swept (the old ones dropped) when they have grown to twice as many as the last sweep left (at least
+/// this many): a sweep walks them all, so it is amortized over as many new pins, not run on every pin.
+constexpr std::size_t minPinSweep = 256;
+
 struct Pins {
     ImGuiContext* context = nullptr;
     std::unordered_map<ImGuiID, int> frames; ///< child ID -> last frame it was pinned
+    std::size_t sweepAt = minPinSweep;       ///< frames.size() that makes pin() sweep
 };
 Pins pins; // main thread only, like all ImGui code
 
@@ -87,6 +94,7 @@ std::unordered_map<ImGuiID, int>& pinFrames() {
     if (pins.context != context) {
         pins.frames.clear();
         pins.context = context;
+        pins.sweepAt = minPinSweep;
     }
     return pins.frames;
 }
@@ -166,7 +174,10 @@ void noteNonVisual() { ++nonVisualCount; }
 void pin(ImGuiID id) {
     auto& frames = pinFrames();
     const int frame = ImGui::GetFrameCount();
-    if (frames.size() > 256) std::erase_if(frames, [&](const auto& e) { return frame - e.second > 1; });
+    if (frames.size() >= pins.sweepAt) {
+        std::erase_if(frames, [&](const auto& e) { return frame - e.second > 1; });
+        pins.sweepAt = std::max(minPinSweep, frames.size() * 2);
+    }
     frames[id] = frame;
 }
 
@@ -176,5 +187,7 @@ bool pinned(ImGuiID id) {
     const auto it = frames.find(id);
     return it != frames.end() && ImGui::GetFrameCount() - it->second <= 1;
 }
+
+std::size_t pinCount() { return pinFrames().size(); }
 
 } // namespace imlui::cull

@@ -443,6 +443,7 @@ using ImGui::CalcTextSize;
 using ImGui::PushID;
 using ImGui::PopID;
 using ImGui::GetID;
+using ImGui::PushOverrideID; // internal: an ID scope from an ID computed already (the Renderer's per-element scope)
 using ImGui::GetStateStorage;
 // widgets
 using ImGui::TextUnformatted;

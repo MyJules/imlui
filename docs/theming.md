@@ -215,7 +215,8 @@ the scheme's `error` role.
 ## Scheme generation
 
 `generateScheme(seed, dark)` (`imlui.theme.scheme`) works in **OKLCH**. The seed is converted to OKLCH, and six
-tonal palettes, each a hue and a chroma, are derived from it:
+tonal palettes, each a hue and a chroma, are derived from it (the last few schemes generated are cached, so making
+`Theme`s, which generate their default scheme, costs little):
 
 | Palette | Hue | Chroma |
 |---|---|---|
@@ -367,7 +368,8 @@ theme {
   parser); see `imlui.theme.font_check` in [Architecture](architecture.md#resources).
 - **Unknown names.** An element whose `font` names no declared font draws in its style's face; the name is logged
   once.
-- **Reuse and hot reload.** Each face (with its fallbacks) becomes one atlas font, reused while its file is
+- **Reuse and hot reload.** Each fallback file is read once per set applied, for all its faces. Each face (with its
+  fallbacks) becomes one atlas font, reused while its file is
   unchanged: re-applying a theme, `themeState` changes and script reloads don't add fonts. The fonts of the set in
   use and of the one before it are kept (switching back and forth between two themes reuses both); a font neither
   needs leaves the atlas, with its bytes, when another theme is applied, so going through many themes doesn't grow

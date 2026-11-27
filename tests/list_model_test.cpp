@@ -319,7 +319,7 @@ TEST(ListModelRows, ACapErasesTheOldestRowsInTheSameEdit) {
     rev = m.revision();
     m.appendRows({7, 8});
     EXPECT_EQ(m.rows(), (std::vector<int>{4, 5, 6, 7, 8}));
-    EXPECT_EQ(m.revision(), rev + 2); // one rowsRemoved for both
+    EXPECT_EQ(m.revision(), rev + 2);           // one rowsRemoved for both
     m.appendRows({10, 11, 12, 13, 14, 15, 16}); // alone over the cap: its last 5
     EXPECT_EQ(m.rows(), (std::vector<int>{12, 13, 14, 15, 16}));
 
@@ -667,7 +667,7 @@ TEST_F(ListModelTest, ACappedAppenderKeepsTheDelegatesOfTheRowsThatStay) {
     m_h->renderFrame("keyed");
     m_h->renderFrame("plain");
     check("#backend.logs == 20 and backend.logs[1].id == 4 and backend.logs[20].id == 23");
-    check("built == 23 and made[4] == kept"); // three new delegates, the 17 that stay kept
+    check("built == 23 and made[4] == kept");           // three new delegates, the 17 that stay kept
     check("#backend.plain == 20 and plainBuilt == 40"); // by index: every index's row changed
     EXPECT_TRUE(luaui::errors().empty());
 }
@@ -778,6 +778,37 @@ TEST(ListModelThreads, AnAppenderWithOnAppliedHonorsTheCapAndReportsEachApply) {
     EXPECT_EQ(m.size(), 10u);
 }
 
+// Rows waiting for the apply are trimmed to the cap as they come (the apply would erase them anyway), with the cap
+// set after the appender was made; the apply still reports every row that arrived and went.
+TEST(ListModelThreads, AnAppenderTrimsWaitingRowsToTheCap) {
+    clearPosted();
+    VectorModel<int> m;
+    std::vector<std::pair<std::size_t, std::size_t>> applied;
+    const auto out =
+        m.appender([&](std::size_t appended, std::size_t erased) { applied.emplace_back(appended, erased); });
+    m.setMaxRows(10);
+    m.appendRows({-2, -1});
+    std::thread{[out] {
+        for (int i = 0; i < 1000; ++i)
+            out.append(i);
+        out.appendRows(std::vector<int>(50, 7));
+    }}.join();
+    EXPECT_EQ(runPosted(), 1u);
+    ASSERT_EQ(applied.size(), 1u);
+    EXPECT_EQ(applied[0], (std::pair<std::size_t, std::size_t>{1050, 1042})); // 1050 rows came, 2 old + 1040 new went
+    EXPECT_EQ(m.rows(), std::vector<int>(10, 7));
+
+    // Without a cap nothing is trimmed.
+    m.setMaxRows(0);
+    std::thread{[out] {
+        for (int i = 0; i < 100; ++i)
+            out.append(i);
+    }}.join();
+    EXPECT_EQ(runPosted(), 1u);
+    EXPECT_EQ(applied.back(), (std::pair<std::size_t, std::size_t>{100, 0}));
+    EXPECT_EQ(m.size(), 110u);
+}
+
 // A worker appends as fast as it can while the main loop applies: after every apply (and in its callback) the model
 // is within the cap, nothing is lost, and the counts add up.
 TEST(ListModelThreads, ACappedTailNeverExceedsItsCap) {
@@ -873,7 +904,6 @@ TEST_F(ListModelTest, AFillResolvesWithAReportAndLeavesTheRowsInCxx) {
     EXPECT_TRUE(luaui::errors().empty());
     shutdownBackground(std::chrono::seconds{10});
 }
-
 
 // ------------------------------------------------------------ Lua definitions
 

@@ -75,9 +75,9 @@ These are handled by the renderer (`Renderer::render`) for every element.
 |---|---|---|---|
 | `id` | string | — | Makes the element reachable by name: `nameField.text` at app level, `ids.nameField` inside a [component or delegate](lua-api.md#element-ids), which has its own scope. Ids are weak (they don't keep the element alive); a duplicate in a scope is reported, and so is an app-level id that collides with a `ui` member or a Lua global, since the name would resolve to that instead. Every constructor registers it (`ui.registerId`), the Lua-side `Repeater`, `ListView`, `If`, `Loader` and `Responsive` included: `ListView { id = "list" }` is `list`. |
 | `parent` | element | — | *Read-only, Lua side.* The element that lays this one out (inline containers are skipped), `nil` for the root: `self.parent` in a binding or handler. A weak reference, kept in a side table; assigning it has no effect (the next sync drops the field; debug builds report it). See [`self.parent`](lua-api.md#selfparent). |
-| `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) |
+| `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) A binding runs once a frame, however many passes a layout makes over its children (so do `width`, `fillWidth` and `height` bindings); a handler that ran in between makes the next pass run it again. |
 | `enabled` | bool | `true` | `false` disables the element and everything inside it, with the Material disabled colors. |
-| `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. |
+| `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. Read only while the element is hovered: a binding that formats the text costs nothing otherwise. |
 
 ### Sizes
 
@@ -118,6 +118,12 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 
 Non-visual children are rendered in place and don't count for the spacing. Children that hold the item being edited
 or dragged, the keyboard focus, an open popup or a non-visual element (a `Dialog`, a `Timer`) are never culled.
+
+**Long lists belong in a `ListView`.** Culling skips the rendering of a child out of view, not the visit: a stack
+still reads each child's `visible` and lays out its cached size, every frame, so a `Column` (or a `Repeater` in
+one) of 10,000 children costs 10,000 cheap steps a frame even when 20 are in view, and builds every delegate up
+front. A [`ListView`](#listview) builds and visits only the items in and near view, so a frame costs the same for any
+length.
 
 How `align` knows a child's width before drawing it: every built-in element whose size follows from its props, the
 font and the theme knows it up front (its *intrinsic size*: `Text`, `Icon`, `Button`, `Checkbox`, `Chip`,
@@ -380,7 +386,8 @@ array children are used, like a `ScrollView`. It takes every `ScrollView` prop. 
 
 Item heights. With `itemHeight`, finding the items in view costs the same for any length. Without it, the items
 are measured as they render, and the content height (the scroll range) is the measured heights plus the average for
-the items not rendered yet, so it settles as you scroll. When items above the view turn out taller or shorter than
+the items not rendered yet, so it settles as you scroll. Measured heights are pixels: after a zoom or a move to a
+monitor with another scale they are scaled with it until the items render again. When items above the view turn out taller or shorter than
 assumed, the scroll moves by the same amount on the next frame, so what is in view stays where it is. A delegate
 that returns `nil`, or a hidden or non-visual element, takes no space and no `spacing`; an inline delegate (an `If`,
 a `Repeater`) is one item made of its children, stacked.
@@ -391,7 +398,9 @@ What virtualization changes:
   its delegate function does happen when it first scrolls near the view, not when the model gets the item.
 - **Built delegates are cached**, so one that scrolls out and back is the same element with its state. Without a
   `key`, the delegate of an index is dropped when the item at that index changes or the model gets shorter; with a
-  `key`, when its key leaves a model of at most 256 items. Past that, the cache keeps at most
+  `key`, when its key leaves a model of at most 256 items (a Lua list's keys are counted again only when one of its
+  items is another value than at the last count, so change an item's key by replacing the item, not by editing the
+  table in place). Past that, the cache keeps at most
   max(256, 4 x the items shown) delegates and drops the ones shown longest ago: keep state that must outlive
   scrolling far away in the model, not in the delegate.
 - **Keyboard and gamepad navigation** reach the items that are built: while a nav move picks its target, the
@@ -401,6 +410,11 @@ What virtualization changes:
 - **An item that holds the active item** (a `TextField` being edited, a `Slider` being dragged), the nav focus, an
   open popup or a non-visual element (a `Dialog`, a `Timer`) keeps rendering, at its place, after it scrolled out of
   range, like a culled child would ([culling](#stacking-containers)'s rules); at most 16 such items per list.
+- **A model shows at most 4,194,304 (2^22) items.** A longer one (a numeric `model = math.huge`, a count gone wrong)
+  shows its first 2^22 items, and the excess is reported once: the measured heights of more would take gigabytes
+  (20 bytes an item with measured heights).
+- **A model that shrinks while the list renders** (a delegate's handler that calls `model:clear()`) ends the render
+  where `__range` returned fewer delegates than asked for; the next frame, requested, shows what the model holds now.
 - `cull` and `ui.setCulling` don't change which delegates a `ListView` builds; they apply to its own children when it
   has no `delegate`, and inside each delegate as in any stack.
 - With a `key`, items that share a key get one delegate each in the order they're shown, which can pair them up
@@ -979,9 +993,9 @@ A numeric field (56dp) with decrement and increment icon buttons.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number | `0` | **two-way.** Clamped to the range. |
+| `value` | number | `0` | **two-way.** Clamped to the range when the user changes it. Typed text that isn't a finite number (`nan`, `inf`) is dropped: the value stays. `onValueModified` fires only when the value actually changed. |
 | `from`, `to` | number | `-1e9`, `1e9` | Range. With `from > to` the range is empty and the buttons don't clamp. |
-| `stepSize` | number | `1` | Button step. |
+| `stepSize` | number | `1` | Button step. A negative step is taken as its magnitude (the up button still goes up); `0`, NaN or an infinity as `1`. |
 | `decimals` | integer | `0` | Shown decimals, clamped to 0..15. |
 | `label` | string | `""` | Floating label. |
 | `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
@@ -1048,6 +1062,9 @@ A swatch with the hex value. Clicking it opens a picker popup with a hue bar and
 | `color` | color | — | **two-way.** Any color spec; written back as `"#RRGGBB"` (`"#RRGGBBAA"` with alpha). Unset shows white. |
 | `label` | string | `""` | |
 | `alpha` | bool | `false` | Adds an alpha bar. Without it the color stays opaque, also when the hex field gets `#RGBA` or `#RRGGBBAA`. |
+
+The hex field applies a whole `#RRGGBB` or `#RRGGBBAA` as you type, and the short `#RGB` / `#RGBA` only when the edit
+ends (Enter, or the field loses focus), so typing `#123456` doesn't pass through `#112233` and `#11223344`.
 | `width` | size | `0` (natural) | *Raw.* |
 
 **Signals:** `onColorChanged(self, hex)`.
@@ -1092,7 +1109,7 @@ A line or bar chart with a grid, a gradient area and a hover readout.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `values` | list of numbers | `{}` | Data. Non-finite values (NaN, ±inf) are gaps: no point, bar or readout, the line breaks around them, and the automatic range ignores them. |
+| `values` | list of numbers | `{}` | Data. Non-finite values (NaN, ±inf) are gaps: no point, bar or readout, the line breaks around them, and the automatic range ignores them. A line with more values than the plot has pixel columns is drawn through each column's lowest and highest value, so a long series costs what its width does. |
 | `kind` | `"lines"` \| `"bars"` | `"lines"` | `"histogram"` is an alias of `"bars"`. An unknown name is reported. |
 | `fill` | bool | `true` | Gradient area under lines. |
 | `title` | string | — | Chart title. Unset: `label`. |

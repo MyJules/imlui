@@ -49,6 +49,27 @@ module :private;
 
 namespace imlui {
 
+namespace {
+
+/// Its address is the registry key of the painter table `p` that every Canvas hands onPaint, filled anew for each
+/// paint: no table a frame per canvas. Not const: identical const objects may be folded into one address.
+char painterKey = 0;
+
+/// Pushes the painter table (made at the first paint), with the painter metatable (registry "imlui.painter").
+void pushPainter(lua::State* state) {
+    if (lua::rawgetp(state, lua::registryIndex, &painterKey) != lua::Type::Table) {
+        lua::pop(state);
+        lua::createtable(state, 0, 8);
+        lua::pushvalue(state, -1);
+        lua::rawsetp(state, lua::registryIndex, &painterKey);
+    }
+    // Set on every paint: a script may have replaced it on the shared table.
+    lua::getfield(state, lua::registryIndex, "imlui.painter");
+    lua::setmetatable(state, -2);
+}
+
+} // namespace
+
 /// The painter `p` of `onPaint`, only to type the signal in the Lua definitions (it is built in render()).
 struct CanvasPainter {};
 
@@ -129,7 +150,7 @@ void Canvas::render(Frame& frame) {
         return;
     }
     lua::pushvalue(state, n.index());
-    lua::createtable(state, 0, 8);
+    pushPainter(state);
     lua::pushnumber(state, static_cast<double>(w / s));
     lua::setfield(state, -2, "width");
     lua::pushnumber(state, static_cast<double>(h / s));
@@ -144,8 +165,6 @@ void Canvas::render(Frame& frame) {
     lua::setfield(state, -2, "pressed");
     lua::pushnumber(state, clockTime());
     lua::setfield(state, -2, "time");
-    lua::getfield(state, lua::registryIndex, "imlui.painter");
-    lua::setmetatable(state, -2);
     ImDrawList* dl = frame.drawList();
     dl->PushClipRect(p, {p.x + w, p.y + h}, true);
     luaui::beginPaint(dl, p);
