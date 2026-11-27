@@ -700,7 +700,7 @@ results, and signal arguments. Built in:
 | `std::pair<A, B>`, `std::tuple<Ts...>` | sequence `{a, b, ...}` | Element *i* converts as the *i*-th type. A longer sequence, or any other key, fails; a missing trailing element is `nil` (a `std::optional` element takes it). |
 | `std::variant<Ts...>` | any alternative | Pushes the active alternative. Reads the **first** alternative whose check passes, so list the specific ones first: `bool` takes every value, `std::string` takes numbers, an integer takes numeric strings. A vector and a map tell sequences from string-keyed tables in either order; `{}` is both an empty sequence and an empty map, so the one listed first takes it. |
 | `std::monostate` | `nil` | The empty alternative of a variant. |
-| an enum with [`EnumNames<E>`](#enums-and-structs) | one of its names | Pushes the name. Reads the names only (case-sensitive): an integer or an unknown name fails. A value without a name pushes its underlying integer, which doesn't read back. |
+| an enum with [`EnumNames<E>`](#enums-and-structs) | one of its names | Pushes the name (the first one listed for the value). Reads the names only (case-sensitive): an integer or an unknown name fails. A value without a name pushes its underlying integer, which doesn't read back. |
 | a struct with [`LuaFields<T>`](#enums-and-structs) | table | One key per field. A missing field keeps its default (see below). |
 | [`imlui::LuaFunction`](#lua-functions-luafunction) | function | A callback the script hands to C++. |
 
@@ -759,9 +759,14 @@ type.property("series", &Plot::series, &Plot::setSeries); // const Series& serie
 Plot { series = { label = "cpu", points = { { x = 0, y = 1 }, { x = 1, y = 3 } }, quality = "low" } }
 ```
 
-- `EnumNames<E>::values` lists `{value, "name"}` pairs. An optional `name` replaces the default error name
-  (`'low'|'high'`) and makes the enum an `---@alias` in the [Lua definitions](#editor-support-lua-definitions);
-  an optional `doc` is its hover text there.
+- `EnumNames<E>::values` lists `{value, "name"}` pairs. A value may have several names: each reads as it, and it
+  pushes the first, so list the canonical name first and an alias (an older spelling) after it. An optional `name`
+  makes the enum an `---@alias` in the [Lua definitions](#editor-support-lua-definitions) and leads its errors
+  (`Quality ('low'|'high') expected, got string "medium"`; without one, `'low'|'high' expected, ...`); an optional
+  `doc` is its hover text there.
+- The built-in elements use the same traits: their enums' names are in `imlui.ui.enum_names` (`md::ButtonVariant`
+  is `ButtonVariant`, ...), so a property of yours can take one of them too (`type.property("variant", ...)` with a
+  `md::ButtonVariant` getter and setter).
 - `LuaFields<T>::fields` is a tuple of `imlui::field("key", &T::member)` (an `imlui::LuaField<T, M>`). An optional
   `name` replaces the default error name (`{x, y}`) and makes the struct a `---@class` in the Lua definitions. `T`
   must be default-constructible.

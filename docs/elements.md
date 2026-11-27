@@ -58,6 +58,12 @@ Each element has a short description, a props table, then **Signals** and **Two-
 - Signal handlers get `self` first: `onToggled = function(self, checked) ... end`. A handler runs after the prop
   it reports on has been written back.
 - Indices (`currentIndex`, `currentRow`, ...) are 1-based.
+- **Names from a fixed set** (a `variant`, an `align`, `justify`, a text `style`, `fillMode`, ...) are strings,
+  checked against the names the Notes list: a name that isn't one of them is reported with the names it takes
+  (`Button.variant: ButtonVariant ('filled'|'tonal'|...) expected, got string "tonla"`) and the element keeps its
+  previous value. Each set is an `---@alias` in the [Lua definitions](extending.md#editor-support-lua-definitions)
+  (`ButtonVariant`, `Align`, ...), so the editor completes the names. Some sets accept an older spelling too
+  (`fillMode = "preserveAspectFit"`); the Notes say which.
 - **Non-visual** elements take no layout space and aren't a layout item: put them anywhere among the children,
   for example a `Dialog` or a `Timer` inside a `Row`.
 
