@@ -1,7 +1,7 @@
 # Package tests (label `package`): the consumer app in consumer/ configured, built and run (run.cmake) with imlui
 # added each way an app can add it (docs/getting-started.md, "Adding imlui to your project"):
 #
-#   package.subdirectory       add_subdirectory(<imlui source>), with the app's own glfw and spdlog (OWN_DEPS)
+#   package.subdirectory       add_subdirectory(<imlui source>), with the app's own SDL3 and spdlog (OWN_DEPS)
 #   package.fetchcontent       FetchContent_Declare(imlui SOURCE_DIR <imlui source>) + FetchContent_MakeAvailable
 #   package.install            cmake --install of this build into package/prefix (the fixture of the two below)
 #   package.find_package       find_package(imlui 0.1 CONFIG REQUIRED) on that prefix

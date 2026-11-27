@@ -1894,7 +1894,7 @@ imlui::post([&backend, result] { backend.setResult(result); }); // thread-safe; 
 
 `engine.post(fn)` is the same call for code that has the `Engine`. The function runs at the next loop iteration,
 outside any frame, in the order things were posted. It may call `notify` or `emit`, which request a frame. The
-loop is woken through `glfwPostEmptyEvent`, so this works while the app is idle and sleeping. A posted function
+loop is woken through an SDL user event (`platform::Window::postEmptyEvent`), so this works while the app is idle and sleeping. A posted function
 that throws is reported like a script error (the error overlay and the log, `posted function: <what>`), and the
 functions after it still run. `notify` and `emit` run protected, so a Lua error they meet (a script's `__newindex` on
 the element table, out of memory) is reported the same way instead of aborting the process. Functions posted before

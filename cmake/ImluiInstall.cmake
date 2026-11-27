@@ -6,12 +6,12 @@
 #   <prefix>/
 #     bin/                       imlui_rc, imlui_pack                  (imported executables imlui::imlui_rc, ...)
 #     lib/                       imlui, imlui_core, imlui_lua, imlui_glob (imlui::imlui, imlui::imlui_core, ...)
-#     lib/imlui/                 the vendored static libraries         (imlui::ext_lua, ext_imgui, ext_glfw, ...)
+#     lib/imlui/                 the vendored static libraries         (imlui::ext_lua, ext_imgui, ext_sdl3, ...)
 #     lib/cmake/imlui/           imluiConfig.cmake, imluiConfigVersion.cmake, imluiTargets*.cmake, the helpers
 #                                (ImluiResources.cmake, ImluiLuaDefinitions.cmake, ImluiWarnings.cmake, ImluiStd.cmake:
 #                                the config builds the module `std` in the app) and cxx-modules/ (module metadata)
 #     include/imlui/modules/     the module interface units (src/ as it is laid out, embedded/imlui.cppm + .bin)
-#     include/imlui/ext/<name>/  the vendored headers the modules include: lua, imgui, glfw, spdlog, stb, zstd
+#     include/imlui/ext/<name>/  the vendored headers the modules include: lua, imgui, SDL, spdlog, stb, zstd
 #     share/imlui/licenses/      the vendored code's and the fonts' licenses
 #
 # C++20 modules aren't installed as BMIs (they depend on the compiler and its flags): the interface units are, and an
@@ -32,7 +32,8 @@ set(ext ${PROJECT_SOURCE_DIR}/external)
 install(TARGETS imlui_rc imlui_pack EXPORT imluiTargets RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # ------------------------------------------------------------------ vendored libraries and their headers
-install(TARGETS imlui_ext_lua imlui_ext_imgui glfw imlui_ext_spdlog imlui_ext_stb_image imlui_ext_zstd
+install(TARGETS imlui_ext_lua imlui_ext_imgui SDL3-static SDL3_Headers imlui_ext_spdlog imlui_ext_stb_image
+                imlui_ext_zstd
         EXPORT imluiTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/imlui
 )
@@ -41,10 +42,13 @@ install(FILES ${ext}/lua/lua.h ${ext}/lua/lualib.h ${ext}/lua/lauxlib.h ${ext}/l
         DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/lua)
 install(FILES ${ext}/imgui/imgui.h ${ext}/imgui/imconfig.h ${ext}/imgui/imgui_internal.h
               ${ext}/imgui/imstb_rectpack.h ${ext}/imgui/imstb_textedit.h ${ext}/imgui/imstb_truetype.h
-              ${ext}/imgui/backends/imgui_impl_glfw.h ${ext}/imgui/backends/imgui_impl_opengl3.h
+              ${ext}/imgui/backends/imgui_impl_sdl3.h ${ext}/imgui/backends/imgui_impl_opengl3.h
               ${ext}/imlui_imconfig.h
         DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/imgui)
-install(DIRECTORY ${ext}/glfw/include/GLFW DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/glfw)
+# SDL's public headers, and the SDL_revision.h its build generated in place of the source tree's placeholder.
+install(DIRECTORY ${ext}/SDL/include/SDL3 DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/SDL)
+install(FILES $<TARGET_PROPERTY:SDL3-static,BINARY_DIR>/include-revision/SDL3/SDL_revision.h
+        DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/SDL/SDL3)
 install(DIRECTORY ${ext}/spdlog/include/spdlog DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/spdlog)
 install(FILES ${ext}/stb/stb_image.h DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/stb)
 install(FILES ${ext}/zstd/lib/zstd.h ${ext}/zstd/lib/zstd_errors.h DESTINATION ${IMLUI_INSTALL_EXT_INCLUDEDIR}/zstd)
@@ -52,7 +56,7 @@ install(FILES ${ext}/zstd/lib/zstd.h ${ext}/zstd/lib/zstd_errors.h DESTINATION $
 set(licenses ${CMAKE_INSTALL_DATADIR}/imlui/licenses)
 install(FILES ${ext}/lua/README.md DESTINATION ${licenses} RENAME lua.md)
 install(FILES ${ext}/imgui/LICENSE.txt DESTINATION ${licenses} RENAME imgui.txt)
-install(FILES ${ext}/glfw/LICENSE.md DESTINATION ${licenses} RENAME glfw.md)
+install(FILES ${ext}/SDL/LICENSE.txt DESTINATION ${licenses} RENAME SDL.txt)
 install(FILES ${ext}/spdlog/LICENSE DESTINATION ${licenses} RENAME spdlog.txt)
 install(FILES ${ext}/stb/LICENSE DESTINATION ${licenses} RENAME stb.txt)
 install(FILES ${ext}/zstd/LICENSE DESTINATION ${licenses} RENAME zstd.txt)

@@ -2,8 +2,9 @@
 //
 // Lua, the element tree, notify() and emit() are main-thread only. A worker thread posts a function with post(),
 // from anywhere, without an Engine&; the main thread runs it at its next loop iteration (runPosted()), outside any
-// frame. While an Engine runs, it installs a wake handler (glfwPostEmptyEvent) so a post wakes the sleeping loop: the
-// post that finds the queue empty does, outside the queue's lock; those after it until the queue is run ride along.
+// frame. While an Engine runs, it installs a wake handler (platform::Window::postEmptyEvent, an SDL user event) so a
+// post wakes the sleeping loop: the post that finds the queue empty does, outside the queue's lock; those after it
+// until the queue is run ride along.
 //
 // No loop running: functions are kept, in order, and run by the next runPosted() (an Engine's first loop
 // iteration). Engine::run() drops what is still queued when it returns (the functions are destroyed on the main
@@ -39,9 +40,9 @@ void clearPosted();
 [[nodiscard]] std::size_t postedCount();
 
 /// Called after a post() that found the queue empty, on the posting thread, without the queue's lock, so the main loop
-/// wakes up: must be thread-safe (the Engine installs glfwPostEmptyEvent while its loop runs) and must not call
-/// setPostWakeHandler. Empty to disable. Main thread; waits for posting threads still inside the previous handler, so
-/// once it returns that one is no longer called. Functions already queued when a handler is installed don't wake the
+/// wakes up: must be thread-safe (the Engine installs platform::Window::postEmptyEvent while its loop runs) and must
+/// not call setPostWakeHandler. Empty to disable. Main thread; waits for posting threads still inside the previous
+/// handler, so once it returns that one is no longer called. Functions already queued when a handler is installed don't wake the
 /// loop: run runPosted() after installing it (the Engine's loop does at once).
 void setPostWakeHandler(std::function<void()> handler);
 

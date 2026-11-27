@@ -27,6 +27,8 @@ Follow-ups not scheduled yet:
   factory that knows the type's size), Lua's incremental GC steps and the `Box` userdata. A lazily built `Repeater`
   would change what it means (all its children exist), so long lists stay `ListView`'s job.
 - Lua's generational GC made no measurable difference on the bench (tried; not switched).
+- What SDL3 opens up: a renderer on SDL_GPU (Direct3D 12 / Vulkan / Metal) next to OpenGL 3.3, mobile targets
+  (Android, iOS), and pen and touch input (the ImGui backend already tells touch from mouse).
 
 ## Kept as designed
 

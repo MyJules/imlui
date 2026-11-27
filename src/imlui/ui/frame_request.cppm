@@ -46,7 +46,8 @@ void beginFrameRequests();
 void clearFrameRequests();
 
 /// Called when a frame is requested while the engine's loop is asleep (waiting for
-/// events), so the host can wake it, e.g. with glfwPostEmptyEvent(). Empty to disable.
+/// events), so the host can wake it, e.g. with platform::Window::postEmptyEvent() (an SDL user event). Empty to
+/// disable.
 void setFrameWakeHandler(std::function<void()> handler);
 
 /// Set by the engine: true while its loop runs, false while it waits for events.

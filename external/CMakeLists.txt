@@ -10,10 +10,11 @@
 #     adds before or after imlui.
 #   - spdlog and GoogleTest: when the app already has them (the targets spdlog::spdlog, GTest::gtest_main exist when
 #     imlui is added), imlui uses the app's copy instead of building its own, so an executable links one copy.
-#   - GLFW is the exception: its CMakeLists.txt does a lot of platform work (X11 / Wayland protocol generation, Cocoa),
-#     so it's added with add_subdirectory and keeps its upstream target name `glfw`. When the app already has a target
-#     `glfw` (its own copy, or find_package(glfw3)), imlui uses it; an app that adds its own GLFW after imlui must
-#     check `if(NOT TARGET glfw)` first. An executable can only hold one GLFW anyway (its C symbols).
+#   - SDL3 is the exception: its CMakeLists.txt does a lot of platform work (the per-platform drivers, Wayland protocol
+#     generation, Cocoa), so it's added with add_subdirectory and keeps its upstream target names (`SDL3-static`,
+#     `SDL3_Headers`, the aliases `SDL3::SDL3`, `SDL3::SDL3-static`, `SDL3::Headers`). When the app already has the
+#     target `SDL3::SDL3` (its own copy, or find_package(SDL3)), imlui uses it; an app that adds its own SDL3 after imlui
+#     must check `if(NOT TARGET SDL3::SDL3)` first. An executable can only hold one SDL anyway (its C symbols).
 # A library taken from the app can't be part of an installed imlui package: IMLUI_INSTALL=ON then stops the configure.
 #
 # The libraries the modules need (their headers are in the wrappers' global module fragments) are part of an installed
@@ -64,20 +65,34 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 add_library(ext::lua ALIAS imlui_ext_lua)
 
-# ---------------------------------------------------------------- GLFW 3.4 (`glfw`, see the top of this file)
-if(TARGET glfw)
-    _imlui_use_app_library(glfw glfw)
+# ---------------------------------------------------------------- SDL 3.4.20 (`SDL3-static`, see the top of this file)
+# Windowing, input and events (src/wrap/window.cppm). Trimmed to what its CMake build needs: no test/, examples/,
+# docs/, build-scripts/ or IDE projects. Only the static library, and only the parts imlui uses: video (with OpenGL)
+# and events. The other subsystems (audio, GPU, the 2D renderer, camera, joystick and gamepad, haptic, HIDAPI, power,
+# sensor, dialogs) are off; their functions still exist and fail (imgui_impl_sdl3 asks for gamepads and gets none).
+if(TARGET SDL3::SDL3)
+    _imlui_use_app_library(sdl3 SDL3::SDL3)
 else()
-    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-    add_subdirectory(glfw EXCLUDE_FROM_ALL)
-    # Its own install rules are off; ours install its headers under the private folder instead of include/.
-    set_target_properties(glfw PROPERTIES SYSTEM ON EXPORT_NAME ext_glfw)
-    set_property(TARGET glfw PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-                 $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/glfw/include> $<INSTALL_INTERFACE:${ext_include}/glfw>)
-    add_library(ext::glfw ALIAS glfw)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    foreach(option SDL_SHARED SDL_TEST_LIBRARY SDL_TESTS SDL_EXAMPLES SDL_INSTALL SDL_UNINSTALL SDL_INSTALL_DOCS
+                   SDL_AUDIO SDL_GPU SDL_RENDER SDL_CAMERA SDL_JOYSTICK SDL_HAPTIC SDL_HIDAPI SDL_POWER SDL_SENSOR
+                   SDL_DIALOG SDL_VULKAN SDL_XINPUT)
+        set(${option} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    # A GitHub archive has no REVISION.txt: without a revision SDL would ask git, which would describe imlui's checkout.
+    set(SDL_REVISION "SDL-release-3.4.20" CACHE STRING "" FORCE)
+    add_subdirectory(SDL EXCLUDE_FROM_ALL)
+    # Its own install rules are off; ours install the library and its headers under the private folder instead.
+    set_target_properties(SDL3-static PROPERTIES SYSTEM ON EXPORT_NAME ext_sdl3)
+    if(WIN32) # its fallbacks to the CRT's itoa family, which the CRT headers mark deprecated
+        target_compile_definitions(SDL3-static PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+    endif()
+    set_target_properties(SDL3_Headers PROPERTIES SYSTEM ON EXPORT_NAME ext_sdl3_headers)
+    # The generated SDL_revision.h first, as SDL's own target has it.
+    set(sdl_build_include ${CMAKE_CURRENT_BINARY_DIR}/SDL/include-revision ${CMAKE_CURRENT_SOURCE_DIR}/SDL/include)
+    set_property(TARGET SDL3_Headers PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+                 "$<BUILD_INTERFACE:${sdl_build_include}>" $<INSTALL_INTERFACE:${ext_include}/SDL>)
+    add_library(ext::sdl3 ALIAS SDL3-static)
 endif()
 
 # ---------------------------------------------------------------- Dear ImGui
@@ -88,7 +103,7 @@ add_library(imlui_ext_imgui STATIC
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/imlui_imgui_assert.cpp
 )
@@ -98,7 +113,7 @@ target_include_directories(imlui_ext_imgui PUBLIC
 target_compile_definitions(imlui_ext_imgui PUBLIC
     IMGUI_DISABLE_OBSOLETE_FUNCTIONS
     IMGUI_USER_CONFIG="imlui_imconfig.h")
-target_link_libraries(imlui_ext_imgui PUBLIC ext::glfw)
+target_link_libraries(imlui_ext_imgui PUBLIC ext::sdl3)
 find_package(OpenGL REQUIRED)
 target_link_libraries(imlui_ext_imgui PUBLIC OpenGL::GL)
 # Third-party code is not ours to scan for modules.
