@@ -13,6 +13,8 @@ import imlui.types.type_builder;
 import imlui.ui.enum_names;
 import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
+import imlui.ui.enum_names;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -41,8 +43,8 @@ public:
     [[nodiscard]] std::optional<double> spacing() const;
     void setSpacing(std::optional<double> spacing);
     /// Horizontal alignment of the children. Frame::renderStack() applies it.
-    [[nodiscard]] const std::string& align() const;
-    void setAlign(std::string align);
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
 
 private:
     md::CardVariant m_variant = md::CardVariant::Elevated;
@@ -50,7 +52,7 @@ private:
     std::optional<Color> m_color;
     std::optional<float> m_rounding;
     std::optional<double> m_spacing;
-    std::string m_align = "start";
+    Align m_align = Align::Start;
 };
 
 } // namespace imlui
@@ -113,7 +115,7 @@ std::optional<float> Card::rounding() const { return m_rounding; }
 void Card::setRounding(std::optional<float> rounding) { m_rounding = rounding; }
 std::optional<double> Card::spacing() const { return m_spacing; }
 void Card::setSpacing(std::optional<double> spacing) { m_spacing = spacing; }
-const std::string& Card::align() const { return m_align; }
-void Card::setAlign(std::string align) { m_align = std::move(align); }
+Align Card::align() const { return m_align; }
+void Card::setAlign(Align align) { m_align = align; }
 
 } // namespace imlui

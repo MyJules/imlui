@@ -31,6 +31,7 @@ import imlui.ui.item_size;
 import imlui.ui.layout_box;
 import imlui.ui.layout_cache;
 import imlui.ui.props;
+import imlui.ui.renderer;
 
 export namespace imlui {
 
@@ -358,8 +359,8 @@ void ListView::renderContent(Frame& frame) {
     }
     const float prevTotal = m_contentHeight;
 
-    // Horizontal placement: the stack's `align`, as Frame::renderStack does it.
-    const float align = alignFactor(this->align());
+    // Horizontal placement: the stack's `align`, read and applied as Frame::renderStack does it.
+    const float align = alignFactor(Renderer::stackAlign(frame.node()));
     const float boxWidth = layout::availableWidth();
     const auto renderAt = [&](Frame::Child& child, float y) {
         float x = origin.x;

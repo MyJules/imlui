@@ -28,6 +28,8 @@ import imlui.ui.layout_box;
 import imlui.ui.layout_cache;
 import imlui.ui.frame_request;
 import imlui.ui.item_size;
+import imlui.types.lua_convert;
+import imlui.ui.enum_names;
 import imlui.ui.props;
 
 export namespace imlui {
@@ -155,6 +157,10 @@ public:
     /// intrinsic widths or else last frame's (imlui.ui.layout_cache). Returns the right edge (screen x) of the widest
     /// visual child, or the stack's left edge without one: for a container that pads its content on the right.
     float renderStack(const luaui::Node& node);
+    /// The `align` renderStack(node) places the children by, read from the table (a value or a binding): Start when
+    /// it is unset or not an Align name. The element's `align` property (Column's, StackAlign) reports such a name,
+    /// once, when its field is written: this read doesn't, as it runs every frame.
+    [[nodiscard]] static Align stackAlign(const luaui::Node& node);
     /// The size renderStack(node) takes with `maxWidth` available, composed from the visual children's intrinsic
     /// sizes (and ImGui's whole-pixel line advance); {0, 0} without visual children. nullopt when a child has none,
     /// or when an aligned stack is in an auto-sized window (it aligns in the widest child of the last frame).
@@ -538,9 +544,17 @@ bool Renderer::renderUnseen(lua::State* state, int idx) {
     return rendered;
 }
 
+Align Renderer::stackAlign(const Node& node) {
+    lua::State* state = node.state();
+    node.push("align");
+    const Align align = LuaConvert<Align>::get(state, -1); // Start when it isn't a name
+    lua::pop(state);
+    return align;
+}
+
 float Renderer::renderStack(const Node& node) {
     const auto spacing = node.number("spacing");
-    const float align = alignFactor(node.string("align", "start"));
+    const float align = alignFactor(stackAlign(node));
     lua::State* state = node.state();
     const float boxAvail = layout::availableWidth();
     float avail = boxAvail;
@@ -785,7 +799,7 @@ std::optional<Renderer::Skipped> Renderer::skipOutOfView(ImGuiID key, ImVec2 at,
 
 std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
     const auto spacing = node.number("spacing");
-    const float align = alignFactor(node.string("align", "start"));
+    const float align = alignFactor(stackAlign(node));
     if (align > 0.0f && layout::shrinkToFit()) return std::nullopt; // aligned in last frame's widest child
     lua::State* state = node.state();
     const float lineGap = ImGui::GetStyle().ItemSpacing.y;

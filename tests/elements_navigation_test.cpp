@@ -29,6 +29,7 @@ import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
 import imlui.widgets.top_app_bar;
+import imlui.ui.props;
 
 using namespace imlui;
 
@@ -138,7 +139,7 @@ TEST_F(NavigationElementsTest, TextTakesItsPropsAndPositionalTextAndLabelIsAnAli
     EXPECT_EQ(plain->style(), TextStyle::BodyLarge);
     EXPECT_FALSE(plain->color().has_value());
     EXPECT_FALSE(plain->wrap());
-    EXPECT_EQ(plain->align(), "start");
+    EXPECT_EQ(plain->align(), Align::Start);
 
     EXPECT_EQ(m_h.instance<Text>("positional")->text(), "hello");
     const Text* styled = m_h.instance<Text>("styled");
@@ -147,7 +148,7 @@ TEST_F(NavigationElementsTest, TextTakesItsPropsAndPositionalTextAndLabelIsAnAli
     ASSERT_TRUE(styled->color().has_value());
     EXPECT_EQ(*styled->color(), (Color{1.0f, 0.0f, 0.0f, 1.0f}));
     EXPECT_TRUE(styled->wrap());
-    EXPECT_EQ(styled->align(), "center");
+    EXPECT_EQ(styled->align(), Align::Center);
     ASSERT_NE(m_h.instance<Text>("label"), nullptr);
     EXPECT_EQ(m_h.instance<Text>("label")->text(), "a label");
 
@@ -364,7 +365,7 @@ TEST_F(NavigationElementsTest, NavigationRailStacksDestinationsBelowItsHeader) {
     frames(2);
     const NavigationRail* rail = m_h.instance<NavigationRail>("rail");
     EXPECT_FLOAT_EQ(rail->spacing(), 12.0f);
-    EXPECT_EQ(rail->align(), "top");
+    EXPECT_EQ(rail->align(), NavigationRail::Align::Top);
     const Rect r = rects["rail"];
     EXPECT_FLOAT_EQ(r.width(), 80.0f);
     EXPECT_FLOAT_EQ(r.height(), 500.0f);

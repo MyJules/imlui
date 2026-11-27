@@ -11,6 +11,8 @@ import imlui.ui.elements.stack_props;
 import imlui.ui.item_size;
 import imlui.ui.layout_box;
 import imlui.ui.renderer;
+import imlui.ui.enum_names;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -37,13 +39,13 @@ public:
     [[nodiscard]] std::optional<double> spacing() const;
     void setSpacing(std::optional<double> spacing);
     /// Horizontal alignment of the children: "start" | "center" | "end". Frame::renderStack() applies it.
-    [[nodiscard]] const std::string& align() const;
-    void setAlign(std::string align);
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
 
 private:
     float m_padding = 0.0f;
     std::optional<double> m_spacing;
-    std::string m_align = "start";
+    Align m_align = Align::Start;
 };
 
 } // namespace imlui
@@ -146,7 +148,7 @@ float Column::padding() const { return m_padding; }
 void Column::setPadding(float padding) { m_padding = padding; }
 std::optional<double> Column::spacing() const { return m_spacing; }
 void Column::setSpacing(std::optional<double> spacing) { m_spacing = spacing; }
-const std::string& Column::align() const { return m_align; }
-void Column::setAlign(std::string align) { m_align = std::move(align); }
+Align Column::align() const { return m_align; }
+void Column::setAlign(Align align) { m_align = align; }
 
 } // namespace imlui

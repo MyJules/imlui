@@ -11,16 +11,18 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.elements.stack_props;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// A collapsible header whose children are indented while expanded (also registered as Expander).
 ///
-/// Props:   title = unset (the text), text = "" (positional), supportingText = "", expanded = true
-/// Raw:     width; spacing, align, cull (its children are stacked with them)
+/// Props:   title = unset (the text), text = "" (positional), supportingText = "", expanded = true,
+///          align = "start" ("center", "end"; the children's, StackAlign)
+/// Raw:     width; spacing, cull (its children are stacked with them and `align`)
 /// Signals: onToggled(self, expanded)
 /// Two-way: expanded
-class Section final : public Element {
+class Section final : public Element, public StackAlign {
 public:
     static void declare(TypeBuilder<Section>& type);
 
@@ -66,7 +68,7 @@ void Section::declare(TypeBuilder<Section>& type) {
         .signal<bool>("onToggled", {"expanded"})
         .doc("Called when the user opens or closes it, with the new state.")
         .defaultProperty("text");
-    rawStackProps(type);
+    stackProps(type);
 }
 
 void Section::render(Frame& frame) {

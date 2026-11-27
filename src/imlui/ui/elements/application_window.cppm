@@ -12,19 +12,21 @@ import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// The root element: fills the native window without decoration and stacks its children. Non-visual.
 ///
-/// Props:   title = unset (the native window title, applied every frame while the prop exists),
+/// Props:   title = unset (the native window title, applied every frame while the prop exists), align = "start"
+///          ("center", "end"; the children's, StackAlign),
 ///          color = unset (surface), padding = 24, scrollable = true,
 ///          imageCacheBudget = unset (bytes of decoded image pixels the image cache keeps, ImageCache::setBudget;
 ///          0: no limit; applied every frame while the prop exists, else the cache's 256 MiB default stands)
-/// Raw:     menuBar (a MenuBar), spacing, align, cull; width, height (the initial window size, read by the engine)
+/// Raw:     menuBar (a MenuBar), spacing, cull; width, height (the initial window size, read by the engine)
 ///
 /// Without a `title` prop, the last ui.setTitle() (or "imlui") sticks.
-class ApplicationWindow final : public Element {
+class ApplicationWindow final : public Element, public StackAlign {
 public:
     static void declare(TypeBuilder<ApplicationWindow>& type);
 
@@ -76,7 +78,7 @@ void ApplicationWindow::declare(TypeBuilder<ApplicationWindow>& type) {
         .rawProperty("menuBar", "Element|false")
         .doc("A `MenuBar { ... }` at the top of the window.")
         .nonVisual();
-    rawStackProps(type);
+    stackProps(type);
 }
 
 void ApplicationWindow::render(Frame& frame) {

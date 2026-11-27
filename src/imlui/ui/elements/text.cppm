@@ -12,6 +12,7 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.enum_names;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -39,9 +40,9 @@ public:
     /// Wrapping or aligned (not "start"): its size depends on the available width, so it fills (a Row gives it a
     /// share, and it wraps or aligns in that).
     [[nodiscard]] bool followsWidth() const;
-    /// "start", "center" or "end": the line's position in the available width.
-    [[nodiscard]] const std::string& align() const;
-    void setAlign(std::string align);
+    /// The line's position in the available width.
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
     /// A font name the theme declares (`ui.theme { fonts = { mono = ... } }`), "regular" or "medium"; "" (the
     /// default) draws in the style's own face, and so do names the theme doesn't declare.
     [[nodiscard]] const std::string& font() const;
@@ -52,7 +53,7 @@ private:
     TextStyle m_style = TextStyle::BodyLarge;
     std::optional<Color> m_color;
     bool m_wrap = false;
-    std::string m_align = "start";
+    Align m_align = Align::Start;
     std::string m_font;
 };
 
@@ -104,8 +105,8 @@ void Text::setColor(std::optional<Color> color) { m_color = color; }
 bool Text::wrap() const { return m_wrap; }
 bool Text::followsWidth() const { return m_wrap || Frame::alignFactor(m_align) > 0.0f; }
 void Text::setWrap(bool wrap) { m_wrap = wrap; }
-const std::string& Text::align() const { return m_align; }
-void Text::setAlign(std::string align) { m_align = std::move(align); }
+Align Text::align() const { return m_align; }
+void Text::setAlign(Align align) { m_align = align; }
 const std::string& Text::font() const { return m_font; }
 void Text::setFont(std::string font) { m_font = std::move(font); }
 

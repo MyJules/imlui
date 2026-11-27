@@ -16,8 +16,12 @@ export namespace imlui {
 /// "Label###id": the visible text may change every frame without changing the ImGui ID.
 [[nodiscard]] std::string labelId(std::string_view text, const char* id);
 
-/// "start" -> 0, "center" -> 0.5, "end" / "right" / "bottom" -> 1.
-[[nodiscard]] float alignFactor(std::string_view align);
+/// Where a stack places each child across its width (a Column's, a Window's `align`), and a Text its line: its Lua
+/// names ("start", "center", "end") are in imlui.ui.enum_names.
+enum class Align { Start, Center, End };
+
+/// Start -> 0, Center -> 0.5, End -> 1: the share of the free space before the item.
+[[nodiscard]] float alignFactor(Align align);
 
 /// A 1-based index prop as an int that is safe to do arithmetic on: values below 1, NaN and -infinity become 0
 /// (none), values past the int range (and +infinity) become the largest int.
@@ -55,9 +59,12 @@ std::string labelId(std::string_view text, const char* id) {
     return s;
 }
 
-float alignFactor(std::string_view align) {
-    if (align == "center") return 0.5f;
-    if (align == "end" || align == "right" || align == "bottom") return 1.0f;
+float alignFactor(Align align) {
+    switch (align) {
+    case Align::Center: return 0.5f;
+    case Align::End: return 1.0f;
+    case Align::Start: break;
+    }
     return 0.0f;
 }
 

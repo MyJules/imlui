@@ -18,6 +18,7 @@ import imlui.types.type_builder;
 import imlui.test.headless_frame;
 import imlui.test.render_counter;
 import imlui.test.last_item_probe;
+import imlui.ui.props;
 
 using namespace imlui;
 
@@ -119,6 +120,38 @@ TEST_F(WindowsTest, ApplicationWindowPropsReachTheInstanceAndChildrenRender) {
     EXPECT_FALSE(w->color().has_value());
     EXPECT_FLOAT_EQ(w->padding(), 24.0f);
     EXPECT_TRUE(w->scrollable());
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// The stacking windows' `align` is a property too (StackAlign): a typo is reported once with the names, not on every
+// frame, and the children are placed at the start meanwhile.
+TEST_F(WindowsTest, ApplicationWindowReportsAnUnknownAlignOnce) {
+    run(R"(root = ApplicationWindow { Last { id = "last", Probe {} } })");
+    m_h.renderFrames("root", 3);
+    auto* last = m_h.instance<test::LastItemProbe>("last");
+    ASSERT_NE(last, nullptr);
+    const float start = last->min().x;
+    run(R"(root.align = "end")");
+    m_h.renderFrames("root", 3);
+    EXPECT_GT(last->min().x, start + 100.0f);
+    EXPECT_EQ(m_h.instance<ApplicationWindow>("root")->align(), Align::End);
+
+    run(R"(root.align = "bottom")");
+    m_h.renderFrames("root", 3);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(
+                  R"(ApplicationWindow.align: Align ('start'|'center'|'end') expected, got string "bottom")"),
+              std::string::npos)
+        << luaui::errors()[0];
+    EXPECT_FLOAT_EQ(last->min().x, start);
+    luaui::clearErrors();
+    m_h.renderFrames("root", 3);
+    EXPECT_TRUE(luaui::errors().empty());
+
+    // nil is the default again.
+    run("root.align = nil");
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(m_h.instance<ApplicationWindow>("root")->align(), Align::Start);
     EXPECT_TRUE(luaui::errors().empty());
 }
 

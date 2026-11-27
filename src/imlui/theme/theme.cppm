@@ -18,6 +18,10 @@ import imlui.theme.skin_tokens;
 
 export namespace imlui {
 
+/// How ImGui's own style is set: from the scheme (Material, or the Fluent colors under design "fluent"), or one of
+/// ImGui's stock styles. Its Lua names ("material", "imgui-dark", ...) are in imlui.ui.enum_names.
+enum class ThemePreset { Material, ImguiDark, ImguiLight, ImguiClassic };
+
 struct Theme {
     /// Material 3 shape scale: corner radii in dp.
     struct Shape {
@@ -37,9 +41,9 @@ struct Theme {
     /// Overrides of the design's SkinTokens, by name, applied in order over its defaults (a token-driven skin's
     /// tokens(); the Material skin ignores them). Each must pass tokenProblem(); setTheme() drops one that doesn't.
     std::vector<TokenOverride> tokens;
-    /// "material" | "imgui-dark" | "imgui-light" | "imgui-classic". Under "material", design "fluent" maps the
-    /// Fluent colors and its tokens onto ImGuiStyle instead of the Material scheme mapping.
-    std::string preset = "material";
+    /// Under Material, design "fluent" maps the Fluent colors and its tokens onto ImGuiStyle instead of the Material
+    /// scheme mapping.
+    ThemePreset preset = ThemePreset::Material;
     Color seed = *parseHex("#6750A4");
     bool dark = true;
     Scheme scheme = generateScheme(seed, dark);
@@ -333,16 +337,17 @@ void applyFluent(const Theme& t, ImGuiStyle& st) {
 void applyNow(const Theme& t) {
     ImGuiStyle& st = ImGui::GetStyle();
     st = ImGuiStyle{};
-    if (t.preset == "imgui-light")
-        ImGui::StyleColorsLight(&st);
-    else if (t.preset == "imgui-classic")
-        ImGui::StyleColorsClassic(&st);
-    else if (t.preset == "imgui-dark")
-        ImGui::StyleColorsDark(&st);
-    else if (t.design == fluent::designName)
-        applyFluent(t, st);
-    else
-        applyMaterial(t, st);
+    switch (t.preset) {
+    case ThemePreset::ImguiLight: ImGui::StyleColorsLight(&st); break;
+    case ThemePreset::ImguiClassic: ImGui::StyleColorsClassic(&st); break;
+    case ThemePreset::ImguiDark: ImGui::StyleColorsDark(&st); break;
+    case ThemePreset::Material:
+        if (t.design == fluent::designName)
+            applyFluent(t, st);
+        else
+            applyMaterial(t, st);
+        break;
+    }
 
     for (const auto& o : t.style) {
         for (const auto& f : styleFields) {

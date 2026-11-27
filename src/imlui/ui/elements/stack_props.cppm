@@ -1,12 +1,17 @@
-// The raw props of the stacking containers, declared for the Lua definitions (TypeBuilder::rawProperty): the
-// `spacing`, `align` and `cull` that Renderer::renderStack (Frame::renderStack, Frame::stackSize) reads from the
-// element table of every element it stacks the children of, whether or not the type declares them as properties.
-// Templates, so they live in the interface (CODE_STYLE).
+// The props of the stacking containers that Renderer::renderStack (Frame::renderStack, Frame::stackSize) reads from
+// the element table of every element it stacks the children of: `spacing`, `align` and `cull`. A type that stacks its
+// children and doesn't declare `spacing` and `align` itself (Window, Dialog, Section, Tab, ...) declares them with
+// stackProps(): `spacing` and `cull` raw (TypeBuilder::rawProperty, for the Lua definitions), `align` as a typed
+// property held by StackAlign, so the sync reports a name that isn't an Align once (when the field changes, like any
+// property's), as it does for Column's. The templates live in the interface (CODE_STYLE); StackAlign is their
+// part of the element.
 export module imlui.ui.elements.stack_props;
 
 import std;
 
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -19,16 +24,37 @@ TypeBuilder<T>& rawCullProp(TypeBuilder<T>& type) {
         "the same either way. `ui.setCulling(false)` turns it off everywhere.");
 }
 
-/// Declares raw `spacing`, `align` and `cull`, for a type that stacks its children with Frame::renderStack and
-/// doesn't declare `spacing` and `align` as properties.
+/// The `align` of a type declared with stackProps(): a base of the element, holding the value its property syncs.
+/// Renderer::renderStack places the children by the table's field (Renderer::stackAlign), which reads the same.
+class StackAlign {
+public:
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
+
+private:
+    Align m_align = Align::Start;
+};
+
+/// Declares raw `spacing` and `cull` and the property `align` (StackAlign), for a type that stacks its children with
+/// Frame::renderStack and doesn't declare `spacing` and `align` itself.
 template <class T>
-TypeBuilder<T>& rawStackProps(TypeBuilder<T>& type) {
+    requires std::derived_from<T, StackAlign>
+TypeBuilder<T>& stackProps(TypeBuilder<T>& type) {
     type.template rawProperty<std::optional<double>>("spacing")
         .doc("The gap between visible children (dp). Unset: ImGui's item spacing.")
-        .template rawProperty<std::string>("align")
+        .property("align", &StackAlign::align, &StackAlign::setAlign)
         .doc("Each child's horizontal position by its width: `\"start\"` (default), `\"center\"` or `\"end\"`. A "
              "child that fills isn't moved.");
     return rawCullProp(type);
 }
+
+} // namespace imlui
+
+module :private;
+
+namespace imlui {
+
+Align StackAlign::align() const { return m_align; }
+void StackAlign::setAlign(Align align) { m_align = align; }
 
 } // namespace imlui
