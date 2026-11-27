@@ -5,7 +5,8 @@
 // positionViewAtBeginning() / positionViewAtEnd() and `firstVisibleIndex`, and requests made while the list isn't
 // rendered, and the chunked rendering staying finite: while a nav move scores items (which widens the view), and with
 // a negative `spacing` that cancels `itemHeight`; the step tree (positions right as the model shrinks and grows) and
-// long runs of hidden items probed, not walked, on every frame. Renders headless ImGui frames
+// long runs of hidden items probed, not walked, on every frame; a model longer than ListView::maxItems capped, one
+// cleared by a delegate while the list renders, and measured heights scaled with a zoom. Renders headless ImGui frames
 // (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
@@ -13,6 +14,7 @@ import std;
 
 import imgui;
 import imlui.lua.errors;
+import imlui.theme.dpi;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.script_object;
@@ -44,6 +46,28 @@ private:
     float m_h = 20.0f;
     float m_y = -1.0f;
     int m_renders = 0;
+};
+
+/// A box `h` dp tall: its height in pixels follows the zoom, like real content.
+class DpBar final : public Element {
+public:
+    static void declare(TypeBuilder<DpBar>& type) { type.property("h", &DpBar::h, &DpBar::setH); }
+    void render(Frame& frame) override { ImGui::Dummy({10.0f, frame.dp(m_h)}); }
+    [[nodiscard]] float h() const { return m_h; }
+    void setH(float h) { m_h = h; }
+
+private:
+    float m_h = 20.0f;
+};
+
+/// Emits onRender while it renders (Lua code running mid-frame, like a handler) and takes 20 px.
+class Emitter final : public Element {
+public:
+    static void declare(TypeBuilder<Emitter>& type) { type.signal("onRender"); }
+    void render(Frame&) override {
+        emit("onRender");
+        ImGui::Dummy({10.0f, 20.0f});
+    }
 };
 
 /// Marks the frame as scoring a nav move from where it renders on, as ImGui does on the frame an arrow key moves the
@@ -91,8 +115,13 @@ private:
 class Feed final : public ScriptObject {
 public:
     static void declare(TypeBuilder<Feed>& type) {
-        type.doc("A test feed.").property("rows", &Feed::rows).doc("The rows.");
+        type.doc("A test feed.")
+            .property("rows", &Feed::rows)
+            .doc("The rows.")
+            .method("clear", &Feed::clear)
+            .doc("Empties the rows.");
     }
+    void clear() { model.clear(); }
     [[nodiscard]] const VectorModel<std::int64_t>& rows() const { return model; }
     void add(int count) {
         for (int i = 0; i < count; ++i)
@@ -113,9 +142,12 @@ protected:
         clearFrameRequests();
         m_h.registerType<Bar>("Bar");
         m_h.registerType<NavScoring>("NavScoring");
+        m_h.registerType<Emitter>("Emitter");
+        m_h.registerType<DpBar>("DpBar");
         m_h.types().registerSingleton("feed", m_feed);
     }
     void TearDown() override {
+        setZoom(1.0f);
         clearFrameRequests();
         ImGui::GetCurrentContext()->NavMoveScoringItems = false;
     }
@@ -628,6 +660,94 @@ TEST_F(ListViewScrollTest, ALongRunOfHiddenItemsIsProbedNotWalked) {
     EXPECT_FLOAT_EQ(bar(1500)->y(), top + 20.0f);
     EXPECT_FLOAT_EQ(bar(3000)->y(), top + 40.0f);
     EXPECT_FLOAT_EQ(list().contentHeight(), 60.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A model longer than ListView::maxItems (a numeric `math.huge`, a count gone wrong) shows its first maxItems items and
+// is reported once: its measured heights would take gigabytes (a bad_alloc on every frame), and the step tree's counts
+// would wrap past 2^32. With a fixed `itemHeight` too.
+TEST_F(ListViewScrollTest, AModelLongerThanTheLimitIsCapped) {
+    Watchdog watchdog{120.0};
+    for (const char* heights : {"itemHeight = 20,", ""}) {
+        SCOPED_TRACE(heights);
+        luaui::clearErrors();
+        run(std::string{R"(
+            made = {}
+            list = ListView { height = 200, spacing = 0, )"} +
+            heights + R"( model = math.huge,
+                              delegate = function(i) made[i] = Bar { h = 20 }; return made[i] end })");
+        settle("list");
+        ListView& l = list();
+        EXPECT_EQ(l.renderedRange().first, 1);
+        EXPECT_LT(l.renderedRange().second, 30);
+        const auto cap = static_cast<double>(ListView::maxItems);
+        EXPECT_NEAR(static_cast<double>(l.contentHeight()), cap * 20.0, cap * 20.0 * 1e-3);
+        m_h.renderFrames("list", 2);
+        const auto& errors = luaui::errors();
+        ASSERT_EQ(errors.size(), 1u);
+        EXPECT_NE(errors[0].find("more than " + std::to_string(ListView::maxItems) + " items"), std::string::npos)
+            << errors[0];
+        run("list.model = 1e9");
+        m_h.renderFrame("list");
+        EXPECT_EQ(luaui::errors().size(), 1u); // once per list
+    }
+    luaui::clearErrors();
+}
+
+// A delegate's handler that empties the model while the list renders makes __range return fewer delegates than asked
+// for: that is the end of the model, not a run of items that take no space to walk, a chunk at a time, up to the count
+// the render started with. The next frame shows the empty model, and items added after it show again.
+TEST_F(ListViewScrollTest, AModelClearedWhileRenderingEndsTheRender) {
+    Watchdog watchdog{120.0};
+    m_feed.add(20000);
+    run(R"(
+        ranges = 0
+        cleared = false
+        list = ListView { height = 200, spacing = 0, model = feed.rows,
+                          delegate = function(row)
+                              if row == 3 then
+                                  return Emitter { onRender = function()
+                                      if not cleared then cleared = true; feed:clear() end
+                                  end }
+                              end
+                              return Bar { h = 20 }
+                          end }
+        local range = list.__range
+        list.__range = function(...) ranges = ranges + 1; return range(...) end)");
+    m_h.renderFrame("list");
+    check("cleared");
+    check("ranges < 10");
+    ListView& l = list();
+    EXPECT_LT(l.renderedRange().second, 30); // the chunk asked for before the model was cleared, not 20000
+    settle("list");
+    EXPECT_EQ(l.renderedRange().second, -1);
+    EXPECT_FLOAT_EQ(l.contentHeight(), 0.0f);
+    m_feed.add(5);
+    settle("list");
+    EXPECT_EQ(l.renderedRange().first, 1);
+    EXPECT_EQ(l.renderedRange().second, 5);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Measured heights are pixels: after a zoom they are scaled with it, so the content height (the scroll range) is right
+// at once instead of mixing heights of two scales until every item rendered again.
+TEST_F(ListViewScrollTest, MeasuredHeightsFollowAZoom) {
+    run(R"(
+        list = ListView { height = 200, spacing = 0, model = 1000,
+                          delegate = function(i) return DpBar { h = 20 } end })");
+    settle("list");
+    run("list:positionViewAtEnd()");
+    settle("list"); // every item from the top to the end was assumed 20px, those near the end measured
+    ListView& l = list();
+    EXPECT_NEAR(l.contentHeight(), 1000.0f * 20.0f, 1.0f);
+    setZoom(2.0f);
+    m_h.renderFrame("list");
+    EXPECT_NEAR(l.contentHeight(), 1000.0f * 40.0f, 1.0f) << "the heights scaled with the zoom";
+    setZoom(1.0f);
+    m_h.renderFrame("list");
+    EXPECT_NEAR(l.contentHeight(), 1000.0f * 20.0f, 1.0f);
+    settle("list");
+    EXPECT_NEAR(l.contentHeight(), 1000.0f * 20.0f, 1.0f);
     EXPECT_TRUE(luaui::errors().empty());
 }
 

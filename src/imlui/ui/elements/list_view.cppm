@@ -49,6 +49,10 @@ public:
 
     static void declare(TypeBuilder<ListView>& type);
 
+    /// The most items a model shows: the first ones of a longer model (`model = math.huge`, a count gone wrong), which
+    /// would otherwise take gigabytes of measured heights, are shown, and the excess is reported once.
+    static constexpr std::size_t maxItems = std::size_t{1} << 22;
+
     /// The height of every item (dp). Unset: each item's height is measured when it renders, and the average of the
     /// measured ones stands in for the others.
     [[nodiscard]] std::optional<float> itemHeight() const;
@@ -145,6 +149,9 @@ private:
                                        float estimate, std::optional<float> fixed) const;
     /// Sets firstVisibleIndex, and tells Lua when it changed.
     void publishFirstVisible(std::int64_t index);
+    /// Scales the measured heights by `ratio` (a new DPI scale: a zoom, another monitor), so they stay what the items
+    /// measure until they are measured again.
+    void rescaleHeights(double ratio);
 
     /// A positionViewAtIndex() call that hasn't landed yet.
     struct PendingPosition {
@@ -166,6 +173,8 @@ private:
     int m_steerFrame = -1; ///< ImGui frame of the last render that scrolled for the above (the first one of a frame)
 
     std::vector<float> m_heights; ///< per model index (0-based), when `itemHeight` is unset
+    float m_scale = 0.0f;         ///< dpiScale() m_heights were measured at (0: none yet)
+    bool m_tooMany = false;       ///< a model longer than maxItems was reported
     double m_measuredSum = 0.0;   ///< the measured heights' sum
     std::size_t m_measured = 0;   ///< how many are measured
     std::size_t m_spaceless = 0;  ///< how many take no space
@@ -299,6 +308,17 @@ void ListView::publishFirstVisible(std::int64_t index) {
     if (index == m_firstVisible) return;
     m_firstVisible = index;
     notify("firstVisibleIndex");
+}
+
+void ListView::rescaleHeights(double ratio) {
+    m_measuredSum = 0.0;
+    for (float& h : m_heights) {
+        if (h < 0.0f) continue; // unmeasured, noSpace: the same at any scale
+        h = static_cast<float>(static_cast<double>(h) * ratio);
+        m_measuredSum += static_cast<double>(h);
+    }
+    m_steps = StepTree{};
+    m_steps.assign(m_heights);
 }
 
 bool ListView::setHeight(std::size_t i, float h) {
@@ -525,7 +545,14 @@ void ListView::renderContent(Frame& frame) {
         publishFirstVisible(0);
         return;
     }
-    const std::size_t n = *count;
+    std::size_t n = *count;
+    if (n > maxItems) {
+        if (!m_tooMany)
+            luaui::reportError("ListView: the model has more than " + std::to_string(maxItems) +
+                               " items; only the first " + std::to_string(maxItems) + " are shown");
+        m_tooMany = true;
+        n = maxItems;
+    }
 
     const float gap = spacing() ? frame.dp(static_cast<float>(*spacing())) : ImGui::GetStyle().ItemSpacing.y;
     const std::optional<float> fixed = m_itemHeight ? std::optional<float>{frame.dp(*m_itemHeight)} : std::nullopt;
@@ -533,6 +560,14 @@ void ListView::renderContent(Frame& frame) {
     // as the height would put every item at one place, so no number of them would fill the view (and the index in
     // view, the scroll divided by it, would divide by zero).
     const float fixedStep = fixed ? std::max(1.0f, *fixed + gap) : 0.0f;
+    // The heights are pixels: at another DPI scale (a zoom, another monitor) they are scaled with it, until the items
+    // are measured again.
+    const float scale = frame.dp(1.0f);
+    if (m_scale > 0.0f && scale != m_scale && m_measured > 0) {
+        rescaleHeights(static_cast<double>(scale) / static_cast<double>(m_scale));
+        frame.requestFrame();
+    }
+    m_scale = scale;
     if (!fixed && m_heights.size() != n) {
         // The model changed length (an insertion, a removal, a reset): keep the heights of the indices that are still
         // there. The tree drops the ones past the end as they are, or appends the new ones.
@@ -601,13 +636,9 @@ void ListView::renderContent(Frame& frame) {
         return rendered;
     };
 
-    // A one-element table to splice an inline delegate (a Repeater or an If) from.
-    lua::createtable(state, 1, 0);
-    const int wrapper = lua::gettop(state);
-
     // Renders the delegate at the top of the stack (an element, or false) at screen y `y`. Returns its height, or
-    // noSpace when it took none. An inline delegate's children stack with the gap between them, and together they
-    // are the item.
+    // noSpace when it took none. An inline delegate's children (a Repeater's, an If's) stack with the gap between
+    // them, and together they are the item: spliced like the renderer splices an inline child.
     const auto renderItem = [&](float y) -> float {
         const int item = lua::gettop(state);
         if (!lua::istable(state, item)) return noSpace;
@@ -623,22 +654,19 @@ void ListView::renderContent(Frame& frame) {
                 spaced = true;
             }
         };
+        lua::getfield(state, item, "__type");
+        const bool element = lua::isstring(state, -1);
+        lua::pop(state);
+        const luaui::Node itemNode{state, item};
+        if (!element || !shown(itemNode)) return noSpace;
         lua::rawgetfield(state, item, "__inline"); // raw, like the renderer: only the table's own marker counts
         const bool isInline = lua::toboolean(state, -1);
         lua::pop(state);
         if (isInline) {
-            lua::pushvalue(state, item);
-            lua::rawseti(state, wrapper, 1);
-            frame.forEachChild(luaui::Node{state, wrapper}, one);
+            frame.forEachChild(itemNode, one);
         } else {
-            const luaui::Node itemNode{state, item};
-            lua::getfield(state, item, "__type");
-            const bool element = lua::isstring(state, -1);
-            lua::pop(state);
-            if (element && itemNode.boolean("visible", true)) {
-                Frame::Child child{frame, itemNode};
-                one(child);
-            }
+            Frame::Child child{frame, itemNode};
+            one(child);
         }
         return spaced ? std::max(0.0f, bottom - y) : noSpace;
     };
@@ -659,6 +687,18 @@ void ListView::renderContent(Frame& frame) {
     const auto stepOf = [&](std::size_t i) { return fixed ? fixedStep : step(i, gap, est); };
     bool changed = false;
     bool windowed = false; // a long run of noSpace items was visited only in part (spacelessProbe)
+    // A delegate's handler that shrank the model while this render runs (model:clear()) makes `__range` return fewer
+    // delegates than asked for: the model ends there, and the render stops (the next one counts it again).
+    bool shrank = false;
+    const auto pushSpan = [&](std::size_t from, std::size_t& to) {
+        if (!pushRange(node, from + 1, to)) return false;
+        const auto got = static_cast<std::size_t>(std::max<lua::Integer>(0, lua::rawlen(state, -1)));
+        if (got < to - from) {
+            to = from + got;
+            shrank = true;
+        }
+        return true;
+    };
     std::size_t first = 0, anchor = 0, end = 0; // rendered: [first, end); anchor: the first item in view
     float anchorTop = 0.0f;
     if (n > 0) {
@@ -703,7 +743,7 @@ void ListView::renderContent(Frame& frame) {
                 } else if (!fixed) {
                     to = next = spanEnd(i, anchor);
                 }
-                if (!pushRange(node, from + 1, to)) break;
+                if (!pushSpan(from, to)) break;
                 const int list = lua::gettop(state);
                 for (std::size_t k = from; k < to; ++k) {
                     const float before = stepOf(k);
@@ -714,6 +754,7 @@ void ListView::renderContent(Frame& frame) {
                     y += before;
                 }
                 lua::settop(state, list - 1);
+                if (shrank) break;
                 i = next;
             }
         }
@@ -723,13 +764,13 @@ void ListView::renderContent(Frame& frame) {
         float y = origin.y + anchorTop;
         end = anchor;
         const auto more = [&] { return y < limit || !cull::outOfView(y, y + 1.0f); };
-        while (end < n && more()) {
+        while (end < n && !shrank && more()) {
             if (const std::optional<std::size_t> run = fixed ? std::nullopt : longSpacelessRun(end, n)) {
                 // A long run of items that took no space: its window, and on after the run (or where the window's
                 // items, taking space now, filled the view).
-                const auto [from, to] = spacelessWindowOf(end, *run);
+                auto [from, to] = spacelessWindowOf(end, *run);
                 windowed = true;
-                if (!pushRange(node, from + 1, to)) break;
+                if (!pushSpan(from, to)) break;
                 const int list = lua::gettop(state);
                 std::size_t k = from;
                 for (; k < to && more(); ++k) {
@@ -740,7 +781,7 @@ void ListView::renderContent(Frame& frame) {
                     y += step(k, gap, est);
                 }
                 lua::settop(state, list - 1);
-                end = k < to ? k : *run;
+                end = k < to || shrank ? k : *run;
                 continue;
             }
             const float perItem = fixed ? fixedStep : std::max(1.0f, est + gap);
@@ -750,8 +791,8 @@ void ListView::renderContent(Frame& frame) {
             const float reach = y < limit ? limit - y : std::max(1.0f, viewHeight);
             const std::size_t want = static_cast<std::size_t>(std::ceil(reach / perItem)) + 1;
             // Up to a long noSpace run, which the loop takes next (above).
-            const std::size_t chunkEnd = fixed ? std::min(n, end + want) : spanEnd(end, std::min(n, end + want));
-            if (!pushRange(node, end + 1, chunkEnd)) break;
+            std::size_t chunkEnd = fixed ? std::min(n, end + want) : spanEnd(end, std::min(n, end + want));
+            if (!pushSpan(end, chunkEnd)) break;
             const int list = lua::gettop(state);
             const std::size_t chunkFirst = end;
             for (; end < chunkEnd && more(); ++end) {
@@ -770,16 +811,21 @@ void ListView::renderContent(Frame& frame) {
 
         // Items held last frame (see renderIndex) that are out of range now keep rendering, at their place.
         for (const std::size_t i : m_pinned) {
-            if (i >= n || (i >= first && i < end)) continue;
-            if (!pushRange(node, i + 1, i + 1)) continue;
-            lua::rawgeti(state, -1, 1);
-            const float at = fixed ? static_cast<float>(i) * fixedStep : top(i, gap, est);
-            const float h = renderIndex(i, origin.y + at);
-            if (!fixed) changed = setHeight(i, h) || changed;
-            lua::settop(state, wrapper);
+            if (shrank || i >= n || (i >= first && i < end)) continue;
+            std::size_t to = i + 1;
+            if (!pushSpan(i, to)) continue;
+            const int list = lua::gettop(state);
+            if (to > i) {
+                lua::rawgeti(state, list, 1);
+                const float at = fixed ? static_cast<float>(i) * fixedStep : top(i, gap, est);
+                const float h = renderIndex(i, origin.y + at);
+                if (!fixed) changed = setHeight(i, h) || changed;
+            }
+            lua::settop(state, list - 1);
         }
     }
     lua::settop(state, stackTop);
+    if (shrank) frame.requestFrame(); // to count the model again, and show what it holds now
     m_pinned = std::move(pinned);
     // The next frame visits the long runs' next windows: an item in one that takes space now (a hidden item shown, a
     // nil delegate rebuilt for a changed row) shows within the run's length / spacelessProbe rendered frames.

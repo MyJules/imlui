@@ -37,6 +37,9 @@ public:
 private:
     int m_currentIndex = 1;
     md::TabsVariant m_variant = md::TabsVariant::Primary;
+    /// The headers, kept from frame to frame: their strings are assigned in place, so a render allocates nothing
+    /// while the titles fit. Taken while in use (moved out and back), like Row's plan.
+    std::vector<md::TabInfo> m_tabs;
 };
 
 } // namespace imlui
@@ -63,14 +66,21 @@ void TabBar::declare(TypeBuilder<TabBar>& type) {
 void TabBar::render(Frame& frame) {
     // Collect the tab headers: the visual children. Non-visual ones (Timer, Dialog, ...) are no tabs; they render
     // in place below, whichever tab is shown.
-    std::vector<md::TabInfo> tabs;
+    std::vector<md::TabInfo> tabs = std::move(m_tabs);
+    std::size_t count = 0;
     frame.forEachChild([&](Frame::Child& c) {
         if (!c.isVisual()) return;
-        if (const Tab* tab = c.as<Tab>())
-            tabs.push_back({tab->title(), tab->icon()});
-        else // another element used as a tab
-            tabs.push_back({c.node().string("title", "Tab"), c.node().string("icon", "")});
+        if (count == tabs.size()) tabs.emplace_back();
+        md::TabInfo& info = tabs[count++];
+        if (const Tab* tab = c.as<Tab>()) {
+            info.label = tab->title();
+            info.icon = tab->icon();
+        } else { // another element used as a tab
+            info.label = c.node().string("title", "Tab");
+            info.icon = c.node().string("icon", "");
+        }
     });
+    tabs.resize(count);
     const int last = std::max(0, static_cast<int>(tabs.size()) - 1);
     int cur = std::clamp(indexValue(m_currentIndex) - 1, 0, last); // indexValue: no overflow on INT_MIN
     if (skin().tabs("##tabs", tabs, &cur, m_variant == md::TabsVariant::Secondary, frame.size("width"))) {
@@ -90,6 +100,7 @@ void TabBar::render(Frame& frame) {
         frame.renderStack(c.node());
         ImGui::PopID();
     });
+    m_tabs = std::move(tabs);
 }
 
 int TabBar::currentIndex() const { return m_currentIndex; }

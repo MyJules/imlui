@@ -75,9 +75,9 @@ These are handled by the renderer (`Renderer::render`) for every element.
 |---|---|---|---|
 | `id` | string | — | Makes the element reachable by name: `nameField.text` at app level, `ids.nameField` inside a [component or delegate](lua-api.md#element-ids), which has its own scope. Ids are weak (they don't keep the element alive); a duplicate in a scope is reported, and so is an app-level id that collides with a `ui` member or a Lua global, since the name would resolve to that instead. Every constructor registers it (`ui.registerId`), the Lua-side `Repeater`, `ListView`, `If`, `Loader` and `Responsive` included: `ListView { id = "list" }` is `list`. |
 | `parent` | element | — | *Read-only, Lua side.* The element that lays this one out (inline containers are skipped), `nil` for the root: `self.parent` in a binding or handler. A weak reference, kept in a side table; assigning it has no effect (the next sync drops the field; debug builds report it). See [`self.parent`](lua-api.md#selfparent). |
-| `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) |
+| `visible` | bool | `true` | `false` skips the element entirely: it isn't rendered and takes no space. On an inline container it hides all of its children. (A `Grid` keeps a hidden child's empty cell.) A binding runs once a frame, however many passes a layout makes over its children (so do `width`, `fillWidth` and `height` bindings); a handler that ran in between makes the next pass run it again. |
 | `enabled` | bool | `true` | `false` disables the element and everything inside it, with the Material disabled colors. |
-| `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. |
+| `tooltip` | string | — | A plain tooltip (inverse surface colors, `bodySmall`) on hover, also while disabled. Read only while the element is hovered: a binding that formats the text costs nothing otherwise. |
 
 ### Sizes
 
@@ -118,6 +118,12 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 
 Non-visual children are rendered in place and don't count for the spacing. Children that hold the item being edited
 or dragged, the keyboard focus, an open popup or a non-visual element (a `Dialog`, a `Timer`) are never culled.
+
+**Long lists belong in a `ListView`.** Culling skips the rendering of a child out of view, not the visit: a stack
+still reads each child's `visible` and lays out its cached size, every frame, so a `Column` (or a `Repeater` in
+one) of 10,000 children costs 10,000 cheap steps a frame even when 20 are in view, and builds every delegate up
+front. A [`ListView`](#listview) builds and visits only the items in and near view, so a frame costs the same for any
+length.
 
 How `align` knows a child's width before drawing it: every built-in element whose size follows from its props, the
 font and the theme knows it up front (its *intrinsic size*: `Text`, `Icon`, `Button`, `Checkbox`, `Chip`,
@@ -380,7 +386,8 @@ array children are used, like a `ScrollView`. It takes every `ScrollView` prop. 
 
 Item heights. With `itemHeight`, finding the items in view costs the same for any length. Without it, the items
 are measured as they render, and the content height (the scroll range) is the measured heights plus the average for
-the items not rendered yet, so it settles as you scroll. When items above the view turn out taller or shorter than
+the items not rendered yet, so it settles as you scroll. Measured heights are pixels: after a zoom or a move to a
+monitor with another scale they are scaled with it until the items render again. When items above the view turn out taller or shorter than
 assumed, the scroll moves by the same amount on the next frame, so what is in view stays where it is. A delegate
 that returns `nil`, or a hidden or non-visual element, takes no space and no `spacing`; an inline delegate (an `If`,
 a `Repeater`) is one item made of its children, stacked.
@@ -401,6 +408,11 @@ What virtualization changes:
 - **An item that holds the active item** (a `TextField` being edited, a `Slider` being dragged), the nav focus, an
   open popup or a non-visual element (a `Dialog`, a `Timer`) keeps rendering, at its place, after it scrolled out of
   range, like a culled child would ([culling](#stacking-containers)'s rules); at most 16 such items per list.
+- **A model shows at most 4,194,304 (2^22) items.** A longer one (a numeric `model = math.huge`, a count gone wrong)
+  shows its first 2^22 items, and the excess is reported once: the measured heights of more would take gigabytes
+  (20 bytes an item with measured heights).
+- **A model that shrinks while the list renders** (a delegate's handler that calls `model:clear()`) ends the render
+  where `__range` returned fewer delegates than asked for; the next frame, requested, shows what the model holds now.
 - `cull` and `ui.setCulling` don't change which delegates a `ListView` builds; they apply to its own children when it
   has no `delegate`, and inside each delegate as in any stack.
 - With a `key`, items that share a key get one delegate each in the order they're shown, which can pair them up

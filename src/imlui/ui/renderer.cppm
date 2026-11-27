@@ -60,6 +60,13 @@ public:
         /// never reused (created now if the table has none yet). 0 when it has no instance: an unregistered type,
         /// or a constructor that threw (reported).
         [[nodiscard]] virtual std::uint64_t elementId(const luaui::Node& node) = 0;
+        /// elementId() and kind() at once: what Frame::Child asks of every child a layout visits, on every pass.
+        struct Identity {
+            std::uint64_t id = 0;
+            Kind kind = Kind::Unknown;
+        };
+        /// By default elementId() and kind(); an implementation can answer both with one lookup of the instance.
+        [[nodiscard]] virtual Identity identity(const luaui::Node& node);
 
         virtual ~Types() = default;
     };
@@ -95,6 +102,10 @@ public:
 
     /// The element's identity (Types::elementId): unique, never reused; 0 without an instance.
     [[nodiscard]] std::uint64_t elementId(const luaui::Node& node);
+    /// elementId() and the element's kind at once (Types::identity), for Frame::Child.
+    [[nodiscard]] Types::Identity identity(const luaui::Node& node);
+    /// The ImGui ID in the current ID scope of the element whose elementId() is `id`: elementImGuiId().
+    [[nodiscard]] static ImGuiID imguiId(std::uint64_t id);
     /// The ImGui ID of the element in the current ID scope, made from elementId(): the ID of the scope render()
     /// pushes for it, and its key in the layout cache.
     [[nodiscard]] ImGuiID elementImGuiId(const luaui::Node& node);
@@ -125,7 +136,7 @@ public:
                 if (element && inl) {
                     luaui::Node c{state, lua::gettop(state)};
                     const Nesting level{*this};
-                    if (level && c.boolean(luaui::keys::visible, true)) forEachChild(c, f);
+                    if (level && shown(c)) forEachChild(c, f);
                 } else if (element) {
                     f(lua::gettop(state));
                 }
@@ -149,14 +160,20 @@ public:
     /// frame: for a layout that can't place it yet, on the first frame it has neither an intrinsic size nor a
     /// size in the layout cache, so it doesn't flash in the wrong place.
     bool renderUnseen(lua::State* state, int idx);
-    /// render() of an element whose `visible` the caller has just read as true (Frame::Child): not read again.
+    /// render() of an element whose `visible` the caller has just read as true: not read again.
     bool renderShown(lua::State* state, int idx);
+    /// renderShown() of an element whose identity() the caller knows (Frame::Child): not looked up again.
+    bool renderShown(const luaui::Node& node, const Types::Identity& identity);
 
     /// Renders children top-to-bottom. `spacing` (dp) overrides the gap
     /// between visible items; `align` positions them horizontally in the layout box (imlui.ui.layout_box), by their
     /// intrinsic widths or else last frame's (imlui.ui.layout_cache). Returns the right edge (screen x) of the widest
     /// visual child, or the stack's left edge without one: for a container that pads its content on the right.
     float renderStack(const luaui::Node& node);
+    /// The same with the gap given: an element that holds its `spacing` synced (Column, ScrollView, Card) passes it, so
+    /// the stack doesn't read it from the table again. (`align` is read from the table: a name that isn't an Align
+    /// places the children at the start, while the element's property keeps the value it had.)
+    float renderStack(const luaui::Node& node, std::optional<double> spacing);
     /// The `align` renderStack(node) places the children by, read from the table (a value or a binding): Start when
     /// it is unset or not an Align name. The element's `align` property (Column's, StackAlign) reports such a name,
     /// once, when its field is written: this read doesn't, as it runs every frame.
@@ -165,6 +182,8 @@ public:
     /// sizes (and ImGui's whole-pixel line advance); {0, 0} without visual children. nullopt when a child has none,
     /// or when an aligned stack is in an auto-sized window (it aligns in the widest child of the last frame).
     [[nodiscard]] std::optional<ImVec2> stackSize(const luaui::Node& node, float maxWidth);
+    [[nodiscard]] std::optional<ImVec2> stackSize(const luaui::Node& node, float maxWidth,
+                                                  std::optional<double> spacing);
 
     /// Whether the children of `node` that are out of view are skipped (imlui.ui.culling): culling is on
     /// (ui.setCulling) and `node`'s `cull` prop isn't false. renderStack() and Grid cull.
@@ -220,7 +239,8 @@ public:
     class Culling {
     public:
         /// `width`: the width the container gives its children. Culled children keep the sizes they had at the
-        /// width they last rendered in, so on a frame it differs from the last one's (a resize) nothing is culled.
+        /// width and the DPI scale (dpiScale(): a zoom, another monitor) they last rendered at, so on a frame either
+        /// differs from the last one's (a resize, a zoom) nothing is culled.
         Culling(Renderer& renderer, const luaui::Node& node, float width);
         ~Culling();
         Culling(const Culling&) = delete;
@@ -299,12 +319,13 @@ private:
     /// the next pass call it again. Returns false, with nothing pushed, when it failed (reported) or returned no
     /// table.
     bool pushChildren(const luaui::Node& node);
-    /// render() from the element's ID scope on, for a known type.
-    bool renderElement(const luaui::Node& node, Types::Kind kind);
+    /// render() from the element's ID scope on, for a known type; `key` its elementId().
+    bool renderElement(const luaui::Node& node, Types::Kind kind, std::uint64_t key);
 
     /// Culling's memo of a container's children, by an ImGui ID in the container's scope.
     struct CullMemo {
         float width = -1.0f;
+        float scale = 0.0f; ///< dpiScale() on that frame
         int frame = -1;
         std::vector<Culling::Child> children;
     };
@@ -379,6 +400,8 @@ void Renderer::setWindowTitle(std::string title) { m_title = std::move(title); }
 ImageCache* Renderer::images() const { return m_images; }
 void Renderer::setImages(ImageCache* images) { m_images = images; }
 
+Renderer::Types::Identity Renderer::Types::identity(const Node& node) { return {elementId(node), kind(node)}; }
+
 bool Renderer::render(lua::State* state, int idx) {
     lua::checkstack(state, 32);
     const Node n{state, idx};
@@ -387,19 +410,23 @@ bool Renderer::render(lua::State* state, int idx) {
         luaui::reportError("unknown element type '" + n.type() + "'");
         return false;
     }
-    if (!n.boolean(luaui::keys::visible, true)) return false;
-    return renderElement(n, kind);
+    if (!shown(n)) return false;
+    return renderElement(n, kind, elementId(n));
 }
 
 bool Renderer::renderShown(lua::State* state, int idx) {
     lua::checkstack(state, 32);
     const Node n{state, idx};
-    const Types::Kind kind = m_types.kind(n);
-    if (kind == Types::Kind::Unknown) {
-        luaui::reportError("unknown element type '" + n.type() + "'");
+    return renderShown(n, identity(n));
+}
+
+bool Renderer::renderShown(const Node& node, const Types::Identity& identity) {
+    lua::checkstack(node.state(), 32);
+    if (identity.kind == Types::Kind::Unknown) {
+        luaui::reportError("unknown element type '" + node.type() + "'");
         return false;
     }
-    return renderElement(n, kind);
+    return renderElement(node, identity.kind, identity.id);
 }
 
 Renderer::Nesting::Nesting(Renderer& renderer) : m_depth{renderer.m_depth}, m_ok{++m_depth <= maxDepth} {
@@ -423,7 +450,7 @@ void Renderer::reportTooDeep(int depth, bool stack) {
                            " levels (does an element contain itself?); the deeper levels are skipped");
 }
 
-bool Renderer::renderElement(const Node& n, Types::Kind kind) {
+bool Renderer::renderElement(const Node& n, Types::Kind kind, std::uint64_t key) {
     // Every visual element is exactly one layout item (a group), so composite elements (label + field, ...) behave
     // inside Rows.
     const bool visual = kind == Types::Kind::Visual;
@@ -435,18 +462,13 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
         if (visual) layout::recordSize(ImGui::GetID(idKey(key)), {0.0f, 0.0f});
     };
     const Nesting level{*this};
-    if (!level) {
-        recordNothing(elementId(n));
+    if (!level || key == 0) { // key 0: no instance, its constructor threw (reported)
+        recordNothing(key);
         return false;
     }
-    const std::uint64_t key = elementId(n);
-    if (key == 0) { // no instance: its constructor threw, which was reported
-        recordNothing(0);
-        return false;
-    }
-    const ImGuiID id = ImGui::GetID(idKey(key));
+    const ImGuiID id = imguiId(key);
     const MaterialStacksGuard stacks;
-    ImGui::PushID(idKey(key));
+    ImGui::PushOverrideID(id); // what PushID(idKey(key)) pushes, without hashing it again
     const bool disabled = n.has(luaui::keys::enabled) && !n.boolean(luaui::keys::enabled, true);
     if (disabled) ImGui::BeginDisabled();
     const std::uint64_t provisional = m_provisional;
@@ -459,15 +481,20 @@ bool Renderer::renderElement(const Node& n, Types::Kind kind) {
         ImGui::EndGroup();
         layout::recordSize(id, ImGui::GetItemRectSize(), m_provisional != provisional);
     }
-    if (n.has(luaui::keys::tooltip)) skin().tooltip(n.string("tooltip"));
+    // The text (a binding, often a formatted string) is read only while the element is hovered: the tooltip's own
+    // delay, and the frames it asks for meanwhile, start there.
+    if (n.has(luaui::keys::tooltip) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        skin().tooltip(n.string("tooltip"));
     if (disabled) ImGui::EndDisabled();
     ImGui::PopID();
     return true;
 }
 
 std::uint64_t Renderer::elementId(const Node& node) { return m_types.elementId(node); }
-ImGuiID Renderer::elementImGuiId(const Node& node) { return ImGui::GetID(idKey(elementId(node))); }
-void Renderer::pushElementId(const Node& node) { ImGui::PushID(idKey(elementId(node))); }
+Renderer::Types::Identity Renderer::identity(const Node& node) { return m_types.identity(node); }
+ImGuiID Renderer::imguiId(std::uint64_t id) { return ImGui::GetID(idKey(id)); }
+ImGuiID Renderer::elementImGuiId(const Node& node) { return imguiId(elementId(node)); }
+void Renderer::pushElementId(const Node& node) { ImGui::PushOverrideID(elementImGuiId(node)); }
 
 bool Renderer::pushChildren(const Node& node) {
     lua::State* state = node.state();
@@ -503,25 +530,29 @@ bool Renderer::pushChildren(const Node& node) {
             lua::settop(state, fn);
             return true;
         }
+        lua::settop(state, entry); // stale: refilled below, so an element costs no new table a frame
+    } else {
+        lua::pop(state);
+        lua::createtable(state, 3, 0);
+        lua::pushvalue(state, node.index());
+        lua::pushvalue(state, -2);
+        lua::rawset(state, cache);
     }
-    lua::settop(state, cache);
+    const int entry = lua::gettop(state);
     lua::pushvalue(state, fn);
     lua::pushvalue(state, node.index());
     // A read (safeRead): it doesn't move luaui::changes(), so the stamp taken before the call still holds after it.
     if (!luaui::safeRead(state, 1, 1) || !lua::istable(state, -1)) {
-        lua::settop(state, fn - 1);
+        lua::settop(state, fn - 1); // the entry keeps its old stamp: the next pass calls the function again
         return false;
     }
     const int list = lua::gettop(state);
-    lua::pushvalue(state, node.index());
-    lua::createtable(state, 3, 0);
     lua::pushvalue(state, list);
-    lua::rawseti(state, -2, 1);
+    lua::rawseti(state, entry, 1);
     lua::pushinteger(state, frame);
-    lua::rawseti(state, -2, 2);
+    lua::rawseti(state, entry, 2);
     lua::pushinteger(state, changes);
-    lua::rawseti(state, -2, 3);
-    lua::rawset(state, cache);
+    lua::rawseti(state, entry, 3);
     lua::insert(state, fn); // the children where the function was
     lua::settop(state, fn);
     return true;
@@ -565,8 +596,9 @@ Align Renderer::stackAlign(const Node& node) {
     return align;
 }
 
-float Renderer::renderStack(const Node& node) {
-    const auto spacing = node.number("spacing");
+float Renderer::renderStack(const Node& node) { return renderStack(node, node.number("spacing")); }
+
+float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
     const float align = alignFactor(stackAlign(node));
     lua::State* state = node.state();
     const float boxAvail = layout::availableWidth();
@@ -602,7 +634,7 @@ float Renderer::renderStack(const Node& node) {
             return;
         }
         Node c{state, idx};
-        if (!c.boolean(luaui::keys::visible, true)) return;
+        if (!shown(c)) return;
         if (!first && spacing)
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
                                  ImGui::GetStyle().ItemSpacing.y);
@@ -728,9 +760,12 @@ Renderer::Culling::Culling(Renderer& renderer, const Node& node, float width)
     CullMemo& memo = memos.byId[ImGui::GetID("##imlui.cull")];
     if (memo.frame == frame) return; // rendered twice in a frame (one element in two places): no memo, no culling
     m_cullsBelow = true;
-    m_culls = memo.frame >= 0 && std::fabs(memo.width - width) <= 0.5f;
+    // The cached sizes are in pixels: a zoom or another monitor's scale changes them, as a resize does.
+    const float scale = dpiScale();
+    m_culls = memo.frame >= 0 && std::fabs(memo.width - width) <= 0.5f && memo.scale == scale;
     memo.frame = frame;
     memo.width = width;
+    memo.scale = scale;
     m_children = &memo.children;
 }
 
@@ -811,7 +846,10 @@ std::optional<Renderer::Skipped> Renderer::skipOutOfView(ImGuiID key, ImVec2 at,
 }
 
 std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
-    const auto spacing = node.number("spacing");
+    return stackSize(node, maxWidth, node.number("spacing"));
+}
+
+std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth, std::optional<double> spacing) {
     const float align = alignFactor(stackAlign(node));
     if (align > 0.0f && layout::shrinkToFit()) return std::nullopt; // aligned in last frame's widest child
     lua::State* state = node.state();
@@ -821,7 +859,7 @@ std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth) {
     forEachChild(node, [&](int idx) {
         if (!known || !isVisual(state, idx)) return;
         const Node c{state, idx};
-        if (!c.boolean(luaui::keys::visible, true)) return;
+        if (!shown(c)) return;
         if (!first && spacing) y += static_cast<float>(*spacing) * dpiScale() - lineGap;
         const std::optional<ImVec2> size = intrinsicSize(c, maxWidth);
         if (!size) {

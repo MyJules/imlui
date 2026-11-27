@@ -109,6 +109,8 @@ public:
     private:
         const Frame& m_frame;
         luaui::Node m_node;
+        /// Its identity and kind, looked up once (Renderer::identity): render() needs no other lookup.
+        Renderer::Types::Identity m_identity;
         ImGuiID m_id;
         bool m_visual;
         /// The last intrinsicSize() query (maxWidth, result): a layout asks for the width and the height.
@@ -127,6 +129,9 @@ public:
     void renderChildren();
     /// Renders the children with the `spacing`/`align` props, like Column.
     void renderStack();
+    /// The same with the `spacing` given: an element that holds it synced (Column's, ScrollView's) passes its own, so
+    /// the stack doesn't read it from the table again.
+    void renderStack(std::optional<double> spacing);
     /// The same for the children of another element, e.g. the content of the current Tab:
     /// `frame.renderStack(child.node())`. Uses that element's `spacing`/`align`.
     void renderChildren(const luaui::Node& parent);
@@ -135,6 +140,7 @@ public:
     /// container's intrinsicSize(). nullopt when a visual child has none; {0, 0} without visual children.
     [[nodiscard]] std::optional<ImVec2> stackSize(float maxWidth) const;
     [[nodiscard]] std::optional<ImVec2> stackSize(const luaui::Node& parent, float maxWidth) const;
+    [[nodiscard]] std::optional<ImVec2> stackSize(float maxWidth, std::optional<double> spacing) const;
 
     /// Calls f(Frame::Child&) for every visible child element (inline containers such as Repeater and If
     /// spliced in, hidden children skipped), for custom layouts: place the cursor, then child.render().
@@ -149,7 +155,7 @@ public:
         lua::State* state = parent.state();
         m_renderer.forEachChild(parent, [&](int idx) {
             const luaui::Node node{state, idx};
-            if (!node.boolean(luaui::keys::visible, true)) return;
+            if (!shown(node)) return;
             Child child{*this, node};
             f(child);
         });
@@ -164,7 +170,7 @@ public:
         bool called = false;
         if (m_node.push(key) == lua::Type::Table) {
             const luaui::Node node{state, -1};
-            if (!node.type().empty() && node.boolean("visible", true)) {
+            if (!node.type().empty() && shown(node)) {
                 Child child{*this, node};
                 f(child);
                 called = true;
@@ -244,12 +250,12 @@ namespace imlui {
 // ------------------------------------------------------------ Frame::Child
 
 Frame::Child::Child(const Frame& frame, const luaui::Node& node)
-    : m_frame{frame}, m_node{node}, m_id{frame.m_renderer.elementImGuiId(node)},
-      m_visual{frame.m_renderer.isVisual(node.state(), node.index())} {}
+    : m_frame{frame}, m_node{node}, m_identity{frame.m_renderer.identity(node)}, m_id{Renderer::imguiId(m_identity.id)},
+      m_visual{m_identity.kind == Renderer::Types::Kind::Visual} {}
 
 // Every Child is made right after its `visible` was read as true (forEachChild, withElementProp, ListView), so the
 // render doesn't read it again.
-bool Frame::Child::render() { return m_frame.m_renderer.renderShown(m_node.state(), m_node.index()); }
+bool Frame::Child::render() { return m_frame.m_renderer.renderShown(m_node, m_identity); }
 
 bool Frame::Child::render(float right) {
     const layout::BoxScope box{layout::boxTo(right)};
@@ -267,7 +273,7 @@ bool Frame::Child::fillsWidth() const {
 const luaui::Node& Frame::Child::node() const { return m_node; }
 std::string Frame::Child::type() const { return m_node.type(); }
 ImGuiID Frame::Child::id() const { return m_id; }
-void Frame::Child::pushId() const { m_frame.m_renderer.pushElementId(m_node); }
+void Frame::Child::pushId() const { ImGui::PushOverrideID(m_id); } // what Renderer::pushElementId pushes
 
 std::optional<ImVec2> Frame::Child::intrinsicSize(float maxWidth) const {
     if (!m_visual) return std::nullopt;
@@ -320,11 +326,15 @@ Frame::Frame(Renderer& renderer, const luaui::Node& node, const InstanceLookup* 
 
 void Frame::renderChildren() { m_renderer.renderChildren(m_node); }
 void Frame::renderStack() { m_renderer.renderStack(m_node); }
+void Frame::renderStack(std::optional<double> spacing) { m_renderer.renderStack(m_node, spacing); }
 void Frame::renderChildren(const luaui::Node& parent) { m_renderer.renderChildren(parent); }
 void Frame::renderStack(const luaui::Node& parent) { m_renderer.renderStack(parent); }
 std::optional<ImVec2> Frame::stackSize(float maxWidth) const { return m_renderer.stackSize(m_node, maxWidth); }
 std::optional<ImVec2> Frame::stackSize(const luaui::Node& parent, float maxWidth) const {
     return m_renderer.stackSize(parent, maxWidth);
+}
+std::optional<ImVec2> Frame::stackSize(float maxWidth, std::optional<double> spacing) const {
+    return m_renderer.stackSize(m_node, maxWidth, spacing);
 }
 
 bool Frame::renderElementProp(const char* key) {

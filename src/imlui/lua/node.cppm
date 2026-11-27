@@ -63,6 +63,9 @@ public:
     /// Pushes the resolved value of property `key`; returns its Lua type.
     lua::Type push(const char* key) const;
     lua::Type push(const lua::Key& key) const;
+    /// push() after pushRaw(): replaces the raw value on top with the property's value (a binding on top is called,
+    /// a bind object read) and returns its type.
+    lua::Type resolveTop() const;
 
     [[nodiscard]] bool has(const char* key) const;
     [[nodiscard]] bool has(const lua::Key& key) const;
@@ -105,8 +108,6 @@ private:
     /// pushRaw() after the table's own field was pushed (of type `t`): an absent one is looked up through the table's
     /// own metatable (not a shared one), by `key`.
     lua::Type pushRawRest(lua::Type t, const char* key) const;
-    /// push() after pushRaw(): a binding on top is called, a bind object read; returns the type of the value.
-    lua::Type resolveTop() const;
     /// The number on top (or nullopt), popped.
     std::optional<double> popNumber() const;
     /// The boolean on top (of type `t`; `def` for nil), popped.

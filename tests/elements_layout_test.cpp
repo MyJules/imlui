@@ -1966,6 +1966,59 @@ TEST_F(LayoutTest, ComposedSizesSyncEachElementOncePerFrame) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// The props every pass over the children reads of each child before syncing it, `visible`, `width`, `fillWidth` and
+// `height`, run their bindings once a frame too: a Row's child is visited by the Row's passes (which fill, their sizes,
+// the render), by the fill and size questions of its parent's `align` and by the parent's own render. Lua that may
+// change tables running in between (a handler) makes the next pass run them again; a binding that returned false
+// (hidden) is no exception.
+TEST_F(LayoutTest, VisibleAndSizeBindingsRunOncePerFrame) {
+    run(R"(
+        counts = {}
+        function counted(name, value)
+            return function() counts[name] = (counts[name] or 0) + 1 return value end
+        end
+        root = Column { align = "center",
+                        Row { Probe { w = 20, intrinsic = true, visible = counted("visible", true),
+                                      width = counted("width", 30) },
+                              Probe { w = 10, intrinsic = true, fillWidth = counted("fill", true) },
+                              Spacer { height = counted("height", 6) },
+                              Probe { visible = counted("hidden", false) } } })");
+    m_h.renderFrames("root", 3);
+    run("counts = {}");
+    m_h.renderFrames("root", 2);
+    for (const char* name : {"visible", "width", "fill", "height", "hidden"})
+        check(std::string{"counts."} + name + " == 2");
+    run(R"(
+        counts = {}
+        mid = Column { Row { Writer { onRender = function() end }, Probe { visible = counted("mid", true) } } })");
+    m_h.renderFrames("mid", 3);
+    run("counts = {}");
+    m_h.renderFrame("mid");
+    check("counts.mid == 2"); // the Row's plan, then its render after the handler ran
+    // The memo keeps the tables of recent frames only: elements that come and go every frame don't make it grow.
+    run(R"(
+        churn = Row { Repeater { model = function() local t = {} for i = 1, 300 do t[i] = {} end return t end,
+                                 delegate = function() return Probe { visible = function() return true end } end } })");
+    m_h.renderFrames("churn", 20); // 6000 delegates, 300 a frame
+    EXPECT_LE(propMemoEntries(), 3000u);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A `tooltip` is read only while its element is hovered: a binding that formats the text doesn't run otherwise.
+TEST_F(LayoutTest, ATooltipIsReadOnlyWhileHovered) {
+    run(R"(
+        reads = 0
+        tipped = Probe { w = 40, h = 20, tooltip = function() reads = reads + 1 return "tip" end }
+        root = Column { Probe { w = 40, h = 20 }, tipped })");
+    m_h.renderFrames("root", 3);
+    check("reads == 0");
+    const ImVec2 at = probe("tipped").pos();
+    run("native.injectMouse(" + std::to_string(at.x + 5.0f) + ", " + std::to_string(at.y + 5.0f) + ")");
+    m_h.renderFrames("root", 2);
+    check("reads > 0");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // A custom element without an intrinsic size makes its Column fall back to the layout cache: no intrinsic size, so
 // a centered parent renders it unseen on its first frame, and it is in place on the next.
 TEST_F(LayoutTest, AStackWithACustomChildFallsBackToTheCache) {
