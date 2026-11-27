@@ -41,6 +41,12 @@ import imlui.skin.fluent.inputs;
 // ---- end (B) imports
 // ---- (C) lists, menus, navigation, containers, messages, chrome: imports
 import imlui.skin.fluent.chrome;
+// -- (C1) lists, menus, navigation
+import imlui.skin.fluent.list;
+import imlui.skin.fluent.menu;
+import imlui.skin.fluent.navigation;
+import imlui.skin.fluent.navigation_drawer;
+import imlui.skin.fluent.tabs;
 // ---- end (C) imports
 
 export namespace imlui {
@@ -110,6 +116,33 @@ public:
     [[nodiscard]] std::optional<Color> applicationBackground() const override;
     [[nodiscard]] WindowChrome windowChrome() const override;
     [[nodiscard]] float scrollViewRounding() const override;
+    // -- (C1) lists, menus, navigation
+    bool listItem(const char* id, const md::ListItemOptions& o) const override;
+    [[nodiscard]] ImVec2 listItemSize(const md::ListItemOptions& o) const override;
+    bool expander(const char* id, std::string_view title, std::string_view supporting, bool* open,
+                  float width) const override;
+    [[nodiscard]] ImVec2 expanderSize(std::string_view supporting, float width) const override;
+    bool menuItem(const char* id, std::string_view label, std::string_view leadingIcon, std::string_view trailing,
+                  bool selected, bool closeOnClick, bool reserveIcon) const override;
+    bool beginMenu(const char* label, float minWidth) const override;
+    void endMenu() const override;
+    bool beginAnchoredMenu(const char* popupId, ImVec2 a, ImVec2 b, float minWidth) const override;
+    void endAnchoredMenu() const override;
+    bool tabs(const char* id, const std::vector<md::TabInfo>& items, int* current, bool secondary,
+              float width) const override;
+    bool navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                        std::string_view badge, float width) const override;
+    [[nodiscard]] ImVec2 navigationItemSize(float width) const override;
+    bool navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                           std::string_view badge, float width) const override;
+    [[nodiscard]] ImVec2 navigationBarItemSize(float width) const override;
+    bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                            std::string_view badge, float width) const override;
+    [[nodiscard]] ImVec2 navigationRailItemSize(float width) const override;
+    bool beginModalDrawer(const char* id, bool* open, float width) const override;
+    void endModalDrawer() const override;
+    [[nodiscard]] Color navigationBarColor() const override;
+    [[nodiscard]] Color navigationRailColor() const override;
     // ======== end (C) ========
 };
 
@@ -201,6 +234,55 @@ ImVec2 FluentSkin::colorFieldSize(Color c, std::string_view label, float width) 
 std::optional<Color> FluentSkin::applicationBackground() const { return fluent::applicationBackground(look()); }
 Skin::WindowChrome FluentSkin::windowChrome() const { return fluent::windowChrome(look()); }
 float FluentSkin::scrollViewRounding() const { return fluent::scrollViewRounding(look()); }
+// -- (C1) lists, menus, navigation
+bool FluentSkin::listItem(const char* id, const md::ListItemOptions& o) const {
+    return fluent::listItem(look(), id, o);
+}
+ImVec2 FluentSkin::listItemSize(const md::ListItemOptions& o) const { return fluent::listItemSize(look(), o); }
+bool FluentSkin::expander(const char* id, std::string_view title, std::string_view supporting, bool* open,
+                          float width) const {
+    return fluent::expander(look(), id, title, supporting, open, width);
+}
+ImVec2 FluentSkin::expanderSize(std::string_view supporting, float width) const {
+    return fluent::expanderSize(look(), supporting, width);
+}
+bool FluentSkin::menuItem(const char* id, std::string_view label, std::string_view leadingIcon,
+                          std::string_view trailing, bool selected, bool closeOnClick, bool reserveIcon) const {
+    return fluent::menuItem(look(), id, label, leadingIcon, trailing, selected, closeOnClick, reserveIcon);
+}
+bool FluentSkin::beginMenu(const char* label, float minWidth) const {
+    return fluent::beginMenu(look(), label, minWidth);
+}
+void FluentSkin::endMenu() const { fluent::endMenu(); }
+bool FluentSkin::beginAnchoredMenu(const char* popupId, ImVec2 a, ImVec2 b, float minWidth) const {
+    return fluent::beginAnchoredMenu(look(), popupId, a, b, minWidth);
+}
+void FluentSkin::endAnchoredMenu() const { fluent::endAnchoredMenu(); }
+bool FluentSkin::tabs(const char* id, const std::vector<md::TabInfo>& items, int* current, bool secondary,
+                      float width) const {
+    return fluent::tabs(look(), id, items, current, secondary, width);
+}
+bool FluentSkin::navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                                std::string_view badge, float width) const {
+    return fluent::navigationItem(look(), id, iconName, label, selected, badge, width);
+}
+ImVec2 FluentSkin::navigationItemSize(float width) const { return fluent::navigationItemSize(look(), width); }
+bool FluentSkin::navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                                   std::string_view badge, float width) const {
+    return fluent::navigationBarItem(look(), id, iconName, label, selected, badge, width);
+}
+ImVec2 FluentSkin::navigationBarItemSize(float width) const { return fluent::navigationBarItemSize(look(), width); }
+bool FluentSkin::navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
+                                    std::string_view badge, float width) const {
+    return fluent::navigationRailItem(look(), id, iconName, label, selected, badge, width);
+}
+ImVec2 FluentSkin::navigationRailItemSize(float width) const { return fluent::navigationRailItemSize(look(), width); }
+bool FluentSkin::beginModalDrawer(const char* id, bool* open, float width) const {
+    return fluent::beginModalDrawer(look(), id, open, width);
+}
+void FluentSkin::endModalDrawer() const { fluent::endModalDrawer(); }
+Color FluentSkin::navigationBarColor() const { return fluent::navigationBarColor(look()); }
+Color FluentSkin::navigationRailColor() const { return fluent::navigationRailColor(look()); }
 // ======== end (C) ========
 
 } // namespace imlui

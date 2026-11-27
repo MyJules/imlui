@@ -134,6 +134,28 @@ void drawContent(ImDrawList* dl, const Content& c, float x, float cy, Color colo
 [[nodiscard]] Color strongStroke(const Look& look, State state);
 // ---- end (A)
 
+// ---- Selection: rows and navigation items (lists, menus, navigation panes)
+
+/// A row-like item's highlight lies inside its row, `plateInsetX` dp from its sides and `plateInsetY` dp from its top
+/// and bottom (WinUI's ListViewItem, MenuFlyoutItem and NavigationViewItem margins).
+inline constexpr float plateInsetX = 4.0f;
+inline constexpr float plateInsetY = 2.0f;
+/// The selection indicator: a pill 3dp thick and 16dp long, 10dp while its item is pressed.
+inline constexpr float indicatorThickness = 3.0f;
+inline constexpr float indicatorLength = 16.0f;
+inline constexpr float indicatorPressedLength = 10.0f;
+
+/// A selected subtle item's colors (a list row, a navigation item) in `state`: the subtle fills one step on (at rest
+/// subtleHover, hovered subtlePressed, pressed subtleHover; disabled subtlePressed, so the selection still shows).
+[[nodiscard]] ControlColors selectedColors(const Look& look, State state);
+/// A subtle item's colors in `state`, `selected` (0..1, an animated selection) of the way from the unselected ones
+/// to selectedColors().
+[[nodiscard]] ControlColors rowColors(const Look& look, State state, float selected);
+/// Draws the selection indicator centered on `c`, `length` pixels long (indicatorLength in dp at full size),
+/// vertical (at a row's left edge) or horizontal (under a selector bar item), in accent (accentDisabled when
+/// `disabled`).
+void drawIndicator(ImDrawList* dl, ImVec2 c, float length, bool vertical, bool disabled, const Look& look);
+
 } // namespace imlui::fluent
 
 module :private;
@@ -348,5 +370,35 @@ Color strongStroke(const Look& look, State state) {
     return state == State::Disabled ? look.colors.controlStrongStrokeDisabled : look.colors.controlStrongStroke;
 }
 // ---- end (A)
+
+ControlColors selectedColors(const Look& look, State state) {
+    const Colors& c = look.colors;
+    switch (state) {
+    case State::Rest: return {c.subtleHover, clear, clear, c.text};
+    case State::Hover: return {c.subtlePressed, clear, clear, c.text};
+    case State::Pressed: return {c.subtleHover, clear, clear, c.textSecondary};
+    case State::Disabled: return {c.subtlePressed, clear, clear, c.textDisabled};
+    }
+    return {c.subtleHover, clear, clear, c.text};
+}
+
+ControlColors rowColors(const Look& look, State state, float selected) {
+    ControlColors c = controlColors(look, Fill::Subtle, state);
+    if (selected <= 0.0f) return c;
+    const ControlColors s = selectedColors(look, state);
+    const float t = std::min(selected, 1.0f);
+    // The unselected fill is transparent at rest: fade the selected one in by its alpha, not toward its hue.
+    c.fill = c.fill.a > 0 ? mix(c.fill, s.fill, t) : s.fill.withAlpha(s.fill.a * t);
+    c.text = s.text;
+    return c;
+}
+
+void drawIndicator(ImDrawList* dl, ImVec2 c, float length, bool vertical, bool disabled, const Look& look) {
+    if (length < 1.0f) return;
+    const float th = std::max(1.0f, std::round(dp(indicatorThickness)));
+    const ImVec2 half = vertical ? ImVec2{th * 0.5f, length * 0.5f} : ImVec2{length * 0.5f, th * 0.5f};
+    md::fillRoundRect(dl, {c.x - half.x, c.y - half.y}, {c.x + half.x, c.y + half.y}, th * 0.5f,
+                      disabled ? look.colors.accentDisabled : look.colors.accent);
+}
 
 } // namespace imlui::fluent
