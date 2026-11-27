@@ -16,7 +16,7 @@ flowchart TD
     C --> W
     W --> TH["Theme<br/>imlui.theme.*, imlui.color.*"]
     W --> I["Dear ImGui 1.92<br/>(import imgui)"]
-    I --> G["GLFW + OpenGL 3.3<br/>imlui.platform.window"]
+    I --> G["SDL3 + OpenGL 3.3<br/>imlui.platform.window"]
     E["Engine<br/>imlui.app.engine"] -.owns.-> G
     E -.runs.-> S
     E -.drives.-> R
@@ -34,7 +34,7 @@ flowchart TD
 | **Skin** | `imlui.skin`. The look of the controls: a `Skin` draws and measures each one, and gives the chrome some elements draw themselves; the theme's `design` picks it by name. The base class is Material and calls the Material widgets; another skin (the built-in `FluentSkin`) overrides some controls. See [Skins](#skins). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
 | **Resources** | `imlui.resources`. Every file the engine and the scripts load (Lua, fonts, data) is a resource named `prefix:/path` and served by stacked mounts. See [Resources](#resources). |
-| **ImGui / platform** | Dear ImGui with the GLFW and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. |
+| **ImGui / platform** | Dear ImGui with the SDL3 and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. SDL3 is the window, input and event layer; the renderer is OpenGL 3.3 core. |
 
 ## Frame loop
 
@@ -52,7 +52,8 @@ flowchart TD
      next file check, whichever comes first. With nothing pending, that's the 400 ms hot-reload interval (or forever
      without hot reload, while a scan runs, or when no mount's files can change). While minimized it sleeps at least
      100 ms (but not past a C++ main timer).
-   - `window.waitEvents(timeout)` (`glfwWaitEventsTimeout`). Input or window events start a **settle period** of
+   - `window.waitEvents(timeout)` (`SDL_WaitEventTimeout`, then the rest of the queue). Input or window events
+     start a **settle period** of
      0.3 s, during which every iteration renders, so transitions and hover layers finish.
    - Runs the functions other threads queued with `imlui::post()` / `Engine::post()` (`imlui.ui.main_thread`;
      one that throws is reported like a script error). They may `notify()` and so request a frame. C++ futures
@@ -76,7 +77,8 @@ flowchart TD
 `requestFrameAfter(seconds)` and `requestFramesFor(seconds)` (continuously, the settle period).
 `secondsUntilFrame()` tells the loop when the next frame is due. At the start of a frame,
 `beginFrameRequests()` drops the requests that frame serves, so anything that still needs frames asks again while
-it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`. With vsync on,
+it renders. Requests that come in while the loop sleeps wake it through `platform::Window::postEmptyEvent()`: an SDL
+user event (`SDL_RegisterEvents`) pushed from any thread, at most one in the queue at a time. With vsync on,
 presenting a frame waits for the display, which paces an animation that asks for a frame every frame; with
 `vsync = false` (`platform::Window::Config`) the engine sets a minimum frame interval instead
 (`setMinFrameInterval`: at most the refresh rate of the monitor the window is on, `platform::Window::refreshRate()`
@@ -120,11 +122,15 @@ long slide. The Fluent knob and dot sizes animate in dp, so a zoom or monitor ch
 ### Scaling
 
 `imlui.theme.dpi` holds the monitor **content scale** and the user **zoom**. `dpiScale()` is their product, and
-`dp(v)` converts with it. The window reports content scale changes (`glfwSetWindowContentScaleCallback`), and
+`dp(v)` converts with it. The content scale is SDL's window display scale (`SDL_GetWindowDisplayScale`: the display's
+content scale times the pixel density), and the window reports its changes (`SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED`,
+seen through an event watch, so also while Windows runs the modal loop of a window drag), and
 `ui.setZoom` and the zoom shortcuts schedule a zoom change. At the start of the next frame, `syncScale()` applies
 the zoom and, if the effective scale changed, calls `reapplyTheme()`: the style is rebuilt from an unscaled
 `ImGuiStyle`, then `ScaleAllSizes(dpiScale())` and `FontScaleDpi = dpiScale()` are applied, as for any new
-theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself when it moves to another monitor.
+theme. The window opens at its dp size times the primary display's content scale, and when it moves to a monitor
+with another DPI, SDL resizes it on Windows to the size the OS suggests (`WM_DPICHANGED`), as for a per-monitor
+DPI-aware app.
 
 ### Rendering a frame
 
@@ -151,12 +157,14 @@ theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself wh
    title is only updated when it changes.
 
 **Live resize.** On Windows, the OS runs a modal loop while the user drags the window border, so
-`glfwWaitEventsTimeout()` doesn't return. The engine registers a **refresh callback** that runs the posted functions
-and the due C++ main timers and then `renderFrame()`, and GLFW calls it from its refresh and framebuffer-size callbacks
-(only inside `waitEvents()`, so never during a frame). The UI then lays itself out again during the drag, and worker
+`SDL_WaitEventTimeout()` doesn't return. The engine registers a **refresh callback** that runs the posted functions
+and the due C++ main timers and then `renderFrame()`, and the window calls it from an SDL event watch
+(`SDL_AddEventWatch`, which sees each event as SDL sends it, from inside the modal loop too) for
+`SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` and `SDL_EVENT_WINDOW_EXPOSED` (SDL sends an expose for each repaint and on a
+10 ms timer while the drag lasts), only inside `waitEvents()`, so never during a frame. The UI then lays itself out again during the drag, and worker
 results and `delay()`s don't stall until it ends. Each step of the drag sends a new framebuffer size and then a
 repaint at that size: the repaint is skipped when the frame just presented has that size (`Window::refreshDuringEvents`),
-and vsync is off for the rest of the poll (`glfwSwapInterval(0)`, back to 1 when it returns), so a step costs one
+and vsync is off for the rest of the poll (`SDL_GL_SetSwapInterval(0)`, back to 1 when it returns), so a step costs one
 frame, not two waits for a vertical blank, and the content keeps up with the edge (the compositor presents a windowed
 app's frames without tearing).
 
@@ -1368,10 +1376,10 @@ library's own rules in `src/CMakeLists.txt`):
 |---|---|
 | `bin/` | `imlui_rc`, `imlui_pack`: imported as `imlui::imlui_rc`, `imlui::imlui_pack`, which the helpers run. |
 | `lib/` | `imlui_core` (the modules, exported as `imlui::imlui`, which an app links), `imlui_files` (the library's own files, embedded, and `defaultConfig()`: `imlui::imlui_files`, linked by `imlui::imlui`), `imlui_lua` (`imlui::imlui_lua`), `imlui_glob` (`imlui::imlui_glob`), all static. The build tree's target `imlui` isn't installed. |
-| `lib/imlui/` | The vendored static libraries the library needs: `imlui::ext_lua`, `ext_imgui`, `ext_glfw`, `ext_spdlog` (compiled, `SPDLOG_COMPILED_LIB`, bundled fmt), `ext_stb_image`, `ext_zstd` (the decompressor). Link-only for the app, except through the modules' BMIs. |
+| `lib/imlui/` | The vendored static libraries the library needs: `imlui::ext_lua`, `ext_imgui`, `ext_sdl3` (with `ext_sdl3_headers`), `ext_spdlog` (compiled, `SPDLOG_COMPILED_LIB`, bundled fmt), `ext_stb_image`, `ext_zstd` (the decompressor). Link-only for the app, except through the modules' BMIs. |
 | `lib/cmake/imlui/` | `imluiConfig.cmake` (finds Threads and OpenGL, includes the targets and the helpers), `imluiConfigVersion.cmake` (`SameMinorVersion`: 0.1 accepts 0.1.*, not 0.2), `imluiTargets*.cmake`, `cxx-modules/` (which module each interface unit provides, per configuration), `ImluiResources.cmake`, `ImluiWarnings.cmake`, `ImluiStd.cmake` (builds the module `std` in the app, below). |
 | `include/imlui/modules/` | The module interface units, as laid out in `src/` (`imlui/...`, `wrap/...`). Not `imlui.embedded.imlui`: in an install it's private to `imlui_files`, whose archive holds the blob. |
-| `include/imlui/ext/<name>/` | The vendored headers the wrappers include in their global module fragments: `lua/` (`lua.h`, `lualib.h`, `lauxlib.h`, `luaconf.h`), `imgui/` (the ImGui headers, the GLFW and OpenGL3 backend headers, `imlui_imconfig.h`), `glfw/GLFW/`, `spdlog/spdlog/` (with the bundled fmt), `stb/stb_image.h`, `zstd/` (`zstd.h`, `zstd_errors.h`). Each is its `imlui::ext_*` target's include folder; under `imlui/` so they never meet another copy of the same library. |
+| `include/imlui/ext/<name>/` | The vendored headers the wrappers include in their global module fragments: `lua/` (`lua.h`, `lualib.h`, `lauxlib.h`, `luaconf.h`), `imgui/` (the ImGui headers, the SDL3 and OpenGL3 backend headers, `imlui_imconfig.h`), `SDL/SDL3/` (with the `SDL_revision.h` the build generated), `spdlog/spdlog/` (with the bundled fmt), `stb/stb_image.h`, `zstd/` (`zstd.h`, `zstd_errors.h`). Each is its `imlui::ext_*` target's include folder; under `imlui/` so they never meet another copy of the same library. |
 | `share/imlui/licenses/` | The vendored code's licenses and the fonts'. |
 
 C++20 modules aren't installed as BMIs: a BMI belongs to one compiler version and one set of flags. The interface
@@ -1420,7 +1428,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink, and the replaced one is kept for writers still using it, so writing takes no lock), `setLevel`, `enabled(level)` (spdlog's `should_log`: the `info`/`debug`/... templates check it before formatting, and Lua's `log.*` through `native.logEnabled`) |
-| `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `refreshRate` (of the monitor the window is on; cached until it moves or the monitors change), `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
+| `imlui.platform.window` | `platform::Window` + `Window::Config`: SDL3 window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `refreshRate` (of the monitor the window is on; cached until it moves or the monitors change), `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
 | `imlui.platform.system_fonts` | `systemFontFolder()`: the OS's font folder (`SHGetKnownFolderPath(FOLDERID_Fonts)` on Windows; nullopt elsewhere). See [System fonts](#system-fonts) |
 | `imlui.platform.process` | `executablePath()` (from the OS: `GetModuleFileNameW`, `/proc/self/exe`), `processArguments(argc, argv)` (`ProcessArguments`: the arguments as paths, from the UTF-16 command line on Windows when `argv` is the process's own, and whether it is) |
 | `imlui.platform.stack` | `stackRemaining()`: the bytes of the calling thread's stack left below the caller (`GetCurrentThreadStackLimits` on Windows, less what the thread can't grow into: the guard page, the bottom page and the overflow handler's `SetThreadStackGuarantee`, at least 64 KiB; `pthread_getattr_np` on Linux; nullopt elsewhere), which the renderer checks per level (`Renderer::stackReserve`) |
@@ -1535,7 +1543,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, `unsyncedFrameRate` (the cap with vsync off: the refresh rate, else `fallbackFrameRate`, 240), wake handler |
 | `imlui.ui.main_timers` | C++ main-thread timers: `addMainTimer(seconds, fn)` / `removeMainTimer(id)` on the app clock, no Lua state needed; the engine's loop runs the due ones (`runDueMainTimers`, after the posts, outside a frame) and sleeps at most until the next (`secondsUntilMainTimer`); `clearMainTimers` drops them at shutdown. What `delay()` uses |
-| `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed; only a post into an empty queue calls the wake handler, outside the queue's lock), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs; waits for a thread still inside the old one). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
+| `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed; only a post into an empty queue calls the wake handler, outside the queue's lock), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `Window::postEmptyEvent`, an SDL user event, while it runs; waits for a thread still inside the old one). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
 | `imlui.ui.background` | The background pool: `runInBackground(work, lane)` (any thread; `work(std::stop_token)` on up to `backgroundThreadLimit()` workers, `hardware_concurrency() - 1` clamped to [2, 8], started lazily, first queued first run; `BackgroundLane::Decodes`, the image decodes' lane: up to `decodeThreadLimit` (2) workers of its own, newest first; a throw reported on the main thread), `shutdownBackground(wait)` (both lanes: tokens stopped, queues dropped, workers joined within `wait` or detached; a later task starts a new pool; `Engine::run()` calls it), `backgroundTaskCount` |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `Align` and `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
@@ -1636,15 +1644,16 @@ library's files, so editing them never rebuilds it or re-packs the `.pak` archiv
 
 Vendored code in `external/` is built as ordinary static libraries, with module scanning turned off. Project code
 never includes their headers directly. Only the wrapper modules above do, in their global module fragment. The
-targets are named `imlui_ext_<name>` and reached through the aliases `ext::lua`, `ext::imgui`, `ext::glfw`,
+targets are named `imlui_ext_<name>` and reached through the aliases `ext::lua`, `ext::imgui`, `ext::sdl3`,
 `ext::spdlog`, `ext::stb_image`, `ext::zstd`, `ext::zstd_compress` and `ext::gtest_main`, so they don't clash with an
-app's own copies when imlui is a subproject. GLFW is the exception: it keeps its upstream name `glfw`. When the parent
-project already has `glfw`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is added, imlui uses those
-(`imlui_ext_<name>` is then an INTERFACE target that links the app's and sees its headers as system headers), and
-`IMLUI_INSTALL=ON` stops the configure for `glfw` and spdlog (an install can't carry the app's copy). See
+app's own copies when imlui is a subproject. SDL3 is the exception: it keeps its upstream names (`SDL3-static`,
+`SDL3_Headers`, the aliases `SDL3::SDL3`, `SDL3::SDL3-static`, `SDL3::Headers`). When the parent project already has
+`SDL3::SDL3`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is added, imlui uses those (`imlui_ext_<name>` is then an
+INTERFACE target that links the app's and sees its headers as system headers), and `IMLUI_INSTALL=ON` stops the
+configure for SDL3 and spdlog (an install can't carry the app's copy). See
 `external/CMakeLists.txt` and [Getting started](getting-started.md#1-adding-imlui-to-your-project).
 
-- **Dear ImGui 1.92.9b** is built with the GLFW and OpenGL 3 backends, `IMGUI_DISABLE_OBSOLETE_FUNCTIONS`, and a
+- **Dear ImGui 1.92.9b** is built with the SDL3 (`imgui_impl_sdl3`, from the `v1.92.9b` tag) and OpenGL 3 backends, `IMGUI_DISABLE_OBSOLETE_FUNCTIONS`, and a
   user config (`external/imlui_imconfig.h`). The config routes `IM_ASSERT` to a handler that reports the failing
   expression and the ImGui window it happened in, then aborts. ImGui 1.92 rasterizes glyphs on demand, so every
   text size and icon size stays sharp.
@@ -1667,7 +1676,14 @@ project already has `glfw`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is 
   `__children`, `__native`, each property's name: `TypeInfo::Property::key`, ...) are `lua::Key`s
   (`luaui::keys`); `luaui::Node` takes a Key wherever it takes a name for the hot reads. `tooltip`'s text is read
   only while its element is hovered.
-- **GLFW 3.4** is built via `add_subdirectory` (its CMake does the per-platform work).
+- **SDL 3.4.20** (`external/SDL`, zlib license, tag `release-3.4.20`) is built via `add_subdirectory` (its CMake does
+  the per-platform work) as a static library only. The tree is trimmed to what that build needs (no `test/`,
+  `examples/`, `docs/`, `build-scripts/`, `VisualC*/`, `Xcode/`, `android-project/`, `src/test/`). Only video (with
+  OpenGL) and events are used: audio, GPU, the 2D renderer, camera, joystick and gamepad, haptic, HIDAPI, power,
+  sensor, dialogs and Vulkan are off (their functions exist and fail). `SDL_REVISION` is set, as the archive has no
+  `REVISION.txt`. imlui sets the hints `SDL_HINT_VIDEO_ALLOW_SCREENSAVER` and `SDL_HINT_NO_SIGNAL_HANDLERS` (a UI app
+  leaves the screen saver and Ctrl+C alone), defines `SDL_MAIN_HANDLED` and calls `SDL_SetMainReady()`, so apps keep
+  their plain `main`, and routes SDL's log to imlui's (tag `[sdl]`).
 - **spdlog 1.15.3** is built from its sources as its own CMake would build the static library: `SPDLOG_COMPILED_LIB`
   with the bundled fmt.
 - **GoogleTest 1.17.0** (`googletest/` only, for the tests: `IMLUI_BUILD_TESTS`) is built from `gtest-all.cc` and

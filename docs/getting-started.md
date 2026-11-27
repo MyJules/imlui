@@ -18,7 +18,7 @@ Clang.
 | **Visual Studio or Build Tools, with a Windows SDK** | On Windows, clang uses the MSVC STL and the Windows SDK libraries. If clang can't find them, configure from a *Developer PowerShell for VS*. imlui's modules `import std;`, built from the STL's `modules/std.ixx` (Visual Studio 2022 17.5 or newer). Elsewhere the standard library must ship its module source (libc++ or libstdc++ with `*.modules.json`), or set `IMLUI_STD_MODULE_SOURCE` to it. |
 | OpenGL | Provided by the system driver (`find_package(OpenGL)`). |
 
-You don't install anything else. Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3, stb_image 2.34 and zstd
+You don't install anything else. Dear ImGui 1.92.9b, Lua 5.4.8, SDL 3.4.20, spdlog 1.15.3, stb_image 2.34 and zstd
 1.5.7 are vendored in imlui's `external/` and built as plain static libraries. Roboto Regular/Medium and Material
 Icons Round are in `external/fonts/`, and the library embeds them.
 
@@ -146,14 +146,16 @@ As a subproject imlui sets no global flags, doesn't set `CMAKE_RUNTIME_OUTPUT_DI
 vendored libraries are targets named `imlui_ext_<name>` (aliases `ext::<name>`), so they don't clash with an app's own
 copies, with one exception and one shortcut:
 
-- **GLFW** keeps its upstream target name `glfw` (its own CMake builds it). If the app already has a `glfw` target
-  when it adds imlui (its own copy, or `find_package(glfw3)`), imlui uses that one; an app that adds its own GLFW
-  *after* imlui must guard it with `if(NOT TARGET glfw)`. One executable can only hold one GLFW anyway.
+- **SDL3** keeps its upstream target names (`SDL3-static`, `SDL3_Headers`, the aliases `SDL3::SDL3`,
+  `SDL3::SDL3-static`, `SDL3::Headers`; its own CMake builds it, as a static library). If the app already has an
+  `SDL3::SDL3` target when it adds imlui (its own copy, or `find_package(SDL3)`), imlui uses that one; an app that
+  adds its own SDL3 *after* imlui must guard it with `if(NOT TARGET SDL3::SDL3)`. One executable can only hold one SDL
+  anyway.
 - **spdlog** and **GoogleTest**: if the app already has `spdlog::spdlog` (or `GTest::gtest_main`, for imlui's own
   tests) when it adds imlui, imlui uses the app's copy, so the executable links one spdlog. Added after imlui, the
   app's copy doesn't clash, but both get linked: keep them the same version, or add the app's first.
 
-imlui can't install a library it took from the app, so `IMLUI_INSTALL=ON` with an app's `glfw` or `spdlog` stops the
+imlui can't install a library it took from the app, so `IMLUI_INSTALL=ON` with an app's SDL3 or `spdlog` stops the
 configure. An installed imlui exports its vendored libraries as `imlui::ext_*`.
 
 ### 2. src/CMakeLists.txt

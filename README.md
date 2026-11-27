@@ -74,7 +74,7 @@ ctest --preset clang-debug               # ctest ... -L package: only the packag
 cmake --install build/clang-debug --prefix <prefix>   # the package for find_package(imlui)
 ```
 
-Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, GLFW 3.4, spdlog 1.15.3, stb_image 2.34,
+Dependencies are vendored in `external/` (Dear ImGui 1.92.9b, Lua 5.4.8, SDL 3.4.20, spdlog 1.15.3, stb_image 2.34,
 zstd 1.5.7) and are built as plain libraries. Project code only uses them through module wrappers.
 
 `external/fonts/` holds Roboto Regular and Medium plus Material Icons Round (all Apache 2.0). The library embeds
@@ -95,7 +95,7 @@ resource `app:/main.lua`, e.g. `imlui::defaultConfig(argc, argv, imlui::embedded
 
 | Path | What |
 |---|---|
-| `src/wrap/` | third-party wrappers: `lua` (+ `lua.stack_guard`), `imgui`, `imlui.log` (spdlog), `imlui.platform.window` (GLFW + OpenGL3 + ImGui backends) |
+| `src/wrap/` | third-party wrappers: `lua` (+ `lua.stack_guard`), `imgui`, `imlui.log` (spdlog), `imlui.platform.window` (SDL3 + OpenGL3 + ImGui backends) |
 | `src/imlui/color/` | `imlui.color.*`: colors and hex, OKLCH, tonal palettes |
 | `src/imlui/theme/` | `imlui.theme.*`: Material 3 scheme from a seed, typography, icons, DPI, mapping onto ImGuiStyle |
 | `src/imlui/lua/` | `imlui.lua.*`: Lua bridge (`Node` bindings and signals, values, errors, theme tables, Canvas painter, `imlui.native`) |

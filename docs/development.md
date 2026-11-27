@@ -263,7 +263,7 @@ doesn't depend on `Engine`.
 - Output goes to stderr in color: `[HH:MM:SS.mmm] [imlui] [level] msg`. The default level is `debug`.
   Messages at `warn` and above are flushed immediately.
 - **Lua**: `log.info("x = %d", x)` and the other levels, plus `print(...)` at info level. Script errors are logged
-  at error level with the tag `[lua]`. GLFW errors are tagged `[glfw]`.
+  at error level with the tag `[lua]`. SDL's log lines (warnings and errors, and why a window couldn't be created) are tagged `[sdl]`.
 
 ## clang-tidy and clice
 
@@ -599,7 +599,7 @@ archive are mounted. It must exit with 0 and log no error.
 
 | Test (label `package`) | imlui added with |
 |---|---|
-| `package.subdirectory` | `add_subdirectory(<this checkout>)`, in an app that has its own GLFW (added before imlui: imlui must use it) and spdlog (added after: imlui's copy must not be named `spdlog`), `IMLUI_CONSUMER_OWN_DEPS` |
+| `package.subdirectory` | `add_subdirectory(<this checkout>)`, in an app that has its own SDL3 (added before imlui: imlui must use it) and spdlog (added after: imlui's copy must not be named `spdlog`), `IMLUI_CONSUMER_OWN_DEPS` |
 | `package.fetchcontent` | `FetchContent_Declare(imlui SOURCE_DIR <this checkout>)` + `FetchContent_MakeAvailable` (a `GIT_REPOSITORY` works the same: `-DIMLUI_GIT_REPOSITORY=<url> -DIMLUI_GIT_TAG=<rev>` on the consumer) |
 | `package.install` | not an app: `cmake --install` of this build into `build/<preset>/tests/package/prefix`, the fixture of the two below |
 | `package.find_package` | `find_package(imlui 0.1 CONFIG REQUIRED)` on that prefix; the app is configured with `IMLUI_DEV_PATHS=OFF`, so the executable carries everything |
@@ -611,7 +611,7 @@ installed modules' BMIs again (find_package), a few minutes in all. Their build 
 (`RUN_SERIAL`). `ctest --preset clang-debug -L package` runs only them, `-LE package` everything else, and
 `-DIMLUI_PACKAGE_TESTS=OFF` leaves them out. They aren't added with a multi-config generator, and the two install
 tests need `IMLUI_INSTALL=ON`. A sanitizer build (`clang-asan`) has only `package.subdirectory`, without the app's
-own GLFW and spdlog but with `IMLUI_SANITIZERS` passed on: the consumer sets nothing else, so it checks that linking
+own SDL3 and spdlog but with `IMLUI_SANITIZERS` passed on: the consumer sets nothing else, so it checks that linking
 `imlui::imlui` gives the app's targets the flags importing imlui's modules needs.
 
 ### The headless frame harness
@@ -776,7 +776,7 @@ end, 800)
 
 ImGui processes a press and its release in different frames, so leave at least a frame between them, as above.
 `injectMouse` starts the same 0.3 s settle period as real input, so the UI renders and reacts without real input.
-While the window is focused and the real cursor is outside it, the ImGui GLFW backend replaces injected positions
+While the window is focused and the real cursor is outside it, the ImGui SDL3 backend replaces injected positions
 with the real cursor position on every frame. Injected clicks are reliable while the real cursor rests over the
 window, or while the window isn't focused.
 Script errors and `log.error` output appear on stderr, which a CI job can scan.
