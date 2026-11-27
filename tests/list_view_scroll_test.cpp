@@ -6,8 +6,10 @@
 // rendered, and the chunked rendering staying finite: while a nav move scores items (which widens the view), and with
 // a negative `spacing` that cancels `itemHeight`; the step tree (positions right as the model shrinks and grows) and
 // long runs of hidden items probed, not walked, on every frame; a model longer than ListView::maxItems capped, one
-// cleared by a delegate while the list renders, and measured heights scaled with a zoom. Renders headless ImGui frames
-// (tests/support/headless_frame.cppm).
+// cleared by a delegate while the list renders, and measured heights scaled with a zoom. Measured heights with a
+// negative `spacing` as large as the items, `cacheSize`, measured heights that follow a C++ model's rows (and stay per
+// index once its change log is gone), and followBottom / positionViewAtIndex on a ListView of its own children. Renders
+// headless ImGui frames (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
 import std;
@@ -17,6 +19,7 @@ import imlui.lua.errors;
 import imlui.theme.dpi;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.list_model;
 import imlui.types.script_object;
 import imlui.types.type_builder;
 import imlui.types.vector_model;
@@ -748,6 +751,206 @@ TEST_F(ListViewScrollTest, MeasuredHeightsFollowAZoom) {
     EXPECT_NEAR(l.contentHeight(), 1000.0f * 20.0f, 1.0f);
     settle("list");
     EXPECT_NEAR(l.contentHeight(), 1000.0f * 20.0f, 1.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ measured heights with a negative spacing
+
+// Measured heights and a negative `spacing` as large as an item's height (or larger): the steps between items were
+// zero or negative, so the items in view never reached the view's end and every delegate was built (and the anchor was
+// found by a walk from the first item). Each step is at least a pixel now, as with `itemHeight`.
+TEST_F(ListViewScrollTest, ASpacingThatCancelsMeasuredHeightsStepsAPixel) {
+    Watchdog watchdog{120.0};
+    for (const char* spacing : {"-20", "-30"}) {
+        SCOPED_TRACE(spacing);
+        run(std::string{R"(
+            made = {}
+            list = ListView { height = 200, model = 10000, spacing = )"} +
+            spacing + R"(,
+                              delegate = function(i) made[i] = Bar { h = 20 }; return made[i] end })");
+        settle("list");
+        check("made[1] ~= nil and made[2000] == nil and list.__view.built < 1000");
+        ListView& l = list();
+        EXPECT_LT(l.renderedRange().second, 1000);
+        run("list:positionViewAtIndex(5000)");
+        EXPECT_LT(settle("list"), 25);
+        check("list.firstVisibleIndex == 5000 and made[5000] ~= nil and made[7000] == nil");
+        EXPECT_NEAR(l.scroll().y, 4999.0f, 1.0f); // a pixel per item above it
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ cacheSize
+
+// `cacheSize` bounds the delegates kept built: max(cacheSize, 4 x the items shown), the ones shown longest ago
+// dropped first; 256 by default.
+TEST_F(ListViewScrollTest, CacheSizeBoundsTheDelegatesKept) {
+    struct Case {
+        const char* prop;
+        int atMost;
+        int atLeast;
+    };
+    for (const Case c : {Case{"", 300, 0}, Case{"cacheSize = 2000,", 2000, 500}, Case{"cacheSize = 0,", 200, 0}}) {
+        SCOPED_TRACE(c.prop);
+        run(std::string{"list = ListView { height = 200, spacing = 0, model = 100000, "} + c.prop +
+            " delegate = function(i) return Bar { h = 20 } end }");
+        settle("list");
+        run("most = 0");
+        for (int k = 1; k <= 30; ++k) {
+            run("list:positionViewAtIndex(" + std::to_string(k * 1000) + ")");
+            settle("list");
+            run("most = math.max(most, list.__view.built)");
+        }
+        check("most <= " + std::to_string(c.atMost) + " and most >= " + std::to_string(c.atLeast));
+    }
+    check("list.cacheSize == 0");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ measured heights by row
+
+/// Fills the feed with rows whose values are their heights (20, 40, 60, ...).
+void fillHeights(Feed& feed, std::int64_t n) {
+    std::vector<std::int64_t> rows;
+    for (std::int64_t i = 1; i <= n; ++i)
+        rows.push_back(20 + (i % 3) * 20);
+    feed.model.appendRows(std::move(rows));
+}
+
+// With a C++ list model the measured heights belong to the rows: an insertion, a removal, a move or a sort above the
+// view moves them along (the model's change log), so an index doesn't keep the height of the row it held before. Here
+// the rows' values are their heights, and the top rows, measured on the first frame, are out of view at the end.
+TEST_F(ListViewScrollTest, MeasuredHeightsFollowTheRowsOfAModel) {
+    fillHeights(m_feed, 300);
+    run(R"(list = ListView { height = 200, spacing = 0, model = feed.rows,
+                             delegate = function(h) return Bar { h = h } end })");
+    settle("list");
+    run("list:positionViewAtEnd()");
+    settle("list");
+    ListView& l = list();
+    // Every measured height among the first rows is its row's value.
+    const auto expectRows = [&](std::string_view after) {
+        SCOPED_TRACE(after);
+        int measured = 0;
+        for (std::int64_t i = 1; i <= 16; ++i) {
+            if (const std::optional<float> h = l.measuredHeight(i)) {
+                EXPECT_FLOAT_EQ(*h, static_cast<float>(m_feed.model.at(static_cast<std::size_t>(i - 1)))) << i;
+                ++measured;
+            }
+        }
+        return measured;
+    };
+    ASSERT_GE(expectRows("first"), 6);
+    ASSERT_GT(l.scroll().y, 1000.0f); // the first rows stay out of view
+
+    m_feed.model.insertRows(0, {100, 120});
+    m_h.renderFrame("list");
+    EXPECT_FALSE(l.measuredHeight(1));
+    EXPECT_FALSE(l.measuredHeight(2));
+    EXPECT_GE(expectRows("insert"), 6);
+    m_feed.model.erase(0, 3);
+    m_h.renderFrame("list");
+    EXPECT_GE(expectRows("erase"), 4);
+    m_feed.model.move(0, 2, 5);
+    m_h.renderFrame("list");
+    EXPECT_GE(expectRows("move"), 4);
+    m_feed.model.sort(std::greater<>{}); // the tallest first: the rows measured move to wherever they sort
+    m_h.renderFrame("list");
+    expectRows("sort");
+    settle("list");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// More changes between two renders than the model's change log keeps: the heights stay per index, as without a model.
+TEST_F(ListViewScrollTest, MeasuredHeightsStayPerIndexWhenTheLogIsGone) {
+    fillHeights(m_feed, 300);
+    run(R"(list = ListView { height = 200, spacing = 0, model = feed.rows,
+                             delegate = function(h) return Bar { h = h } end })");
+    settle("list");
+    run("list:positionViewAtEnd()");
+    settle("list");
+    ListView& l = list();
+    const std::optional<float> first = l.measuredHeight(1);
+    ASSERT_TRUE(first);
+    for (std::size_t i = 0; i <= ListModel::maxLoggedChanges; ++i)
+        m_feed.model.insert(0, 200);
+    m_h.renderFrame("list");
+    EXPECT_EQ(l.measuredHeight(1), first);
+    settle("list");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ without a delegate
+
+// followBottom on a ListView of its own children (a Repeater spliced in): it keeps the end in view as children come,
+// stops when scrolled up and follows again at the end.
+TEST_F(ListViewScrollTest, FollowBottomWorksWithItsOwnChildren) {
+    run(R"(
+        made = {}
+        items = {}
+        for i = 1, 30 do items[i] = i end
+        list = ListView { height = 200, spacing = 0, followBottom = true,
+            Repeater { model = function() return items end,
+                       delegate = function(i) made[i] = Bar { h = 20 }; return made[i] end } })");
+    m_h.renderFrame("list");
+    const float top = bar(1)->y();
+    settle("list");
+    ListView& l = list();
+    EXPECT_NEAR(l.scroll().y, 30.0f * 20.0f - 200.0f, 1.0f);
+    EXPECT_FLOAT_EQ(l.contentHeight(), 30.0f * 20.0f);
+    run("for i = 31, 40 do items[i] = i end");
+    settle("list");
+    EXPECT_NEAR(l.scroll().y, 40.0f * 20.0f - 200.0f, 1.0f);
+    EXPECT_NEAR(bar(40)->y() + 20.0f, top + 200.0f, 1.0f);
+    EXPECT_EQ(settle("list"), 1);
+
+    wheel(3.0f); // up: no longer following
+    settle("list");
+    const float up = l.scroll().y;
+    ASSERT_LT(up, 40.0f * 20.0f - 210.0f);
+    run("for i = 41, 50 do items[i] = i end");
+    settle("list");
+    EXPECT_FLOAT_EQ(l.scroll().y, up);
+    wheel(-100.0f);
+    settle("list");
+    run("for i = 51, 60 do items[i] = i end");
+    settle("list");
+    EXPECT_NEAR(l.scroll().y, 60.0f * 20.0f - 200.0f, 1.0f);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// positionViewAtIndex on a ListView of its own children: `index` counts the visible ones (a hidden child has none, a
+// Repeater's are spliced in), placed by their sizes as the stack laid them out (spacing and whole-pixel line advance).
+TEST_F(ListViewScrollTest, PositionViewAtIndexWorksWithItsOwnChildren) {
+    run(R"(
+        made = {}
+        list = ListView { height = 200, spacing = 4,
+            Bar { h = 30, visible = false },
+            Repeater { model = 100, delegate = function(i) made[i] = Bar { h = 10 + (i % 4) * 7.5 }; return made[i] end } })");
+    settle("list");
+    const float top = bar(1)->y();
+    ListView& l = list();
+    run("list:positionViewAtIndex(50)");
+    EXPECT_LT(settle("list"), 25);
+    ASSERT_NE(bar(50), nullptr);
+    EXPECT_NEAR(bar(50)->y(), top, 1.0f);
+    run("list:positionViewAtIndex(70, 'end')");
+    settle("list");
+    EXPECT_NEAR(bar(70)->y() + bar(70)->h(), top + 200.0f, 1.0f);
+    run("list:positionViewAtIndex(30, 'center')");
+    settle("list");
+    EXPECT_NEAR(bar(30)->y() + bar(30)->h() * 0.5f, top + 100.0f, 1.0f);
+    run("list:positionViewAtIndex(1000)"); // clamped: the last child, as far as the scroll range goes
+    settle("list");
+    EXPECT_NEAR(l.scroll().y, maxScroll(l, 200.0f), 1.0f);
+    run("list:positionViewAtBeginning()");
+    settle("list");
+    EXPECT_EQ(l.scroll().y, 0.0f);
+    run("list:positionViewAtEnd()");
+    settle("list");
+    EXPECT_NEAR(bar(100)->y() + bar(100)->h(), top + 200.0f, 1.0f);
+    check("list.firstVisibleIndex == 0"); // a delegate's index only
+    EXPECT_EQ(settle("list"), 1);
     EXPECT_TRUE(luaui::errors().empty());
 }
 

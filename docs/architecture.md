@@ -280,7 +280,8 @@ virtualized (below).
 the Lua side for the delegates it shows, never for all of them. Each render it calls `__count(self)`, which resolves
 the model and drops cached delegates the model no longer has, then `__range(self, first, last)` (a read, like
 `__children`) for the delegates of indices `first..last`, built on demand into a cache (`self.__view`: by index,
-or by key with a `key` function, at most max(256, 4 x shown) entries, the ones shown longest ago dropped first).
+or by key with a `key` function, at most max(`cacheSize`, 4 x shown) entries, the ones shown longest ago dropped
+first; the element passes its `cacheSize`, 256 by default, to `__count(self, cacheSize)`).
 The element keeps a height per index: `itemHeight` when set (the step from one item to the next, `itemHeight` plus
 `spacing`, at least a pixel), else measured when the item renders (a change under
 half a pixel is ignored, so whole-pixel rounding doesn't move the estimate), with the measured ones' average for the
@@ -300,14 +301,28 @@ tree over the measured heights): each node holds its range's measured heights' s
 many take space, so a range's steps are `heights + unmeasured x estimate + spaced x spacing`, and a new estimate or
 `spacing` needs no update. Finding the anchor, placing the margin above it, `positionViewAtIndex`, the pinned items
 and the correction that keeps the view still are O(log n), not a walk from the first item (a million-row list
-scrolled to its end); a model that grows appends to the tree, one that shrinks cuts it. With a negative `spacing` a
-step can be negative, and the anchor is found by the walk instead. Items are placed on whole pixels: ImGui truncates
+scrolled to its end); a model that grows appends to the tree, one that shrinks cuts it. A negative `spacing` as large
+as an item would make steps of zero or less (every item at one place, and no number of them would fill the view): the
+tree has a floor, `1 - spacing` for a negative one (else 0), under which it counts no measured height or estimate, so
+each step is at least a pixel and the descent stays valid (changing it rebuilds the tree). Items are placed on whole pixels: ImGui truncates
 the cursor after each item, so a height measured at a fractional y depended on that fraction, which follows the
 estimate, and the two could keep each other changing. Items that take no space (a delegate that returned `nil`, a
 hidden or non-visual element) are stepped over a run at a time; a run of more than 256 of them in range isn't
 visited in full on every frame (its delegates asked for and checked), but a probe of 32 of them is, at an offset that
 moves on each frame, so one that takes space again shows within the run's length / 32 rendered frames. A shorter run
 is visited in full.
+
+**Heights by row.** `__count` returns a C++ list model as its second result. The element remembers the model's
+object id and revision; on a render where the revision moved it asks the model for its change log since then
+(`ListModel::changesSince`) and applies it to the heights: an insertion inserts unmeasured ones, a removal erases, a
+move rotates, a sort (`rowsRemapped`) permutes by its mapping, a reset makes every height unmeasured, and the pinned
+indices move with their rows. Appends and changed rows need nothing (the length check appends; a changed row keeps
+its height as the best guess); anything else is applied to a copy, kept only when every change fits the heights
+shown, then the sums and the tree are rebuilt (O(n)). A log that doesn't reach back (more than its 64 entries) leaves
+the heights per index. Without a delegate, `followBottom` and `positionViewAtIndex` steer the own children's
+`ScrollView` stack: the content height is ImGui's cursor after it, and a position's target is found by stacking the
+visible children's sizes from the layout cache as `Renderer::renderStack` does (the gap, ImGui's whole-pixel line
+advance), on the frames a position is pending.
 
 **List models.** A C++ list model (`imlui.types.list_model`, see [List models](extending.md#list-models)) reaches Lua
 as one full userdata per model and state, found again through a weak-valued registry table keyed by the model's
@@ -327,6 +342,15 @@ only), so an unchanged row is the same table while a delegate holds it, wherever
 each index's entry without reading the row or its key (`atIndex`); an entry whose item is no longer its row's is
 rebuilt (`fresh`); without a `key` function, the model's keys are the key (`keyFunction`), read without converting
 rows. A model singleton (a type with a `LuaConvert`) is installed as that value instead of a singleton box.
+`__imlui_model` also holds `set` (`model:set(i, v)`, through the virtual `ListModel::setFromLua`, which `VectorModel`
+implements once `setScriptWritable(true)`) and `listen`, which the prelude's `connect` calls for a model target: it
+checks the signal (`ListModel::signalNames`), marks the model as listened to and adds the state's main thread to a
+module-level list of listening states (a userdata in its registry takes it off as the state closes). Each notification
+of a listened model then calls the prelude's dispatch for the model's value in each of those states (found through the
+values table by object id), with 1-based arguments, right after the change. The prelude keeps a model's connections
+in a strong table (the value must stay the one found again), dropped with its last disconnect. A model also keeps a
+**change log** once something asked for it (`changesSince`): the last 64 notifications, each one revision, a repair of
+the bookkeeping as a reset, and the mapping of the latest sort only (each is a row count long).
 
 A tree is walked at most `Renderer::maxDepth` (256) levels deep: each element rendered or asked for its intrinsic
 size or fill, and each inline container spliced in, is a level. Deeper is almost surely a cycle (`a[1] = b; b[1] = a`,

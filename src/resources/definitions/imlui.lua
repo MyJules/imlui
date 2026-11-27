@@ -85,10 +85,11 @@ ids = {}
 ---@type table
 env = {}
 
----Rows that live in C++ (`imlui::ListModel`, `imlui::VectorModel<T>`), read-only: `model[i]` is row `i` (1-based;
----nil out of range), `#model` the row count, `ipairs(model)` walks the rows. A row is converted when it is first
----read, and an unchanged row reads as the same table while something holds it. Give it to a `Repeater` or `ListView`
----as its `model`. A model that was destroyed reads as empty.
+---Rows that live in C++ (`imlui::ListModel`, `imlui::VectorModel<T>`): `model[i]` is row `i` (1-based; nil out of
+---range), `#model` the row count, `ipairs(model)` walks the rows. A row is converted when it is first read, and an
+---unchanged row reads as the same table while something holds it. Give it to a `Repeater` or `ListView` as its
+---`model`. A model that was destroyed reads as empty. `model:set(i, v)` writes a row when the C++ side allows it, and
+---`connect(model, "onRowsInserted", fn)` listens to its changes (`ListModelSignal`).
 ---@class ListModel<T>: { [integer]: T }
 ---@operator len: integer
 local ListModel = {}
@@ -110,19 +111,44 @@ function ListModel:hasKeys() end
 ---@return integer
 function ListModel:revision() end
 
+---Replaces row `i` (1-based) with `v`, converted to the row type, when the C++ side made the model writable
+---(`VectorModel::setScriptWritable`); raises otherwise, out of range or for a value that doesn't convert. Notifies like
+---a C++ edit (`onRowsChanged`).
+---@param i integer
+---@param v any A row: a value of the model's row type (a table for a struct).
+function ListModel:set(i, v) end
+
+---The signals of a list model, for `connect(model, signal, fn)`: `onRowsInserted(first, count)`,
+---`onRowsRemoved(first, count)`, `onRowsChanged(first, count)`, `onRowsMoved(first, count, destination)` (1-based),
+---`onRowsRemapped()` (a sort, a replace) and `onReset()`. Called right after the change.
+---@alias ListModelSignal "onRowsInserted"|"onRowsRemoved"|"onRowsChanged"|"onRowsMoved"|"onRowsRemapped"|"onReset"
+
 -- The Lua-side containers' own props (their constructors and classes are in types.lua).
 
 ---@alias ModelValue any[]|ListModel<any>|integer
 
+---A `Repeater` / `ListView` delegate whose `item` is a `T`. LuaLS doesn't infer a callback's parameter from a generic
+---field, so type the delegate where it is written, with the model's row type (`ListModel<LogLine>` -> `LogLine`):
+---
+---```lua
+---ListView { model = backend.logs,
+---    ---@type Delegate<LogLine>
+---    delegate = function(line) return Text { line.text } end }
+---```
+---@alias Delegate<T> fun(item: T, index: integer, ids: Ids): Element?
+
+---A `key` function for items of type `T` (see `Delegate`).
+---@alias KeyFunction<T> fun(item: T, index: integer): any
+
 ---@class RepeaterProps
 ---@field model ModelValue|(fun(self: Element): ModelValue)|Binding The items: a list, a C++ list model, or a number n for 1..n.
----@field delegate fun(item: any, index: integer, ids: Ids): Element? Builds one item's element.
----@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index (a list model's own keys without it).
+---@field delegate Delegate<any> Builds one item's element (`---@type Delegate<Row>` above it types `item`).
+---@field key? KeyFunction<any> Keeps delegates by key instead of by index (a list model's own keys without it).
 
 ---@class ListViewProps
 ---@field model? ModelValue|(fun(self: Element): ModelValue)|Binding The items: a list, a C++ list model, or a number n for 1..n.
----@field delegate? fun(item: any, index: integer, ids: Ids): Element? Builds one item's element.
----@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index (a list model's own keys without it).
+---@field delegate? Delegate<any> Builds one item's element (`---@type Delegate<Row>` above it types `item`).
+---@field key? KeyFunction<any> Keeps delegates by key instead of by index (a list model's own keys without it).
 ---@field itemHeight? number dp, for items that all have the same height.
 
 ---@class IfProps

@@ -374,13 +374,14 @@ array children are used, like a `ScrollView`. It takes every `ScrollView` prop. 
 | `model` | list, [C++ list model](lua-api.md#c-list-models), number, function or `bind` | — | Items; a number `n` means `1..n`. |
 | `delegate` | `function(item, index, ids) -> element` | — | Builds one item's element; `ids` is its own [id scope](lua-api.md#element-ids). |
 | `key` | `function(item, index) -> key` | — | *Optional.* Keeps delegates by key instead of by index: see [Repeater](lua-api.md#repeater--model-delegate-). A list model's own keys are used without one. |
-| `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. With a negative `spacing`, each item starts at least a pixel below the one before it. |
-| `followBottom` | bool | `false` | Keeps the view at the end while it is scrolled there: see [Scrolling from a script](#scrolling-a-listview-from-a-script). |
+| `itemHeight` | number | — | *Optional.* Every item's height (dp). Unset: each item is measured when it renders, and the measured ones' average stands in for the others. With a negative `spacing` (with or without `itemHeight`), each item starts at least a pixel below the one before it. |
+| `followBottom` | bool | `false` | Keeps the view at the end while it is scrolled there: see [Scrolling from a script](#scrolling-a-listview-from-a-script). Also without `delegate`. |
+| `cacheSize` | integer | `256` | How many built delegates are kept: at most max(`cacheSize`, 4 x the items shown), the ones shown longest ago dropped first. See below. |
 | `firstVisibleIndex` | integer | `0` | *Read-only.* The model index of the first item at least partly in view when the list last rendered (0 before that, with an empty model or without `delegate`); `onFirstVisibleIndexChanged(self, index)` follows it. |
 
 | Method | Notes |
 |---|---|
-| `positionViewAtIndex(index, mode)` | Scrolls so that item `index` is placed by `mode`: `"beginning"` (default), `"center"`, `"end"` or `"contain"`. Built or not; see below. |
+| `positionViewAtIndex(index, mode)` | Scrolls so that item `index` is placed by `mode`: `"beginning"` (default), `"center"`, `"end"` or `"contain"`. Built or not; see below. Without `delegate`, `index` counts its visible children. |
 | `positionViewAtBeginning()` | Scrolls to the top. |
 | `positionViewAtEnd()` | Scrolls to the end (the last item's bottom at the view's bottom). |
 
@@ -401,8 +402,9 @@ What virtualization changes:
   `key`, when its key leaves a model of at most 256 items (a Lua list's keys are counted again only when one of its
   items is another value than at the last count, so change an item's key by replacing the item, not by editing the
   table in place). Past that, the cache keeps at most
-  max(256, 4 x the items shown) delegates and drops the ones shown longest ago: keep state that must outlive
-  scrolling far away in the model, not in the delegate.
+  max(`cacheSize`, 4 x the items shown) delegates (`cacheSize` is 256 by default) and drops the ones shown longest ago:
+  keep state that must outlive scrolling far away in the model, not in the delegate, or raise `cacheSize` for a list
+  whose delegates are costly to build again (and lower it for one whose delegates hold much).
 - **Keyboard and gamepad navigation** reach the items that are built: while a nav move picks its target, the
   margin grows by a view's height (as for [culling](architecture.md#culling)), so the arrow keys, Page Up / Down and
   Tab reach the next items and ImGui scrolls to them; a jump further than that (`Home`, `End`, Ctrl+Tab cycling
@@ -421,8 +423,11 @@ What virtualization changes:
   differently after scrolling.
 - With a [C++ list model](lua-api.md#c-list-models), only the rows of the delegates it builds are converted, a
   frame reads nothing of a model that didn't change, a delegate is rebuilt when its row changed, and the model's
-  keys keep delegates without a `key`. Measured heights stay per index (the `ListView` doesn't see rows move): after
-  an insertion above the view, an index keeps the height of the row it held until it renders again.
+  keys keep delegates without a `key`. **Measured heights belong to the rows**: an insertion or a removal above the
+  view, a move or a sort moves them along with their rows (the model's change log), so the content height and the
+  items' places stay right without the rows rendering again. A changed row keeps its height until it renders. More
+  than 64 changes between two renders of the list leave the heights per index, as for a Lua list, until the items
+  render again. With a Lua list, heights are per index.
 
 ```lua
 ListView { height = 240, spacing = 4, model = function() return todo.items end,
@@ -456,8 +461,13 @@ heights that keep changing (an animated item). Meanwhile it wins over `followBot
 when heights above it change. `positionViewAtBeginning()` and `positionViewAtEnd()` are
 `positionViewAtIndex(1, "beginning")` and `positionViewAtIndex(#model, "end")`.
 
-These scroll the `ListView`'s own view only: inside a `ScrollView`, the outer view stays where it is. A `ListView`
-without `delegate` (its own children) ignores them.
+These scroll the `ListView`'s own view only: inside a `ScrollView`, the outer view stays where it is.
+
+**Without `delegate`** (a `ListView` of its own children, a `Repeater` in it spliced in) both work too: `followBottom`
+keeps the end in view as children come, and `positionViewAtIndex(index, mode)` counts the visible children (a hidden
+or non-visual child has no index) and places one by the sizes the children rendered at, stacked with `spacing` as the
+stack lays them out, a child never rendered at the others' average; it corrects over the next frames as for a
+delegate. `firstVisibleIndex` stays 0.
 
 **A list that isn't rendered applies nothing until it renders again**: scrolled out of view inside an outer
 `ScrollView`, culled, on a page that isn't shown. Nothing is lost meanwhile: a `positionViewAtIndex` request is kept

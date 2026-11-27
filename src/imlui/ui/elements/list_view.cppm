@@ -7,12 +7,16 @@
 // `itemHeight` when it's set, otherwise the heights it measured, with their average standing in for the items it
 // hasn't rendered yet. Items above the first one in view are measured too (the margin), and when that changes where
 // the first one in view starts, the scroll moves by the same amount on the next frame, so what is on screen doesn't
-// jump. A ListView without a delegate is a plain ScrollView of its own children.
+// jump. With a C++ list model (`__count`'s second result), the measured heights follow their rows: the model's change
+// log (ListModel::changesSince) moves them along with insertions, removals, moves and sorts, instead of each index
+// keeping the height of the row it held. A ListView without a delegate is a plain ScrollView of its own children.
 //
 // Scrolling from a script: `followBottom` keeps the view at the end while it is there (checked at the start of a
 // frame against ImGui's scroll range, which is the last frame's content), and positionViewAtIndex() remembers a
 // request that every frame turns into a scroll target from the heights known by then, until the scroll is at the
 // target and no height changed (the item is then where it was asked to be), for at most maxPositionFrames frames.
+// Without a delegate both work on the children as the stack placed them: their sizes in the layout cache, stacked the
+// way Renderer::renderStack stacks them.
 export module imlui.ui.elements.list_view;
 
 import std;
@@ -22,6 +26,7 @@ import imgui;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.types.frame;
+import imlui.types.list_model;
 import imlui.types.lua_convert;
 import imlui.types.type_builder;
 import imlui.ui.culling;
@@ -38,7 +43,7 @@ export namespace imlui {
 /// A ScrollView whose children come from `model` / `delegate` (Lua side), every ScrollView prop. Only the delegates
 /// in view, and a margin of half the view's height above and below it, are built and rendered.
 ///
-/// Props:   itemHeight = unset (measured), followBottom = false, firstVisibleIndex (read-only)
+/// Props:   itemHeight = unset (measured), followBottom = false, cacheSize = 256, firstVisibleIndex (read-only)
 /// Methods: positionViewAtIndex(index, mode), positionViewAtBeginning(), positionViewAtEnd()
 class ListView final : public ScrollView {
 public:
@@ -63,10 +68,19 @@ public:
     [[nodiscard]] float contentHeight() const;
     /// The model indices (1-based, inclusive) rendered last time; {0, -1} when none were.
     [[nodiscard]] std::pair<std::int64_t, std::int64_t> renderedRange() const;
+    /// The measured height (pixels) of item `index` (1-based); nullopt when it isn't measured (never rendered, taking
+    /// no space, out of range, or `itemHeight` is set).
+    [[nodiscard]] std::optional<float> measuredHeight(std::int64_t index) const;
 
     /// Keeps the view at the end while it is scrolled there (a log, a chat): new items, taller items, a smaller view.
     [[nodiscard]] bool followBottom() const;
     void setFollowBottom(bool followBottom);
+    /// The delegates the Lua side keeps built: at most max(cacheSize, 4 x the items shown), the ones shown longest ago
+    /// dropped first. At least 0.
+    [[nodiscard]] int cacheSize() const;
+    void setCacheSize(int cacheSize);
+    /// The default cacheSize.
+    static constexpr int defaultCacheSize = 256;
     /// The model index (1-based) of the first item in view when the element last rendered; 0 when none was.
     [[nodiscard]] std::int64_t firstVisibleIndex() const;
 
@@ -82,6 +96,20 @@ protected:
     void renderContent(Frame& frame) override;
 
 private:
+    /// renderContent() without a delegate: the own children, stacked by ScrollView, with followBottom and positions.
+    void renderOwnChildren(Frame& frame);
+    /// The scroll that puts an item at `t` (content y), `h` tall, where `mode` says in a view `viewHeight` tall
+    /// scrolled to `scrollY`.
+    [[nodiscard]] static float placeScroll(float t, float h, Position mode, float scrollY, float viewHeight);
+    /// followBottom's scroll to `maxScroll` from `scrollY`, unless the last one left the scroll where it was.
+    void followEnd(Frame& frame, float maxScroll, float scrollY);
+    /// Moves the measured heights along with the changes of `model` since m_modelRevision (its change log), so that
+    /// each row keeps its height wherever it moved; nothing when the log doesn't reach back that far (the heights then
+    /// stay per index).
+    void followRows(const ListModel& model);
+    /// Recomputes the sums over m_heights and the step tree from scratch.
+    void recount();
+
     /// Per index: the measured height in pixels, `unmeasured`, or `noSpace` (nothing visual: a delegate that returned
     /// nil, a hidden or non-visual element), which takes no space and no gap.
     static constexpr float unmeasured = -1.0f;
@@ -97,13 +125,17 @@ private:
         /// Makes the tree hold `heights` (per index: a height, `unmeasured` or `noSpace`): O(n), or O(k log n) when
         /// it held all but the last k of them (the model grew).
         void assign(const std::vector<float>& heights);
+        /// The least height the tree counts a measured item (and the estimate) at: 1 - gap for a negative gap, so that
+        /// each step is at least a pixel (else 0). Changing it rebuilds the tree from `heights`.
+        void setFloor(float floor, const std::vector<float>& heights);
+        [[nodiscard]] float floor() const { return m_floor; }
         /// Keeps the first `n` indices (the model shrank).
         void truncate(std::size_t n);
         /// Index `i` changed from `old` to `h`.
         void update(std::size_t i, float old, float h);
         /// Where index `i` starts: the steps of the indices before it.
         [[nodiscard]] float top(std::size_t i, float gap, float estimate) const;
-        /// The last index (up to size()) whose top is at most `y`. Needs every step >= 0 (`gap` >= 0).
+        /// The last index (up to size()) whose top is at most `y`. Needs every step >= 0 (floor() + gap >= 0).
         [[nodiscard]] std::size_t lastStartingBy(float y, float gap, float estimate) const;
         /// The first index from `i` on that takes space (size() when none does): the end of a run of noSpace items.
         [[nodiscard]] std::size_t nextSpaced(std::size_t i) const;
@@ -116,7 +148,7 @@ private:
             std::uint32_t measured = 0; // unsigned: a change's difference wraps, and the sums come out right
             std::uint32_t spaced = 0;
         };
-        [[nodiscard]] static Node entry(float h);
+        [[nodiscard]] Node entry(float h) const;
         [[nodiscard]] static double value(const Node& sum, float gap, float estimate);
         /// The sum of the indices before `i`.
         [[nodiscard]] Node prefix(std::size_t i) const;
@@ -125,11 +157,13 @@ private:
         [[nodiscard]] std::size_t descend(Fits fits) const;
         [[nodiscard]] std::size_t size() const;
         std::vector<Node> m_nodes; ///< 1-based (m_nodes[0] is unused): node j sums the indices (j - lowbit(j), j]
+        float m_floor = 0.0f;
     };
 
     /// Sets the height of index `i`; returns whether it changed by more than half a pixel.
     bool setHeight(std::size_t i, float h);
-    /// The space index `i` takes, its gap below included.
+    /// The space index `i` takes, its gap below included: its height (at least the tree's floor) and the gap, 0 for
+    /// noSpace. `estimate` is floored already (see renderContent).
     [[nodiscard]] float step(std::size_t i, float gap, float estimate) const;
     /// Where index `i` starts, from the top of the content.
     [[nodiscard]] float top(std::size_t i, float gap, float estimate) const;
@@ -164,6 +198,7 @@ private:
 
     std::optional<float> m_itemHeight;
     bool m_followBottom = false;
+    int m_cacheSize = defaultCacheSize;
     bool m_following = true;    ///< the view was at the end last frame (it starts there)
     float m_viewHeight = -1.0f; ///< the visible content height last frame (pixels)
     float m_followTarget = -1.0f; ///< the scroll followBottom asked for last frame (-1: none), and the scroll then
@@ -171,6 +206,13 @@ private:
     std::int64_t m_firstVisible = 0;
     std::optional<PendingPosition> m_position;
     int m_steerFrame = -1; ///< ImGui frame of the last render that scrolled for the above (the first one of a frame)
+    /// Without a delegate: where the item a position is for was placed last frame (top, height), to tell it landed.
+    std::optional<std::pair<float, float>> m_ownPlaced;
+
+    /// The C++ list model the last render showed (its objectId(), 0 for none) and its revision then: the heights
+    /// follow its rows (followRows).
+    std::uint64_t m_modelId = 0;
+    std::uint64_t m_modelRevision = 0;
 
     std::vector<float> m_heights; ///< per model index (0-based), when `itemHeight` is unset
     float m_scale = 0.0f;         ///< dpiScale() m_heights were measured at (0: none yet)
@@ -220,19 +262,27 @@ namespace {
 /// The height an unmeasured item is assumed to have before any was measured (dp): a one-line Material list item.
 constexpr float defaultItemHeight = 56.0f;
 
-/// Calls `__count(self)`: the model's length (resolving it for the __range calls of this render). nullopt when it
-/// failed (reported) or the element has no `__count`.
-std::optional<std::size_t> callCount(const luaui::Node& node) {
+/// What `__count` returned: the model's length, and the model when it is a C++ list model.
+struct Counted {
+    std::size_t n = 0;
+    const ListModel* model = nullptr;
+};
+
+/// Calls `__count(self, cacheSize)`: the model's length (resolving it for the __range calls of this render), and the
+/// model when it is a C++ list model. nullopt when it failed (reported) or the element has no `__count`.
+std::optional<Counted> callCount(const luaui::Node& node, int cacheSize) {
     lua::State* state = node.state();
     if (node.pushRaw("__count") != lua::Type::Function) {
         lua::pop(state);
         return std::nullopt;
     }
     lua::pushvalue(state, node.index());
-    if (!luaui::safeRead(state, 1, 1)) return std::nullopt;
-    const lua::Integer n = lua::isinteger(state, -1) ? lua::tointeger(state, -1) : 0;
-    lua::pop(state);
-    return static_cast<std::size_t>(std::max<lua::Integer>(0, n));
+    lua::pushinteger(state, cacheSize);
+    if (!luaui::safeRead(state, 2, 2)) return std::nullopt;
+    const lua::Integer n = lua::isinteger(state, -2) ? lua::tointeger(state, -2) : 0;
+    const ListModel* model = ListModel::fromLua(state, -1);
+    lua::pop(state, 2);
+    return Counted{static_cast<std::size_t>(std::max<lua::Integer>(0, n)), model};
 }
 
 /// Pushes `__range(self, first, last)` (1-based, inclusive): the delegates for those model indices, in order (an
@@ -268,7 +318,10 @@ void ListView::declare(TypeBuilder<ListView>& type) {
         .property("followBottom", &ListView::followBottom, &ListView::setFollowBottom)
         .doc("Keeps the view at the end while it is scrolled there (`false`): new items, items that turn out taller "
              "and a smaller view keep the last item in view, for a log or a chat. Scrolling up stops it; scrolling "
-             "back to the end starts it again. A list starts at the end. Needs a `delegate`.")
+             "back to the end starts it again. A list starts at the end. Works with its own children too.")
+        .property("cacheSize", &ListView::cacheSize, &ListView::setCacheSize)
+        .doc("How many built delegates are kept (256): at most max(`cacheSize`, 4 x the items shown), the ones shown "
+             "longest ago dropped first. A delegate dropped is built again when it comes back into view.")
         .property("firstVisibleIndex", &ListView::firstVisibleIndex)
         .doc("Read-only: the model index (1-based) of the first item at least partly in view when the list last "
              "rendered; 0 before that, with an empty model or without a `delegate`.")
@@ -278,12 +331,14 @@ void ListView::declare(TypeBuilder<ListView>& type) {
              "bottom) or `\"contain\"` (the least scroll that shows all of it). Works for items never built: it "
              "scrolls by the heights known (`itemHeight`, else the measured ones and their average), and corrects "
              "on the next frames as the items there are measured. Takes effect at the next render; nothing with an "
-             "empty model or without a `delegate`.")
+             "empty model. Without a `delegate`, `index` counts its visible children (an inline container's spliced "
+             "in).")
         .method("positionViewAtBeginning", &ListView::positionViewAtBeginning)
         .doc("Scrolls to the top: `positionViewAtIndex(1, \"beginning\")`.")
         .method("positionViewAtEnd", &ListView::positionViewAtEnd)
         .doc("Scrolls to the end: the last item's bottom at the view's bottom.")
-        .docMember("spacing", "The gap between items (dp). Unset: ImGui's item spacing.");
+        .docMember("spacing", "The gap between items (dp). Unset: ImGui's item spacing. A negative one overlaps "
+                              "the items, each still at least a pixel below the one before.");
 }
 
 std::optional<float> ListView::itemHeight() const { return m_itemHeight; }
@@ -293,8 +348,15 @@ void ListView::setItemHeight(std::optional<float> itemHeight) {
 }
 float ListView::contentHeight() const { return m_contentHeight; }
 std::pair<std::int64_t, std::int64_t> ListView::renderedRange() const { return {m_first, m_last}; }
+std::optional<float> ListView::measuredHeight(std::int64_t index) const {
+    if (m_itemHeight || index < 1 || static_cast<std::uint64_t>(index) > m_heights.size()) return std::nullopt;
+    const float h = m_heights[static_cast<std::size_t>(index - 1)];
+    return h >= 0.0f ? std::optional<float>{h} : std::nullopt;
+}
 bool ListView::followBottom() const { return m_followBottom; }
 void ListView::setFollowBottom(bool followBottom) { m_followBottom = followBottom; }
+int ListView::cacheSize() const { return m_cacheSize; }
+void ListView::setCacheSize(int cacheSize) { m_cacheSize = std::max(0, cacheSize); }
 std::int64_t ListView::firstVisibleIndex() const { return m_firstVisible; }
 
 void ListView::positionViewAtIndex(std::int64_t index, std::optional<Position> mode) {
@@ -311,14 +373,125 @@ void ListView::publishFirstVisible(std::int64_t index) {
 }
 
 void ListView::rescaleHeights(double ratio) {
+    for (float& h : m_heights)
+        if (h >= 0.0f) h = static_cast<float>(static_cast<double>(h) * ratio); // unmeasured, noSpace: at any scale
+    recount();
+}
+
+void ListView::recount() {
     m_measuredSum = 0.0;
-    for (float& h : m_heights) {
-        if (h < 0.0f) continue; // unmeasured, noSpace: the same at any scale
-        h = static_cast<float>(static_cast<double>(h) * ratio);
-        m_measuredSum += static_cast<double>(h);
+    m_measured = 0;
+    m_spaceless = 0;
+    for (const float h : m_heights) {
+        if (h >= 0.0f) {
+            m_measuredSum += static_cast<double>(h);
+            ++m_measured;
+        } else if (h == noSpace) {
+            ++m_spaceless;
+        }
     }
+    const float floor = m_steps.floor();
     m_steps = StepTree{};
+    m_steps.setFloor(floor, {});
     m_steps.assign(m_heights);
+}
+
+void ListView::followRows(const ListModel& model) {
+    const std::optional<std::span<const ListModel::Change>> changes = model.changesSince(m_modelRevision);
+    if (!changes) return; // too long ago: the heights stay per index
+    using Kind = ListModel::Change::Kind;
+    // Only appends (a log) and changed rows (whose heights stay the best guess until they render again): the length
+    // check in renderContent appends them, with no rebuild.
+    std::size_t length = m_heights.size();
+    const bool appendsOnly = std::ranges::all_of(*changes, [&](const ListModel::Change& c) {
+        if (c.kind == Kind::Changed) return true;
+        if (c.kind != Kind::Inserted || c.first != length) return false;
+        length += c.count;
+        return true;
+    });
+    if (appendsOnly) return;
+    // Else on a copy, kept only when every change applies: notifications that don't match what was shown leave the
+    // heights per index.
+    std::vector<float> h = m_heights;
+    const auto at = [&h](std::size_t i) { return h.begin() + static_cast<std::ptrdiff_t>(i); };
+    bool reset = false; // everything is new: no height is known
+    // The pinned items follow their rows too; one whose row went is dropped.
+    std::vector<std::optional<std::size_t>> pins(m_pinned.begin(), m_pinned.end());
+    const auto shiftPins = [&](auto&& to) {
+        for (std::optional<std::size_t>& p : pins)
+            if (p) p = to(*p);
+    };
+    for (const ListModel::Change& c : *changes) {
+        if (reset) break;
+        const std::size_t size = h.size();
+        switch (c.kind) {
+        case Kind::Inserted:
+            if (c.first > size) return; // notifications that don't match what was shown: per index
+            if (c.first < size) {
+                h.insert(at(c.first), c.count, unmeasured);
+                shiftPins([&](std::size_t i) -> std::optional<std::size_t> { return i < c.first ? i : i + c.count; });
+            } else {
+                h.resize(size + c.count, unmeasured);
+            }
+            break;
+        case Kind::Removed:
+            if (c.first > size || c.count > size - c.first) return;
+            h.erase(at(c.first), at(c.first + c.count));
+            shiftPins([&](std::size_t i) -> std::optional<std::size_t> {
+                if (i < c.first) return i;
+                if (i < c.first + c.count) return std::nullopt;
+                return i - c.count;
+            });
+            break;
+        case Kind::Changed: break;
+        case Kind::Moved:
+            if (c.count > size || c.first > size - c.count || c.destination > size - c.count) return;
+            if (c.destination < c.first)
+                std::rotate(at(c.destination), at(c.first), at(c.first + c.count));
+            else if (c.destination > c.first)
+                std::rotate(at(c.first), at(c.first + c.count), at(c.destination + c.count));
+            shiftPins([&](std::size_t i) -> std::optional<std::size_t> {
+                // Where old index i is after the move (as std::rotate moved it).
+                if (i >= c.first && i < c.first + c.count) return c.destination + (i - c.first);
+                if (c.destination < c.first && i >= c.destination && i < c.first) return i + c.count;
+                if (c.destination > c.first && i >= c.first + c.count && i < c.destination + c.count)
+                    return i - c.count;
+                return i;
+            });
+            break;
+        case Kind::Remapped: {
+            if (!c.previous) { // an older sort: its mapping isn't kept
+                reset = true;
+                break;
+            }
+            const std::vector<std::optional<std::size_t>>& previous = *c.previous;
+            std::vector<float> next(previous.size(), unmeasured);
+            std::vector<bool> taken(size, false);
+            std::vector<std::optional<std::size_t>> newIndex(size);
+            for (std::size_t r = 0; r < previous.size(); ++r) {
+                const std::optional<std::size_t> p = previous[r];
+                if (p && *p < size && !taken[*p]) {
+                    taken[*p] = true;
+                    next[r] = h[*p];
+                    newIndex[*p] = r;
+                }
+            }
+            h = std::move(next);
+            shiftPins([&](std::size_t i) { return i < newIndex.size() ? newIndex[i] : std::nullopt; });
+            break;
+        }
+        case Kind::Reset: reset = true; break;
+        }
+    }
+    if (reset) {
+        h.assign(model.count(), unmeasured);
+        pins.clear();
+    }
+    m_heights = std::move(h);
+    m_pinned.clear();
+    for (const std::optional<std::size_t>& p : pins)
+        if (p) m_pinned.push_back(*p);
+    recount();
 }
 
 bool ListView::setHeight(std::size_t i, float h) {
@@ -347,7 +520,7 @@ bool ListView::setHeight(std::size_t i, float h) {
 
 float ListView::step(std::size_t i, float gap, float estimate) const {
     const float h = m_heights[i];
-    if (h >= 0.0f) return h + gap;
+    if (h >= 0.0f) return std::max(h, m_steps.floor()) + gap;
     return h == noSpace ? 0.0f : estimate + gap;
 }
 
@@ -389,9 +562,16 @@ constexpr std::size_t lowbit(std::size_t j) { return j & (~j + 1); }
 
 } // namespace
 
-ListView::StepTree::Node ListView::StepTree::entry(float h) {
-    if (h >= 0.0f) return {static_cast<double>(h), 1, 1};
+ListView::StepTree::Node ListView::StepTree::entry(float h) const {
+    if (h >= 0.0f) return {static_cast<double>(std::max(h, m_floor)), 1, 1};
     return h == noSpace ? Node{} : Node{0.0, 0, 1};
+}
+
+void ListView::StepTree::setFloor(float floor, const std::vector<float>& heights) {
+    if (floor == m_floor) return;
+    m_floor = floor;
+    m_nodes.clear();
+    assign(heights);
 }
 
 double ListView::StepTree::value(const Node& sum, float gap, float estimate) {
@@ -522,6 +702,10 @@ float ListView::positionScroll(std::size_t i, Position mode, float scrollY, floa
         const float measured = m_heights[i];
         h = measured >= 0.0f ? measured : (measured == noSpace ? 0.0f : estimate);
     }
+    return placeScroll(t, h, mode, scrollY, viewHeight);
+}
+
+float ListView::placeScroll(float t, float h, Position mode, float scrollY, float viewHeight) {
     switch (mode) {
     case Position::Beginning: return t;
     case Position::Center: return t + (h - viewHeight) * 0.5f;
@@ -532,20 +716,117 @@ float ListView::positionScroll(std::size_t i, Position mode, float scrollY, floa
     return std::min(std::max(scrollY, t + h - viewHeight), t);
 }
 
+void ListView::followEnd(Frame& frame, float maxScroll, float scrollY) {
+    // The same target as last frame, which left the scroll where it was: ImGui's range ends short of it (content that
+    // ends above the last item's bottom), and asking again would never settle.
+    const bool stuck = std::abs(maxScroll - m_followTarget) <= 0.5f && std::abs(scrollY - m_followScroll) <= 0.5f;
+    if (!stuck) {
+        ImGui::SetScrollY(maxScroll);
+        frame.requestFrame();
+    }
+    m_followTarget = maxScroll;
+    m_followScroll = scrollY;
+}
+
+void ListView::renderOwnChildren(Frame& frame) {
+    // The scroll state at the start, as renderContent reads it (see there).
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float scrollY = ImGui::GetScrollY();
+    const float visibleHeight = std::max(0.0f, ImGui::GetContentRegionAvail().y);
+    const bool restoring = restoringScroll();
+    const int frameNo = ImGui::GetFrameCount();
+    const bool steer = !restoring && frameNo != m_steerFrame;
+    if (steer) m_steerFrame = frameNo;
+    bool following = false;
+    if (m_followBottom && steer) {
+        following =
+            scrollY >= ImGui::GetScrollMaxY() - 1.0f || (m_following && std::abs(visibleHeight - m_viewHeight) > 0.5f);
+    }
+    const float prevTotal = m_contentHeight;
+
+    ScrollView::renderContent(frame);
+
+    // The content's bottom as ImGui records it (CursorMaxPos: the cursor after the last item, less the item spacing).
+    const float itemSpacing = ImGui::GetStyle().ItemSpacing.y;
+    const float total = std::max(0.0f, ImGui::GetCursorScreenPos().y - itemSpacing - origin.y);
+    m_contentHeight = total;
+    m_first = 0;
+    m_last = -1;
+    const float maxScroll = std::max(0.0f, std::trunc(total) - visibleHeight);
+    bool positioned = false;
+    if (m_position && steer) {
+        // Where each visible visual child was placed: its size in the layout cache (the average of the known ones for a
+        // child never rendered), stacked as Renderer::renderStack stacks them, ImGui's whole-pixel line advance
+        // included. Only on the frames a position is pending.
+        std::vector<float> heights;
+        float known = 0.0f;
+        int knownCount = 0;
+        frame.forEachChild([&](Frame::Child& child) {
+            if (!child.isVisual()) return;
+            const std::optional<ImVec2> size = layout::lastSize(child.id());
+            heights.push_back(size ? size->y : -1.0f);
+            if (size) {
+                known += size->y;
+                ++knownCount;
+            }
+        });
+        if (heights.empty()) {
+            m_position.reset();
+            m_ownPlaced.reset();
+        } else {
+            const float average = knownCount > 0 ? known / static_cast<float>(knownCount) : 0.0f;
+            const float extra = spacing() ? frame.dp(static_cast<float>(*spacing())) - itemSpacing : 0.0f;
+            const auto index = static_cast<std::size_t>(
+                std::clamp<std::int64_t>(m_position->index, 1, static_cast<std::int64_t>(heights.size())));
+            float y = origin.y, t = 0.0f, h = 0.0f;
+            for (std::size_t k = 0; k < index; ++k) {
+                if (k > 0) y += extra;
+                h = heights[k] >= 0.0f ? heights[k] : average;
+                t = y - origin.y;
+                y = std::trunc(y + h + itemSpacing);
+            }
+            const float target =
+                std::clamp(std::round(placeScroll(t, h, m_position->mode, scrollY, visibleHeight)), 0.0f, maxScroll);
+            const bool same =
+                m_ownPlaced && std::abs(m_ownPlaced->first - t) <= 0.5f && std::abs(m_ownPlaced->second - h) <= 0.5f;
+            const bool landed = same && std::abs(total - prevTotal) <= 0.5f &&
+                                std::abs(scrollY - std::min(target, ImGui::GetScrollMaxY())) <= 1.0f;
+            m_ownPlaced = std::pair{t, h};
+            if (landed || m_position->frames >= maxPositionFrames) {
+                m_position.reset();
+                m_ownPlaced.reset();
+            } else {
+                ++m_position->frames;
+                ImGui::SetScrollY(target);
+                frame.requestFrame();
+                positioned = true;
+            }
+        }
+    }
+    if (!positioned && following && std::abs(maxScroll - scrollY) > 0.5f)
+        followEnd(frame, maxScroll, scrollY);
+    else if (!positioned)
+        m_followTarget = -1.0f;
+    if (m_followBottom && steer) {
+        m_following = following;
+        m_viewHeight = visibleHeight;
+    }
+    if (steer) publishFirstVisible(0);
+}
+
 void ListView::renderContent(Frame& frame) {
     const luaui::Node& node = frame.node();
     lua::State* state = node.state();
     const int stackTop = lua::gettop(state);
     lua::checkstack(state, 24);
-    const std::optional<std::size_t> count = callCount(node);
+    const std::optional<Counted> count = callCount(node, m_cacheSize);
     if (!count) {
         // No delegate: the ListView's own children, like a ScrollView.
-        m_position.reset();
-        ScrollView::renderContent(frame);
-        publishFirstVisible(0);
+        m_modelId = 0;
+        renderOwnChildren(frame);
         return;
     }
-    std::size_t n = *count;
+    std::size_t n = count->n;
     if (n > maxItems) {
         if (!m_tooMany)
             luaui::reportError("ListView: the model has more than " + std::to_string(maxItems) +
@@ -568,6 +849,20 @@ void ListView::renderContent(Frame& frame) {
         frame.requestFrame();
     }
     m_scale = scale;
+    // A C++ list model: the heights follow its rows as they move (inserted above the view, sorted).
+    if (const ListModel* model = count->model) {
+        if (model->objectId() == m_modelId && model->revision() != m_modelRevision && !fixed)
+            followRows(*model);
+        else if (model->objectId() != m_modelId)
+            (void)model->changesSince(model->revision()); // starts its change log
+        m_modelId = model->objectId();
+        m_modelRevision = model->revision();
+    } else {
+        m_modelId = 0;
+    }
+    // A negative gap as large as an item's height would put items at one place (or move up), so that no number of them
+    // fills the view: each step is at least a pixel, as with `itemHeight`.
+    if (!fixed) m_steps.setFloor(gap < 0.0f ? 1.0f - gap : 0.0f, m_heights);
     if (!fixed && m_heights.size() != n) {
         // The model changed length (an insertion, a removal, a reset): keep the heights of the indices that are still
         // there. The tree drops the ones past the end as they are, or appends the new ones.
@@ -683,7 +978,8 @@ void ListView::renderContent(Frame& frame) {
         return h;
     };
 
-    const float est = fixed ? *fixed : estimate(frame);
+    // The estimate, floored like a measured height (see the step tree's floor).
+    const float est = fixed ? *fixed : std::max(estimate(frame), m_steps.floor());
     const auto stepOf = [&](std::size_t i) { return fixed ? fixedStep : step(i, gap, est); };
     bool changed = false;
     bool windowed = false; // a long run of noSpace items was visited only in part (spacelessProbe)
@@ -703,17 +999,13 @@ void ListView::renderContent(Frame& frame) {
     float anchorTop = 0.0f;
     if (n > 0) {
         // The first item in view, and the margin above it. Measured: the last index that starts by the view's top,
-        // found in the step tree in O(log n). Its descent needs steps >= 0, which a negative `spacing` can break: then
-        // the walk from the top.
+        // found in the step tree in O(log n) (its steps are >= 0: a negative gap is floored, see above).
         if (fixed) {
             anchor = std::min(n - 1, static_cast<std::size_t>(std::max(0.0f, viewTop) / fixedStep));
             anchorTop = static_cast<float>(anchor) * fixedStep;
-        } else if (gap >= 0.0f) {
+        } else {
             anchor = std::min(n - 1, m_steps.lastStartingBy(viewTop, gap, est));
             anchorTop = top(anchor, gap, est);
-        } else {
-            while (anchor + 1 < n && anchorTop + stepOf(anchor) <= viewTop)
-                anchorTop += stepOf(anchor++);
         }
         // The margin, and more while a nav move scores items (cull::outOfView widens the view then): the item it
         // lands on must be submitted. A run of items that take no space adds nothing to it: stepped over at once.
@@ -834,14 +1126,12 @@ void ListView::renderContent(Frame& frame) {
     // The content's height by what is known now, and the scroll moved by as much as the anchor moved: items above it
     // that were measured at another height than assumed (or the estimate that changed) would otherwise shift what
     // is in view on the next frame.
-    const float est2 = fixed ? *fixed : estimate(frame);
+    const float est2 = fixed ? *fixed : std::max(estimate(frame), m_steps.floor());
     float total = 0.0f;
     if (fixed) {
         if (n > 0) total = std::max(0.0f, static_cast<float>(n - 1) * fixedStep + *fixed); // the last item's bottom
     } else {
-        const std::size_t spaced = n - m_spaceless;
-        total = static_cast<float>(m_measuredSum) + static_cast<float>(n - m_measured - m_spaceless) * est2 +
-                static_cast<float>(spaced) * gap;
+        total = top(n, gap, est2);                             // every step: heights, estimates and gaps
         if (total > 0.0f) total = std::max(0.0f, total - gap); // no gap after the last item
     }
     m_contentHeight = total;
@@ -876,15 +1166,7 @@ void ListView::renderContent(Frame& frame) {
             }
         }
     } else if (following && std::abs(maxScroll - scrollY) > 0.5f) {
-        // The same target as last frame, which left the scroll where it was: ImGui's range ends short of it (content
-        // that ends above the last item's bottom), and asking again would never settle.
-        const bool stuck = std::abs(maxScroll - m_followTarget) <= 0.5f && std::abs(scrollY - m_followScroll) <= 0.5f;
-        if (!stuck) {
-            ImGui::SetScrollY(maxScroll);
-            frame.requestFrame();
-        }
-        m_followTarget = maxScroll;
-        m_followScroll = scrollY;
+        followEnd(frame, maxScroll, scrollY);
         scrolled = true;
     } else {
         m_followTarget = -1.0f;

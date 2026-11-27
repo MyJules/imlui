@@ -269,7 +269,7 @@ std::string connectDefinitions(const std::vector<Connectable>& connectables) {
         out += "---@alias ImluiSignal ";
         for (std::size_t i = 0; i < connectables.size(); ++i)
             out += (i ? "|" : "") + connectables[i].alias;
-        out += "\n\n";
+        out += "|ListModelSignal\n\n"; // a list model's signals (the prelude's definitions)
     }
     out += "---Adds a listener to a signal of a C++ element or singleton: `fn` runs whenever `target` emits `signal`, "
            "after its handler.\n";
@@ -277,6 +277,7 @@ std::string connectDefinitions(const std::vector<Connectable>& connectables) {
     out += "---@param signal ImluiSignal\n";
     out += "---@param fn function\n";
     out += "---@return fun() disconnect\n";
+    out += "---@overload fun(target: ListModel<any>, signal: ListModelSignal, fn: fun(...: integer)): fun()\n";
     for (const Connectable& c : connectables)
         out += "---@overload fun(target: " + c.type + ", signal: " + c.alias + ", fn: " + c.signal + "): fun()\n";
     out += "function connect(target, signal, fn) end\n";
