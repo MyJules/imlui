@@ -524,6 +524,39 @@ TEST_F(WidgetsTest, SpinBoxTypedNanIsIgnored) {
     EXPECT_TRUE(changed);
 }
 
+// ------------------------------------------------------------------ Slider
+
+// The value logic every skin's slider shares: drag to a snapped, clamped value; ticks at the whole steps.
+TEST_F(WidgetsTest, SliderValueLogic) {
+    const double nan = std::numeric_limits<double>::quiet_NaN(), inf = std::numeric_limits<double>::infinity();
+    const md::SliderRange r = md::sliderRange(0.0, 1.0, 0.4);
+    EXPECT_TRUE(r.ranged);
+    double v = 0.0;
+    EXPECT_TRUE(md::sliderDragTo(&v, r, 70.0f, 0.0f, 100.0f)); // 0.7 snaps to 0.8, the last whole step
+    EXPECT_EQ(v, 0.8);
+    EXPECT_FALSE(md::sliderDragTo(&v, r, 100.0f, 0.0f, 100.0f)); // 1.0 is no step: still 0.8, no change
+    EXPECT_FLOAT_EQ(md::sliderFraction(v, r), 0.8f);
+    EXPECT_EQ(md::sliderStops(r), 2); // 0, 0.4, 0.8
+    EXPECT_FLOAT_EQ(md::sliderStopAt(r, 2), 0.8f);
+    const md::SliderRange tenths = md::sliderRange(0.0, 1.0, 0.1);
+    EXPECT_EQ(md::sliderStops(tenths), 10); // 1 / 0.1 = 9.999...: the last tick stays
+    EXPECT_TRUE(md::sliderDragTo(&v, tenths, 30.0f, 0.0f, 100.0f));
+    EXPECT_EQ(v, 0.3); // without binary noise
+    // Continuous (a step that isn't finite, or <= 0): no ticks.
+    for (const double step : {0.0, -1.0, nan, inf})
+        EXPECT_EQ(md::sliderStops(md::sliderRange(0.0, 1.0, step)), -1) << step;
+    EXPECT_EQ(md::sliderStops(md::sliderRange(0.0, 100.0, 1.0)), -1); // more than 40 steps
+    // No range: the value is left alone.
+    for (const auto& [lo, hi] : {std::pair{1.0, 1.0}, std::pair{2.0, 1.0}, std::pair{0.0, inf}, std::pair{nan, 1.0}}) {
+        const md::SliderRange empty = md::sliderRange(lo, hi, 0.0);
+        EXPECT_FALSE(empty.ranged);
+        v = 0.5;
+        EXPECT_FALSE(md::sliderDragTo(&v, empty, 50.0f, 0.0f, 100.0f));
+        EXPECT_EQ(v, 0.5);
+        EXPECT_EQ(md::sliderFraction(v, empty), 0.0f);
+    }
+}
+
 // ------------------------------------------------------------------ ColorField
 
 // While typing, only a whole #RRGGBB or #RRGGBBAA is applied ("#123" on the way to "#123456" isn't #112233); the
@@ -552,13 +585,13 @@ TEST_F(WidgetsTest, HexInputAppliesCompleteColorsWhileTyping) {
 // (made from the color each frame) doesn't hold it by then.
 TEST_F(WidgetsTest, ColorPickerBodyCommitsShortHexWhenTheEditEnds) {
     Color c{1.0f, 1.0f, 1.0f, 1.0f};
-    std::string typed;              // what the "user" typed in the hex box this frame (empty: nothing)
-    bool ends = false;              // the box loses focus this frame
+    std::string typed; // what the "user" typed in the hex box this frame (empty: nothing)
+    bool ends = false; // the box loses focus this frame
     bool changed = false;
     const auto render = [&] {
         frame([&] {
             std::string hex = toHex(c);
-            changed = md::colorPickerBody(&c, hex, false, dp(240), [&](std::string& value, const md::TextFieldOptions&) {
+            const md::HexField box = [&](std::string& value, const md::TextFieldOptions&) {
                 md::TextFieldResult r;
                 if (!typed.empty()) {
                     value = typed;
@@ -566,7 +599,8 @@ TEST_F(WidgetsTest, ColorPickerBodyCommitsShortHexWhenTheEditEnds) {
                 }
                 r.committed = ends;
                 return r;
-            });
+            };
+            changed = md::colorPickerBody(&c, hex, false, dp(240), box);
         });
     };
     for (const char* step : {"#1", "#12", "#123"}) {

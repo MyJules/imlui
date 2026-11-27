@@ -19,14 +19,27 @@ export namespace imlui::md {
 bool beginModalDrawer(const char* id, bool* open, float width = 360.0f);
 void endModalDrawer();
 
+/// Where a modal drawer is in its slide, from beginModalDrawerWindow().
+struct ModalDrawerFrame {
+    float t = 0.0f;                   ///< how far it is open, 0..1 (animated)
+    ImVec2 viewportMin, viewportMax;  ///< the main viewport, which the window covers
+    ImVec2 sheetMin, sheetMax;        ///< the sheet, slid in from the left by `t` (eased)
+};
+/// beginModalDrawer()'s behaviour, shared with the other skins' drawers: slides the sheet (`width` dp, at most 80% of
+/// the viewport) by `*open`, and begins the window over the viewport, focused when it appears. A click on the scrim
+/// right of the sheet, or Escape (unless a popup over the drawer takes it), sets `*open` to false. nullopt when it
+/// is closed (nothing begun). The caller draws the scrim and the sheet, then calls beginModalDrawerSheet().
+[[nodiscard]] std::optional<ModalDrawerFrame> beginModalDrawerWindow(const char* id, bool* open, float width);
+/// Begins the sheet's scrolling region, `padding` inside it, over `surface` (pushSurface()); endModalDrawer() ends it.
+void beginModalDrawerSheet(const ModalDrawerFrame& f, float padding, Color surface);
+
 } // namespace imlui::md
 
 module :private;
 
 namespace imlui::md {
 
-bool beginModalDrawer(const char* id, bool* open, float width) {
-    const Scheme& s = scheme();
+std::optional<ModalDrawerFrame> beginModalDrawerWindow(const char* id, bool* open, float width) {
     const ImGuiID key = ImGui::GetID(id);
     ImGuiStorage* st = ImGui::GetStateStorage();
     const ImGuiID shownKey = key + 1;
@@ -34,7 +47,7 @@ bool beginModalDrawer(const char* id, bool* open, float width) {
     const float t = animate(key, *open ? 1.0f : 0.0f, 16.0f);
     if (t <= 0.0f) {
         st->SetBool(shownKey, false);
-        return false;
+        return std::nullopt;
     }
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float sheetW = std::min(dp(width), vp->Size.x * 0.8f);
@@ -57,33 +70,46 @@ bool beginModalDrawer(const char* id, bool* open, float width) {
                      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(3);
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 end{vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y};
-    fillRoundRect(dl, vp->Pos, end, 0.0f, s.scrim.withAlpha(0.32f * t));
+    ModalDrawerFrame f;
+    f.t = t;
+    f.viewportMin = vp->Pos;
+    f.viewportMax = {vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y};
+    f.sheetMin = {x0, vp->Pos.y};
+    f.sheetMax = {x0 + sheetW, f.viewportMax.y};
 
     // The scrim right of the sheet closes the drawer when clicked.
-    const float sheetEnd = x0 + sheetW;
-    ImGui::SetCursorScreenPos({sheetEnd, vp->Pos.y});
-    if (ImGui::InvisibleButton("##scrim", {std::max(1.0f, end.x - sheetEnd), std::max(1.0f, vp->Size.y)}))
-        *open = false;
+    ImGui::SetCursorScreenPos({f.sheetMax.x, vp->Pos.y});
+    const ImVec2 scrim{std::max(1.0f, f.viewportMax.x - f.sheetMax.x), std::max(1.0f, vp->Size.y)};
+    if (ImGui::InvisibleButton("##scrim", scrim)) *open = false;
     // Escape closes it too, unless a menu or popup opened from the drawer takes the key first (or took it: ImGui's
     // nav closes a menu in NewFrame).
     if (*open && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !popupOver(ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         *open = false;
+    return f;
+}
 
-    const ImVec2 a{x0, vp->Pos.y}, b{sheetEnd, end.y};
-    const float radius = dp(shape().large);
-    drawShadow(dl, a, b, radius, t);
-    fillRoundRect(dl, a, b, radius, s.surfaceContainerLow, ImDrawFlags_RoundCornersRight);
-
-    ImGui::SetCursorScreenPos(a);
+void beginModalDrawerSheet(const ModalDrawerFrame& f, float padding, Color surface) {
+    ImGui::SetCursorScreenPos(f.sheetMin);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{0, 0, 0, 0});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {dp(12), dp(12)});
-    ImGui::BeginChild("##sheet", {sheetW, vp->Size.y}, ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {padding, padding});
+    ImGui::BeginChild("##sheet", {f.sheetMax.x - f.sheetMin.x, f.viewportMax.y - f.viewportMin.y},
+                      ImGuiChildFlags_AlwaysUseWindowPadding);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
-    pushSurface(s.surfaceContainerLow);
+    pushSurface(surface);
+}
+
+bool beginModalDrawer(const char* id, bool* open, float width) {
+    const Scheme& s = scheme();
+    const std::optional<ModalDrawerFrame> f = beginModalDrawerWindow(id, open, width);
+    if (!f) return false;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    fillRoundRect(dl, f->viewportMin, f->viewportMax, 0.0f, s.scrim.withAlpha(0.32f * f->t));
+    const float radius = dp(shape().large);
+    drawShadow(dl, f->sheetMin, f->sheetMax, radius, f->t);
+    fillRoundRect(dl, f->sheetMin, f->sheetMax, radius, s.surfaceContainerLow, ImDrawFlags_RoundCornersRight);
+    beginModalDrawerSheet(*f, dp(12), s.surfaceContainerLow);
     return true;
 }
 

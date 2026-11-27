@@ -215,8 +215,8 @@ TEST(FindRole, OnlyWholeNamesMatch) {
     EXPECT_EQ(findRole(s, "errorContainer"), &s.errorContainer);
 }
 
-// generateScheme() keeps its last few results (fewer than `seeds`): whatever the order seeds come in, each scheme is the one a seed
-// gives the first time.
+// generateScheme() keeps its last few results (fewer than `seeds`): whatever the order seeds come in, each scheme
+// is the one a seed gives the first time.
 TEST(GenerateScheme, CachedResultsMatchFreshOnes) {
     std::vector<Scheme> first;
     for (const char* hex : seeds)

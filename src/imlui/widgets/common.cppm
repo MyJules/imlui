@@ -323,8 +323,8 @@ void pathPoint(ImDrawList* dl, ImVec2 p) {
 }
 
 /// Appends `n` + 1 points of an arc around `c` at radius `r`: angles a0 + i * step for i in 0..n, from the cosine
-/// and sine of `a0` and of `step` (one sincos per arc, not per point). Each point rotates the last by `step`, in double:
-/// the rounding a float rotation gathers over a few hundred points stays far below a pixel's 1/1000.
+/// and sine of `a0` and of `step` (one sincos per arc, not per point). Each point rotates the last by `step`, in
+/// double: the rounding gathered over a few thousand points stays far below a thousandth of a pixel.
 template <class Add>
 void arcPoints(ImVec2 c, float r, double cos0, double sin0, double step, int n, Add add) {
     const double cs = std::cos(step), sn = std::sin(step);

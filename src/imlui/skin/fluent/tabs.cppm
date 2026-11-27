@@ -40,16 +40,19 @@ namespace {
 constexpr float barExtra = 8.0f; // dp over controlHeight
 
 struct TabsLayout {
-    std::vector<Content> tabs;
     float w = 0, h = 0, tabW = 0;
 };
 
-TabsLayout tabsLayout(const Look& look, const std::vector<md::TabInfo>& items, float width) {
+/// The bar's layout; with `contents`, each tab's measured content too (tabs() draws them).
+TabsLayout tabsLayout(const Look& look, const std::vector<md::TabInfo>& items, float width,
+                      std::vector<Content>* contents = nullptr) {
     TabsLayout l;
     float widest = 0;
+    if (contents) contents->clear();
     for (const md::TabInfo& t : items) {
-        l.tabs.push_back(content(look, t.label, t.icon));
-        widest = std::max(widest, l.tabs.back().width);
+        const Content c = content(look, t.label, t.icon);
+        widest = std::max(widest, c.width);
+        if (contents) contents->push_back(c);
     }
     const float n = static_cast<float>(std::max<std::size_t>(1, items.size()));
     l.w = md::itemWidth(width, (widest + 2.0f * paddingX(look)) * n);
@@ -68,7 +71,9 @@ ImVec2 tabsSize(const Look& look, const std::vector<md::TabInfo>& items, bool, f
 bool tabs(const Look& look, const char* id, const std::vector<md::TabInfo>& items, int* current, bool secondary,
           float width) {
     if (items.empty()) return false;
-    const TabsLayout l = tabsLayout(look, items, width);
+    // Reused from bar to bar (the UI runs on one thread): no allocation per frame.
+    static std::vector<Content> contents;
+    const TabsLayout l = tabsLayout(look, items, width, &contents);
     const Colors& k = look.colors;
     const float radius = secondary ? overlayRadius(look) : controlRadius(look);
     const float stroke = std::max(1.0f, strokeWidth(look));
@@ -93,7 +98,7 @@ bool tabs(const Look& look, const char* id, const std::vector<md::TabInfo>& item
         ImGui::PopID();
         const bool sel = i == *current;
         const State state = stateOf(item);
-        const Content& c = l.tabs[static_cast<std::size_t>(i)];
+        const Content& c = contents[static_cast<std::size_t>(i)];
         const ImVec2 b{a.x + l.tabW, a.y + l.h};
 
         ImVec2 pa, pb; // the item's highlight
