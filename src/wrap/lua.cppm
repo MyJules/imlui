@@ -17,6 +17,12 @@ module;
 #include "lualib.h"
 #include "lauxlib.h"
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h> // VirtualAlloc, VirtualFree: the pool's chunks
+#endif
+
 // Under AddressSanitizer, newstate() keeps Lua's plain allocator: the pool would hide Lua's memory from ASan (a
 // block freed to a free list is still "valid" to it, a read past a small block lands in its neighbour).
 #if defined(__has_feature)
@@ -60,7 +66,7 @@ enum class Type : int { None = -1, Nil, Boolean, LightUserData, Number, String, 
 // ---------------------------------------------------------------- state
 /// A new state (luaL_newstate's panic and warning functions), nullptr when out of memory. Its memory comes from a pool
 /// of its own (small blocks from size-class free lists), which close() releases: the state is used by one thread at
-/// a time, like any Lua state.
+/// a time, like any Lua state. trimMemory() gives back what a peak left unused.
 State* newstate();
 /// A state whose memory comes from `allocator` (called with `ud`), e.g. to cap a sandbox's memory.
 State* newstate(Alloc allocator, void* ud);
@@ -73,6 +79,30 @@ void openbase(State* state);
 CFunction atpanic(State* state, CFunction panicf);
 /// Sets the debug hook (lua_sethook), e.g. maskCount to run `hook` after every `count` instructions.
 void sethook(State* state, Hook hook, int mask, int count);
+/// The allocator of `state` and its `ud` (lua_getallocf).
+Alloc getallocf(State* state, void** ud);
+
+/// What newstate()'s pool holds (all zero for a state made with another allocator).
+struct MemoryStats {
+    std::size_t reserved = 0; ///< bytes the pool took from the OS for its small blocks
+    std::size_t free = 0;     ///< of those, the bytes no live block uses
+    std::size_t trims = 0;    ///< times trimMemory() walked the pool
+};
+/// When trimMemory() walks the pool.
+struct TrimOptions {
+    /// Trims when the free bytes are at least this many, more than the live ones, and this many more than their
+    /// lowest since the last trim (a pool kept fragmented by a few live blocks isn't walked again until it grows).
+    std::size_t minFree = std::size_t{8} << 20;
+    /// And at most this often.
+    std::chrono::steady_clock::duration minInterval = std::chrono::seconds{1};
+    /// Trims now, whatever the free bytes and the last trim.
+    bool force = false;
+};
+/// Gives the OS back the pool's chunks that hold no live block (after a collection freed a big tree), when
+/// `options` says it's worth it; the check is cheap, so call it often, but never from inside a Lua call (an
+/// allocation). Returns the bytes given back (0 without a pool: a state with another allocator, or under ASan).
+std::size_t trimMemory(State* state, const TrimOptions& options = {});
+[[nodiscard]] MemoryStats memoryStats(State* state);
 /// The main thread of the state `state` belongs to (`state` itself unless it is a coroutine): it lives as long as the
 /// state, unlike a coroutine.
 State* mainthread(State* state);
@@ -225,21 +255,32 @@ static_assert(static_cast<int>(Type::Thread) == LUA_TTHREAD);
 namespace {
 Type toType(int t) { return static_cast<Type>(t); }
 
+/// The chunk of a closed state's one-chunk slab (its first), kept for the next state: creating and closing small
+/// states (sandboxes, the tests) then costs no OS call and no fresh pages. Any thread may close or create a state.
+std::atomic<std::byte*> spareChunk{nullptr};
+
 /// The memory of a state made by newstate(): Lua allocates mostly small blocks (tables, strings, closures, userdata,
 /// a table's hash part), and building a UI allocates tens of thousands at once, each one a trip through the C heap's
-/// locks and bookkeeping. Blocks up to `smallMax` bytes come from size-class free lists instead, carved from large
-/// chunks that live as long as the state (a freed block goes back to its list, for the next block of its class);
-/// bigger ones go to the C heap. Not thread-safe: one per state, and a state runs on one thread at a time.
+/// locks and bookkeeping. Blocks up to `smallMax` bytes come from size-class free lists instead (a freed block goes
+/// back to its list, for the next block of its class); bigger ones go to the C heap. The lists are carved from chunks
+/// of `chunkSize` bytes aligned to their size, so a block's chunk is its address with the low bits cleared, and each
+/// chunk counts its live blocks: trim() gives the chunks a peak left empty back to the OS. Not thread-safe: one per
+/// state, and a state runs on one thread at a time.
+///
+/// Chunks come from the OS in slabs of 1 to `slabChunks` chunks (64 KiB to 1 MiB, doubling as the pool grows), so a
+/// small state takes 64 KiB (the last closed state's, when there is one: spareChunk) and a big one makes one OS call
+/// per MiB. trim() decommits each empty chunk (the OS takes back its memory but the slab keeps the address range,
+/// where a later chunk is committed again) and releases a slab once none of its chunks is committed.
 class Pool {
 public:
     Pool() = default;
     Pool(const Pool&) = delete;
     Pool& operator=(const Pool&) = delete;
     ~Pool() {
-        while (m_chunks) {
-            Chunk* next = m_chunks->next;
-            std::free(m_chunks);
-            m_chunks = next;
+        while (m_slabs) {
+            Slab* next = m_slabs->next;
+            releaseSlab(m_slabs);
+            m_slabs = next;
         }
     }
 
@@ -262,34 +303,124 @@ public:
         return moved;
     }
 
+    /// trimMemory(): trims when `options` says it's worth it (see TrimOptions). Cheap unless it trims: a few
+    /// comparisons, and the clock only once the bytes say yes.
+    std::size_t trimIfWorth(const TrimOptions& options) {
+        const std::size_t free = freeBytes();
+        if (!options.force) {
+            m_freeLow = std::min(m_freeLow, free);
+            if (free < options.minFree || free <= m_live || free - m_freeLow < options.minFree) return 0;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!options.force && m_trims > 0 && now - m_lastTrim < options.minInterval) return 0;
+        const std::size_t released = trim();
+        ++m_trims;
+        m_lastTrim = now;
+        m_freeLow = freeBytes();
+        return released;
+    }
+
+    /// Gives back every chunk without a live block but the one being carved: drops their blocks from the free lists
+    /// (one pass over them), then decommits them. Returns the bytes given back.
+    std::size_t trim() {
+        std::size_t empty = 0;
+        for (Chunk* chunk = m_chunks; chunk; chunk = chunk->next) {
+            chunk->empty = chunk->live == 0 && chunk != m_current;
+            empty += chunk->empty ? 1 : 0;
+        }
+        if (empty == 0) return 0;
+        for (FreeBlock*& head : m_free) {
+            FreeBlock** link = &head;
+            while (FreeBlock* b = *link) {
+                if (chunkOf(b)->empty)
+                    *link = b->next;
+                else
+                    link = &b->next;
+            }
+        }
+        for (Chunk** link = &m_chunks; Chunk* chunk = *link;) {
+            if (!chunk->empty) {
+                link = &chunk->next;
+                continue;
+            }
+            *link = chunk->next;
+            Slab* slab = chunk->slab;
+            slab->committed &= ~chunkBit(slab, chunk);
+            decommit(chunk);
+            ++m_holes;
+        }
+        // Slabs left without a committed chunk go back whole (their holes with them).
+        for (Slab** link = &m_slabs; Slab* slab = *link;) {
+            if (slab->committed != 0) {
+                link = &slab->next;
+                continue;
+            }
+            *link = slab->next;
+            m_holes -= slab->chunks;
+            releaseSlab(slab);
+        }
+        const std::size_t released = empty * chunkSize;
+        m_reserved -= released;
+        return released;
+    }
+
+    [[nodiscard]] MemoryStats stats() const { return {.reserved = m_reserved, .free = freeBytes(), .trims = m_trims}; }
+
 private:
     static constexpr std::size_t granule = 16; ///< block sizes are multiples of it (and so is their alignment)
     static constexpr std::size_t smallMax = 512;
-    static constexpr std::size_t firstChunk = std::size_t{16} << 10; ///< chunks double up to lastChunk
-    static constexpr std::size_t lastChunk = std::size_t{1} << 20;
+    /// The size and alignment of a chunk: Windows' allocation granularity, so every slab VirtualAlloc gives starts
+    /// on a chunk.
+    static constexpr std::size_t chunkSize = std::size_t{64} << 10;
+    static constexpr std::size_t slabChunks = 16; ///< the most chunks in a slab (1 MiB); fits Slab::committed
 
     struct FreeBlock {
         FreeBlock* next;
     };
-    /// A chunk's header; its blocks follow it.
+    struct Chunk;
+    /// A range of chunks taken from the OS at once (on the C heap: its chunks may be decommitted).
+    struct Slab {
+        Slab* next;
+        std::byte* base;
+        std::uint32_t chunks;    ///< chunks in the range
+        std::uint32_t carved;    ///< chunks handed out so far (the others are committed and unused)
+        std::uint32_t committed; ///< a bit per chunk: committed (handed out or not yet), not decommitted by trim()
+    };
+    /// A chunk's header, at its start; its blocks follow it.
     struct alignas(granule) Chunk {
         Chunk* next;
+        Slab* slab;
+        std::uint32_t live; ///< blocks handed out and not released
+        bool empty;         ///< trim(): to be given back
     };
+    static_assert(sizeof(Chunk) == 2 * granule);
 
     /// The free list of blocks of `size` bytes (1..smallMax): size classes of `granule` bytes.
     static std::size_t sizeClass(std::size_t size) { return (size - 1) / granule; }
+    static Chunk* chunkOf(void* block) {
+        return reinterpret_cast<Chunk*>(reinterpret_cast<std::uintptr_t>(block) & ~(chunkSize - 1));
+    }
+    static std::uint32_t chunkBit(const Slab* slab, const void* chunk) {
+        const auto offset = static_cast<std::size_t>(static_cast<const std::byte*>(chunk) - slab->base);
+        return std::uint32_t{1} << (offset / chunkSize);
+    }
+    [[nodiscard]] std::size_t freeBytes() const { return m_reserved - m_live; }
 
     void* allocate(std::size_t size) {
         if (size > smallMax) return std::malloc(size);
         const std::size_t c = sizeClass(size);
+        const std::size_t bytes = (c + 1) * granule;
         if (FreeBlock* b = m_free[c]) {
             m_free[c] = b->next;
+            ++chunkOf(b)->live;
+            m_live += bytes;
             return b;
         }
-        const std::size_t bytes = (c + 1) * granule;
         if (static_cast<std::size_t>(m_end - m_cursor) < bytes && !grow()) return nullptr;
         void* b = m_cursor;
         m_cursor += bytes;
+        ++m_current->live;
+        m_live += bytes;
         return b;
     }
 
@@ -298,7 +429,10 @@ private:
             std::free(ptr);
             return;
         }
-        push(ptr, sizeClass(size));
+        const std::size_t c = sizeClass(size);
+        --chunkOf(ptr)->live;
+        m_live -= (c + 1) * granule;
+        push(ptr, c);
     }
 
     void push(void* ptr, std::size_t c) {
@@ -309,24 +443,131 @@ private:
 
     /// A new chunk to carve from; what was left of the current one goes to the free list of its size.
     bool grow() {
-        auto* chunk = static_cast<Chunk*>(std::malloc(m_nextChunk));
-        if (!chunk) return false;
+        void* memory = nullptr;
+        Slab* slab = m_slabs;
+        if (slab && slab->carved < slab->chunks) { // the newest slab's next chunk
+            memory = slab->base + std::size_t{slab->carved++} * chunkSize;
+        } else if (m_holes > 0) { // a chunk trim() gave back, committed again
+            for (slab = m_slabs; slab; slab = slab->next) {
+                const std::uint32_t all = (std::uint32_t{1} << slab->chunks) - 1;
+                if (slab->committed == all) continue;
+                const auto i = static_cast<std::size_t>(std::countr_one(slab->committed));
+                memory = commit(slab->base + i * chunkSize);
+                if (!memory) return false;
+                slab->committed |= std::uint32_t{1} << i;
+                --m_holes;
+                m_reserved += chunkSize;
+                break;
+            }
+            if (!memory) return false; // never: m_holes counts the slabs' holes
+        } else {
+            slab = newSlab(m_nextSlab);
+            if (!slab) return false;
+            m_nextSlab = std::min(m_nextSlab * 2, slabChunks);
+            memory = slab->base;
+        }
         if (const auto left = static_cast<std::size_t>(m_end - m_cursor); left >= granule)
             push(m_cursor, sizeClass(left - left % granule));
+        auto* chunk = static_cast<Chunk*>(memory);
         chunk->next = m_chunks;
+        chunk->slab = slab;
+        chunk->live = 0;
+        chunk->empty = false;
         m_chunks = chunk;
+        m_current = chunk;
         m_cursor = reinterpret_cast<std::byte*>(chunk + 1);
-        m_end = reinterpret_cast<std::byte*>(chunk) + m_nextChunk;
-        m_nextChunk = std::min(m_nextChunk * 2, lastChunk);
+        m_end = reinterpret_cast<std::byte*>(chunk) + chunkSize;
         return true;
     }
 
+    /// A slab of `chunks` committed chunks, put first in m_slabs, its first chunk carved; nullptr when out of memory.
+    Slab* newSlab(std::size_t chunks) {
+        auto* slab = static_cast<Slab*>(std::malloc(sizeof(Slab)));
+        if (!slab) return nullptr;
+        const std::size_t bytes = chunks * chunkSize;
+        std::byte* base = chunks == 1 ? spareChunk.exchange(nullptr, std::memory_order_acquire) : nullptr;
+        if (!base) base = osAllocate(bytes);
+        if (!base) {
+            std::free(slab);
+            return nullptr;
+        }
+        *slab = {.next = m_slabs,
+                 .base = base,
+                 .chunks = static_cast<std::uint32_t>(chunks),
+                 .carved = 1,
+                 .committed = (std::uint32_t{1} << chunks) - 1};
+        m_slabs = slab;
+        m_reserved += bytes;
+        return slab;
+    }
+
+    static void releaseSlab(Slab* slab) {
+        std::byte* expected = nullptr;
+        const bool kept = slab->chunks == 1 && slab->committed == 1 &&
+                          spareChunk.compare_exchange_strong(expected, slab->base, std::memory_order_release);
+        if (!kept) osRelease(slab->base);
+        std::free(slab);
+    }
+
+    /// `bytes` (a multiple of chunkSize) committed, aligned to chunkSize; nullptr when out of memory.
+    static std::byte* osAllocate(std::size_t bytes) {
+#if defined(_WIN32)
+        // VirtualAlloc's ranges start on its allocation granularity, 64 KiB everywhere Windows runs.
+        auto* base = static_cast<std::byte*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        if (base && reinterpret_cast<std::uintptr_t>(base) % chunkSize != 0) {
+            VirtualFree(base, 0, MEM_RELEASE);
+            return nullptr;
+        }
+        return base;
+#else
+        return static_cast<std::byte*>(std::aligned_alloc(chunkSize, bytes));
+#endif
+    }
+    static void osRelease(std::byte* base) {
+#if defined(_WIN32)
+        VirtualFree(base, 0, MEM_RELEASE);
+#else
+        std::free(base);
+#endif
+    }
+
+    /// The OS takes the chunk's memory back; its address range stays the slab's. (Elsewhere a decommitted chunk
+    /// stays as it is, until its whole slab goes.)
+    static void decommit(void* chunk) {
+#if defined(_WIN32)
+        VirtualFree(chunk, chunkSize, MEM_DECOMMIT);
+#else
+        static_cast<void>(chunk);
+#endif
+    }
+    static void* commit(void* chunk) {
+#if defined(_WIN32)
+        return VirtualAlloc(chunk, chunkSize, MEM_COMMIT, PAGE_READWRITE);
+#else
+        return chunk;
+#endif
+    }
+
     std::array<FreeBlock*, smallMax / granule> m_free{};
-    std::byte* m_cursor = nullptr; ///< the unused rest of the newest chunk
+    std::byte* m_cursor = nullptr; ///< the unused rest of m_current
     std::byte* m_end = nullptr;
-    Chunk* m_chunks = nullptr;
-    std::size_t m_nextChunk = firstChunk;
+    Chunk* m_current = nullptr; ///< the chunk being carved
+    Chunk* m_chunks = nullptr;  ///< every chunk handed out and not given back
+    Slab* m_slabs = nullptr;    ///< newest first
+    std::size_t m_nextSlab = 1; ///< chunks in the next slab
+    std::size_t m_holes = 0;    ///< chunks trim() decommitted in the slabs still held
+    std::size_t m_reserved = 0; ///< bytes committed in the slabs
+    std::size_t m_live = 0;     ///< bytes in live blocks (of their size class)
+    std::size_t m_freeLow = 0;  ///< the lowest free bytes trimIfWorth() saw since the last trim
+    std::size_t m_trims = 0;
+    std::chrono::steady_clock::time_point m_lastTrim;
 };
+
+Pool* poolOf(State* state) {
+    void* ud = nullptr;
+    return lua_getallocf(state, &ud) == &Pool::alloc ? static_cast<Pool*>(ud) : nullptr;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- state
@@ -343,12 +584,20 @@ State* newstate() {
 #endif
 State* newstate(Alloc allocator, void* ud) { return lua_newstate(allocator, ud); }
 void close(State* state) {
-    void* ud = nullptr;
-    const bool pooled = lua_getallocf(state, &ud) == &Pool::alloc;
+    Pool* pool = poolOf(state);
     void* keys = imlui_lua_keys(state); // used until the end of lua_close (a finalizer may read fields)
     lua_close(state);
     imlui_lua_freekeys(keys);
-    if (pooled) delete static_cast<Pool*>(ud); // after lua_close, which frees its blocks through it
+    delete pool; // after lua_close, which frees its blocks through it
+}
+Alloc getallocf(State* state, void** ud) { return lua_getallocf(state, ud); }
+std::size_t trimMemory(State* state, const TrimOptions& options) {
+    Pool* pool = poolOf(state);
+    return pool ? pool->trimIfWorth(options) : 0;
+}
+MemoryStats memoryStats(State* state) {
+    const Pool* pool = poolOf(state);
+    return pool ? pool->stats() : MemoryStats{};
 }
 void openlibs(State* state) { luaL_openlibs(state); }
 CFunction atpanic(State* state, CFunction panicf) { return lua_atpanic(state, panicf); }

@@ -61,7 +61,9 @@ flowchart TD
      timers resume theirs in `ui.__tick`, at the start of a frame, which also reports the future rejections left
      unhandled since the last one ([Async](lua-api.md#async)). Then the C++ main timers due run
      (`imlui.ui.main_timers`: `delay()`, `withTimeout`), also outside a frame.
-   - `renderFrame()`, but only if a frame is due. Otherwise the loop goes back to sleep without rendering.
+   - `renderFrame()`, but only if a frame is due. Otherwise the loop goes back to sleep without rendering. It starts
+     with `lua::trimMemory`, outside every Lua call: after a collection freed a lot (a big page left), the Lua
+     pool's empty chunks go back to the OS ([Lua memory](#lua-memory)). It costs a few comparisons when it doesn't.
 4. When the loop ends (window closed, `quit()`, or an exception that escapes it: a scope guard runs the same
    `Engine::shutdown()`): the wake handler is removed, the C++ main timers dropped (a dropped `delay` is cancelled,
    which may resume a coroutine) and the queued posts dropped, the Lua state closes (every element dies, so the work
@@ -229,6 +231,38 @@ frame that aligns them, on every frame.
 The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
+
+### Lua memory
+
+`lua::newstate()` gives each state a memory pool of its own (`class Pool` in `src/wrap/lua.cppm`; under
+AddressSanitizer the plain allocator instead, so ASan still sees Lua's memory). Building a UI allocates tens of
+thousands of small blocks at once (tables, strings, closures, userdata), so blocks up to 512 bytes come from
+size-class free lists (16-byte classes); larger ones go to the C heap.
+
+- **Chunks.** The free lists are carved from chunks of 64 KiB aligned to 64 KiB, so a block's chunk is its address
+  with the low 16 bits cleared. Each chunk counts its live blocks (one increment or decrement in an allocation or a
+  free), and the pool counts its reserved bytes (the committed chunks) and its live ones; the rest is free.
+- **Slabs.** Chunks come from the OS (`VirtualAlloc` on Windows, whose ranges start on 64 KiB) in slabs of 1, 2, 4, 8
+  and then 16 chunks (1 MiB), so a small state takes 64 KiB and a big one makes one OS call per MiB: with one call per
+  64 KiB chunk, building the stress scenarios was 5 to 10% slower. A closed state's one-chunk slab is kept for the
+  next state (`spareChunk`, one for the process), so creating and closing small states (sandboxes, the tests) costs
+  no OS call: about 26 us for a state with the standard libraries, as with the C heap.
+- **Trim.** `Pool::trim()` gives back every chunk without a live block but the one being carved: one pass over the free
+  lists drops the blocks of those chunks, then each is decommitted (its memory goes back to the OS; the slab keeps
+  the address range, and a later chunk is committed there again), and a slab with no committed chunk left is
+  released. It never runs inside an allocation.
+- **When.** `lua::trimMemory(state, options)` decides (`lua::TrimOptions`): the free bytes must be at least `minFree`
+  (8 MiB), more than the live bytes, and `minFree` more than their lowest since the last trim (seen at the calls),
+  and the last trim at least `minInterval` (1 s) ago. The hysteresis keeps a fragmented pool, whose free bytes stay
+  high because every chunk keeps a live block, from being walked on every frame. The Engine calls it at the start of
+  every rendered frame and logs what a trim gave back; `lua::memoryStats` reads the reserved and free bytes and the
+  number of trims (tests, the log line).
+- **The C heap** (C++ instances, ImGui, the layout caches) is left alone: `_heapmin` after the same drop gave nothing
+  back (the private bytes didn't move).
+
+The stress page's `controls` at 10 000 rows (80 000 elements, a 68 MiB Lua heap) left for an empty page: 82 MiB
+private bytes after the collection, 24.5 MiB after the trim (`imlui_bench drop`; 83.4 MiB before the pool could trim).
+What stays is mostly the C heap and Lua's large blocks (12 MiB, which the pool doesn't hold).
 
 ## Property resolution
 
@@ -1423,13 +1457,14 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, `reservehash`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes, `mainthread`); `newstate()` gives each state a memory pool of its own (blocks up to 512 bytes from size-class free lists carved from chunks of 16 KiB to 1 MiB, larger ones from the C heap; released by `close()`; the plain allocator under AddressSanitizer, so ASan still sees Lua's memory); `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
+| `lua` | Lua 5.4 API (Lua is compiled as C++: C++ linkage), with its macros turned into real functions (including full userdata, user values, `rawgetp`/`rawsetp`, `raise`, `reservehash`, and `openbase`, `newstate(allocator, ud)` and `sethook` for sandboxes, `mainthread`); `newstate()` gives each state a memory pool of its own (blocks up to 512 bytes from size-class free lists carved from 64 KiB chunks, larger ones from the C heap; released by `close()`; the plain allocator under AddressSanitizer, so ASan still sees Lua's memory), `trimMemory(state, TrimOptions)` (gives the empty chunks back to the OS when the free bytes are large; see [Lua memory](#lua-memory)), `memoryStats` (`MemoryStats`: reserved and free bytes, trims), `getallocf`; `lua::Raised`, the C++ exception a Lua error is; `lua::Type` enum, `lua::ok`, `registryIndex`, ... Its own library, `imlui_lua`, which `imlui` links publicly and the resource tools use to evaluate manifests |
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on a normal scope exit (not while a Lua error unwinds it) |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink, and the replaced one is kept for writers still using it, so writing takes no lock), `setLevel`, `enabled(level)` (spdlog's `should_log`: the `info`/`debug`/... templates check it before formatting, and Lua's `log.*` through `native.logEnabled`) |
 | `imlui.platform.window` | `platform::Window` + `Window::Config`: SDL3 window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `refreshRate` (of the monitor the window is on; cached until it moves or the monitors change), `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
 | `imlui.platform.system_fonts` | `systemFontFolder()`: the OS's font folder (`SHGetKnownFolderPath(FOLDERID_Fonts)` on Windows; nullopt elsewhere). See [System fonts](#system-fonts) |
+| `imlui.platform.memory` | `privateBytes()` (the process's private bytes: `GetProcessMemoryInfo` on Windows; nullopt elsewhere), for the Engine's log line after a Lua memory trim and `imlui_bench drop` |
 | `imlui.platform.process` | `executablePath()` (from the OS: `GetModuleFileNameW`, `/proc/self/exe`), `processArguments(argc, argv)` (`ProcessArguments`: the arguments as paths, from the UTF-16 command line on Windows when `argv` is the process's own, and whether it is) |
 | `imlui.platform.stack` | `stackRemaining()`: the bytes of the calling thread's stack left below the caller (`GetCurrentThreadStackLimits` on Windows, less what the thread can't grow into: the guard page, the bottom page and the overflow handler's `SetThreadStackGuarantee`, at least 64 KiB; `pthread_getattr_np` on Linux; nullopt elsewhere), which the renderer checks per level (`Renderer::stackReserve`) |
 | `zstd` | The zstd decompressor: `zstd::contentSize(frame)`, `zstd::decompress(frame, out)`. The tools wrap the compressor themselves (`zstd.compress`, in `tools/lib/`). |
