@@ -23,6 +23,9 @@ struct TabInfo {
 
 /// Material tabs header. `current` 0-based. `secondary` = secondary tabs style. Returns true when changed.
 bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool secondary = false, float width = -1.0f);
+/// The size tabs() takes with the same arguments: 48dp high, 64dp for primary tabs with an icon; `width` resolved like
+/// itemWidth() (natural: 90dp a tab). {0, 0} without items.
+[[nodiscard]] ImVec2 tabsSize(const std::vector<TabInfo>& items, bool secondary = false, float width = -1.0f);
 
 } // namespace imlui::md
 
@@ -30,14 +33,27 @@ module :private;
 
 namespace imlui::md {
 
+namespace {
+
+/// Primary tabs with an icon put it above the label.
+bool stackedTabs(const std::vector<TabInfo>& items, bool secondary) {
+    if (secondary) return false;
+    return std::ranges::any_of(items, [](const TabInfo& t) { return hasIcon(t.icon); });
+}
+
+} // namespace
+
+ImVec2 tabsSize(const std::vector<TabInfo>& items, bool secondary, float width) {
+    if (items.empty()) return {0.0f, 0.0f};
+    return {itemWidth(width, dp(90) * static_cast<float>(items.size())), dp(stackedTabs(items, secondary) ? 64 : 48)};
+}
+
 bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool secondary, float width) {
     if (items.empty()) return false;
     const Scheme& s = scheme();
-    bool anyIcon = false;
-    for (auto& t : items) anyIcon = anyIcon || hasIcon(t.icon);
-    const bool stacked = anyIcon && !secondary;
-    const float h = dp(stacked ? 64 : 48);
-    const float w = itemWidth(width, dp(90) * static_cast<float>(items.size()));
+    const bool stacked = stackedTabs(items, secondary);
+    const ImVec2 size = tabsSize(items, secondary, width);
+    const float w = size.x, h = size.y;
     const float tw = w / static_cast<float>(items.size());
     ImGui::PushID(id);
     ImVec2 p = ImGui::GetCursorScreenPos();

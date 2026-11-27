@@ -14,7 +14,8 @@ import imlui.types.type_builder;
 
 export namespace imlui {
 
-/// The Material 3 bottom navigation bar: 80dp tall; the visible destinations share the width equally.
+/// The Material 3 bottom navigation bar: the skin's height (Skin::navigationBarSize: 80dp); the visible destinations
+/// share the width equally.
 ///
 /// Props:   color = unset (surfaceContainer)
 /// Raw:     width
@@ -23,8 +24,8 @@ public:
     static void declare(TypeBuilder<NavigationBar>& type);
 
     void render(Frame& frame) override;
-    /// Its width (a fill of `maxWidth` unless set) and 80dp (taller only for a taller destination). None while a
-    /// destination has no intrinsic size.
+    /// Its width (a fill of `maxWidth` unless set) and the skin's height (taller only for a taller destination). None
+    /// while a destination has no intrinsic size.
     [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     /// The container color; unset: surfaceContainer.
@@ -44,7 +45,7 @@ namespace imlui {
 void NavigationBar::declare(TypeBuilder<NavigationBar>& type) {
     type.doc("The Material 3 bottom navigation bar, for compact windows. Its visible children are "
              "`NavigationItem`s (directly or from a `Repeater`), which share the width equally.\n"
-             "Natural size: the available width (unless `width` is set), 80dp high.")
+             "Natural size: the available width (unless `width` is set), 80dp high (the skin's).")
         .fillsWidth(); // an unset width fills
     type.property("color", &NavigationBar::color, &NavigationBar::setColor)
         .doc("The container color; unset: `surfaceContainer`.");
@@ -53,7 +54,7 @@ void NavigationBar::declare(TypeBuilder<NavigationBar>& type) {
 void NavigationBar::render(Frame& frame) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float w = frame.resolvedWidth();
-    const float h = frame.dp(80);
+    const float h = skin().navigationBarSize(w).y;
     const Color bg = m_color.value_or(skin().navigationBarColor());
     md::fillRoundRect(frame.drawList(), p, {p.x + w, p.y + h}, 0.0f, bg);
     md::pushSurface(bg);
@@ -80,7 +81,7 @@ std::optional<ImVec2> NavigationBar::intrinsicSize(const Frame& frame, float max
     const float cell = count > 0 ? w / static_cast<float>(count) : w;
     // The destinations, asked in the scope render() renders them in, each where its cell starts.
     const NavigationScope scope{{NavigationScope::Style::Bar, cell}};
-    float h = frame.dp(80);
+    float h = skin().navigationBarSize(w).y;
     bool known = true;
     int i = 0;
     frame.forEachChild([&](Frame::Child& child) {

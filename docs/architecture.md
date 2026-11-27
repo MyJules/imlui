@@ -1108,9 +1108,9 @@ with `registerSkin(name, factory)` ([Skins](extending.md#skins)).
 | Ranges | `slider`/`sliderSize`, `progress`/`progressSize`, `circularProgress`/`circularProgressSize` |
 | Inputs | `textField`/`textFieldSize`, `spinBox`/`spinBoxSize`, `dropdown`/`dropdownSize`, `colorField`/`colorFieldSize` |
 | Lists and menus | `listItem`/`listItemSize`, `expander`/`expanderSize`, `menuItem`, `beginMenu`/`endMenu` (menu-bar menus and submenus), `beginAnchoredMenu`/`endAnchoredMenu` (a `menu` prop's dropdown) |
-| Navigation | `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `beginModalDrawer`/`endModalDrawer` |
+| Navigation | `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `navigationBarSize` (the NavigationBar's container), `beginModalDrawer`/`endModalDrawer` |
 | Containers, messages | `beginCard`/`endCard`/`cardSize`, `beginDialog`/`endDialog`, `snackbar`, `tooltip` (the renderer's `tooltip` prop) |
-| Others | `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize` |
+| Others | `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize`, `brokenImage` (an `Image`'s placeholder for a missing or undecodable file) |
 | Tokens | `tokens()`: the skin's metrics (`SkinTokens`) |
 | Element chrome | `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` ([Element chrome](extending.md#element-chrome)) |
 
@@ -1393,8 +1393,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.dropdown` | `dropdown` (+ `DropdownOptions`) |
 | `imlui.widgets.spin_box` | `spinBox`; its value rules, shared with the Fluent number box: `spinStepSize` (a step that isn't finite and positive is its magnitude, else 1) and `spinBoxApply` (a typed non-finite value reverts, the step, the clamp, a change only when the value differs) |
 | `imlui.widgets.color_field` | `colorField` (swatch and picker popup); shared with the Fluent color field: `colorPickerBody` (the popup's picker and hex box, + `HexField`, the skin's box) and `applyHexInput` (while typing only a whole `#RRGGBB`/`#RRGGBBAA`, the short forms when the edit ends) |
-| `imlui.widgets.tabs` | `tabs` (+ `TabInfo`, `TabsVariant`: the TabBar's `variant`) |
-| `imlui.widgets.navigation` | Navigation destinations: `navigationItem` (drawer), `navigationBarItem`, `navigationRailItem` |
+| `imlui.widgets.tabs` | `tabs`, `tabsSize` (+ `TabInfo`, `TabsVariant`: the TabBar's `variant`) |
+| `imlui.widgets.navigation` | Navigation destinations: `navigationItem` (drawer), `navigationBarItem`, `navigationRailItem`; `navigationBarSize` (the bar's 80dp) |
 | `imlui.widgets.navigation_drawer` | `beginModalDrawer`/`endModalDrawer`: scrim and sliding sheet in a window above the app; shared with the Fluent pane: `beginModalDrawerWindow` (+ `ModalDrawerFrame`: the slide, the window, the scrim click and Escape) and `beginModalDrawerSheet` |
 | `imlui.widgets.list` | `listItem` (+ `ListItemOptions`), `expander` |
 | `imlui.widgets.card` | `beginCard`/`endCard` (+ `CardVariant`) |
@@ -1422,7 +1422,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.skin.fluent.segmented` | `fluent::segmented`, `segmentedSize` |
 | `imlui.skin.fluent.slider` | `fluent::slider`, `sliderSize` (WinUI's Slider; md's format check and snapping) |
 | `imlui.skin.fluent.progress` | `fluent::progress`, `circularProgress` and their sizes (ProgressBar, ProgressRing) |
-| `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` |
+| `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor`, `brokenImage` |
 | `imlui.skin.fluent.inputs` | Fluent's inputs (group B): `fluent::textField`, `spinBox`, `dropdown`, `colorField` and their sizes; `headerHeight`, `descriptionHeight`, `flyoutRowHeight` and the Fluent constants without a token (`innerButtonWidth`, `innerButtonMargin`, `descriptionGap`, `flyoutGap`, `swatchInset`, `pickerPadding`, `pickerWidth`). The combo box and the color field open `common`'s flyout; privately, the combo box's rows (`flyoutRow`: WinUI's ComboBoxItem, with the selection indicator) |
 | `imlui.skin.fluent.list` | `fluent::listItem`/`listItemSize` (WinUI's list row), `expander`/`expanderSize` (the Expander header) |
 | `imlui.skin.fluent.menu` | `fluent::menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu` (WinUI's MenuFlyout), `menuRowHeight` |

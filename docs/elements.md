@@ -492,7 +492,9 @@ Material tabs. A `TabBar` collects its visible children as tab headers and rende
 content, stacked with that child's `spacing` / `align`. Its children are normally `Tab`s; another element used
 as a tab gives its header through *raw* `title` (default `"Tab"`) and `icon` props. Non-visual children (`Timer`,
 `Dialog`, `Window`, `ModalNavigationDrawer`, ...) are not tabs and don't count for `currentIndex`: they render
-whichever tab is selected, so a `Dialog` declared in a `TabBar` opens from any tab.
+whichever tab is selected, so a `Dialog` declared in a `TabBar` opens from any tab. Its size is known before it
+renders (a `Row` places it right on its first frame): the skin's header (`Skin::tabsSize`), an 8dp gap and the
+selected tab's content.
 
 | `TabBar` prop | Type | Default | Notes |
 |---|---|---|---|
@@ -618,7 +620,8 @@ scope comes back afterwards. A rail's `header` and a `ModalNavigationDrawer`'s s
 
 ### NavigationBar
 
-The Material 3 bottom navigation bar, for compact windows: 80dp tall, as wide as the available width. Its visible
+The Material 3 bottom navigation bar, for compact windows: 80dp tall (the skin's height, `Skin::navigationBarSize`;
+taller only for a taller destination), as wide as the available width. Its visible
 children are `NavigationItem`s (directly or from a `Repeater`) and share the width equally.
 
 | Prop | Type | Default | Notes |
@@ -785,7 +788,8 @@ and drawn as a texture. It's drawn at its natural size times the DPI scale (one 
 Images are PNG or JPEG, at most 16384 pixels on a side and 256 MiB of pixels (4 bytes each, 8192 x 8192:
 `maxImageBytes`); a larger one is undecodable, found from its header before anything is decoded. A missing or
 undecodable file is reported once in the error overlay (`Image: image 'app:/logo.png' not found`) and drawn as a
-placeholder: a `surfaceContainerHighest` box with a broken-image icon, 48dp unless sized.
+placeholder, 48dp unless sized, by the skin (`Skin::brokenImage`): under Material a `surfaceContainerHighest` box
+with a broken-image icon, under Fluent the standard control fill.
 
 **Signals:** `onStatusChanged(self, status)`, `onImplicitWidthChanged(self, w)`, `onImplicitHeightChanged(self, h)`
 

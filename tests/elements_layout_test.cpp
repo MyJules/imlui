@@ -1286,6 +1286,26 @@ TEST_F(LayoutTest, TabBarShowsTheCurrentTabAndWritesBackClicks) {
     check("s.tab == 9");
 }
 
+// A TabBar tells its size before it renders (a Row places it right on its first frame): the skin's header
+// (Skin::tabsSize), the gap and the current tab's content, exactly what it renders.
+TEST_F(LayoutTest, TabBarIntrinsicSizeIsWhatItRenders) {
+    for (const std::string tabs : {"Tab { title = 'One', Probe { w = 40, h = 30, intrinsic = true } }",
+                                   "Tab { title = 'One', icon = 'home' }, Tab { title = 'Two' }",
+                                   "Tab { title = 'One', Probe { w = 400, h = 10, intrinsic = true }, "
+                                   "Probe { w = 10, h = 10, intrinsic = true } }"}) {
+        run("root = nil; collectgarbage(); root = Column { Last { id = 'it', TabBar { width = 300, " + tabs +
+            " } }, Measure { id = 'm', TabBar { width = 300, " + tabs + " } } }");
+        m_h.renderFrames("root", 2);
+        Measure* m = m_h.instance<Measure>("m");
+        ASSERT_NE(m, nullptr);
+        ASSERT_EQ(m->results.size(), 1u);
+        ASSERT_TRUE(m->results[0].intrinsic.has_value()) << tabs;
+        EXPECT_FLOAT_EQ(m->results[0].intrinsic->x, lastSize("it").x) << tabs;
+        EXPECT_FLOAT_EQ(m->results[0].intrinsic->y, lastSize("it").y) << tabs;
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // Non-visual children are no tabs: they don't count for currentIndex and render whichever tab is shown, so a
 // Dialog in a TabBar opens.
 TEST_F(LayoutTest, TabBarRendersNonVisualChildrenInPlace) {

@@ -36,6 +36,8 @@ bool navigationItem(const Look& look, const char* id, std::string_view iconName,
 bool navigationBarItem(const Look& look, const char* id, std::string_view iconName, std::string_view label,
                        bool selected, std::string_view badge, float width);
 [[nodiscard]] ImVec2 navigationBarItemSize(const Look& look, float width);
+/// The NavigationBar `width` (pixels, resolved) wide: as high as its destinations (80dp).
+[[nodiscard]] ImVec2 navigationBarSize(const Look& look, float width);
 /// Draws a navigation rail destination (md::navigationRailItem's parameters); returns whether it was clicked.
 bool navigationRailItem(const Look& look, const char* id, std::string_view iconName, std::string_view label,
                         bool selected, std::string_view badge, float width);
@@ -181,6 +183,7 @@ bool navigationItem(const Look& look, const char* id, std::string_view iconName,
 }
 
 ImVec2 navigationBarItemSize(const Look&, float width) { return {std::max(1.0f, width), dp(barHeight)}; }
+ImVec2 navigationBarSize(const Look&, float width) { return {std::max(0.0f, width), dp(barHeight)}; }
 
 bool navigationBarItem(const Look& look, const char* id, std::string_view iconName, std::string_view label,
                        bool selected, std::string_view badge, float width) {

@@ -25,6 +25,9 @@ constexpr ImVec2 testButton{123.0f, 45.0f};
 /// What the test skin was asked to do.
 int buttonDraws = 0;
 int buttonMeasures = 0;
+int brokenImages = 0;
+/// The test skin's NavigationBar height, in pixels.
+constexpr float testBarHeight = 77.0f;
 
 /// Overrides the button only: every other control falls back to Material.
 class TestSkin final : public Skin {
@@ -39,6 +42,8 @@ public:
         ++buttonMeasures;
         return testButton;
     }
+    [[nodiscard]] ImVec2 navigationBarSize(float width) const override { return {width, testBarHeight}; }
+    void brokenImage(ImVec2, ImVec2, float) const override { ++brokenImages; }
 };
 
 /// Records where it renders: a 1px item.
@@ -63,6 +68,7 @@ protected:
         m_h.registerType<Spot>("Spot");
         buttonDraws = 0;
         buttonMeasures = 0;
+        brokenImages = 0;
     }
     ~SkinTest() override {
         setTheme(Theme{});
@@ -128,6 +134,23 @@ TEST_F(SkinTest, ARegisteredSkinDrawsTheControlsItOverrides) {
     m_h.renderFrames("root", 2);
     EXPECT_FLOAT_EQ(between("a", "b"), materialButton);
     EXPECT_EQ(buttonDraws, 0);
+}
+
+// The NavigationBar's height and a broken Image's placeholder come from the skin too.
+TEST_F(SkinTest, NavigationBarHeightAndBrokenImageComeFromTheSkin) {
+    run(R"(
+        a, b = Spot {}, Spot {}
+        root = Column { spacing = 0, a, NavigationBar { width = 300 }, b, Image { source = "app:/missing.png" } })");
+    m_h.renderFrames("root", 2);
+    const auto down = [&] { return m_h.instance<Spot>("b")->pos().y - m_h.instance<Spot>("a")->pos().y - 1.0f; };
+    const float material = down();
+    EXPECT_NE(material, testBarHeight);
+    EXPECT_EQ(brokenImages, 0);
+
+    applyTheme(R"(theme { design = "test" })");
+    m_h.renderFrames("root", 2);
+    EXPECT_FLOAT_EQ(down(), testBarHeight);
+    EXPECT_GT(brokenImages, 0);
 }
 
 // Layouts that place by sizes (a right-justified Row) use the new skin's on the first frame after the switch.

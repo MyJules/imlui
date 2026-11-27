@@ -25,6 +25,8 @@ bool navigationBarItem(const char* id, std::string_view iconName, std::string_vi
                        std::string_view badge, float width);
 /// The size of navigationBarItem() `width` wide.
 [[nodiscard]] ImVec2 navigationBarItemSize(float width);
+/// A navigation bar `width` wide (pixels, already resolved): 80dp high, its destinations' height.
+[[nodiscard]] ImVec2 navigationBarSize(float width);
 
 /// Navigation rail destination, `width` x 56dp: a 24dp icon in a 56x32dp pill indicator with the label below.
 /// Returns true when clicked.
@@ -164,6 +166,7 @@ bool navigationBarItem(const char* id, std::string_view iconName, std::string_vi
 }
 
 ImVec2 navigationBarItemSize(float width) { return destinationSize(width, barDestination); }
+ImVec2 navigationBarSize(float width) { return {std::max(0.0f, width), dp(barDestination.height)}; }
 
 bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                         std::string_view badge, float width) {
