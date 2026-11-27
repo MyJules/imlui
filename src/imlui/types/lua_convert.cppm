@@ -382,6 +382,12 @@ struct LuaConvert<Color> {
         if (lua::type(s, idx) == lua::Type::String) return resolveColor(lua::tostring(s, idx)).value_or(Color{});
         return luaui::Node::colorFromTable(s, idx).value_or(Color{});
     }
+    /// For a string, what's wrong with it ("Text.color: color expected, got unknown role 'pirmary'").
+    static std::string mismatch(lua::State* s, int idx) {
+        if (lua::type(s, idx) == lua::Type::String)
+            return "color expected, got " + colorSpecProblem(lua::tostring(s, idx));
+        return std::string{"color expected, got "} + lua::typeName(s, idx);
+    }
 };
 
 /// nil <-> std::nullopt. An omitted argument (an index past the top) reads as nil too.

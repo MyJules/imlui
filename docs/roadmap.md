@@ -31,17 +31,6 @@ Follow-ups not scheduled yet:
   factory that knows the type's size), Lua's incremental GC steps and the `Box` userdata. A lazily built `Repeater`
   would change what it means (all its children exist), so long lists stay `ListView`'s job.
 - Lua's generational GC made no measurable difference on the bench (tried; not switched).
-- `font_check` assumes glyphs up to ~128 px; `fontScale` is capped at 4, but zoom × DPI can still exceed it: cap the
-  final pixel size.
-- A file reached through a linked folder is readable but not listed, so hot reload sees it only once loaded.
-- `TextField` copies its text every frame (`md::textField` edits in place).
-- Left over from the November 2026 fixes: a plain user coroutine (not an async task) that yields inside `inScope`
-  shares the global scope stack; bare hex without `#` (`"face"`) is a documented color spec, so a mistyped role made of
-  hex digits reads as a color — decide whether to require `#` for roles; `boxAt`-style forgery aside, scripts have the
-  full `debug` library.
-- Follow-ups from the November 2026 review: a test for the painter's `catchCxx` path (nothing in it throws on
-  demand); the 240 fps cap with `vsync = false` is a constant, not the monitor's refresh rate; free an image's CPU
-  pixels once the backend has uploaded it, if no backend re-uploads from them.
 
 ## Kept as designed
 

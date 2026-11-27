@@ -398,3 +398,31 @@ TEST_F(LuaGuardsTest, NonFiniteColorsStayValid) {
     setTheme(Theme{});
     applyPendingTheme();
 }
+
+// Scripts get the whole debug library in a dev build (IMLUI_DEV_PATHS=ON) and only debug.traceback in a shipped one,
+// as `debug` and as require("debug"); the DSL works either way (it keeps the whole library to itself: a component's
+// environment is set through debug.setupvalue, an error's position read through debug.getinfo).
+TEST(ScriptDebugLibrary, IsWholeInADevBuildAndTracebackAloneWhenShipped) {
+#ifdef IMLUI_TEST_DEV_PATHS
+    EXPECT_TRUE(luaui::fullDebugLibrary());
+#else
+    EXPECT_FALSE(luaui::fullDebugLibrary());
+#endif
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    const std::string mode = std::string{"local full = "} + (luaui::fullDebugLibrary() ? "true" : "false");
+    EXPECT_EQ(h.run(mode + R"(
+        assert(require("debug") == debug)
+        assert(type(debug.traceback) == "function" and debug.traceback("x"):find("stack traceback", 1, true))
+        local names = {}
+        for k in pairs(debug) do names[#names + 1] = k end
+        if full then
+            assert(type(debug.getinfo) == "function" and type(debug.getregistry) == "function" and #names > 10)
+        else
+            assert(#names == 1 and names[1] == "traceback", table.concat(names, ","))
+        end
+        assert(ui.native.fullDebug == full)
+        root = Column { Text { text = "hello" } })"),
+              "");
+    h.renderFrame("root");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}

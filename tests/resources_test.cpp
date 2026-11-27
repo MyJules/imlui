@@ -530,11 +530,10 @@ TEST(DirectoryMount, ListsPastAnEntryThatCantBeQueried) {
     EXPECT_EQ(mount.list(""), strings({"b.txt", "c/"}));
 }
 
-// A link to a folder (a symbolic link, or on Windows a junction) isn't listed or walked, as the manifest scan doesn't
-// descend into one either: a link to the folder itself or a parent made listRecursive, which the hot-reload watcher
-// polls, walk loop/loop/... until the path got too long (with two links, exponentially). A file is still read through
-// a link by its name.
-TEST(DirectoryMount, DoesntWalkIntoLinkedFolders) {
+// A link to a folder that leads back to the folder itself or a parent isn't listed or walked: it made listRecursive,
+// which the hot-reload watcher polls, walk loop/loop/... until the path got too long (with two links, exponentially).
+// A file is still read through such a link by its name.
+TEST(DirectoryMount, DoesntWalkIntoLinksBackUp) {
     test::TempDir dir;
     dir.write("a.lua", "a");
     dir.write("sub/b.lua", "b");
@@ -552,6 +551,39 @@ TEST(DirectoryMount, DoesntWalkIntoLinkedFolders) {
         EXPECT_EQ(res.listRecursive("app:/"), strings({"app:/a.lua", "app:/sub/b.lua"}));
         EXPECT_EQ(text(mount->read("sub/up/a.lua")), "a");
         EXPECT_EQ(text(mount->read("sub/self/self/b.lua")), "b");
+    }
+}
+
+// A link to a folder elsewhere (a shared folder linked in) is listed and walked like a folder, so hot reload, which
+// watches what listRecursive finds, sees its files before they are loaded. Two links leading to each other's folders
+// (a/toB -> b, b/toA -> a) are each walked once from the other side, and not back.
+TEST(DirectoryMount, ListsAndWalksLinkedFolders) {
+    test::TempDir dir;
+    dir.write("app/main.lua", "m");
+    dir.write("shared/lib/util.lua", "u");
+    dir.write("app/a/x.lua", "x");
+    dir.write("app/b/y.lua", "y");
+    if (!dir.linkFolder("app/shared", "shared") || !dir.linkFolder("app/a/toB", "app/b") ||
+        !dir.linkFolder("app/b/toA", "app/a"))
+        GTEST_SKIP() << "can't create a link to a folder here";
+    for (const bool withSelection : {false, true}) {
+        SCOPED_TRACE(withSelection ? "with a selection" : "without a selection");
+        auto mount = withSelection ? std::make_shared<DirectoryMount>(dir.path() / "app",
+                                                                      ResourceSelection{.include = {"**/*.lua"}})
+                                   : std::make_shared<DirectoryMount>(dir.path() / "app");
+        EXPECT_EQ(mount->list(""), strings({"a/", "b/", "main.lua", "shared/"}));
+        EXPECT_EQ(mount->list("shared"), strings({"lib/"}));
+        EXPECT_EQ(mount->list("a"), strings({"toB/", "x.lua"}));
+        EXPECT_EQ(mount->list("a/toB"), strings({"y.lua"})); // toA leads back to `a`
+        EXPECT_TRUE(mount->exists("shared/lib"));
+        const std::vector<std::string> all = {"a/toB/y.lua", "a/x.lua",  "b/toA/x.lua",
+                                              "b/y.lua",     "main.lua", "shared/lib/util.lua"};
+        EXPECT_EQ(mount->listFiles(""), all);
+        EXPECT_EQ(mount->listFiles("shared"), strings({"lib/util.lua"}));
+        Resources res;
+        ASSERT_TRUE(res.mount("app:/", mount));
+        EXPECT_EQ(res.listRecursive("app:/shared/"), strings({"app:/shared/lib/util.lua"}));
+        EXPECT_TRUE(mount->modified("shared/lib/util.lua").has_value());
     }
 }
 
@@ -696,7 +728,7 @@ protected:
     void run(std::string_view code) { ASSERT_EQ(m_frame.run(code), ""); }
 
     test::TempDir m_dir;
-    test::HeadlessFrame m_frame;
+    test::HeadlessFrame m_frame{test::HeadlessFrame::Options{.fullDebug = true}}; // debug.getinfo
 };
 
 } // namespace

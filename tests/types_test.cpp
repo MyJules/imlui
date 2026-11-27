@@ -331,6 +331,12 @@ TEST(LuaConvertTest, ChecksAndCoerces) {
     EXPECT_FALSE(LuaConvert<std::string>::check(s, -1));
     lua::pushstring(s, "not a color");
     EXPECT_FALSE(LuaConvert<Color>::check(s, -1));
+    lua::pushstring(s, "face"); // hex needs its '#': a word is a role name
+    EXPECT_FALSE(LuaConvert<Color>::check(s, -1));
+    EXPECT_EQ(luaMismatch<Color>(s, -1),
+              "color expected, got unknown role 'face' (a hex color needs its '#': '#face')");
+    lua::pushboolean(s, true);
+    EXPECT_EQ(luaMismatch<Color>(s, -1), "color expected, got boolean");
     lua::pushstring(s, "#00FF00");
     EXPECT_EQ(LuaConvert<Color>::get(s, -1), (Color{0, 1, 0, 1}));
     lua::settop(s, 0);

@@ -55,7 +55,9 @@ app-level watcher that a component's handler triggers (by writing the state) bui
 component's `ids`. So do a future's `next`/`catch`/`onProgress` handlers and an async function's coroutine. The scope
 is popped however the call ends (a to-be-closed variable), so a handler that raises can't leave it behind. An async
 function keeps its scopes to itself: one that awaits while a component it builds is in its scope doesn't leave that
-scope active for other code while it waits, gets it back when it resumes, and pops it when it's cancelled. Not covered: the getter and
+scope active for other code while it waits, gets it back when it resumes, and pops it when it's cancelled. A plain
+coroutine (`coroutine.create`, `coroutine.wrap`) does the same: it runs in the scope it was created in, wherever it is
+resumed, a scope it yields inside stays with it, and `coroutine.close` pops it from the coroutine's stack. Not covered: the getter and
 setter of a `bind(getter, setter)` (they run in whatever scope is active, app level when imlui calls them), and
 functions of an app-level element, which run in whatever scope is active (app level whenever the engine calls them).
 
@@ -286,6 +288,11 @@ files from disk or loads DLLs (`package.path` and `package.cpath` are `""`, `pac
 `package.preload` is searched besides the resources), so a plain Lua library goes into the app's resources too. A
 module that isn't found is an error that lists each resource name looked at. Errors and tracebacks name the file as a
 resource: `app:/StatCard.lua:3: ...`.
+
+Scripts have Lua's standard libraries, with `require` limited as above. The `debug` library is whole only in a dev
+build (`IMLUI_DEV_PATHS=ON`); a shipped build (`IMLUI_DEV_PATHS=OFF`) gives scripts `debug.traceback` alone (as
+`debug` and as `require "debug"`), so use `debug.traceback` for diagnostics and nothing else from `debug` in code that
+ships.
 
 ```lua
 -- StatCard.lua

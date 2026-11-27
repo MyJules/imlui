@@ -952,6 +952,7 @@ TEST(ReleaseConfig, HeadlessUiRunsOnEmbeddedLuaAndFonts) {
     test::HeadlessFrame::Options options;
     options.embedded = true;
     options.builtins = true;
+    options.fullDebug = true; // debug.getinfo
     test::HeadlessFrame h{options};
     EXPECT_TRUE(h.resources().origin("imlui:/imlui.lua").starts_with(libraryOrigin("imlui:/")));
     ASSERT_EQ(h.run(R"(

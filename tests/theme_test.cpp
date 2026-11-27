@@ -62,9 +62,20 @@ TEST_F(ThemeTest, ResolveColorRejectsABadAlpha) {
     EXPECT_EQ(resolveColor("primary/.25"), theme().scheme.primary.withAlpha(0.25f));
 }
 
-TEST_F(ThemeTest, ResolveColorHexWithoutHash) {
-    // Not a role name, so it falls back to hex parsing.
-    EXPECT_EQ(resolveColor("0000FF"), (Color{0, 0, 1, 1}));
+// A spec without '#' is a role name, also when it is made of hex digits: "face" is an unknown role (a typo of one
+// read as a color before), and the problem says so, with a hint.
+TEST_F(ThemeTest, ResolveColorHexNeedsItsHash) {
+    for (const char* bare : {"0000FF", "face", "add", "bad/0.5"})
+        EXPECT_FALSE(resolveColor(bare).has_value()) << bare;
+    EXPECT_EQ(resolveColor("#0000FF"), (Color{0, 0, 1, 1}));
+    EXPECT_EQ(colorSpecProblem("face"), "unknown role 'face' (a hex color needs its '#': '#face')");
+    EXPECT_EQ(colorSpecProblem("pirmary"), "unknown role 'pirmary'");
+    EXPECT_EQ(colorSpecProblem("bad/0.5"), "unknown role 'bad'");
+    EXPECT_EQ(colorSpecProblem("primary/2"), "bad alpha in 'primary/2' (a number in 0..1)");
+    EXPECT_EQ(colorSpecProblem("#12"), "bad hex color '#12' (#RGB, #RGBA, #RRGGBB or #RRGGBBAA)");
+    EXPECT_EQ(colorSpecProblem(""), "an empty color spec");
+    EXPECT_EQ(colorSpecProblem("primary"), "");
+    EXPECT_EQ(colorSpecProblem("#face"), "");
 }
 
 TEST_F(ThemeTest, ResolveColorRejectsUnknown) {

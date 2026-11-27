@@ -62,9 +62,11 @@ HexEdit hexEdit;
 ImVec2 colorFieldSize(Color c, std::string_view label, float width) { return colorFieldSizeOf(toHex(c), label, width); }
 
 bool applyHexInput(Color* c, std::string_view text, bool final, bool alpha) {
-    const std::size_t digits = text.size() - (text.starts_with('#') ? 1 : 0);
+    const bool hash = text.starts_with('#');
+    const std::size_t digits = text.size() - (hash ? 1 : 0);
     if (!final && digits != 6 && digits != 8) return false;
-    const auto parsed = parseHex(text);
+    // The field holds hex digits only, so typing them without the '#' a color spec needs is fine here.
+    const auto parsed = hash ? parseHex(text) : parseHex("#" + std::string{text});
     if (!parsed) return false;
     // #RGBA / #RRGGBBAA parse with an alpha, which only an alpha picker keeps.
     *c = alpha ? *parsed : parsed->withAlpha(1.0f);

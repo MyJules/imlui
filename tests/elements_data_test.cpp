@@ -3,9 +3,12 @@
 // their arguments (injected mouse clicks), and the Canvas painter.
 #include <gtest/gtest.h>
 
+import std;
+
 import imgui;
 import imlui.color;
 import imlui.lua.errors;
+import imlui.lua.painter;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -337,6 +340,48 @@ TEST_F(DataTest, PainterRoleColorsFollowTheTheme) {
     applyPendingTheme();
     EXPECT_TRUE(drawn(before.scheme.primary.u32()));
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A C++ exception in a painter method becomes a Lua error that names the method (catchCxx), catchable with pcall: the
+// paint goes on, and an uncaught one is reported like any onPaint error without ending the frame.
+// setPainterFaultForTesting() throws where nothing in the painter does.
+TEST_F(DataTest, PainterTurnsACxxExceptionIntoALuaError) {
+    struct NotStd {};
+    struct ResetFault {
+        ResetFault(const ResetFault&) = delete;
+        ResetFault& operator=(const ResetFault&) = delete;
+        ResetFault() = default;
+        ~ResetFault() { luaui::setPainterFaultForTesting(nullptr); }
+    } reset;
+    luaui::setPainterFaultForTesting([](std::string_view method) {
+        if (method == "rect") throw std::runtime_error("injected failure");
+        if (method == "circle") throw NotStd{};
+    });
+    run(R"(
+        caught, unknown, after = nil, nil, false
+        root = Probe { Canvas { width = 40, height = 40,
+            onPaint = function(_, p)
+                local ok, err = pcall(p.rect, p, 0, 0, 40, 40, "primary")
+                caught = not ok and err or nil
+                ok, err = pcall(p.circle, p, 20, 20, 5)
+                unknown = not ok and err or nil
+                p:line(0, 0, 40, 40)
+                after = true
+                p:rect(0, 0, 1, 1) -- uncaught: reported, the frame still ends
+            end } })");
+    frames(2);
+    luaui::setPainterFaultForTesting(nullptr);
+    run(R"(
+        assert(caught == "imlui.painter.rect: injected failure", tostring(caught))
+        assert(type(unknown) == "string" and unknown:find("imlui.painter.circle", 1, true), tostring(unknown))
+        assert(after))");
+    bool reported = false;
+    for (const std::string& e : luaui::errors())
+        reported = reported || e.find("imlui.painter.rect: injected failure") != std::string::npos;
+    EXPECT_TRUE(reported);
+    luaui::clearErrors();
+    frames(); // without the fault: paints cleanly
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
 TEST_F(DataTest, PainterOutsideOnPaintIsAnError) {

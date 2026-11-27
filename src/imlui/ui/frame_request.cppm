@@ -32,6 +32,12 @@ void requestFramesFor(double seconds);
 /// the engine sets this instead. NaN, infinite and negative values are 0.
 void setMinFrameInterval(double seconds);
 
+/// The frame rate the loop keeps to with vsync off, when nothing else paces it: the display's refresh rate
+/// `refreshHz` (platform::Window::refreshRate()), or fallbackFrameRate when it isn't known or isn't plausible (outside
+/// 24..1000 Hz).
+inline constexpr double fallbackFrameRate = 240.0;
+[[nodiscard]] double unsyncedFrameRate(int refreshHz);
+
 /// Called by the engine at the start of a frame: drops the requests that this frame serves.
 /// Requests made while the frame renders stay pending for the next one.
 void beginFrameRequests();
@@ -125,6 +131,10 @@ double secondsUntilFrame() {
 }
 
 void setMinFrameInterval(double seconds) { minFrameInterval = std::isfinite(seconds) && seconds > 0.0 ? seconds : 0.0; }
+
+double unsyncedFrameRate(int refreshHz) {
+    return refreshHz >= 24 && refreshHz <= 1000 ? static_cast<double>(refreshHz) : fallbackFrameRate;
+}
 
 void beginFrameRequests() {
     frameNow = false;

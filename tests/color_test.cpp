@@ -32,10 +32,10 @@ TEST(ParseHex, SixDigitsWithHash) {
     expectColorNear(*c, {1.0f, byte(0x80), 0.0f, 1.0f}, 1e-6f);
 }
 
-TEST(ParseHex, SixDigitsWithoutHash) {
-    auto c = parseHex("336699");
-    ASSERT_TRUE(c.has_value());
-    expectColorNear(*c, {byte(0x33), byte(0x66), byte(0x99), 1.0f}, 1e-6f);
+// The '#' is required: a word made of hex digits ("face", "add") is no color.
+TEST(ParseHex, RejectsHexWithoutHash) {
+    for (const char* bare : {"336699", "face", "add", "abc8", "11223380"})
+        EXPECT_FALSE(parseHex(bare).has_value()) << "input: '" << bare << "'";
 }
 
 TEST(ParseHex, EightDigitsCarryAlpha) {
@@ -51,7 +51,7 @@ TEST(ParseHex, ThreeDigitsExpandEachNibble) {
 }
 
 TEST(ParseHex, FourDigitsExpandAlpha) {
-    auto c = parseHex("abc8");
+    auto c = parseHex("#abc8");
     ASSERT_TRUE(c.has_value());
     expectColorNear(*c, {byte(0xAA), byte(0xBB), byte(0xCC), byte(0x88)}, 1e-6f);
 }

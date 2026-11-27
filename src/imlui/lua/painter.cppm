@@ -29,6 +29,10 @@ void registerPainter(lua::State* state);
 void beginPaint(ImDrawList* drawList, ImVec2 origin);
 void endPaint();
 
+/// For tests: `fault` runs with a method's name ("rect") inside the guard that turns a C++ exception into a Lua error,
+/// before each painter method, so a test can throw there (no painter method throws on demand). Empty by default.
+void setPainterFaultForTesting(std::function<void(std::string_view method)> fault);
+
 } // namespace imlui::luaui
 
 module :private;
@@ -39,6 +43,7 @@ namespace {
 
 ImDrawList* target = nullptr;
 ImVec2 paintOrigin{};
+std::function<void(std::string_view)> painterFault; ///< setPainterFaultForTesting()
 
 /// A color spec's text as a key that unordered_map looks up by string_view (no std::string made for a lookup).
 struct SpecHash {
@@ -197,7 +202,13 @@ constexpr PainterFn painterFns[] = {
 /// the method ("imlui.painter.polyline: what"); a Lua error passes through.
 int callPainter(lua::State* state) {
     const PainterFn& f = painterFns[static_cast<std::size_t>(lua::tointeger(state, lua::upvalueindex(1)))];
-    return catchCxx(state, [&] { return f.fn(state); }, "imlui.painter.", f.name);
+    return catchCxx(
+        state,
+        [&] {
+            if (painterFault) painterFault(f.name);
+            return f.fn(state);
+        },
+        "imlui.painter.", f.name);
 }
 
 } // namespace
@@ -220,5 +231,7 @@ void beginPaint(ImDrawList* drawList, ImVec2 origin) {
 }
 
 void endPaint() { target = nullptr; }
+
+void setPainterFaultForTesting(std::function<void(std::string_view)> fault) { painterFault = std::move(fault); }
 
 } // namespace imlui::luaui

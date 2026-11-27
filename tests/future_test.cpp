@@ -301,7 +301,7 @@ class LuaFutureTest : public FutureTest {
 protected:
     void SetUp() override {
         FutureTest::SetUp();
-        m_h.emplace(test::HeadlessFrame::Options{.builtins = true});
+        m_h.emplace(test::HeadlessFrame::Options{.builtins = true, .fullDebug = true}); // debug.getmetatable
         m_h->registerType<Backend>("Backend");
         m_h->registerType<Filler>("Filler");
         ASSERT_EQ(m_h->run("root = Column {}; w = Backend {}"), "");

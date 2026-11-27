@@ -206,9 +206,6 @@ constexpr double fileCheckSeconds = 0.4;
 constexpr double caretBlinkSeconds = 0.1;
 /// While minimized, the loop wakes at most this often.
 constexpr double minimizedSeconds = 0.1;
-/// With vsync off, the most frames per second the loop renders (vsync paces it otherwise): an animation asks for a
-/// frame every frame, and nothing else would stop it from rendering as fast as the CPU and GPU go.
-constexpr double maxUnsyncedFrameRate = 240.0;
 
 /// The largest root window width or height, in dp: ui.setWindowSize's limit, bigger than any screen and far from
 /// overflowing an int once scaled to pixels.
@@ -356,7 +353,13 @@ void Engine::runWindow(const platform::Window::Config& wc) {
     // On-demand rendering: sleep in waitEvents() until input arrives or the next
     // requested frame, Lua timer, C++ main timer or file check is due, and render only then.
     setFrameWakeHandler([] { platform::Window::postEmptyEvent(); });
-    setMinFrameInterval(wc.vsync ? 0.0 : 1.0 / maxUnsyncedFrameRate);
+    // With vsync off, at most the monitor's refresh rate (vsync paces it otherwise): an animation asks for a frame
+    // every frame, and nothing else would stop it from rendering as fast as the CPU and GPU go. Kept up to date in
+    // the loop: the window may move to a monitor with another rate (refreshRate() is cached until it moves).
+    const auto capFrameRate = [&] {
+        if (!wc.vsync) setMinFrameInterval(1.0 / unsyncedFrameRate(m_window.refreshRate()));
+    };
+    capFrameRate();
     requestFramesFor(settleSeconds);
     // From here on a post() from any thread wakes the loop. Functions posted before run() are run below, first.
     setPostWakeHandler([] { platform::Window::postEmptyEvent(); });
@@ -369,6 +372,7 @@ void Engine::runWindow(const platform::Window::Config& wc) {
             reloadNow();
             requestFramesFor(settleSeconds);
         }
+        capFrameRate();
         double wait = std::min(secondsUntilFrame(), secondsUntilFileCheck());
         if (m_window.minimized()) wait = std::max(wait, minimizedSeconds);
         wait = std::min(wait, secondsUntilMainTimer()); // C++ timers fire on time, minimized too: they don't render

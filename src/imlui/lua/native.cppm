@@ -45,6 +45,11 @@ struct NativeHooks {
 /// the registry and must outlive the state.
 void registerNative(lua::State* state, NativeHooks* hooks);
 
+/// Whether scripts get the whole Lua `debug` library: in a dev build (IMLUI_DEV_PATHS=ON) only. A shipped build gives
+/// them `debug.traceback` alone (the DSL keeps the whole library to itself); `imlui.native` passes this on to the DSL
+/// as `fullDebug`.
+[[nodiscard]] bool fullDebugLibrary();
+
 } // namespace imlui::luaui
 
 module :private;
@@ -105,8 +110,11 @@ ImGuiKey keyFromName(std::string_view name) {
 }
 
 Color argColor(lua::State* state, int idx) {
-    if (lua::type(state, idx) == lua::Type::String)
-        if (auto c = resolveColor(lua::tostring(state, idx))) return *c;
+    if (lua::type(state, idx) == lua::Type::String) {
+        const std::string_view spec = lua::tostring(state, idx);
+        if (auto c = resolveColor(spec)) return *c;
+        lua::error(state, "expected a color (hex string, role name or {r,g,b,a}), got " + colorSpecProblem(spec));
+    }
     if (lua::istable(state, idx))
         if (auto c = Node::colorFromTable(state, idx)) return *c;
     lua::error(state, "expected a color (hex string, role name or {r,g,b,a})");
@@ -384,16 +392,28 @@ int callNative(lua::State* state) {
 }
 
 int openNative(lua::State* state) {
-    lua::createtable(state, 0, static_cast<int>(std::size(nativeFns)));
+    lua::createtable(state, 0, static_cast<int>(std::size(nativeFns)) + 1);
     for (std::size_t i = 0; i < std::size(nativeFns); ++i) {
         lua::pushinteger(state, static_cast<lua::Integer>(i));
         lua::pushcclosure(state, &callNative, 1);
         lua::setfield(state, -2, nativeFns[i].name);
     }
+    // Read once, by the DSL as it loads (before any script runs): a script that changes it later changes nothing.
+    lua::pushboolean(state, fullDebugLibrary());
+    lua::setfield(state, -2, "fullDebug");
     return 1;
 }
 
 } // namespace
+
+bool fullDebugLibrary() {
+    // IMLUI_FULL_DEBUG_LIBRARY is set on imlui_core from IMLUI_DEV_PATHS (src/CMakeLists.txt).
+#if IMLUI_FULL_DEBUG_LIBRARY
+    return true;
+#else
+    return false;
+#endif
+}
 
 void registerNative(lua::State* state, NativeHooks* hooks) {
     cull::setEnabled(true); // a new state (a reload) starts with the default
