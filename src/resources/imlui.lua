@@ -1045,7 +1045,8 @@ end
 
 --[[
   ui.theme {
-      design    = "material",   -- the skin that draws the controls: "material", or one the app registered (registerSkin)
+      design    = "material",   -- the skin that draws the controls: "material", "fluent", or one the app registered (registerSkin)
+      tokens    = { controlHeight = 32, controlRadius = 4 },  -- override the design's metrics (Fluent draws with them)
       preset    = "material",   -- or "imgui-dark" | "imgui-light" | "imgui-classic"
       seed      = "#6750A4",    -- Material 3 scheme is generated from this color
       dark      = true,

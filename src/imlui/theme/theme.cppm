@@ -11,8 +11,10 @@ import std;
 import imgui;
 import imlui.color;
 import imlui.theme.dpi;
+import imlui.theme.fluent_colors;
 import imlui.theme.font_library;
 import imlui.theme.scheme;
+import imlui.theme.skin_tokens;
 
 export namespace imlui {
 
@@ -32,7 +34,11 @@ struct Theme {
     /// Only the name is kept here: the widgets import the theme and the skins import the widgets, so imlui.skin
     /// resolves it (skin(), after the theme changed). An unknown name draws Material.
     std::string design = "material";
-    /// "material" | "imgui-dark" | "imgui-light" | "imgui-classic"
+    /// Overrides of the design's SkinTokens, by name, applied in order over its defaults (a token-driven skin's
+    /// tokens(); the Material skin ignores them). Each must pass tokenProblem(); setTheme() drops one that doesn't.
+    std::vector<TokenOverride> tokens;
+    /// "material" | "imgui-dark" | "imgui-light" | "imgui-classic". Under "material", design "fluent" maps the
+    /// Fluent colors and its tokens onto ImGuiStyle instead of the Material scheme mapping.
     std::string preset = "material";
     Color seed = *parseHex("#6750A4");
     bool dark = true;
@@ -64,11 +70,14 @@ inline constexpr float maxStyleValue = 10000.0f;
 /// the frame it was computed on (a color role resolved by a property sync, the active skin) compares it.
 [[nodiscard]] std::uint64_t themeGeneration();
 
+/// The tokens design "fluent" draws with under `t`: fluentTokens() with `t.tokens` applied.
+[[nodiscard]] SkinTokens fluentTokensFor(const Theme& t);
+
 /// Schedules `t` to become the theme at the start of the next frame
 /// (safe to call from inside a frame, e.g. from a Lua click handler). Values out of range are brought into it:
 /// `fontScale` is clamped (not finite: 1), `spacing` and `shape` radii too (not finite: the default), colors (`seed`,
 /// the scheme's roles, `imguiColors`) to 0..1 (clampColor: NaN is 0), and style overrides with a styleValueProblem()
-/// are dropped. imlui.lua.theme_table reports them to the script first.
+/// are dropped, and so are token overrides with a tokenProblem(). imlui.lua.theme_table reports them to the script first.
 void setTheme(Theme t);
 
 /// Applies a pending theme, its fonts included (useFontSet()); call between frames. Returns true if it changed.
@@ -241,6 +250,86 @@ void applyMaterial(const Theme& t, ImGuiStyle& st) {
     set(ImGuiCol_ModalWindowDimBg, s.scrim.withAlpha(0.32f));
 }
 
+/// Design "fluent" under the "material" preset: the Material mapping, then the Fluent colors and the tokens' geometry
+/// over it, so raw ImGui (scrollbars, popups, InputText, trees, menu bars) matches the Fluent controls.
+void applyFluent(const Theme& t, ImGuiStyle& st) {
+    applyMaterial(t, st);
+    const SkinTokens k = fluentTokensFor(t);
+    const fluent::Colors c = fluent::colorsFor(t.scheme, t.dark);
+    const float pad = k.paddingX * k.density;
+    // ImGui's frame height is the font size (16dp base, times fontScale) plus twice FramePadding.y.
+    const float frameY = std::max(0.0f, (k.controlHeight * k.density - 16.0f * t.fontScale) * 0.5f);
+    st.FramePadding = {pad, frameY};
+    st.ItemInnerSpacing = {k.gap * k.density, st.ItemInnerSpacing.y};
+    st.WindowRounding = k.overlayRadius;
+    st.ChildRounding = k.overlayRadius;
+    st.PopupRounding = k.overlayRadius;
+    st.FrameRounding = k.controlRadius;
+    st.TabRounding = k.controlRadius;
+    st.GrabRounding = k.controlRadius;
+    st.WindowBorderSize = k.strokeWidth;
+    st.PopupBorderSize = k.strokeWidth;
+    st.FrameBorderSize = k.strokeWidth;
+    st.ChildBorderSize = k.strokeWidth;
+    st.TabBarOverlineSize = 0;
+
+    ImVec4* col = st.Colors;
+    auto set = [&](ImGuiCol idx, Color v) { col[idx] = v.vec4(); };
+    const Color clear{0, 0, 0, 0};
+    set(ImGuiCol_Text, c.text);
+    set(ImGuiCol_TextDisabled, c.textDisabled);
+    set(ImGuiCol_WindowBg, c.background);
+    set(ImGuiCol_ChildBg, clear);
+    set(ImGuiCol_PopupBg, c.flyout);
+    set(ImGuiCol_InputTextCursor, c.text);
+    set(ImGuiCol_Border, c.cardStroke);
+    set(ImGuiCol_FrameBg, c.control);
+    set(ImGuiCol_FrameBgHovered, c.controlHover);
+    set(ImGuiCol_FrameBgActive, c.controlInputActive);
+    set(ImGuiCol_TitleBg, c.background);
+    set(ImGuiCol_TitleBgActive, c.background);
+    set(ImGuiCol_TitleBgCollapsed, c.background);
+    set(ImGuiCol_MenuBarBg, c.background);
+    set(ImGuiCol_ScrollbarBg, clear);
+    set(ImGuiCol_ScrollbarGrab, c.controlStrongStroke);
+    set(ImGuiCol_ScrollbarGrabHovered, c.textSecondary);
+    set(ImGuiCol_ScrollbarGrabActive, c.text);
+    set(ImGuiCol_CheckMark, c.accent);
+    set(ImGuiCol_SliderGrab, c.accent);
+    set(ImGuiCol_SliderGrabActive, c.accentPressed);
+    set(ImGuiCol_Button, c.control);
+    set(ImGuiCol_ButtonHovered, c.controlHover);
+    set(ImGuiCol_ButtonActive, c.controlPressed);
+    set(ImGuiCol_Header, c.subtleHover);
+    set(ImGuiCol_HeaderHovered, c.subtleHover);
+    set(ImGuiCol_HeaderActive, c.subtlePressed);
+    set(ImGuiCol_Separator, c.divider);
+    set(ImGuiCol_SeparatorHovered, c.controlStrongStroke);
+    set(ImGuiCol_SeparatorActive, c.accent);
+    set(ImGuiCol_ResizeGrip, clear);
+    set(ImGuiCol_ResizeGripHovered, c.controlStrongStroke);
+    set(ImGuiCol_ResizeGripActive, c.accent);
+    set(ImGuiCol_Tab, clear);
+    set(ImGuiCol_TabHovered, c.subtleHover);
+    set(ImGuiCol_TabSelected, c.layer);
+    set(ImGuiCol_TabSelectedOverline, c.accent);
+    set(ImGuiCol_TabDimmed, clear);
+    set(ImGuiCol_TabDimmedSelected, c.layer);
+    set(ImGuiCol_TabDimmedSelectedOverline, clear);
+    set(ImGuiCol_PlotLines, c.accent);
+    set(ImGuiCol_PlotHistogram, c.accent);
+    set(ImGuiCol_TableHeaderBg, c.subtleHover);
+    set(ImGuiCol_TableBorderStrong, c.divider);
+    set(ImGuiCol_TableBorderLight, c.divider);
+    set(ImGuiCol_TableRowBg, clear);
+    set(ImGuiCol_TableRowBgAlt, c.subtlePressed);
+    set(ImGuiCol_TextLink, c.accentText);
+    set(ImGuiCol_TextSelectedBg, c.accent.withAlpha(0.4f));
+    set(ImGuiCol_NavCursor, c.focusOuter);
+    set(ImGuiCol_NavWindowingDimBg, c.smoke);
+    set(ImGuiCol_ModalWindowDimBg, c.smoke);
+}
+
 void applyNow(const Theme& t) {
     ImGuiStyle& st = ImGui::GetStyle();
     st = ImGuiStyle{};
@@ -250,6 +339,8 @@ void applyNow(const Theme& t) {
         ImGui::StyleColorsClassic(&st);
     else if (t.preset == "imgui-dark")
         ImGui::StyleColorsDark(&st);
+    else if (t.design == fluent::designName)
+        applyFluent(t, st);
     else
         applyMaterial(t, st);
 
@@ -289,6 +380,7 @@ void applyNow(const Theme& t) {
 } // namespace
 
 const Theme& theme() { return currentTheme; }
+SkinTokens fluentTokensFor(const Theme& t) { return applyTokenOverrides(fluentTokens(), t.tokens); }
 std::uint64_t themeGeneration() { return generation; }
 
 void setTheme(Theme t) {
@@ -304,6 +396,7 @@ void setTheme(Theme t) {
           std::pair{&t.shape.extraLarge, defaults.shape.extraLarge}})
         bounded(*radius, 0.0f, maxStyleValue, fallback);
     std::erase_if(t.style, [](const Theme::StyleOverride& o) { return !styleValueProblem(o.name, o.value).empty(); });
+    std::erase_if(t.tokens, [](const TokenOverride& o) { return !tokenProblem(o.name, o.value).empty(); });
     // Widgets and ImGui turn colors into bytes with IM_F32_TO_INT8_SAT, which casts NaN to int (undefined).
     t.seed = clampColor(t.seed);
     for (const auto& role : roles())
