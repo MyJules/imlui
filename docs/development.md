@@ -684,7 +684,12 @@ of row tables without and with a `key` function; `build` is filling the rows and
 frame, the steady frame (median), the frame after one visible row changed and the frame after a row was inserted at
 the top (medians), each with the delegates it built. `modelend` is `model` scrolled to the end (where a list that
 added the heights up from the first item paid for every row above the view), `modelsparse` the same with a delegate
-only for every 10 000th row (`nil` for the others: long runs of rows that take no space). It is built with the tests when imlui is the top-level project
+only for every 10 000th row (`nil` for the others: long runs of rows that take no space). `drop`, not in the default
+list, measures memory instead: per count it builds `controls` (eight elements a row), renders it, replaces it with
+an empty `Column` (a page left) and collects the garbage, then calls `lua::trimMemory` as the Engine does at the start
+of a frame ([Lua memory](architecture.md#lua-memory)); it prints the process's private MiB fresh, at the peak, after
+the drop and after the trim, the Lua heap at the peak and after the drop, and the pool's reserved MiB after the trim.
+Run one count per process (`imlui_bench drop --count 10000`): the private bytes of an earlier one stay. It is built with the tests when imlui is the top-level project
 and never run by ctest. Take numbers from a Release build:
 
 ```sh
@@ -694,6 +699,7 @@ build/clang-release/bin/imlui_bench                                  # every sce
 build/clang-release/bin/imlui_bench controls listview --count 1000   # some scenarios, one count
 build/clang-release/bin/imlui_bench nested --count 100,1000 --frames 300 --warmup 20 --size 1920x1080
 build/clang-release/bin/imlui_bench model modelkey luarows luarowskey modelend modelsparse --rows 100000
+build/clang-release/bin/imlui_bench drop --count 10000                # memory after leaving a big page
 ```
 
 A frame here is ImGui's `NewFrame`, `ui.__tick`, the render pass and `ImGui::Render` (the draw lists), without a

@@ -21,6 +21,7 @@ import lua;
 import imgui;
 import lua.stack_guard;
 import imlui.log;
+import imlui.platform.memory;
 import imlui.platform.window;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
@@ -220,6 +221,19 @@ int windowExtent(double v) {
 
 void closeState(lua::State* state) {
     if (state) lua::close(state);
+}
+
+/// Gives the Lua pool's empty chunks back to the OS after a big drop (a page of thousands of elements left, then
+/// collected); lua::trimMemory decides, and costs a few comparisons when it doesn't. Called outside every Lua call.
+/// The C heap is left alone: _heapmin gave nothing back after the same drop.
+void trimLuaMemory(lua::State* state) {
+    if (!state) return;
+    const std::size_t released = lua::trimMemory(state);
+    if (released == 0) return;
+    const lua::MemoryStats stats = lua::memoryStats(state);
+    const auto mib = [](std::size_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); };
+    log::info("lua memory: gave {:.1f} MiB back ({:.1f} MiB reserved, {:.1f} MiB of it free; {:.1f} MiB private)",
+              mib(released), mib(stats.reserved), mib(stats.free), mib(platform::privateBytes().value_or(0)));
 }
 
 /// The times of every .lua file in the mounted prefixes and of every name in `watched` (what Lua has loaded or read,
@@ -423,6 +437,9 @@ void Engine::shutdown() {
 // ------------------------------------------------------------ frame
 
 void Engine::renderFrame() {
+    // Before the frame, outside every Lua call (the posts and timers ran, ui.__tick hasn't): the memory a collection
+    // freed since the last frame (a big page left) goes back to the OS.
+    trimLuaMemory(m_state);
     // A new window size (a resize, maximize) or scale: layouts that place children by their sizes on the last frame
     // (a Row, a stack's align, the TopAppBar, a branch the new size class switches on) are a frame late. Such a frame
     // is drawn again before it's shown: a live resize presents one frame per size, which would show each size laid

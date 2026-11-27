@@ -16,11 +16,18 @@
 // the number of delegates each of those built. modelend is `model` scrolled to the end, modelsparse the same with a
 // delegate only for every 10 000th row (nil for the others).
 //
+// drop (not in the default list) shows the process's private bytes after a big page (controls at --count) was left
+// and collected, before and after lua::trimMemory: one count per process, since an earlier one's bytes stay.
+//
+//   build/clang-release/bin/imlui_bench drop --count 10000
+//
 // Module-only translation unit (no #include).
 import std;
 
 import imgui;
+import lua;
 import imlui.lua.errors;
+import imlui.platform.memory;
 import imlui.types.lua_convert;
 import imlui.types.script_object;
 import imlui.types.type_builder;
@@ -179,6 +186,63 @@ Result runScenario(const std::string& script, const std::string& scenario, int c
     return r;
 }
 
+// ------------------------------------------------------------ peak and drop
+
+/// The `drop` scenario: the process's memory while a big page is shown and after it was left. Builds `controls` at
+/// `count` (eight elements a row), renders it, then replaces it by an empty Column (leaving the page), collects the
+/// garbage and renders again, then gives the Lua pool's empty chunks back as the Engine does at the start of a frame
+/// (lua::trimMemory).
+struct DropResult {
+    int count = 0;
+    double freshMb = 0.0;    ///< private MiB before the page (the harness and an empty root)
+    double peakMb = 0.0;     ///< private MiB while the page is shown
+    double dropMb = 0.0;     ///< private MiB after it was left and the garbage collected
+    double trimMb = 0.0;     ///< private MiB after lua::trimMemory
+    double reservedMb = 0.0; ///< the Lua pool's reserved MiB after the trim
+    double luaPeakMb = 0.0;
+    double luaDropMb = 0.0;
+    std::vector<std::string> errors;
+};
+
+double privateMb() { return static_cast<double>(imlui::platform::privateBytes().value_or(0)) / (1024.0 * 1024.0); }
+
+double luaMb(imlui::test::HeadlessFrame& h) {
+    check(h, "_G.benchKb = collectgarbage('count')");
+    lua::getglobal(h.state(), "benchKb"); // the globals (_G)
+    const double kb = lua::tonumber(h.state(), -1);
+    lua::pop(h.state());
+    return kb / 1024.0;
+}
+
+DropResult runDropScenario(const std::string& script, int count, const Options& options) {
+    imlui::test::HeadlessFrame h{{.width = options.width, .height = options.height, .builtins = true}};
+    check(h, script);
+    DropResult r;
+    r.count = count;
+    check(h, "root = Column {}");
+    h.renderFrames("root", options.warmup);
+    check(h, "collectgarbage()");
+    r.freshMb = privateMb();
+
+    check(h, std::format("root = stress.build('controls', {})", count));
+    h.renderFrames("root", options.warmup);
+    check(h, "collectgarbage()");
+    r.peakMb = privateMb();
+    r.luaPeakMb = luaMb(h);
+
+    check(h, "root = Column {}; collectgarbage(); collectgarbage()");
+    h.renderFrames("root", options.warmup);
+    check(h, "collectgarbage()");
+    h.renderFrame("root");
+    r.dropMb = privateMb();
+    r.luaDropMb = luaMb(h);
+    lua::trimMemory(h.state());
+    r.trimMb = privateMb();
+    r.reservedMb = static_cast<double>(lua::memoryStats(h.state()).reserved) / (1024.0 * 1024.0);
+    r.errors = imlui::luaui::errors();
+    return r;
+}
+
 // ------------------------------------------------------------ list-model scenarios
 
 bool isModelScenario(std::string_view name) {
@@ -316,7 +380,8 @@ ModelResult runModelScenario(const std::string& scenario, const Options& options
     std::cerr << "usage: imlui_bench [scenario...] [--count n[,n...]] [--rows n] [--frames n] [--warmup n] "
                  "[--size WxH]\n"
                  "scenarios: tiles controls listview table nested plots, and the list-model ones model modelkey "
-                 "luarows luarowskey (--rows rows; default: all)\n";
+                 "luarows luarowskey (--rows rows; default: all), and drop (the memory after leaving a big page; not "
+                 "in the default list)\n";
     std::exit(2);
 }
 
@@ -385,7 +450,7 @@ int main(int argc, char** argv) {
                              "resize med", "resize max", "stale", "passes", "vertices");
     int failures = 0;
     for (const std::string& scenario : options.scenarios) {
-        if (isModelScenario(scenario)) continue;
+        if (isModelScenario(scenario) || scenario == "drop") continue;
         for (const int count : options.counts) {
             try {
                 const Result r = runScenario(script, scenario, count, options);
@@ -428,6 +493,28 @@ int main(int argc, char** argv) {
             ++failures;
         }
         std::cout.flush();
+    }
+
+    // Peak and drop: a table of its own.
+    if (std::ranges::find(options.scenarios, "drop") != options.scenarios.end()) {
+        std::cout << "\nPeak and drop: controls at count n, left for an empty Column (private MiB; Lua heap MiB)\n";
+        std::cout << std::format("{:>7} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}\n", "count", "fresh", "peak",
+                                 "dropped", "trimmed", "lua peak", "lua drop", "reserved");
+        for (const int count : options.counts) {
+            try {
+                const DropResult r = runDropScenario(script, count, options);
+                std::cout << std::format("{:>7} {:>9.1f} {:>9.1f} {:>9.1f} {:>9.1f} {:>9.1f} {:>9.1f} {:>9.1f}\n",
+                                         r.count, r.freshMb, r.peakMb, r.dropMb, r.trimMb, r.luaPeakMb, r.luaDropMb,
+                                         r.reservedMb);
+                for (const std::string& e : r.errors)
+                    std::cout << "  script error: " << e << "\n";
+                failures += r.errors.empty() ? 0 : 1;
+            } catch (const std::exception& e) {
+                std::cout << std::format("drop {:>7}  failed: {}\n", count, e.what());
+                ++failures;
+            }
+            std::cout.flush();
+        }
     }
     return failures == 0 ? 0 : 1;
 }
