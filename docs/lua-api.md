@@ -143,8 +143,9 @@ Button "OK"      -- a non-table argument becomes the first positional value: { "
 ```
 
 For a type registered from C++ with `Engine::registerType<T>()`, the constructor also creates the C++ instance
-(stored in the table as `__native`), and the type's shared metatable makes its methods callable:
-`gauge:reset()`. (`Repeater`, `ListView`, `If`, `Loader` and `Responsive` get the metatable at once and their
+(stored in the table as `__native`, an opaque userdata whose metatable `getmetatable` doesn't return; it lives as
+long as the table, even if a script clears the field), and the type's shared metatable makes its methods callable:
+`gauge:reset()`. Singleton globals hide their metatable the same way. (`Repeater`, `ListView`, `If`, `Loader` and `Responsive` get the metatable at once and their
 instance at their first render.) See [Registering C++ types](extending.md).
 
 ### `types() -> { name, ... }`

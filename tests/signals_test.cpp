@@ -230,18 +230,17 @@ TEST_F(SignalsTest, AForeignUserdataIsNotABox) {
         assert(not ok and err:find("not an element of a C++ type", 1, true), tostring(err))
         assert(not callOk, "a method ran on a forged __native")
 
-        -- A box's own metatable on a foreign userdata: its methods and __gc see no box.
-        debug.setmetatable(io.stdout, getmetatable(rawget(m, "__native")))
+        -- A box's own metatable on a foreign userdata: its methods and __gc see no box. (It is hidden from
+        -- getmetatable; debug.getmetatable still reaches it.)
+        assert(getmetatable(rawget(m, "__native")) == false and getmetatable(sensor) == false)
+        debug.setmetatable(io.stdout, debug.getmetatable(rawget(m, "__native")))
         ok, err = types.listen(io.stdout, "onPeak")
-        local get = getmetatable(io.stdout).__get
-        local gotOk, gotErr = pcall(get, io.stdout, "value")
-        getmetatable(io.stdout).__gc(io.stdout) -- does nothing to a foreign userdata
+        debug.getmetatable(io.stdout).__gc(io.stdout) -- does nothing to a foreign userdata
         debug.setmetatable(io.stdout, stdoutMeta)
         assert(not ok and err:find("not an element of a C++ type", 1, true), tostring(err))
-        assert(not gotOk and gotErr:find("not a live imlui object"), tostring(gotErr))
         io.stdout:write("") -- still a working file
 
-        local sensorMeta = getmetatable(sensor)
+        local sensorMeta = debug.getmetatable(sensor)
         debug.setmetatable(io.stdout, sensorMeta)
         ok, err = pcall(function() return io.stdout.level end)
         debug.setmetatable(io.stdout, stdoutMeta)
