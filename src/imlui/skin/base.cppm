@@ -3,7 +3,8 @@
 // name (Theme::design, Lua `theme { design = "material" }`, resolved by imlui.skin.registry).
 //
 // Skin itself is the Material skin ("material"): each virtual calls the control's md:: widget. Another look
-// subclasses it and overrides only the controls it draws differently; everything else stays Material. Elements call
+// subclasses it and overrides only the controls it draws differently; everything else stays Material ("material" itself
+// is made from MaterialSkin, imlui.skin.material.material_skin, a final subclass that only names itself). Elements call
 // `skin().button(...)` and `skin().buttonSize(...)` instead of md::, so a size always comes from the skin that draws.
 //
 // What goes through the skin: a call that decides a look (a control's shape, colors, metrics or its natural size:

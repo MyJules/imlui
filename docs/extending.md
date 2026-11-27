@@ -1954,7 +1954,8 @@ property (like the built-in `Timer`) when scripts need to stop it. `timer.cppm` 
 
 What the controls look like is a **skin**: an `imlui::Skin` (module `imlui.skin`, part of `import imlui;`) draws and
 measures every control the elements show, and gives the chrome some elements draw themselves. The base class *is* the
-Material skin (`"material"`): each of its virtual functions calls the `md::` widget the elements used to call. A skin
+Material skin (`"material"` is made from `MaterialSkin`, a final subclass that only names itself): each of its
+virtual functions calls the `md::` widget the elements used to call. A skin
 of your own subclasses it (or `FluentSkin`, the built-in `"fluent"`) and overrides only the controls it draws
 differently; everything else stays what the base class draws. Register it by name, and a script selects it with
 the theme ([Designs](theming.md#designs)):
@@ -2172,7 +2173,7 @@ skeleton.
 | `imlui.types.overload` | `overload<Args...>(&T::fn)`, `constOverload<Args...>(&T::fn)`: pick one of overloaded members |
 | `imlui.types.registry` | `TypeRegistry`: `registerType<T>`, `registerSingleton<T>` (reference or `shared_ptr`; a type with a `LuaConvert`, such as a list model, is that value as a global), `install`, `activate`, `sync`, `typeNames`, `singletonTypes`; it is the `Renderer::Types` the renderer dispatches every element to |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: every built-in element |
-| `imlui.skin` | `Skin` (the Material skin; subclass it for another look), `skin()` (the active one), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames` ([Skins](#skins)) |
+| `imlui.skin` | `Skin` (the Material skin; subclass it for another look), `MaterialSkin` and `FluentSkin` (the built-in `"material"` and `"fluent"`), `skin()` (the active one), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames` ([Skins](#skins)) |
 
 `Engine` forwards `registerType<T>(name)` and both `registerSingleton(name, obj)` overloads to its registry, which
 `types()` returns. All of these come with `import imlui;`.

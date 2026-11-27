@@ -942,7 +942,10 @@ The elements don't call the Material widgets for their controls; they call the *
 virtual draw function and one virtual size function per control (begin/end pairs for containers), with the `md::`
 widgets' parameters. Its default bodies call those widgets, so the base class *is* the Material skin, and another
 skin subclasses it and overrides only what it draws differently: a control it doesn't override falls back to
-Material. Apps add skins with `registerSkin(name, factory)` ([Skins](extending.md#skins)).
+Material. The registry makes `"material"` from `MaterialSkin` (`imlui.skin.material.material_skin`), a final
+subclass that adds nothing but its name: the peer of `FluentSkin`, so each built-in design has its own module and
+class, while the Material draws stay in the base class, where every other skin falls back to them. Apps add skins
+with `registerSkin(name, factory)` ([Skins](extending.md#skins)).
 
 **What goes through the skin** is every call that decides a look (shape, colors, metrics, natural size):
 
@@ -971,7 +974,8 @@ other (`md::snackbar` draws its action with `md::button`); another skin override
 (`snackbar`, `spinBox`, `dropdown`, `colorField`) rather than threading the skin through `md::`.
 
 **Modules.** `imlui.skin.base` holds the class, `imlui.skin.registry` the active skin and the registry (it knows
-`"material"` and `"fluent"`), `imlui.skin.fluent.*` the Fluent skin; `imlui.skin` exports them all. The registry
+`"material"` and `"fluent"`), `imlui.skin.material.material_skin` the Material skin, `imlui.skin.fluent.*` the
+Fluent skin; `imlui.skin` exports them all. The registry
 imports `FluentSkin` to register it, and `FluentSkin` derives from `Skin`, hence the split. The tokens
 (`imlui.theme.skin_tokens`) and the Fluent colors (`imlui.theme.fluent_colors`) live in the theme layer: the theme
 maps them onto `ImGuiStyle` under design `"fluent"` (`applyFluent` in `imlui.theme.theme`), and `imlui.theme` can't
@@ -1255,7 +1259,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.skin.base` | `Skin`: one virtual draw and size function per control, `tokens()`, the element chrome hooks (`WindowChrome`, `TopAppBarChrome`, `TableChrome`); the base class is Material, calling the `md::` widgets. See [Skins](#skins) |
 | `imlui.skin.registry` | `skin()` (the active skin: the one registered under `theme().design`, resolved again after a theme change), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames`; `"material"` and `"fluent"` built in |
-| `imlui.skin` | Umbrella: `export import` of `base`, `registry` and `fluent.fluent_skin` |
+| `imlui.skin` | Umbrella: `export import` of `base`, `registry`, `material.material_skin` and `fluent.fluent_skin` |
+| `imlui.skin.material.material_skin` | `MaterialSkin` (`"material"`, `material::designName`): a final `Skin` that only names itself; the Material draws are the base class's |
 | `imlui.skin.fluent.fluent_skin` | `FluentSkin` (`"fluent"`): `tokens()`, `colors()`, `look()`, and the overrides, one-line forwards in groups (A), (B), (C) (see [Adding a Fluent control](#adding-a-fluent-control)) |
 | `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout, the row selection (`selectedColors`, `rowColors`, `drawIndicator`), the flyouts (`drawFlyout`, `beginFlyout`, `placeFlyout`, `pushFlyoutStyle`/`popFlyoutStyle`) |
 | `imlui.skin.fluent.button` | `fluent::button`, `buttonSize`, `variantFill` |
