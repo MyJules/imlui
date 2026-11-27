@@ -104,6 +104,9 @@ public:
 
     /// Current monitor content scale (DPI factor) of the window.
     [[nodiscard]] float contentScale() const;
+    /// The refresh rate in Hz of the monitor the window overlaps most (the primary one when it overlaps none); 0 when
+    /// it isn't known. Looked up again only after the window moved or was resized, or the monitors changed.
+    [[nodiscard]] int refreshRate();
 
 private:
     /// `resized`: called for a new framebuffer size (else for a repaint the OS asked for).
@@ -129,6 +132,7 @@ private:
     bool m_glfwInitialized = false;
     bool m_backendsReady = false;
     float m_scale = 1.0f;
+    std::optional<int> m_refreshRate; ///< refreshRate(), until the window moves or the monitors change
     std::string m_title;
     std::optional<std::pair<std::array<float, 3>, std::array<float, 3>>> m_titleBarColors;
     std::optional<bool> m_titleBarDark; ///< the dark mode last set on the title bar
@@ -139,6 +143,34 @@ private:
 module :private;
 
 namespace imlui::platform {
+
+namespace {
+
+/// The monitor whose work area overlaps `window`'s frame (decorations included) most; the primary one when none does.
+GLFWmonitor* monitorOf(GLFWwindow* window) {
+    int x = 0, y = 0, w = 0, h = 0;
+    glfwGetWindowPos(window, &x, &y);
+    glfwGetWindowSize(window, &w, &h);
+    int left = 0, top = 0, right = 0, bottom = 0;
+    glfwGetWindowFrameSize(window, &left, &top, &right, &bottom);
+    int count = 0;
+    GLFWmonitor** monitors = glfwGetMonitors(&count);
+    GLFWmonitor* best = glfwGetPrimaryMonitor();
+    long long bestArea = 0;
+    for (int i = 0; i < count; ++i) {
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        glfwGetMonitorWorkarea(monitors[i], &mx, &my, &mw, &mh);
+        const long long ow = std::max(0, std::min(x + w + right, mx + mw) - std::max(x - left, mx));
+        const long long oh = std::max(0, std::min(y + h + bottom, my + mh) - std::max(y - top, my));
+        if (ow * oh > bestArea) {
+            bestArea = ow * oh;
+            best = monitors[i];
+        }
+    }
+    return best;
+}
+
+} // namespace
 
 Window* Window::m_self = nullptr;
 
@@ -232,7 +264,17 @@ void Window::installEventCallbacks() {
     glfwSetCharCallback(m_window, [](GLFWwindow*, unsigned int) { markEvent(); });
     glfwSetCursorEnterCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
     glfwSetWindowFocusCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
-    glfwSetWindowSizeCallback(m_window, [](GLFWwindow*, int, int) { markEvent(); });
+    glfwSetWindowSizeCallback(m_window, [](GLFWwindow*, int, int) {
+        markEvent();
+        if (m_self) m_self->m_refreshRate.reset(); // may now overlap another monitor most
+    });
+    glfwSetWindowPosCallback(m_window, [](GLFWwindow*, int, int) {
+        if (m_self) m_self->m_refreshRate.reset();
+    });
+    // A monitor connected or removed.
+    glfwSetMonitorCallback([](GLFWmonitor*, int) {
+        if (m_self) m_self->m_refreshRate.reset();
+    });
     glfwSetWindowIconifyCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
     glfwSetWindowMaximizeCallback(m_window, [](GLFWwindow*, int) { markEvent(); });
     glfwSetDropCallback(m_window, [](GLFWwindow*, int, const char**) { markEvent(); });
@@ -389,21 +431,7 @@ void Window::keepInWorkArea() {
     int left = 0, top = 0, right = 0, bottom = 0;
     glfwGetWindowFrameSize(m_window, &left, &top, &right, &bottom);
 
-    // The monitor with the largest overlap with the frame (the primary one when none overlaps).
-    int count = 0;
-    GLFWmonitor** monitors = glfwGetMonitors(&count);
-    GLFWmonitor* best = glfwGetPrimaryMonitor();
-    long long bestArea = 0;
-    for (int i = 0; i < count; ++i) {
-        int mx = 0, my = 0, mw = 0, mh = 0;
-        glfwGetMonitorWorkarea(monitors[i], &mx, &my, &mw, &mh);
-        const long long ow = std::max(0, std::min(x + w + right, mx + mw) - std::max(x - left, mx));
-        const long long oh = std::max(0, std::min(y + h + bottom, my + mh) - std::max(y - top, my));
-        if (ow * oh > bestArea) {
-            bestArea = ow * oh;
-            best = monitors[i];
-        }
-    }
+    GLFWmonitor* best = monitorOf(m_window);
     if (!best) return;
     int ax = 0, ay = 0, aw = 0, ah = 0;
     glfwGetMonitorWorkarea(best, &ax, &ay, &aw, &ah);
@@ -423,6 +451,16 @@ void Window::keepInWorkArea() {
 }
 
 float Window::contentScale() const { return m_scale; }
+
+int Window::refreshRate() {
+    if (!m_window) return 0;
+    if (!m_refreshRate) {
+        GLFWmonitor* monitor = monitorOf(m_window);
+        const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+        m_refreshRate = mode ? mode->refreshRate : 0;
+    }
+    return *m_refreshRate;
+}
 
 void Window::refreshDuringEvents(bool resized) {
     // Only from inside pollEvents(): no frame is in progress then.

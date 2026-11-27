@@ -91,6 +91,17 @@ TEST_F(FrameRequestTest, MinFrameIntervalCapsTheFrameRate) {
     }
 }
 
+// With vsync off the cap is the monitor's refresh rate; a rate the platform doesn't know (0) or one that isn't
+// plausible falls back to 240 frames per second.
+TEST_F(FrameRequestTest, UnsyncedFrameRateIsTheRefreshRate) {
+    EXPECT_EQ(unsyncedFrameRate(60), 60.0);
+    EXPECT_EQ(unsyncedFrameRate(144), 144.0);
+    EXPECT_EQ(unsyncedFrameRate(360), 360.0);
+    for (const int unknown : {0, -1, 1, 23, 1001, std::numeric_limits<int>::max()})
+        EXPECT_EQ(unsyncedFrameRate(unknown), fallbackFrameRate) << unknown;
+    EXPECT_EQ(fallbackFrameRate, 240.0);
+}
+
 TEST_F(FrameRequestTest, NonPositiveDelayIsImmediate) {
     requestFrameAfter(0.0);
     EXPECT_EQ(secondsUntilFrame(), 0.0);
