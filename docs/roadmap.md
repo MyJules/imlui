@@ -8,13 +8,10 @@ records what landed.
 Follow-ups not scheduled yet:
 
 - Skins, after Material and Fluent landed: the control vocabulary types are still `md::` (`md::ButtonVariant`,
-  `md::TextFieldOptions`, ...) — move them to a neutral namespace; Material's controls aren't keyboard-navigable
-  while Fluent's are (`ImGuiButtonFlags_EnableNav`) — make Material's navigable too; the Fluent slider takes focus
-  but arrow keys don't move it; Fluent draws with the theme's fonts (Roboto): load Segoe UI Variable / Segoe Fluent
-  Icons from the system on Windows (they can't be vendored), with Material Icons as the fallback; under Material the
-  tokens are informational only; `NavigationBar` hard-codes its 80dp height and `TabBar` has no skin size function;
-  the `Image` element's broken-image placeholder still picks scheme colors itself; clang-tidy segfaults on some
-  modules (`fluent/common`, `fluent/button`, `skin`, and the existing `widgets/button`).
+  `md::TextFieldOptions`, ...) — move them to a neutral namespace; under Material the tokens are informational only;
+  clang-tidy 22.1.7 crashes in `readability-identifier-naming` on some modules, a clang-tidy bug triggered by the
+  mix of global-module-fragment includes and `import std` (see [Development](development.md#clang-tidy-and-clice)):
+  report it upstream with a reduced repro, and re-check with the next LLVM release.
 - **Run `tidy` (and the sanitizer preset) in CI**, and extend the naming check to `tests/`.
 - The default test presets skip the slow `package` tests; label the GL smoke tests so CI can skip them.
 - Lua definitions: typed signals (`signal<Args...>`) and parameter names for the built-ins, whose handlers are

@@ -279,17 +279,42 @@ doesn't depend on `Engine`.
   each file, one Ninja command per file (so in parallel), and fails on any finding. A file is checked again when it
   or any module changed. `cmake/ImluiTidy.cmake` defines it; it's skipped when `clang-tidy` isn't found. A single
   file: `clang-tidy -p build/clang-debug src/imlui/theme/scheme.cppm`.
-- **Module BMIs must be current.** clang-tidy parses the file itself but loads every imported module from the
-  BMIs that the build's compile commands reference (the `.modmap` files). Earlier, clang-tidy 22.1.7 crashed with
-  an access violation in `readability-identifier-naming` on many modules that import `imlui.widgets` or another
-  umbrella (`progress_bar.cppm`, `button.cppm`, `link.cppm`, ...), so the naming checks didn't cover them. With
-  freshly built BMIs it didn't reproduce: all 114 modules of the time passed, run one by one, all in one process and in
-  parallel, with the default options and with `--header-filter=.*`, `--system-headers`, `--fix`, against
-  `clang-debug` both at this commit and at the commit before the cleanup. It also doesn't reproduce with a stale
-  BMI (a changed imported module, not rebuilt). If it comes back, rebuild (`cmake --build build/clang-debug`) and run
-  the `tidy` target, which builds first. Running it while another build rewrites the BMIs is the most likely way to
-  hit it, so don't. The `clang-release` and `clang-asan` builds work too after a build; before one, their compile
-  commands lack the new modules and clang-tidy falls back to a guessed command (errors about `module;`).
+- **Known crash: clang-tidy 22.1.7 segfaults on some modules** (an access violation in
+  `readability-identifier-naming`, the stack dump ending in `ASTMatcher: Processing 'readability-identifier-naming'
+  against: TranslationUnitDecl`). It is a clang-tidy bug with no workaround in our code; what is known:
+  - **Deterministic for a given set of BMIs, but which files crash depends on the build.** With fresh BMIs from one
+    `clang-debug` build, 41 of 205 files crashed every time, alone or in parallel (most of `skin/fluent/*`,
+    `skin/registry`, `skin/material/material_skin`, `widgets/{card,chart,dialog,dropdown,menu,navigation_drawer,
+    progress,slider,snackbar,spin_box,tabs,text,widgets}`, `theme/{icons,font_scope,font_face_scope}`, `ui/props`,
+    `types/lua_convert`, `lua/theme_table`, `resources/embedded_mount`); another agent's build of a nearby commit had a
+    different list of 23. Rebuilding a module's BMI unchanged keeps the result; changing what a BMI holds moves it.
+    So a list of known crashes goes stale with any change.
+  - **It's the check's own AST walk over imported declarations.** The check matches the `TranslationUnitDecl` and
+    walks the whole AST with its own visitor, imported modules' declarations included (modules put them all in the
+    TU's lexical context). Other checks (`readability-else-after-return`, `misc-unused-using-decls`,
+    `bugprone-unused-raii`) and `clang-query` matching `namedDecl()`, `typeLoc()`, `declRefExpr()`, `memberExpr()`,
+    `nestedNameSpecifierLoc()` and `stmt()` over the same TU (hundreds of thousands of matches) don't crash.
+    Neither the options (it crashes with none set, with `GetConfigPerFile: false`, with `--config-file`), nor the
+    header filter (`--header-filter='^$'`), nor `-fmodules-reduced-bmi` change it.
+  - **The trigger is a combination of imports, not one construct.** A file that is only `export module x; import
+    imlui.theme.font_library;` crashes. Cut down by recompiling BMIs: `font_library` importing `imlui.log`,
+    `imlui.resources` and `imlui.theme.font_check` crashes while any two of them don't; `font_check` with nothing but
+    `#include <math.h>` in its global module fragment is enough on its side, and `imlui.log` needs its full
+    implementation (spdlog in its global module fragment and the private part using it), not just its interface. So
+    it is about the textually included C/C++ standard declarations (UCRT `math.h`, spdlog's std headers) of several
+    modules' global module fragments meeting `import std` in one TU. The same declarations inlined into the file
+    instead of imported don't crash, and a file's own content can hide it: the real `fluent/slider.cppm` passes
+    while a stub with its imports alone crashes.
+  - **What to do.** Treat a crash (exit code 139 / 0xC0000005) as "not checked", not as a finding; the CI's `tidy`
+    run is to tolerate it. Rebuild first (`cmake --build build/clang-debug`, which the `tidy` target does), and don't
+    run it while another build rewrites the BMIs. The `clang-release` and `clang-asan` builds work too after a
+    build; before one, their compile commands lack the new modules and clang-tidy falls back to a guessed command
+    (errors about `module;`). Report upstream with a reduced repro when time allows: two or three modules with `#include
+    <math.h>` / spdlog in their global module fragments, one that imports them, and a TU that imports that one along
+    with `import std`.
+  - Findings it does report (`--warnings-as-errors`) in an imported module are reported in every file that imports
+    it: `type_info.cppm`'s `is_transparent` and `script_object.cppm`'s `c_str` (names the standard library's
+    protocols require) currently fail every element module.
 - **clice** (a C++ language server with modules support) is configured by `clice.toml` to use
   `build/clang-debug`'s compile commands. Its cache lives in `.clice/`, which is git-ignored.
 - Format with `clang-format -i <files>` (`.clang-format` at the repo root).
