@@ -548,6 +548,8 @@ using ImGui::IsMouseReleased;
 using ImGui::IsKeyPressed;
 using ImGui::IsKeyDown;
 using ImGui::SetKeyOwner;
+using ImGui::RenderTextEllipsis; // a fixed-width Text's line, cut with an ellipsis (md::textIn)
+using ImGui::RenderTextClipped;
 using ImGui::SetNavCursorVisible;
 using ImGui::GetKeyName;
 using ImGui::IsAnyItemActive;

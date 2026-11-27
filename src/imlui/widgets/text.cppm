@@ -24,6 +24,12 @@ void text(std::string_view s, TextStyle style, std::optional<Color> color = std:
 /// wraps past the box's width): a caller then measures it by rendering.
 [[nodiscard]] std::optional<ImVec2> textSize(std::string_view s, TextStyle style, bool wrap = false, float align = 0.0f,
                                              float maxWidth = 0.0f);
+/// Unwrapped text in a box exactly `width` pixels wide: positioned in it by `align` (0..1) and, when longer, cut
+/// with an ellipsis (a line) or clipped (several lines). Its size doesn't follow the text, so a value that changes
+/// (a counter, a clock) doesn't move what comes after it.
+void textIn(std::string_view s, TextStyle style, std::optional<Color> color, float width, float align = 0.0f);
+/// The size textIn() takes: `width` by the text's height.
+[[nodiscard]] ImVec2 textInSize(std::string_view s, TextStyle style, float width);
 
 /// A standalone icon item (size in dp).
 void icon(std::string_view name, float size = 24.0f, std::optional<Color> color = std::nullopt);
@@ -76,6 +82,30 @@ std::optional<ImVec2> textSize(std::string_view s, TextStyle style, bool wrap, f
     ImVec2 size = ImGui::CalcTextSize(s.data(), s.data() + s.size(), false, wrap ? std::max(1.0f, maxWidth) : 0.0f);
     if (align > 0.0f && !wrap) size.x += alignOffset(size.x, maxWidth, align);
     return size;
+}
+
+ImVec2 textInSize(std::string_view s, TextStyle style, float width) {
+    FontScope fs{style};
+    return {std::max(0.0f, width), ImGui::CalcTextSize(s.data(), s.data() + s.size()).y};
+}
+
+void textIn(std::string_view s, TextStyle style, std::optional<Color> color, float width, float align) {
+    FontScope fs{style};
+    const char* begin = s.data();
+    const char* end = begin + s.size();
+    const ImVec2 text = ImGui::CalcTextSize(begin, end);
+    const ImVec2 box{std::max(0.0f, width), text.y};
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(box);
+    const ImVec2 min{p.x + alignOffset(text.x, box.x, align), p.y};
+    const ImVec2 max{p.x + box.x, p.y + box.y};
+    if (s.empty() || !rectVisible(ImGui::GetWindowDrawList(), p, max)) return;
+    if (color) ImGui::PushStyleColor(ImGuiCol_Text, color->vec4());
+    if (s.find('\n') == std::string_view::npos)
+        ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), min, max, max.x, begin, end, &text);
+    else
+        ImGui::RenderTextClipped(min, max, begin, end, &text);
+    if (color) ImGui::PopStyleColor();
 }
 
 ImVec2 iconSize(float size) {

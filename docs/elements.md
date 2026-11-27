@@ -763,6 +763,7 @@ ApplicationWindow { menuBar = MenuBar {
 | `wrap` | bool | `false` | Wraps at the available width (a fixed `Column`'s, a `Grid` cell's, ...). In a `Row`, wrapping text takes a share of the free width and wraps at it. |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. Aligned text fills: it is as wide as the available width (its offset and its line), and takes a share of a `Row`. |
 | `font` | string | `""` | A [font the theme declares](theming.md#fonts) (`"mono"`, or `"regular"` / `"medium"`), drawn at the style's size. `""` or an undeclared name: the style's own face. |
+| `width` | size | `0` (the text's) | *Raw.* A box of the text's own: the text is that wide whatever it says, so a value that changes (a counter, a clock, digits in a proportional font) doesn't move what follows it. A line is placed in it by `align` and cut with an ellipsis when longer (several lines are clipped); wrapping text wraps at it. A fill or fill-minus width takes a share of a `Row` like any fill. |
 
 ### Icon
 
