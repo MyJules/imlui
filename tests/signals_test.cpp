@@ -104,7 +104,7 @@ protected:
     }
 
     Sensor m_sensor; ///< before the harness: it outlives the harness's Lua state
-    test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true}};
+    test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true, .fullDebug = true}}; // debug.setmetatable
 };
 
 /// A plain Lua state with the registered types, imlui.lua and a stub `imlui.native`, like an engine's (re)load.
