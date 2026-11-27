@@ -1746,8 +1746,9 @@ TEST_F(LayoutTest, AnElementAtARecycledAddressStartsFresh) {
     EXPECT_EQ(m_h.instance<Counter>("a")->count(), 3);
     const ImGuiID before = inspect->ids[0];
 
-    // The same table (same address) loses its instance; the next render gives it a new one.
-    run("rawset(a, '__native', nil) collectgarbage() collectgarbage()");
+    // The same table (same address) loses its instance (finalized, and `__native` dropped); the next render gives it a
+    // new one.
+    run("local n = rawget(a, '__native') debug.getmetatable(n).__gc(n) rawset(a, '__native', nil)");
     m_h.renderFrame("root");
     ASSERT_EQ(inspect->ids.size(), 1u);
     EXPECT_NE(inspect->ids[0], before);

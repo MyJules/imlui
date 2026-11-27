@@ -80,6 +80,10 @@ public:
     /// The same Lua function (in the same state). Empty handles are equal.
     [[nodiscard]] bool operator==(const LuaFunction& other) const;
 
+    /// Whether the value at `idx` of `state` is this handle's function (in its state, which lives): what a handle made
+    /// from it would compare equal to, without making one.
+    [[nodiscard]] bool refersTo(lua::State* state, int idx) const;
+
 private:
     /// A state's liveness token, shared by the handles of its functions.
     struct Life;
@@ -92,8 +96,19 @@ private:
     void pushFunction(lua::State* state) const;
     /// Reports "LuaFunction: bad result (<why>)".
     static void reportBadResult(std::string_view why);
-    /// The liveness token of the state `state` belongs to, made at its first use; a closing state's is dead.
-    static std::shared_ptr<Life> lifeOf(lua::State* state);
+    /// The userdata that holds a state's Life in its registry.
+    struct Token;
+    /// The last state lifeOf() looked up, and its Life.
+    struct LifeCache {
+        std::shared_ptr<Life> life;
+    };
+
+    /// The liveness token of the state `state` belongs to, made at its first use; a closing state's is dead. The
+    /// reference is valid until the next call.
+    static const std::shared_ptr<Life>& lifeOf(lua::State* state);
+    static LifeCache& lifeCache();
+    /// The token at `idx`, or nullptr when the value isn't one (checked by its size and tag).
+    static Token* tokenAt(lua::State* state, int idx);
     /// The token's finalizer (__gc).
     static int lifeGc(lua::State* state);
 
@@ -109,6 +124,7 @@ struct LuaConvert<LuaFunction> {
     static void push(lua::State* s, const LuaFunction& f) { f.push(s); }
     static bool check(lua::State* s, int idx) { return lua::isfunction(s, idx); }
     static LuaFunction get(lua::State* s, int idx) { return LuaFunction{s, idx}; }
+    static bool equals(lua::State* s, int idx, const LuaFunction& f) { return f.refersTo(s, idx); }
 };
 
 } // namespace imlui
@@ -142,39 +158,68 @@ struct LuaFunction::Ref {
 
 namespace {
 
-/// Registry key of the state's liveness token: a full userdata holding a std::shared_ptr<Life>.
+/// Registry key of the state's liveness token: a full userdata holding a Token.
 constexpr const char* lifeKey = "imlui.LuaFunction.life";
 
+/// What the token userdata starts with: the address of this constant. tokenAt() checks it (with the size), so a script
+/// that puts another userdata under lifeKey (debug.getregistry) or hands the finalizer one (io.stdout, whose size may
+/// match) gets nothing read as a std::shared_ptr: no Lua code can write this address into a userdata.
+constexpr char lifeTag = 0;
+
 } // namespace
+
+/// The token userdata: the tag, then the shared pointer to the state's Life.
+struct LuaFunction::Token {
+    const void* tag = &lifeTag;
+    std::shared_ptr<Life> life;
+};
+
+LuaFunction::Token* LuaFunction::tokenAt(lua::State* state, int idx) {
+    if (lua::type(state, idx) != lua::Type::UserData ||
+        lua::rawlen(state, idx) != static_cast<lua::Integer>(sizeof(Token)))
+        return nullptr;
+    void* p = lua::touserdata(state, idx);
+    const void* tag = nullptr;
+    std::memcpy(&tag, p, sizeof tag); // a foreign userdata of this size holds anything: read its first bytes as bytes
+    return tag == &lifeTag ? std::launder(static_cast<Token*>(p)) : nullptr;
+}
 
 /// The token's finalizer: runs when the state closes (lua_close runs finalizers before freeing anything; the token
 /// is reachable from the registry, so it isn't collected earlier). Marks every handle of the state expired and leaves
 /// an empty pointer, which a later lifeOf() (a finalizer that runs after this one) reads as "closing".
 int LuaFunction::lifeGc(lua::State* state) {
-    using LifePtr = std::shared_ptr<Life>;
-    // Only the token itself: a script that reached this function (debug.getregistry, debug.getmetatable) may call it
-    // on any userdata, and the registry still holds the token while lua_close runs the finalizers.
-    lua::getfield(state, lua::registryIndex, lifeKey);
-    const bool token =
-        lua::rawequal(state, 1, -1) && lua::rawlen(state, 1) == static_cast<lua::Integer>(sizeof(LifePtr));
-    lua::pop(state);
-    auto* p = token ? static_cast<LifePtr*>(lua::touserdata(state, 1)) : nullptr;
-    if (p && *p) {
-        (*p)->alive = false;
-        p->reset();
+    // Only a token (tokenAt): a script that reached this function (debug.getregistry, debug.getmetatable) may call it
+    // on any userdata. A script may call it on the token itself too, which makes the state's handles expire early:
+    // nothing dangles.
+    Token* token = tokenAt(state, 1);
+    if (token && token->life) {
+        token->life->alive = false;
+        token->life.reset();
     }
+    if (lifeCache().life && !lifeCache().life->alive) lifeCache() = {};
     return 0;
 }
 
-std::shared_ptr<LuaFunction::Life> LuaFunction::lifeOf(lua::State* state) {
-    using LifePtr = std::shared_ptr<Life>;
+LuaFunction::LifeCache& LuaFunction::lifeCache() {
+    // Per thread, like the states it caches (each used on one thread only).
+    thread_local LifeCache cache;
+    return cache;
+}
+
+const std::shared_ptr<LuaFunction::Life>& LuaFunction::lifeOf(lua::State* state) {
+    // Every conversion of a function asks: the last state's token is kept here, so the usual case reads no registry
+    // field. A closed state's Life is dead (lifeGc), so a new state at the same address misses.
+    lua::State* main = lua::mainthread(state);
+    LifeCache& cache = lifeCache();
+    if (cache.life && cache.life->alive && cache.life->state == main) return cache.life;
     lua::checkstack(state, 3);
-    if (lua::getfield(state, lua::registryIndex, lifeKey) == lua::Type::UserData) {
-        LifePtr life = *static_cast<LifePtr*>(lua::touserdata(state, -1));
+    lua::getfield(state, lua::registryIndex, lifeKey);
+    if (const Token* token = tokenAt(state, -1)) {
         lua::pop(state);
-        return life ? life : std::make_shared<Life>(); // finalized: the state is closing
+        cache = {token->life ? token->life : std::make_shared<Life>()}; // finalized: the state is closing
+        return cache.life;
     }
-    lua::pop(state);
+    lua::pop(state); // none yet, or a script put something else there: a new token
     // The metatable first: once the userdata holds the pointer it must get its finalizer without another allocation
     // (which could raise) in between.
     lua::createtable(state, 0, 2);
@@ -182,24 +227,25 @@ std::shared_ptr<LuaFunction::Life> LuaFunction::lifeOf(lua::State* state) {
     lua::setfield(state, -2, "__gc");
     lua::pushboolean(state, false);
     lua::setfield(state, -2, "__metatable");
-    auto life = std::make_shared<Life>(Life{lua::mainthread(state), true});
-    void* memory = lua::newuserdata(state, sizeof(LifePtr));
-    std::construct_at(static_cast<LifePtr*>(memory), life);
+    auto life = std::make_shared<Life>(Life{main, true});
+    void* memory = lua::newuserdata(state, sizeof(Token));
+    std::construct_at(static_cast<Token*>(memory), Token{&lifeTag, life});
     lua::insert(state, -2);
     lua::setmetatable(state, -2);
     lua::setfield(state, lua::registryIndex, lifeKey);
-    return life;
+    cache = {std::move(life)};
+    return cache.life;
 }
 
 LuaFunction::LuaFunction(lua::State* state, int idx) {
     if (!lua::isfunction(state, idx)) return;
     idx = lua::absindex(state, idx);
-    std::shared_ptr<Life> life = lifeOf(state);
+    const std::shared_ptr<Life>& life = lifeOf(state);
     if (!life->alive) return;
     const void* identity = lua::topointer(state, idx);
     lua::pushvalue(state, idx);
     const int ref = lua::ref(state);
-    m_ref = std::make_shared<const Ref>(std::move(life), ref, identity);
+    m_ref = std::make_shared<const Ref>(life, ref, identity);
 }
 
 bool LuaFunction::expired() const { return !m_ref || !m_ref->life->alive; }
@@ -220,6 +266,11 @@ bool LuaFunction::push(lua::State* state) const {
 bool LuaFunction::operator==(const LuaFunction& other) const {
     if (!m_ref || !other.m_ref) return !m_ref && !other.m_ref;
     return m_ref->life == other.m_ref->life && m_ref->identity == other.m_ref->identity;
+}
+
+bool LuaFunction::refersTo(lua::State* state, int idx) const {
+    return lua::isfunction(state, idx) && !expired() && lua::mainthread(state) == m_ref->life->state &&
+           lua::topointer(state, idx) == m_ref->identity;
 }
 
 void LuaFunction::reportBadResult(std::string_view why) {

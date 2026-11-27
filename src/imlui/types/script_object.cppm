@@ -322,8 +322,15 @@ public:
 
     // ---- linking, used by TypeRegistry
 
-    /// Links the object to the value at `idx` in `state` (any thread of it: the link keeps the main thread).
-    void attach(lua::State* state, int idx, bool singleton);
+    /// Pushes property `name` of `object`, whose type is `type` (the registry's TypeInfo), and returns true; reports
+    /// the error and pushes nothing for a name that isn't a property. notify() reads the new value through it.
+    using PropertyPusher = bool (*)(const void* type, lua::State* state, const ScriptObject& object,
+                                    std::string_view name);
+
+    /// Links the object to the value at `idx` in `state` (any thread of it: the link keeps the main thread). notify()
+    /// reads properties through `pushProperty(type, ...)`; without one it writes nothing back.
+    void attach(lua::State* state, int idx, bool singleton, const void* type = nullptr,
+                PropertyPusher pushProperty = nullptr);
     /// Points the link at `state` again, where attach() was already called (a reload that failed).
     void relink(lua::State* state);
     /// A listener was connected to one of this object's signals in its linked state: emit() and notify() call the
@@ -487,6 +494,8 @@ private:
 
     std::uint64_t m_objectId;
     lua::State* m_state = nullptr;
+    const void* m_type = nullptr;               ///< attach()'s `type`
+    PropertyPusher m_pushProperty = nullptr;   ///< attach()'s `pushProperty`
     bool m_singleton = false;
     bool m_connected = false; ///< noteConnection() ran for the linked state: signals call the listeners too
     /// Shared with every Handle, created by the first handle(). Stopped by cancelHandles() or the destructor.
@@ -630,8 +639,11 @@ bool ScriptObject::pushSelf() const {
     return true;
 }
 
-void ScriptObject::attach(lua::State* state, int idx, bool singleton) {
+void ScriptObject::attach(lua::State* state, int idx, bool singleton, const void* type,
+                          PropertyPusher pushProperty) {
     idx = lua::absindex(state, idx);
+    m_type = type;
+    m_pushProperty = pushProperty;
     // The main thread, not `state`: an element built in a coroutine (an async function's body after an await) is
     // attached on the coroutine's thread, which may be suspended or collected when notify()/emit() run. Every other
     // link to a state (LuaFunction, Future, the ticking loops, listen) uses the main thread too.
@@ -691,24 +703,9 @@ void ScriptObject::writeBack(std::string_view property) {
     const int self = top + 1;
     const CName name{property};
 
-    // The current value comes from the getter, through the box metatable's __get(box, name) (installed
-    // by TypeRegistry), so this module needs no compile-time knowledge of the type.
-    if (m_singleton) {
-        lua::pushvalue(state, self);
-    } else {
-        lua::pushstring(state, "__native");
-        lua::rawget(state, self);
-    }
-    const int box = lua::gettop(state);
-    bool ok = lua::isuserdata(state, box) && lua::getmetatable(state, box) != 0;
-    if (ok) {
-        lua::getfield(state, -1, "__get");
-        lua::remove(state, -2);
-        lua::pushvalue(state, box);
-        lua::pushstring(state, property);
-        ok = luaui::safeCall(state, 2, 1);
-    }
-    if (!ok) {
+    // The current value comes from the getter, through the pusher the registry gave attach() (it knows the type, which
+    // this module doesn't).
+    if (!m_pushProperty || !m_pushProperty(m_type, state, *this, property)) {
         lua::settop(state, top);
         return;
     }

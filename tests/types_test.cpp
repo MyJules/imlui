@@ -51,6 +51,8 @@ public:
             .method("fire", &Probe::fire)
             .method("bump", &Probe::bump)
             .method("limitOr", &Probe::limitOr)
+            .method("peek", &Probe::peek)
+            .unsynced()
             .defaultProperty("value");
     }
 
@@ -93,6 +95,10 @@ public:
     }
     /// Changes `value` in C++ without notify(): the table isn't written.
     void setQuietly(double v) { m_value = v; }
+    /// `value` as the instance holds it: an unsynced method (the table isn't synced first).
+    [[nodiscard]] double peek() const { return m_value; }
+    /// notify() of a name that isn't a property.
+    void notifyUnknown() { notify("nope"); }
     /// `limit`, or `fallback` for nil: an optional argument that may also be left out.
     [[nodiscard]] int limitOr(int fallback, std::optional<int> limit) const { return limit.value_or(fallback); }
 
@@ -196,6 +202,21 @@ public:
     static void declare(TypeBuilder<IntThrower>&) {}
     IntThrower() { throw 42; }
     void render(Frame&) override {}
+};
+
+/// Registers singletons from its reload hook: the registry's list grows while install() runs the hooks.
+class Spawner final : public ScriptObject {
+public:
+    explicit Spawner(TypeRegistry& registry) : m_registry{registry} {}
+    void scriptReloading() override {
+        ++reloads;
+        for (int i = 0; i < 64; ++i)
+            m_registry.registerSingleton("spawned" + std::to_string(i), std::make_shared<Backend>());
+    }
+    int reloads = 0;
+
+private:
+    TypeRegistry& m_registry;
 };
 
 lua::State* newUiState(TypeRegistry& types) {
@@ -741,12 +762,133 @@ TEST_F(TypesTest, CollectingTheElementDestroysTheInstance) {
 TEST_F(TypesTest, ABoxFinalizerIgnoresForeignValues) {
     run(R"(
         keep = Probe {}
-        getmetatable(keep.__native).__gc(io.stdout)
-        getmetatable(backend).__gc(io.stdout)
+        debug.getmetatable(keep.__native).__gc(io.stdout)
+        debug.getmetatable(backend).__gc(io.stdout)
         assert(keep:add(1, 2) == 3 and backend.level == 0.5)
         io.stdout:write("") -- untouched
     )");
     EXPECT_EQ(counters.destructed, 0);
+}
+
+// The box metatables are hidden from getmetatable: their finalizers would destroy an instance C++ code still uses.
+TEST_F(TypesTest, ScriptsCantReachTheBoxFinalizers) {
+    run(R"(
+        keep = Probe {}
+        assert(getmetatable(rawget(keep, "__native")) == false)
+        assert(getmetatable(backend) == false)
+        assert(not pcall(function() return getmetatable(rawget(keep, "__native")).__gc end))
+        assert(keep:add(1, 2) == 3)
+    )");
+    EXPECT_EQ(counters.destructed, 0);
+}
+
+// The box lives as long as its table: a binding that drops `__native` and collects garbage in the middle of a sync
+// doesn't free the instance under the sync, and the instance comes back as the table's (not a second one).
+TEST_F(TypesTest, DroppingNativeDuringASyncKeepsTheInstance) {
+    run(R"(
+        p = Probe {
+            value = function(self)
+                rawset(self, "__native", nil)
+                collectgarbage(); collectgarbage()
+                return 3
+            end,
+            name = "after",
+        })");
+    Probe* p = sync("p");
+    ASSERT_NE(p, nullptr);
+    EXPECT_DOUBLE_EQ(p->value(), 3);
+    EXPECT_EQ(p->name(), "after"); // the properties after the binding are still synced
+    EXPECT_EQ(counters.destructed, 0);
+    run("collectgarbage(); collectgarbage()");
+    EXPECT_EQ(sync("p"), p); // the same instance, put back
+    EXPECT_EQ(counters.constructed, 1);
+    EXPECT_EQ(counters.destructed, 0);
+    // A table that dropped it still destroys it when collected.
+    run("p = nil; collectgarbage(); collectgarbage()");
+    EXPECT_EQ(counters.destructed, 1);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A handler that runs inside a method (emit) drops `__native`, collects garbage and calls the finalizer itself
+// (debug.getmetatable reaches it): the instance outlives the call, and methods called afterwards find it.
+TEST_F(TypesTest, AnInstanceInUseSurvivesItsFinalizer) {
+    run(R"(
+        p = Probe {
+            onFired = function(self)
+                local native = rawget(self, "__native")
+                debug.getmetatable(native).__gc(native) -- ignored: the instance is in use
+                rawset(self, "__native", nil)
+                collectgarbage(); collectgarbage()
+            end,
+        }
+        p:fire()
+        assert(p:add(1, 2) == 3)
+        assert(rawget(p, "__native") ~= nil)
+    )");
+    EXPECT_EQ(counters.destructed, 0);
+    // Called on an instance not in use, the finalizer destroys it: methods then raise, nothing is read after its death.
+    EXPECT_FALSE(runError(R"(
+        local native = rawget(p, "__native")
+        debug.getmetatable(native).__gc(native)
+        p:add(1, 2)
+    )")
+                     .empty());
+    EXPECT_EQ(counters.destructed, 1);
+    EXPECT_EQ(sync("p"), nullptr);
+}
+
+// A method declared unsynced() runs on the instance as it is (after the element's first sync); the others sync it.
+TEST_F(TypesTest, UnsyncedMethodsDontSyncTheElement) {
+    run("u = Probe { value = 1 }");
+    run("assert(u:peek() == 1)"); // never synced: synced first anyway
+    run("u.value = 5; assert(u:peek() == 1); assert(u:add(0, 0) == 5); assert(u:peek() == 5)");
+    TypeInfo info{"X"};
+    TypeBuilder<Probe> builder{info};
+    builder.property("value", &Probe::value, &Probe::setValue);
+    EXPECT_THROW(builder.unsynced(), std::invalid_argument);
+    builder.method("peek", &Probe::peek).doc("Reads it.").unsynced();
+    EXPECT_FALSE(info.findMethod("peek")->syncs);
+}
+
+TEST_F(TypesTest, NotifyOfAnUnknownPropertyIsReported) {
+    run("p = Probe {}");
+    Probe* p = sync("p");
+    ASSERT_NE(p, nullptr);
+    p->notifyUnknown();
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find("Probe has no property 'nope'"), std::string::npos) << luaui::errors()[0];
+}
+
+// The lookups by name, and the default property's index wherever defaultProperty() comes in declare().
+TEST(TypeInfoTest, MembersAreFoundByName) {
+    TypeInfo info{"X"};
+    TypeBuilder<Probe> builder{info};
+    builder.defaultProperty("value").property("name", &Probe::name, &Probe::setName);
+    EXPECT_EQ(info.defaultPropertyIndex(), std::nullopt);
+    builder.property("value", &Probe::value, &Probe::setValue).signal("onFired").method("peek", &Probe::peek);
+    EXPECT_EQ(info.defaultPropertyIndex(), 1u);
+    EXPECT_EQ(info.findProperty("value"), &info.properties()[1]);
+    EXPECT_EQ(info.findMethod("peek"), &info.methods()[0]);
+    EXPECT_EQ(info.findProperty("peek"), nullptr);
+    EXPECT_EQ(info.findMethod("value"), nullptr);
+    EXPECT_TRUE(info.hasSignal("onFired"));
+    EXPECT_FALSE(info.hasSignal("value"));
+    EXPECT_THROW(builder.method("value", &Probe::peek), std::invalid_argument);
+    builder.defaultProperty("name");
+    EXPECT_EQ(info.defaultPropertyIndex(), 0u);
+}
+
+// A table property synced again unchanged is compared in place: no setter call, no conversion of a new vector.
+TEST_F(TypesTest, UnchangedTablePropertiesAreComparedInPlace) {
+    run(R"(p = Probe { items = { "a", "b" } })");
+    Probe* p = sync("p");
+    const std::string* first = p->items().data();
+    for (int i = 0; i < 3; ++i)
+        sync("p");
+    EXPECT_EQ(p->items().data(), first); // the setter didn't run (it would move a new vector in)
+    run("p.items[2] = 'c'");
+    sync("p");
+    EXPECT_EQ(p->items(), (std::vector<std::string>{"a", "c"}));
 }
 
 TEST_F(TypesTest, RawTablesGetAnInstanceOnFirstSync) {
@@ -827,7 +969,7 @@ void expectDeadSingleton(lua::State* state, const std::string& name) {
     const std::string dead = "singleton '" + name + "' was destroyed";
     EXPECT_NE(luaError(state, "local x = " + name + ".level").find(dead), std::string::npos);
     EXPECT_NE(luaError(state, name + ".level = 1").find(dead), std::string::npos);
-    EXPECT_NE(luaError(state, "local ping = getmetatable(" + name + ").__index(" + name + ", 'ping')").find(dead),
+    EXPECT_NE(luaError(state, "local ping = debug.getmetatable(" + name + ").__index(" + name + ", 'ping')").find(dead),
               std::string::npos);
 }
 
@@ -876,6 +1018,27 @@ TEST(SingletonLifetimeTest, DestroyedByReferenceSingletonRaises) {
 
 // A constructor that throws a non-std exception is reported with a message (it escaped the catch before), and the
 // element gets no instance (`__native = false`: the failure is remembered, the constructor not tried again).
+// install() runs the reload hooks from a copy of the singleton list: a hook may register singletons (the list
+// reallocates) or replace them (a replaced one that hasn't run its hook yet doesn't).
+TEST(SingletonLifetimeTest, AReloadHookMayRegisterSingletons) {
+    luaui::clearErrors();
+    TypeRegistry types;
+    Spawner spawner{types};
+    types.registerSingleton("spawner", spawner);
+    lua::State* first = newUiState(types);
+    lua::State* second = newUiState(types);
+    EXPECT_EQ(spawner.reloads, 1);
+    ASSERT_EQ(lua::loadbuffer(second, "assert(spawned63.level == 0.5)", "=test"), lua::ok);
+    EXPECT_EQ(lua::pcall(second, 0, 0, 0), lua::ok) << lua::tostring(second, -1);
+    lua::State* third = newUiState(types); // replaces the spawned singletons while their hooks are due
+    EXPECT_EQ(spawner.reloads, 2);
+    lua::close(first);
+    lua::close(second);
+    lua::close(third);
+    EXPECT_TRUE(luaui::errors().empty());
+    clearFrameRequests();
+}
+
 TEST(ConstructorExceptionTest, NonStdExceptionIsReported) {
     luaui::clearErrors();
     TypeRegistry types;

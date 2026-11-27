@@ -39,6 +39,12 @@ struct Segment {
     bool operator==(const Segment&) const = default;
 };
 
+/// A recursive struct: a table that contains itself is a cycle the conversion must not follow forever.
+struct Tree {
+    std::vector<Tree> children;
+    bool operator==(const Tree&) const = default;
+};
+
 /// A type with its own LuaConvert that has no mismatch(): errors fall back to "<name> expected, got <type>".
 struct Celsius {
     double degrees = 0;
@@ -75,6 +81,12 @@ struct imlui::LuaFields<Vec2> {
 };
 
 template <>
+struct imlui::LuaFields<Tree> {
+    static constexpr std::string_view name = "Tree";
+    static constexpr std::tuple fields{field("children", &Tree::children)};
+};
+
+template <>
 struct imlui::LuaFields<Segment> {
     static constexpr std::string_view name = "Segment";
     static constexpr auto fields = std::tuple{field("label", &Segment::label),     field("from", &Segment::from),
@@ -96,6 +108,11 @@ static_assert(LuaConvert<LuaFunction>::name == "function");
 static_assert(LuaReadable<Segment> && LuaReadable<std::variant<int, Vec2>> && LuaReadable<LuaFunction>);
 static_assert(takesLuaFunction<LuaFunction>() && takesLuaFunction<std::optional<LuaFunction>>());
 static_assert(takesLuaFunction<std::variant<int, LuaFunction>>() && !takesLuaFunction<int>());
+// In-place comparison (LuaConvert<T>::equals): the scalars, strings and the containers that compose them; luaEquals
+// falls back to check() and get() for the rest.
+static_assert(LuaComparable<double> && LuaComparable<std::string> && LuaComparable<std::vector<std::string>>);
+static_assert(LuaComparable<std::optional<int>> && LuaComparable<std::variant<int, std::string>>);
+static_assert(LuaComparable<LuaFunction> && !LuaComparable<Vec2> && !LuaComparable<Segment>);
 
 namespace {
 
@@ -385,6 +402,66 @@ TEST(LuaValuesTest, VariantsTakeTheFirstMatchingAlternative) {
     EXPECT_EQ(lua::gettop(s.get()), 0);
 }
 
+// A table nested deeper than maxNesting (each struct and each sequence is a level), a cycle above all, fails the
+// check instead of recursing until the C++ stack overflows.
+TEST(LuaValuesTest, CyclicAndDeepTablesFailTheCheck) {
+    const LuaState s;
+    const auto deep = [](int levels) {
+        return "(function() local t = {} for i = 1, " + std::to_string(levels) +
+               " do t = { children = { t } } end return t end)()";
+    };
+    EXPECT_TRUE(s.checks<Tree>(deep(50))); // 101 tables
+    const Tree tree = s.read<Tree>(deep(3));
+    ASSERT_EQ(tree.children.size(), 1u);
+    EXPECT_EQ(tree.children[0].children[0].children.size(), 1u);
+    EXPECT_FALSE(s.checks<Tree>(deep(150)));
+    const std::string cycle = "(function() local t = { children = {} } t.children[1] = t return t end)()";
+    EXPECT_FALSE(s.checks<Tree>(cycle));
+    EXPECT_NE(s.why<Tree>(cycle).find("nested more than 200 levels deep"), std::string::npos);
+    EXPECT_FALSE(s.checks<std::vector<Tree>>("(function() local t = {} t[1] = { children = t } return t end)()"));
+    EXPECT_EQ(lua::gettop(s.get()), 0);
+}
+
+// luaEquals: true exactly when check() passes and get() returns an equal value.
+TEST(LuaValuesTest, EqualsComparesInPlace) {
+    const LuaState s;
+    const auto equals = [&]<class T>(std::string_view expr, const T& v) {
+        s.eval(expr);
+        const bool eq = luaEquals<T>(s.get(), -1, v);
+        lua::pop(s.get());
+        return eq;
+    };
+    using Doubles = std::vector<double>;
+    EXPECT_TRUE(equals("{ 1, 2, 3 }", Doubles{1, 2, 3}));
+    EXPECT_TRUE(equals("{ '1', 2, 3 }", Doubles{1, 2, 3})); // a numeric string reads as a number
+    EXPECT_TRUE(equals("{}", Doubles{}));
+    EXPECT_FALSE(equals("{ 1, 2 }", Doubles{1, 2, 3}));
+    EXPECT_FALSE(equals("{ 1, 2, 4 }", Doubles{1, 2, 3}));
+    EXPECT_FALSE(equals("{ 1, 2, 3, x = 1 }", Doubles{1, 2, 3})); // no sequence: check() fails
+    EXPECT_FALSE(equals("{ x = 1 }", Doubles{}));
+    EXPECT_FALSE(equals("'1, 2, 3'", Doubles{1, 2, 3}));
+    EXPECT_TRUE(equals("'abc'", std::string{"abc"}));
+    EXPECT_TRUE(equals("5", std::string{"5"}));
+    EXPECT_FALSE(equals("{}", std::string{}));
+    EXPECT_TRUE(equals("nil", std::optional<int>{}));
+    EXPECT_FALSE(equals("nil", std::optional<int>{3}));
+    EXPECT_TRUE(equals("3", std::optional<int>{3}));
+    EXPECT_TRUE(equals("nil", false));
+    using IntOrString = std::variant<int, std::string>;
+    EXPECT_TRUE(equals("5", IntOrString{5}));
+    EXPECT_FALSE(equals("5", IntOrString{std::string{"5"}})); // get() takes the integer first
+    EXPECT_TRUE(equals("'x'", IntOrString{std::string{"x"}}));
+    EXPECT_TRUE(equals("{ x = 1, y = 2 }", Vec2{1, 2})); // check() and get()
+    EXPECT_TRUE(equals("{ { x = 1 }, { y = 2 } }", std::vector<Vec2>{{1, 0}, {0, 2}}));
+    EXPECT_FALSE(equals("{ { x = 1 }, { y = '?' } }", std::vector<Vec2>{{1, 0}, {0, 0}}));
+    s.eval("function() end");
+    const LuaFunction f{s.get(), -1};
+    EXPECT_TRUE(LuaConvert<LuaFunction>::equals(s.get(), -1, f));
+    lua::pop(s.get());
+    EXPECT_FALSE(equals("function() end", f));
+    EXPECT_EQ(lua::gettop(s.get()), 0);
+}
+
 // ------------------------------------------------------------------ LuaFunction
 
 TEST(LuaFunctionTest, CallsWithConvertedArgumentsAndResults) {
@@ -437,6 +514,33 @@ TEST(LuaFunctionTest, ErrorsAreReportedNotThrown) {
     lua::pop(s.get());
     EXPECT_TRUE(notAFunction.expired());
     EXPECT_FALSE(notAFunction.call());
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// The state's liveness token is recognized by its size and tag: a script that puts another userdata in its registry
+// slot, or calls its finalizer on one, gets nothing reinterpreted.
+TEST(LuaFunctionTest, AForeignTokenIsntRead) {
+    luaui::clearErrors();
+    const LuaState s;
+    s.eval("function() return 1 end");
+    const LuaFunction f{s.get(), -1};
+    lua::pop(s.get());
+    s.eval(R"((function()
+        local r = debug.getregistry()
+        debug.getmetatable(r["imlui.LuaFunction.life"]).__gc(io.stdout) -- not a token: nothing happens
+        r["imlui.LuaFunction.life"] = io.stdout
+    end)())");
+    lua::pop(s.get());
+    const LuaState other; // converts a function there: the next one in `s` looks its token up again
+    other.eval("function() end");
+    const LuaFunction o{other.get(), -1};
+    lua::pop(other.get());
+    s.eval("function() return 2 end");
+    const LuaFunction g{s.get(), -1}; // a new token
+    lua::pop(s.get());
+    EXPECT_EQ(g.call<int>(), 2);
+    s.eval("(function() io.stdout:write('') return true end)()"); // still a working file
+    lua::pop(s.get());
     EXPECT_TRUE(luaui::errors().empty());
 }
 
