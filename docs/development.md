@@ -441,8 +441,9 @@ On this target:
 - `lua_definitions_test.cpp` covers the [Lua definitions](extending.md#editor-support-lua-definitions): the LuaLS type
   of every built-in `LuaConvert` (and of one without the hook), named structs and enums declared once, a golden
   `types.lua` of a small registry (struct, enums, map, pair, variant, `Future`, `LuaFunction`, typed and untyped
-  signals, parameter names, a default property, a singleton, a type name that isn't a Lua name), that the built-ins'
-  `types.lua` and `src/resources/definitions/imlui.lua` compile as Lua, that the hand-written file defines every `ui`
+  signals, parameter names, a default property, a singleton, a type name that isn't a Lua name, `connect`'s overload
+  per signal), that the built-ins' `types.lua` and `src/resources/definitions/imlui.lua` compile as Lua, that every
+  built-in signal is typed and every built-in method parameter named (no `...: any`, no `argN`), that the hand-written file defines every `ui`
   member the prelude has (and nothing else), `writeLuaDefinitions` (unchanged files aren't rewritten) and the
   `--lua-defs` / `IMLUI_LUA_DEFS` options of `defaultConfig`. The ctest `lua_definitions.imlui_smoke_host`
   (`tests/lua_definitions_run.cmake`) runs the test host alone with both and checks the files.

@@ -576,10 +576,25 @@ lab = {}
 ---@param signal ImluiSignal
 ---@param fn function
 ---@return fun() disconnect
----@overload fun(target: Dial, signal: DialSignal, fn: fun(self: Dial, ...: any)): fun()
----@overload fun(target: FineDial, signal: FineDialSignal, fn: fun(self: FineDial, ...: any)): fun()
----@overload fun(target: Gauge, signal: GaugeSignal, fn: fun(self: Gauge, ...: any)): fun()
----@overload fun(target: lab, signal: labSignal, fn: fun(...: any)): fun()
+---@overload fun(target: Dial, signal: "onTurned", fn: (fun(self: Dial))): fun()
+---@overload fun(target: Dial, signal: "onAngleChanged", fn: (fun(self: Dial, value: number))): fun()
+---@overload fun(target: FineDial, signal: "onTurned", fn: (fun(self: FineDial))): fun()
+---@overload fun(target: FineDial, signal: "onAngleChanged", fn: (fun(self: FineDial, value: number))): fun()
+---@overload fun(target: FineDial, signal: "onStepChanged", fn: (fun(self: FineDial, value: integer))): fun()
+---@overload fun(target: Gauge, signal: "onPeak", fn: (fun(self: Gauge, ...: any))): fun()
+---@overload fun(target: Gauge, signal: "onMoved", fn: (fun(self: Gauge, to: number, why: string))): fun()
+---@overload fun(target: Gauge, signal: "onValueChanged", fn: (fun(self: Gauge, value: number))): fun()
+---@overload fun(target: Gauge, signal: "onLimitChanged", fn: (fun(self: Gauge, value?: integer))): fun()
+---@overload fun(target: Gauge, signal: "onTagsChanged", fn: (fun(self: Gauge, value: table<string, number>))): fun()
+---@overload fun(target: Gauge, signal: "onRangeChanged", fn: (fun(self: Gauge, value: [number, number]))): fun()
+---@overload fun(target: Gauge, signal: "onModeChanged", fn: (fun(self: Gauge, value: "fast"|"slow"))): fun()
+---@overload fun(target: Gauge, signal: "onSeriesChanged", fn: (fun(self: Gauge, value: Series))): fun()
+---@overload fun(target: Gauge, signal: "onEitherChanged", fn: (fun(self: Gauge, value: integer|string))): fun()
+---@overload fun(target: Gauge, signal: "onFormatterChanged", fn: (fun(self: Gauge, value?: function))): fun()
+---@overload fun(target: Gauge, signal: "onTintChanged", fn: (fun(self: Gauge, value: Color))): fun()
+---@overload fun(target: Gauge, signal: "onPeakChanged", fn: (fun(self: Gauge, value: number))): fun()
+---@overload fun(target: lab, signal: "onTick", fn: (fun(n: integer))): fun()
+---@overload fun(target: lab, signal: "onLoadChanged", fn: (fun(value: number))): fun()
 function connect(target, signal, fn) end
 ui.connect = connect
 )lua";
@@ -890,6 +905,23 @@ TEST(LuaDefinitions, BuiltInsAndPreludeAreValidLua) {
     EXPECT_NE(types.find("---@field onPaint? (fun(self: Canvas, p: CanvasPainter))\n"), std::string::npos);
     EXPECT_NE(types.find("---@class CanvasPainter\n"), std::string::npos);
     EXPECT_NE(types.find(", style?: TextStyle, font?: string)) Text with"), std::string::npos);
+    // Every built-in signal is typed and every method parameter named: no `...: any` handler, no `argN`.
+    for (const std::string& name : registry.typeNames()) {
+        const TypeInfo* info = registry.find(name);
+        ASSERT_NE(info, nullptr) << name;
+        for (const TypeInfo::Signal& s : info->signalDeclarations())
+            EXPECT_TRUE(s.args.has_value()) << name << "." << s.name << " is untyped";
+        for (const TypeInfo::Method& m : info->methods())
+            for (std::size_t i = 0; i < m.params.size(); ++i)
+                EXPECT_NE(m.params[i].name, "arg" + std::to_string(i + 1)) << name << ":" << m.name << " parameter";
+    }
+    EXPECT_EQ(types.find("...: any"), std::string::npos);
+    // connect has an overload per signal, with the handler's parameters.
+    EXPECT_NE(types.find("---@overload fun(target: Slider, signal: \"onMoved\", fn: (fun(self: Slider, value: "
+                         "number))): fun()\n"),
+              std::string::npos);
+    EXPECT_NE(types.find("---@overload fun(target: Button, signal: \"onClicked\", fn: (fun(self: Button))): fun()\n"),
+              std::string::npos);
     // The files are read together: no alias is declared twice (TextStyle is generated, from Text.style). A class may
     // be (LuaLS merges a class's declarations: imlui.lua adds the Lua-side props to RepeaterProps, ...).
     std::map<std::string, int> declared;
