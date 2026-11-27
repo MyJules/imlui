@@ -16,6 +16,13 @@ export namespace imlui::luaui {
 ///  * a package.searchers entry, second after the preload searcher, finds modules in `imlui:/`: `imlui` is
 ///    `imlui:/imlui.lua`, `a.b` is `imlui:/a/b.lua` or `imlui:/a/b/init.lua`. src/resources/imlui.lua adds its
 ///    own entry in front of it for components next to the script.
+///  * `require` finds nothing else: the stock file searchers are removed (the Lua-file one, which reads
+///    `package.path`, on Windows `.\?.lua` and the like relative to the current folder, and the C and all-in-one
+///    ones, which load DLLs found on `package.cpath`), `package.path` and `package.cpath` are "" (which also drops
+///    the `LUA_PATH`/`LUA_CPATH` environment variables `openlibs` read) and `package.loadlib` is nil. A host is
+///    path-free: its Lua comes from its resources only, so a mistyped `require "Buton"` is a "module not found"
+///    error listing the resources looked for, never a stray `Buton.lua` from the working folder run in `_G` or a
+///    planted `Buton.dll`. `package.preload` still works, for modules a host registers from C++.
 /// `resources` must outlive the state. When `loaded` is given, the full name of every resource the state reads or
 /// loads is added to it (the engine watches them for hot reload); it must outlive the state too.
 void registerResources(lua::State* state, const Resources& resources, std::set<std::string>* loaded = nullptr);
@@ -224,16 +231,28 @@ void registerResources(lua::State* state, const Resources& resources, std::set<s
     lua::setfield(state, -2, "imlui.resource");
     lua::pop(state);
 
-    // table.insert(package.searchers, 2, searcher): shift the others up by one.
+    // package.searchers = { <preload>, searcher }: the preload searcher (always first, see luaopen_package) stays,
+    // the file, C and all-in-one searchers after it go (see the declaration), ours takes the second place.
     lua::getfield(state, -1, "searchers");
     for (auto i = lua::rawlen(state, -1); i >= 2; --i) {
-        lua::rawgeti(state, -1, i);
-        lua::rawseti(state, -2, i + 1);
+        lua::pushnil(state);
+        lua::rawseti(state, -2, i);
     }
     pushContext(state, ctx);
     lua::pushcclosure(state, &searcher, 2);
     lua::rawseti(state, -2, 2);
-    lua::pop(state, 2);
+    lua::pop(state);
+
+    // No searcher reads the paths any more, but package.searchpath does, and they'd show a script where Lua would
+    // look: "" rather than nil, since the package library expects strings there. Overriding them after openlibs is
+    // also what drops LUA_PATH and LUA_CPATH, which luaopen_package read from the environment.
+    lua::pushstring(state, "");
+    lua::setfield(state, -2, "path");
+    lua::pushstring(state, "");
+    lua::setfield(state, -2, "cpath");
+    lua::pushnil(state); // loadlib(path, fn) loads any DLL and calls into it
+    lua::setfield(state, -2, "loadlib");
+    lua::pop(state);
 }
 
 } // namespace imlui::luaui

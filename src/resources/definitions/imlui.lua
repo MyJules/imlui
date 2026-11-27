@@ -453,7 +453,8 @@ function future() end
 ---@param opts? SnackbarOptions
 function snackbar(text, opts) end
 
----Logging through the C++ logger: `string.format(fmt, ...)` when arguments are given, else `tostring(fmt)`.
+---Logging through the C++ logger: `string.format(fmt, ...)` when arguments are given, else `tostring(fmt)`. At a
+---level that's off the message isn't built (no `string.format`, no `__tostring`).
 ---@class ui.log
 log = {}
 ---@param fmt any
@@ -471,6 +472,10 @@ function log.warn(fmt, ...) end
 ---@param fmt any
 ---@param ... any
 function log.error(fmt, ...) end
+---Whether `log[level]` logs: check it before gathering an expensive message.
+---@param level "trace"|"debug"|"info"|"warn"|"error"
+---@return boolean
+function log.enabled(level) end
 
 ---Shows a script error in the error overlay (logged once).
 ---@param message string
@@ -572,7 +577,8 @@ function culling() end
 ---@field quit fun()
 ---@field reload fun()
 ---@field imguiVersion fun(): string
----@field log fun(level: "trace"|"debug"|"info"|"warn"|"error", message: string)
+---@field log fun(level: "trace"|"debug"|"info"|"warn"|"error", message: any)
+---@field logEnabled fun(level: "trace"|"debug"|"info"|"warn"|"error"): boolean
 ---@field injectMouse fun(x: number, y: number, down?: boolean, wheel?: number)
 ---@field injectKey fun(key: string, down: boolean, ctrl?: boolean, shift?: boolean, alt?: boolean)
 ---@field reportError fun(message: string)

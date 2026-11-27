@@ -46,7 +46,12 @@ void setListenerDispatch(lua::State* state, int idx) {
 bool callListeners(lua::State* state, int target, const char* signal, int first, int nargs) {
     target = lua::absindex(state, target);
     first = lua::absindex(state, first);
-    lua::checkstack(state, nargs + 4);
+    // No room for the call (a C stack of calls this deep, or out of memory): reported like an error a listener raised,
+    // and the listeners don't run. Pushing anyway would write past the stack.
+    if (nargs < 0 || !lua::checkstack(state, nargs + 4)) {
+        reportError(std::string{"stack overflow (no room to call the listeners of "} + signal + ")");
+        return false;
+    }
     if (lua::rawgetp(state, lua::registryIndex, &dispatchKey) != lua::Type::Function) {
         lua::pop(state);
         return false;

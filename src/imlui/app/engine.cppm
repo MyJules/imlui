@@ -54,6 +54,7 @@ import imlui.types.registry;
 import imlui.types.lua_definitions;
 import imlui.app.config;
 import imlui.app.host_settings;
+import imlui.app.file_snapshot;
 
 export namespace imlui {
 
@@ -115,9 +116,6 @@ public:
     int run();
 
 private:
-    /// Watched resource names and their modification times (nullopt: missing, or in an immutable mount).
-    using FileSnapshot = std::map<std::string, std::optional<ResourceTime>>;
-
     /// One complete frame. Also called from inside event processing while
     /// the window is being resized.
     void renderFrame();
@@ -132,10 +130,12 @@ private:
     void renderTree();
     void drawErrors();
 
-    /// Sets m_reload when a watched resource changed (checked at most every 400 ms).
+    /// Sets m_reload when a watched resource changed (checked at most every 400 ms; see resourcesChanged).
     void checkForChanges();
     /// The times of every .lua file in the mounted prefixes and of every resource Lua has loaded or read.
     [[nodiscard]] FileSnapshot scanFiles() const;
+    /// Takes m_snapshot (and m_snapshotTime) now.
+    void takeSnapshot();
     void reloadNow();
     /// Applies the root element's width/height/title to the native window.
     void applyRootWindowProps(lua::State* state, int rootRef);
@@ -162,7 +162,11 @@ private:
     float m_themeScale = 0.0f; ///< dpiScale() the ImGui style was last built for
     float m_wheelZoom = 0.0f;  ///< Ctrl + wheel notches not yet turned into zoom steps
     FileSnapshot m_snapshot;
-    std::set<std::string> m_loaded; ///< resources the Lua states read or loaded (watched for hot reload)
+    ResourceTime m_snapshotTime; ///< when the scan of m_snapshot started
+    /// The resources the current Lua state read or loaded, and the current theme's fonts: watched for hot reload.
+    /// Each load starts a set of its own (its state holds a pointer to it, see registerResources), which replaces this
+    /// one when the load succeeds: a file the script no longer reads stops being watched. Never null.
+    std::unique_ptr<std::set<std::string>> m_loaded = std::make_unique<std::set<std::string>>();
     std::chrono::steady_clock::time_point m_lastCheck;
 };
 
@@ -272,7 +276,7 @@ int Engine::run() {
     if (applyPendingTheme()) watchThemeFonts();
     syncTitleBar();
     m_window.show();
-    m_snapshot = scanFiles();
+    takeSnapshot();
     m_lastCheck = std::chrono::steady_clock::now();
 
     // On-demand rendering: sleep in waitEvents() until input arrives or the next
@@ -383,7 +387,7 @@ void Engine::syncScale() {
 void Engine::watchThemeFonts() {
     const FontSet& fonts = theme().fonts;
     auto watch = [&](const std::string& name) {
-        if (const auto canonical = normalizeName(name)) m_loaded.insert(*canonical);
+        if (const auto canonical = normalizeName(name)) m_loaded->insert(*canonical);
     };
     watch(fonts.regular);
     watch(fonts.medium);
@@ -494,27 +498,24 @@ void Engine::checkForChanges() {
     m_lastCheck = now;
     // A changed image is decoded again at its next use; no reload needed.
     if (m_images.refresh() > 0) requestFramesFor(settleSeconds);
-    auto snap = scanFiles();
-    // A changed time, a removed file, or a new .lua file is a change. A name that is new only because a script
-    // read it since the last check (a reload, ui.resource.read at runtime) is not.
-    bool changed = false;
-    for (const auto& [name, time] : snap) {
-        const auto it = m_snapshot.find(name);
-        if (it == m_snapshot.end() ? !m_loaded.contains(name) : it->second != time) changed = true;
-    }
-    for (const auto& [name, time] : m_snapshot)
-        if (!snap.contains(name)) changed = true;
-    m_snapshot = std::move(snap);
-    if (changed) m_reload = true;
+    const FileSnapshot before = std::move(m_snapshot);
+    const ResourceTime beforeTakenAt = m_snapshotTime;
+    takeSnapshot();
+    if (resourcesChanged(before, m_snapshot, *m_loaded, beforeTakenAt)) m_reload = true;
 }
 
-Engine::FileSnapshot Engine::scanFiles() const {
+void Engine::takeSnapshot() {
+    m_snapshotTime = ResourceTime::clock::now(); // before the scan: an edit during it counts as after
+    m_snapshot = scanFiles();
+}
+
+FileSnapshot Engine::scanFiles() const {
     const Resources& res = m_config.resources;
     FileSnapshot out;
     for (const auto& prefix : res.prefixes())
         for (auto& name : res.listRecursive(prefix + ":/"))
             if (name.ends_with(".lua")) out.emplace(std::move(name), std::nullopt);
-    for (const auto& name : m_loaded)
+    for (const auto& name : *m_loaded)
         out.emplace(name, std::nullopt);
     for (auto& [name, time] : out)
         time = res.modified(name);
@@ -527,6 +528,8 @@ void Engine::reloadNow() {
     int root = lua::noRef;
     int tick = lua::noRef;
     int overlays = lua::noRef;
+    // What this load reads: a set of its own, so the names only the previous script read drop out (see m_loaded).
+    auto loadedNames = std::make_unique<std::set<std::string>>();
     // A transaction over the host settings: the script starts from the default theme and zoom shortcuts, and when
     // it fails, what it set while loading (the theme, the title, the zoom, the window size, ...) is undone.
     const bool ok = m_settings.reload([&] {
@@ -547,7 +550,7 @@ void Engine::reloadNow() {
 
             // Lua comes from the resources: `require "imlui"` is imlui:/imlui.lua, components are found next to the
             // entry script.
-            luaui::registerResources(state, m_config.resources, &m_loaded);
+            luaui::registerResources(state, m_config.resources, loadedNames.get());
 
             constexpr std::string_view boot =
                 R"(local ui = require("imlui"); return ui.__load(...), ui.__tick, ui.__overlays)";
@@ -572,6 +575,9 @@ void Engine::reloadNow() {
             lua::close(state);          // destroys its instances and detaches the singletons from it
             m_types.detachState(state); // also when the setup failed before install() made the state detach them
             if (m_state) m_types.activate(m_state);
+            // Still watched alongside the running script's: fixing what failed (a data file the new script read,
+            // say) must reload.
+            m_loaded->merge(*loadedNames);
         }
         return loaded;
     });
@@ -580,6 +586,8 @@ void Engine::reloadNow() {
     applyRootWindowProps(state, root);
 
     closeState(m_state);
+    m_loaded = std::move(loadedNames); // after closing the old state, which held the old set
+    watchThemeFonts();                 // the theme in use until the script's own applies (which adds its fonts)
     m_state = state;
     m_rootRef = root;
     m_tickRef = tick;

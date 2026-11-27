@@ -595,8 +595,11 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
    globals). Before it links a singleton that an earlier state had, `install` calls its `scriptReloading()`, while
    the singleton is still linked to the old state: it stops work started for the old script.
 3. Registers the resource loader (`luaui::registerResources`): the `imlui.resource` library and a
-   `package.searchers` entry that finds modules in `imlui:/`. `package.path` keeps Lua's default, for plain Lua
-   libraries; imlui's own files never go through it.
+   `package.searchers` entry that finds modules in `imlui:/`. It also locks `require` to the resources: the stock
+   file, C and all-in-one searchers are removed (only `package.preload` and the resource searchers are left),
+   `package.path` and `package.cpath` are `""` (so `LUA_PATH`/`LUA_CPATH` from the environment are dropped too) and
+   `package.loadlib` is nil. A host is path-free, so a mistyped module name can't load a stray `.lua` from the working
+   folder or a planted DLL; a plain Lua library an app wants goes into its resources like its own scripts.
 4. Runs a boot chunk: `require("imlui")` (`imlui:/imlui.lua`), `ui.__load(entry)` (`app:/main.lua`, run in its
    own environment over `ui.env`, see [Resources](#resources)), and returns the root, `ui.__tick` and
    `ui.__overlays`.
@@ -609,7 +612,15 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
    reload has run the `scriptReloading()` hooks already: the old script keeps running without the work they stopped.
 
 The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`,
-which walks each mount once through `Mount::listFiles`) and for every resource a Lua state read or loaded. Only directory mounts report times; files in immutable mounts
+which walks each mount once through `Mount::listFiles`) and for every resource the current Lua state read or loaded,
+plus the current theme's fonts. Each load records its reads in a set of its own (`registerResources`' `loaded`): on
+success it replaces the watched names (the theme's fonts added back), so a file the new script no longer reads stops
+triggering reloads; after a failure its names are added to the running script's, so fixing what failed reloads.
+Two scans are compared by `resourcesChanged` (`imlui.app.file_snapshot`): a changed time, a removed `.lua` file or a
+new one is a change, a name no longer watched isn't. A name first read since the previous scan (while reloading, or
+by the running script) has no recorded time, so it counts as changed when its time is at or after that scan's start:
+an edit made between the read and the next scan isn't missed, at the cost of one extra reload when the edit came
+just before the read. Only directory mounts report times; files in immutable mounts
 (embedded data, `.pak` archives) never change while the app runs. With the same check, `ImageCache::refresh` drops
 the images whose file changed; they're decoded again at their next use, without a reload.
 
@@ -1109,7 +1120,7 @@ which uses a submodule, is the example).
 | Path | What |
 |---|---|
 | `CMakeLists.txt` | Project setup: `project(imlui VERSION 0.1.0)`, the options `IMLUI_BUILD_TESTS` and `IMLUI_INSTALL` (both default `ON` only at the top level), the CMake helpers, the install folders (`GNUInstallDirs`), `external/`, `src/` (`add_subdirectory(src)`), the tools, the install rules (`IMLUI_INSTALL`), the tests and the `tidy` target (top level only). Paths are relative to the project (`PROJECT_SOURCE_DIR`, `CMAKE_CURRENT_*`), so it works as a subproject; it sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` (`bin/`) and `CMAKE_EXPORT_COMPILE_COMMANDS` only at the top level, and no global flags. |
-| `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`, and the options `IMLUI_DEV_PATHS` and `IMLUI_EMBED_RESOURCES`: default the opposite of `IMLUI_DEV_PATHS`, both `OFF` is a configure error), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`, `ImluiInstall.cmake` and `imluiConfig.cmake.in` (the install rules and the package, see [Install layout](#install-layout)). The functions are global once included, so a parent project calls them after `add_subdirectory`; the installed package's config includes `ImluiResources.cmake` and `ImluiWarnings.cmake` the same way. Each file has an include guard. The sanitizer flags are also usage requirements of `imlui_lua` (so of everything that links imlui), as importing a module needs the flags it was built with; an app includes `ImluiSanitizers.cmake` itself before `add_subdirectory` only to instrument its targets that don't link imlui. |
+| `cmake/` | `ImluiResources.cmake` (`imlui_add_resources`, `imlui_add_pak`, and the options `IMLUI_DEV_PATHS` and `IMLUI_EMBED_RESOURCES`: default the opposite of `IMLUI_DEV_PATHS`, both `OFF` is a configure error; `IMLUI_DEV_PATHS=ON` in a `Release`/`MinSizeRel` build is a configure warning unless `IMLUI_DEV_PATHS_RELEASE_OK`), `ImluiWarnings.cmake` (`imlui_set_warnings`, `imlui_set_hardening`), `ImluiSanitizers.cmake` (`IMLUI_SANITIZERS`), `ImluiTidy.cmake`, `ImluiInstall.cmake` and `imluiConfig.cmake.in` (the install rules and the package, see [Install layout](#install-layout)). The functions are global once included, so a parent project calls them after `add_subdirectory`; the installed package's config includes `ImluiResources.cmake` and `ImluiWarnings.cmake` the same way. Each file has an include guard. The sanitizer flags are also usage requirements of `imlui_lua` (so of everything that links imlui), as importing a module needs the flags it was built with; an app includes `ImluiSanitizers.cmake` itself before `add_subdirectory` only to instrument its targets that don't link imlui. |
 | `src/CMakeLists.txt` | The library targets: `imlui_lua` (`wrap/lua.cppm`), `imlui_glob` (`imlui/resources/glob.cppm`, shared with the resource tools), `imlui_core` (every other `.cppm` under `src/`, globbed, and the implementation unit `imlui/app/config.cpp`), `imlui` (alias `imlui::imlui`: the library's own files, `imlui_add_resources(imlui resources/resources.lua NAME imlui)`, and `imlui/app/default_config.cpp`, linking `imlui_core`), with `IMLUI_INSTALL=ON` the install's embedded copy `imlui_files_install` (see [Embedding or not](#embedding-or-not)), and their install rules (CMake records a module file set's install folder only from rules in the target's own directory). |
 | `src/imlui/`, `src/wrap/` | The library's modules (see the module map below). |
 | `src/resources/` | The library's resources: `resources.lua` (the manifest), the Lua side (`imlui.lua`) and the editor definitions of the DSL (`definitions/imlui.lua`, which `--lua-defs` copies out), embedded at `imlui:/`. No `.cppm` here, so the module globs never see it. |
@@ -1179,7 +1190,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `lua.stack_guard` | `lua::StackGuard`: restores the stack top on a normal scope exit (not while a Lua error unwinds it) |
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
-| `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink), `setLevel` |
+| `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink, and the replaced one is kept for writers still using it, so writing takes no lock), `setLevel`, `enabled(level)` (spdlog's `should_log`: the `info`/`debug`/... templates check it before formatting, and Lua's `log.*` through `native.logEnabled`) |
 | `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
 | `imlui.platform.process` | `executablePath()` (from the OS: `GetModuleFileNameW`, `/proc/self/exe`), `processArguments(argc, argv)` (`ProcessArguments`: the arguments as paths, from the UTF-16 command line on Windows when `argv` is the process's own, and whether it is) |
 | `imlui.platform.stack` | `stackRemaining()`: the bytes of the calling thread's stack left below the caller (`GetCurrentThreadStackLimits` on Windows, `pthread_getattr_np` on Linux; nullopt elsewhere), which the renderer checks per level (`Renderer::stackReserve`) |
@@ -1361,6 +1372,7 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.app.config` | `EngineConfig` (resources, entry name, window config, hot reload, `exitAfterFrames`, `luaDefinitions`: `--lua-defs <dir>` / `IMLUI_LUA_DEFS`), `defaultConfig(argc, argv, std::vector<ResourcePackage>)` and `defaultConfig(argc, argv, {a::packages(), b::packages()})`, `mountPaks(resources, folder, skipPrefix)`. Declarations only: the definitions are in the implementation units `config.cpp` (in `imlui_core`) and `default_config.cpp` (in the target that holds the library's files), so the module has no private module fragment, which would forbid other units |
 | `imlui.app.host_settings` | `HostSettings`: what a script sets on its host through `imlui.native` (`install(hooks)`: title, zoom, zoom shortcuts, window size; the zoom and size are taken between frames with `takePendingZoom`/`takePendingWindowSize`), and `reload(attempt)`: a load as a transaction that starts from the default theme and zoom shortcuts and, when it fails, puts the theme, culling, title, zoom shortcuts and pending zoom and size back |
+| `imlui.app.file_snapshot` | `FileSnapshot` (watched resource names and their modification times) and `resourcesChanged(before, after, loaded, beforeTakenAt)`: the rule the hot reload compares two scans by (see [Hot reload](#hot-reload)) |
 | `imlui.app.engine` | `Engine`: window, Lua state, frame loop, hot reload, error overlay; `registerType<T>`, `registerSingleton`, `types()`, `resources()`, `post` (thread-safe), `requestQuit`, `requestReload`, `window()`, `writeLuaDefinitions(dir)`, `run()` (writes the Lua definitions instead, without a window, when `EngineConfig::luaDefinitions` is set) |
 | `imlui` | Umbrella for apps: `import imlui;` |
 

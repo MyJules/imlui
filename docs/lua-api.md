@@ -21,6 +21,8 @@ A free name `x` in a script is looked up in this order:
    style (see [Element ids](#element-ids)).
 4. **Any other Capitalized name** becomes an element constructor (`ui.element(name)`), so elements registered
    from C++ work without any Lua changes. For a [registered C++ type](extending.md) it's a typed constructor.
+   The constructor stays below the ids: a name read before an element registers it as an id (a binding that runs
+   before a `Loader` builds `Card { id = "Details" }`) is the id from then on, not stuck as a constructor.
 
 ```lua
 TextField { id = "nameField", label = "Name", text = "" },
@@ -267,8 +269,11 @@ Inside a UI script, `require "Name"` first looks for `Name.lua` (then `Name/init
 `a/b.lua`. Module names are global (one `package.loaded` entry per name), so `require "pages.home"` means
 `app:/pages/home.lua` from every script; relative resource names *inside* `pages/home.lua` (`ui.resource`, `Image`,
 theme fonts) resolve against `app:/pages/`. Results are cached in `package.loaded` like any `require`. `import` is an alias of `require`. If the
-module isn't there, it's looked up in `imlui:/` (in the global environment), then on Lua's default `package.path`.
-Errors and tracebacks name the file as a resource: `app:/StatCard.lua:3: ...`.
+module isn't there, it's looked up in `imlui:/` (in the global environment), and nowhere else: `require` never reads
+files from disk or loads DLLs (`package.path` and `package.cpath` are `""`, `package.loadlib` is nil, and only
+`package.preload` is searched besides the resources), so a plain Lua library goes into the app's resources too. A
+module that isn't found is an error that lists each resource name looked at. Errors and tracebacks name the file as a
+resource: `app:/StatCard.lua:3: ...`.
 
 ```lua
 -- StatCard.lua
@@ -730,7 +735,8 @@ Logging goes through spdlog on the C++ side, with the source tag `[lua]`.
 
 | Function | Description |
 |---|---|
-| `log.trace/debug/info/warn/error(fmt, ...)` | `string.format(fmt, ...)` when arguments are given, otherwise `tostring(fmt)`. |
+| `log.trace/debug/info/warn/error(fmt, ...)` | `string.format(fmt, ...)` when arguments are given, otherwise `tostring(fmt)`. At a level that's off (the host's `log::setLevel`; debug and up by default) the message isn't built: no `string.format`, no `__tostring`. `print(...)` logs at info the same way. |
+| `log.enabled(level) -> bool` | Whether `log[level]` logs (`"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`): check it before gathering an expensive message. |
 | `print(...)` | In UI scripts, logs its tab-joined arguments at info level. |
 
 ```lua
@@ -795,7 +801,8 @@ it. The ones not wrapped are marked **native only**.
 | `native.quit()` | Backs `quit()`. |
 | `native.reload()` | Backs `reload()`. |
 | `native.imguiVersion() -> string` | Backs `imguiVersion()`. |
-| `native.log(level, message)` | Backs `log.*`. `level` is `"trace"`, `"debug"`, `"info"`, `"warn"` or `"error"` (anything else logs at info). |
+| `native.log(level, message)` | Backs `log.*`. `level` is `"trace"`, `"debug"`, `"info"`, `"warn"` or `"error"` (anything else logs at info). At a level that's off, `message` isn't converted (its `__tostring` doesn't run). |
+| `native.logEnabled(level) -> bool` | Backs `log.enabled()`: whether `native.log(level, ...)` logs. |
 | `native.injectMouse(x, y, down?, wheel?)` | **Native only.** Feeds ImGui a mouse event for scripted UI tests: position in window coordinates, an optional left-button state, and an optional vertical wheel delta. See [Development](development.md#scripted-ui-tests). |
 | `native.injectKey(key, down, ctrl?, shift?, alt?)` | **Native only.** Feeds ImGui a key event for scripted UI tests, with the modifier states (sent first, so the key sees them). `key` is an ImGui key name, case-insensitive: `"Escape"`, `"Enter"`, `"Tab"`, `"Space"`, `"A"`..`"Z"`, `"0"`..`"9"`, `"F1"`..`"F12"`, `"Equal"`, `"Minus"`, `"LeftArrow"`, `"Keypad1"`, ..., or an alias (`"Esc"`, `"Return"`, `"Left"`/`"Right"`/`"Up"`/`"Down"`, `"Ctrl"`, `"Shift"`, `"Alt"`, `"="`, `"-"`). An unknown name raises an error. Starts the same settle period as real input. A press and a release sent together are seen in consecutive frames. |
 | `native.setScopeHooks(scopes, callIn)` | **Internal.** Called once by the DSL: hands C++ the element scope table and the function that runs an element's function in its id scope, so C++ calls of handlers and bindings run in their instance's scope ([Architecture](architecture.md)). Not for scripts. |

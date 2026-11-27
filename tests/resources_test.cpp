@@ -681,6 +681,39 @@ TEST_F(LuaResourcesTest, RequireFindsInitFilesAndReportsWhatItTried) {
     )");
 }
 
+// `require` reads resources only: Lua's stock file searcher (which on Windows looks in `.\?.lua` first) and the C
+// searchers (DLLs on package.cpath) are gone, and package.path, package.cpath and package.loadlib can't bring them
+// back. Run from a folder holding Stray.lua, the stock searcher would have found it.
+TEST_F(LuaResourcesTest, RequireNeverReadsFilesOrLoadsLibraries) {
+    test::TempDir cwd;
+    cwd.write("Stray.lua", "strayRan = true; return {}");
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(cwd.path());
+    const std::string error = m_frame.run(R"(
+        assert(package.path == "" and package.cpath == "", "no search paths")
+        assert(package.loadlib == nil, "no DLL loading")
+        assert(#package.searchers == 3, "preload, the script folder's and imlui:/'s: " .. #package.searchers)
+
+        local ok, err = pcall(require, "Stray")
+        assert(not ok and strayRan == nil, "a .lua file in the current folder isn't a module")
+        assert(err:find("module 'Stray' not found", 1, true), err)
+        assert(err:find("no field package.preload['Stray']", 1, true), err)
+        assert(err:find("no resource 'imlui:/Stray.lua'", 1, true), err)
+        assert(not err:find("no file", 1, true), "no file searcher was asked: " .. err)
+
+        -- A script that sets the path finds nothing either: no searcher reads it.
+        package.path = "./?.lua"
+        ok = pcall(require, "Stray")
+        assert(not ok and strayRan == nil, "package.path is not searched")
+
+        -- package.preload, for modules a host registers, still works.
+        package.preload.Preloaded = function() return "preloaded" end
+        assert(require("Preloaded") == "preloaded")
+    )");
+    std::filesystem::current_path(previous);
+    EXPECT_EQ(error, "");
+}
+
 TEST_F(LuaResourcesTest, ErrorsNameTheResourceAndLine) {
     run(R"(
         ui.__load("app:/main.lua")

@@ -7,7 +7,10 @@
 // C++ code passes the call through scopedArgs().
 export module imlui.lua.element_scope;
 
+import std;
+
 import lua;
+import imlui.lua.errors;
 
 export namespace imlui::luaui {
 
@@ -16,7 +19,10 @@ void setScopeHooks(lua::State* state, int scopes, int callIn);
 
 /// Prepares the call of a function of the element table at `element`: the function and its `nargs` arguments are on
 /// top of the stack. When the element was built in a scope, inserts callIn and the scope below the function and
-/// returns `nargs + 2` (call with that); otherwise leaves the stack as it is and returns `nargs`.
+/// returns `nargs + 2` (call with that); otherwise leaves the stack as it is and returns `nargs`. When the stack has
+/// no room for the two (a stack of calls this deep, or out of memory), reports a stack overflow and returns `nargs`:
+/// the call goes ahead outside the scope, which is likely to overflow in turn (and be reported by the protected call)
+/// rather than write past the stack here.
 [[nodiscard]] int scopedArgs(lua::State* state, int element, int nargs);
 
 } // namespace imlui::luaui
@@ -49,7 +55,10 @@ void setScopeHooks(lua::State* state, int scopes, int callIn) {
 int scopedArgs(lua::State* state, int element, int nargs) {
     element = lua::absindex(state, element);
     const int fn = lua::gettop(state) - nargs;
-    lua::checkstack(state, 3);
+    if (!lua::checkstack(state, 3)) {
+        reportError("stack overflow (no room to run an element's function in its id scope)");
+        return nargs;
+    }
     if (lua::rawgetp(state, lua::registryIndex, &keys.scopes) != lua::Type::Table) {
         lua::pop(state);
         return nargs;

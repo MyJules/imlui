@@ -316,7 +316,7 @@ Presets (`CMakePresets.json`), all clang + Ninja, build into `build/<preset>/`:
 | Preset | What |
 |---|---|
 | `clang-debug` | Debug, `/MDd` (STL checked iterators), `-ftrapv` on our targets. The everyday build. |
-| `clang-release` | Release. Build it too before merging: optimization can surface other warnings. |
+| `clang-release` | Release, still a dev build (`IMLUI_DEV_PATHS=ON`, with `IMLUI_DEV_PATHS_RELEASE_OK=ON` so the configure doesn't warn about it). Build it too before merging: optimization can surface other warnings. |
 | `clang-ship` | Release with `IMLUI_DEV_PATHS=OFF`: everything embedded, no source paths, as shipped or installed. |
 | `clang-asan` | Debug code with AddressSanitizer + UndefinedBehaviorSanitizer on every target, vendored ones included. |
 | `clang-fuzz` | RelWithDebInfo with ASan + UBSan + libFuzzer coverage on every target, and the libFuzzer executables. See [Fuzzing](#fuzzing). |
