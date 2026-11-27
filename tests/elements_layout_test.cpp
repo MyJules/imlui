@@ -687,6 +687,45 @@ TEST_F(LayoutTest, RowWidthBoundsAWrappingText) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// A Text with a `width` keeps that width whatever it says: what follows it in a Row doesn't move when the text
+// changes (a counter in a proportional font), a longer line is cut at the box (an ellipsis) instead of pushing the
+// row, `align` places the line in the box, and wrapping text wraps at the box. Its intrinsic size is what it takes.
+TEST_F(LayoutTest, ATextWithAWidthKeepsItWhateverItSays) {
+    run(R"(
+        s = state { label = "1" }
+        long = "The quick brown fox jumps over the lazy dog, again and again and again."
+        after = Probe { w = 10, h = 10 }
+        root = Column {
+            Row { spacing = 0, Last { id = "fixed", Text { text = function() return s.label end, width = 140 } },
+                  after },
+            Last { id = "centered", Text { "ab", width = 200, align = "center" } },
+            Last { id = "wrapped", Text { long, width = 150, wrap = true } },
+            Measure { id = "m", Text { "x", width = 140 }, Text { long, width = 150, wrap = true } },
+        })");
+    m_h.renderFrames("root", 3);
+    const float x = probe("after").pos().x;
+    EXPECT_FLOAT_EQ(lastSize("fixed").x, 140.0f);
+    for (const char* label : {"'11111'", "'W'", "long", "''"}) {
+        run(std::string{"s.label = "} + label);
+        m_h.renderFrames("root", 2);
+        EXPECT_FLOAT_EQ(probe("after").pos().x, x) << label;
+        EXPECT_FLOAT_EQ(lastSize("fixed").x, 140.0f) << label;
+    }
+    EXPECT_FLOAT_EQ(lastSize("centered").x, 200.0f);
+    const ImVec2 wrapped = lastSize("wrapped");
+    EXPECT_FLOAT_EQ(wrapped.x, 150.0f);
+    EXPECT_GT(wrapped.y, 2.0f * lastSize("centered").y); // several lines
+    Measure* m = m_h.instance<Measure>("m");
+    ASSERT_NE(m, nullptr);
+    ASSERT_EQ(m->results.size(), 2u);
+    for (const Measure::Result& r : m->results) {
+        ASSERT_TRUE(r.intrinsic);
+        EXPECT_FLOAT_EQ(r.intrinsic->x, r.rendered.x);
+        EXPECT_FLOAT_EQ(r.intrinsic->y, r.rendered.y);
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(LayoutTest, RowSkipsHiddenAndRendersNonVisualChildren) {
     run(R"(
         fired = 0

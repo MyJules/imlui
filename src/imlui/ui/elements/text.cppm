@@ -12,6 +12,7 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.enum_names;
+import imlui.ui.layout_box;
 import imlui.ui.props;
 
 export namespace imlui {
@@ -21,6 +22,8 @@ export namespace imlui {
 /// Props:   text = "" (positional), style = "bodyLarge", color = unset (the theme's text color), wrap = false,
 ///          align = "start" ("center", "end"; ignored while wrapping; aligned text fills), font = "" (a font the
 ///          theme declares, drawn at the style's size; "" keeps the type scale's face)
+/// Raw:     width (a box of its own: unwrapped text aligns in it and is cut with an ellipsis when longer, wrapping
+///          text wraps at it; 0, the default: the text's own width)
 class Text final : public Element {
 public:
     static void declare(TypeBuilder<Text>& type);
@@ -86,14 +89,49 @@ void Text::declare(TypeBuilder<Text>& type) {
         .fillsWidthWhen(&Text::followsWidth); // takes a share of a Row, and wraps or aligns in it
 }
 
-void Text::render(Frame&) {
-    FontFaceScope face{m_font};
-    md::text(m_text, m_style, m_color, m_wrap, Frame::alignFactor(m_align));
+namespace {
+
+/// Whether `text` lays out in a box of its own (`width` set): not unset, and not the plain fill that wrapping or
+/// aligned text takes anyway (size() answers -1 for an unset width there), which the default path already is.
+bool boxed(const Frame& frame, const Text& text) {
+    const float w = frame.size("width");
+    return w != 0.0f && !(w == -1.0f && text.followsWidth());
 }
 
-std::optional<ImVec2> Text::intrinsicSize(const Frame&, float maxWidth) {
+} // namespace
+
+void Text::render(Frame& frame) {
     FontFaceScope face{m_font};
-    return md::textSize(m_text, m_style, m_wrap, Frame::alignFactor(m_align), maxWidth);
+    if (!boxed(frame, *this)) {
+        md::text(m_text, m_style, m_color, m_wrap, Frame::alignFactor(m_align));
+        return;
+    }
+    // A box of its own: as wide whatever the text, so a value that changes doesn't move what follows.
+    const float width = frame.resolvedWidth(0.0f);
+    if (!m_wrap) {
+        md::textIn(m_text, m_style, m_color, width, Frame::alignFactor(m_align));
+        return;
+    }
+    // Wrapping: at the box's edge, in a group the box's width (a Column's way of reserving it).
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::BeginGroup();
+    ImGui::Dummy({width, 0.0f});
+    ImGui::SetCursorScreenPos(p);
+    {
+        const layout::BoxScope box{layout::boxTo(p.x + width)};
+        md::text(m_text, m_style, m_color, true);
+    }
+    ImGui::EndGroup();
+}
+
+std::optional<ImVec2> Text::intrinsicSize(const Frame& frame, float maxWidth) {
+    FontFaceScope face{m_font};
+    if (!boxed(frame, *this)) return md::textSize(m_text, m_style, m_wrap, Frame::alignFactor(m_align), maxWidth);
+    const float width = frame.widthIn(maxWidth, 0.0f);
+    if (!m_wrap) return md::textInSize(m_text, m_style, width);
+    const std::optional<ImVec2> wrapped = md::textSize(m_text, m_style, true, 0.0f, width);
+    if (!wrapped) return std::nullopt;
+    return ImVec2{width, wrapped->y};
 }
 
 const std::string& Text::text() const { return m_text; }
