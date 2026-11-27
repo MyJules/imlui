@@ -31,6 +31,7 @@ import imlui.widgets.text_field;
 import imlui.skin.fluent.button;
 // ---- end (A) imports
 // ---- (B) inputs: imports
+import imlui.skin.fluent.inputs;
 // ---- end (B) imports
 // ---- (C) lists, menus, navigation, containers, messages, chrome: imports
 import imlui.skin.fluent.chrome;
@@ -62,6 +63,16 @@ public:
 
     // ======== (B) inputs ========
     // textField, spinBox, dropdown, colorField (composites: drawn whole, not through md::)
+    md::TextFieldResult textField(const char* id, std::string& value, const md::TextFieldOptions& o) const override;
+    [[nodiscard]] ImVec2 textFieldSize(const md::TextFieldOptions& o) const override;
+    bool spinBox(const char* id, double* v, double vmin, double vmax, double step, int decimals,
+                 std::string_view label, float width, bool outlined) const override;
+    [[nodiscard]] ImVec2 spinBoxSize(std::string_view label, float width, bool outlined) const override;
+    bool dropdown(const char* id, const std::vector<std::string>& items, int* current, const md::DropdownOptions& o,
+                  const std::vector<std::string>& icons) const override;
+    [[nodiscard]] ImVec2 dropdownSize(const md::DropdownOptions& o) const override;
+    bool colorField(const char* id, Color* c, std::string_view label, bool alpha, float width) const override;
+    [[nodiscard]] ImVec2 colorFieldSize(Color c, std::string_view label, float width) const override;
     // ======== end (B) ========
 
     // ======== (C) lists, menus, navigation, containers, messages; element chrome ========
@@ -96,6 +107,28 @@ ImVec2 FluentSkin::buttonSize(const char* label, md::ButtonVariant variant, ImVe
 // ======== end (A) ========
 
 // ======== (B) inputs ========
+md::TextFieldResult FluentSkin::textField(const char* id, std::string& value, const md::TextFieldOptions& o) const {
+    return fluent::textField(look(), id, value, o);
+}
+ImVec2 FluentSkin::textFieldSize(const md::TextFieldOptions& o) const { return fluent::textFieldSize(look(), o); }
+bool FluentSkin::spinBox(const char* id, double* v, double vmin, double vmax, double step, int decimals,
+                         std::string_view label, float width, bool outlined) const {
+    return fluent::spinBox(look(), id, v, vmin, vmax, step, decimals, label, width, outlined);
+}
+ImVec2 FluentSkin::spinBoxSize(std::string_view label, float width, bool outlined) const {
+    return fluent::spinBoxSize(look(), label, width, outlined);
+}
+bool FluentSkin::dropdown(const char* id, const std::vector<std::string>& items, int* current,
+                          const md::DropdownOptions& o, const std::vector<std::string>& icons) const {
+    return fluent::dropdown(look(), id, items, current, o, icons);
+}
+ImVec2 FluentSkin::dropdownSize(const md::DropdownOptions& o) const { return fluent::dropdownSize(look(), o); }
+bool FluentSkin::colorField(const char* id, Color* c, std::string_view label, bool alpha, float width) const {
+    return fluent::colorField(look(), id, c, label, alpha, width);
+}
+ImVec2 FluentSkin::colorFieldSize(Color c, std::string_view label, float width) const {
+    return fluent::colorFieldSize(look(), c, label, width);
+}
 // ======== end (B) ========
 
 // ======== (C) lists, menus, navigation, containers, messages; element chrome ========

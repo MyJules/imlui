@@ -97,6 +97,10 @@ Fluent-drawn so far; the other controls are being added, and until then they dra
 | What | Fluent look |
 |---|---|
 | `Button` | 32dp high (`controlHeight`), `paddingX` on each side, 4dp corners (`controlRadius`). `filled` and `tonal` are Fluent's **accent** button (an accent outline with `tokens = { buttonFill = "outline" }`), `outlined` and `elevated` the **standard** button (a subtle neutral fill, a 1dp stroke with a darker bottom edge), `text` the **subtle** button (transparent at rest), `fab` an accent button 16dp taller with the overlay radius (square without a label). Hover and press change the fill (no state layer); disabled uses Fluent's disabled fills. Keyboard focus (Tab, arrows; Space or Enter clicks) shows Fluent's focus rectangle: a `focusStrokeWidth` outer stroke `focusOffset` outside the button and a thin inner one. A mouse click shows none. |
+| `TextField`, `TextArea` | Fluent's text box. The `label` is a header above the box (body text, `gap` below it), the box `controlHeight` high (a `TextArea`'s `height`, 120dp by default, is the header and the box together), `supportingText` a description 4dp below it in the secondary text color (`error`: the scheme's `error` role). The box: the control fill (hover: the hover fill; while editing: `controlInputActive`), a `strokeWidth` border whose bottom edge is `controlStrongStroke`, `controlRadius` corners; while editing an accent underline `inputUnderlineWidth` thick at the bottom (`tokens = { inputUnderline = false }`: an accent border instead, and a `controlBottomStroke` bottom edge); `error` makes the bottom edge (and the underline) the error color. Text in body text, `paddingX` in, the placeholder in the secondary text color (shown whenever the text is empty, as the label is outside). `leadingIcon` at `iconSize` inside the left padding; `trailingIcon` (or a password's reveal toggle) a subtle inner button 30dp wide, 4dp inside the box's right edge, not a tab stop. Natural width 280dp, as Material's. `variant` doesn't change the look. Arrow-key focus without editing shows the focus rectangle; editing shows the underline. |
+| `SpinBox` | Fluent's number box with inline spin buttons: the text box (header, box, underline as above) with two subtle Fluent buttons inside its right edge, up (increment) then down (decrement), each 30dp wide and `controlHeight` - 8dp high, disabled at the range's end. Natural width 200dp. |
+| `ComboBox` | Fluent's combo box: a standard control (the standard button's fills and stroke, pressed while open), the header and description as for the text box, the selected item in body text after `paddingX` (and the `leadingIcon`), a chevron at the right. It opens a flyout 4dp below (the `flyout` fill, a `flyoutStroke` border, `overlayRadius` corners, 2dp padding, at least the control's width, scrolling past 8 rows): rows `controlHeight` high with a subtle highlight inset 4dp x 2dp (`controlRadius`), icons from `icons`, and on the selected row a subtle fill and a 3 x 16dp accent pill at its left. Keyboard: the control and the rows are navigable and show the focus rectangle. Natural width 240dp. |
+| `ColorPicker` | A Fluent drop-down button: a standard control with a swatch (`controlHeight` - 12dp square, half the control radius, a `controlStrongStroke` border), the hex value and a chevron, the `label` as a header. It opens a flyout (as the combo box's, 16dp padding) with ImGui's color picker (240dp, in the Fluent ImGui style) and a Fluent text box for the hex value. |
 | `ApplicationWindow` | Fluent's solid background (unless `imgui = { WindowBg = ... }` sets it). |
 | `Window` | A layer over the background, a 1dp divider-colored border, title bars of the background color. |
 | `ScrollView` | The overlay radius (8dp) when it has no `rounding`. |
@@ -153,19 +157,22 @@ module `imlui.theme.fluent_colors`). Fluent's neutral brushes are white or black
 | `accentStroke` / `accentBottomStroke` | white 8% / black 14% | white 8% / black 40% | an accent control's border and its darker bottom edge |
 | `accentText` | `primary` | `primary` | hyperlinks, an outline accent button |
 | `control` / `controlHover` / `controlPressed` / `controlDisabled` | white 6% / 8% / 3% / 4% | white 70% / 50% / 30% / 30% | standard controls |
-| `controlInputActive` | black 70% | white | a focused text input |
+| `controlInputActive` | black 70% | white | a text input while editing |
 | `controlStroke` / `controlBottomStroke` | white 7% / white 9% | black 6% / black 16% | a standard control's border and bottom edge |
-| `controlStrongStroke` / `controlStrongStrokeDisabled` | white 54% / 16% | black 45% / 22% | unchecked checkbox and radio outlines, slider tracks, scrollbar thumbs |
+| `controlStrongStroke` / `controlStrongStrokeDisabled` | white 54% / 16% | black 45% / 22% | unchecked checkbox and radio outlines, slider tracks, scrollbar thumbs, a text input's bottom edge |
 | `controlAlt` / `controlAltHover` / `controlAltPressed` | black 10% / white 4% / white 7% | black 2% / 6% / 9% | an unchecked checkbox's or radio's fill |
 | `subtle` / `subtleHover` / `subtlePressed` | transparent / white 6% / white 4% | transparent / black 4% / black 2% | text buttons, list rows, menu items |
 | `text` / `textSecondary` / `textTertiary` / `textDisabled` | white / 79% / 54% / 36% | black 90% / 61% / 45% / 36% | text |
 | `background` | `surfaceContainer` | `surfaceContainerLow` | the window background (Mica's solid fallback) |
 | `layer` | `background` 60% toward `surfaceContainerHigh` | `background` 50% toward white | content layers, `Window` |
 | `card` / `cardStroke` | white 5% / black 10% | white 70% / black 6% | cards |
-| `flyout` / `flyoutStroke` | `surfaceContainerHigh` / black 20% | `background` 60% toward white / black 6% | menus, popups, tooltips, dialogs |
+| `flyout` / `flyoutStroke` | `surfaceContainerHigh` / black 20% | `background` 60% toward white / black 6% | menus, popups, tooltips, dialogs, combo box and color flyouts |
 | `smoke` | black 30% | black 30% | the dim behind a modal |
 | `divider` | white 8% | black 8% | dividers, table rules |
 | `focusOuter` / `focusInner` | `text` / black 70% | `text` / white 70% | the keyboard focus rectangle |
+
+Fluent's critical color (input validation: an `error` text field, combo box or description) isn't one of these: it is
+the scheme's `error` role.
 
 ## Scheme generation
 
