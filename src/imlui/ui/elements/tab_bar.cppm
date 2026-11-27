@@ -9,6 +9,7 @@ import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 import imlui.ui.props;
 import imlui.ui.elements.tab;
 
@@ -30,12 +31,12 @@ public:
     /// 1-based index of the shown tab among the visible ones.
     [[nodiscard]] int currentIndex() const;
     void setCurrentIndex(int index);
-    [[nodiscard]] const std::string& variant() const;
-    void setVariant(std::string variant);
+    [[nodiscard]] md::TabsVariant variant() const;
+    void setVariant(md::TabsVariant variant);
 
 private:
     int m_currentIndex = 1;
-    std::string m_variant = "primary";
+    md::TabsVariant m_variant = md::TabsVariant::Primary;
 };
 
 } // namespace imlui
@@ -72,7 +73,7 @@ void TabBar::render(Frame& frame) {
     });
     const int last = std::max(0, static_cast<int>(tabs.size()) - 1);
     int cur = std::clamp(indexValue(m_currentIndex) - 1, 0, last); // indexValue: no overflow on INT_MIN
-    if (skin().tabs("##tabs", tabs, &cur, m_variant == "secondary", frame.size("width"))) {
+    if (skin().tabs("##tabs", tabs, &cur, m_variant == md::TabsVariant::Secondary, frame.size("width"))) {
         m_currentIndex = cur + 1;
         notify("currentIndex");
         emit("onCurrentChanged", m_currentIndex);
@@ -93,7 +94,7 @@ void TabBar::render(Frame& frame) {
 
 int TabBar::currentIndex() const { return m_currentIndex; }
 void TabBar::setCurrentIndex(int index) { m_currentIndex = index; }
-const std::string& TabBar::variant() const { return m_variant; }
-void TabBar::setVariant(std::string variant) { m_variant = std::move(variant); }
+md::TabsVariant TabBar::variant() const { return m_variant; }
+void TabBar::setVariant(md::TabsVariant variant) { m_variant = variant; }
 
 } // namespace imlui

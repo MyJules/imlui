@@ -10,6 +10,7 @@ import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 import imlui.types.type_info;
 
 export namespace imlui {
@@ -34,8 +35,8 @@ public:
     void setIcon(std::optional<std::string> icon);
     [[nodiscard]] const std::optional<std::string>& checkedIcon() const; ///< the icon while checked
     void setCheckedIcon(std::optional<std::string> icon);
-    [[nodiscard]] const std::string& variant() const; ///< "standard", "filled", "tonal", "outlined"
-    void setVariant(std::string variant);
+    [[nodiscard]] md::IconButtonVariant variant() const;
+    void setVariant(md::IconButtonVariant variant);
     [[nodiscard]] bool checked() const;
     void setChecked(bool checked);
     [[nodiscard]] const std::optional<Color>& color() const; ///< icon tint
@@ -45,7 +46,7 @@ private:
     std::string m_text;
     std::optional<std::string> m_icon;
     std::optional<std::string> m_checkedIcon;
-    std::string m_variant = "standard";
+    md::IconButtonVariant m_variant = md::IconButtonVariant::Standard;
     bool m_checked = false;
     std::optional<Color> m_color;
 };
@@ -87,7 +88,7 @@ void IconButton::render(Frame& frame) {
     const bool checked = m_checked;
     std::string icon = m_icon.value_or(m_text);
     if (checkable && checked && m_checkedIcon) icon = *m_checkedIcon;
-    const bool clicked = skin().iconButton("##ib", icon, md::iconButtonVariant(m_variant), checkable, checked, m_color);
+    const bool clicked = skin().iconButton("##ib", icon, m_variant, checkable, checked, m_color);
     if (clicked) {
         if (checkable) {
             m_checked = !checked;
@@ -106,8 +107,8 @@ const std::optional<std::string>& IconButton::icon() const { return m_icon; }
 void IconButton::setIcon(std::optional<std::string> icon) { m_icon = std::move(icon); }
 const std::optional<std::string>& IconButton::checkedIcon() const { return m_checkedIcon; }
 void IconButton::setCheckedIcon(std::optional<std::string> icon) { m_checkedIcon = std::move(icon); }
-const std::string& IconButton::variant() const { return m_variant; }
-void IconButton::setVariant(std::string variant) { m_variant = std::move(variant); }
+md::IconButtonVariant IconButton::variant() const { return m_variant; }
+void IconButton::setVariant(md::IconButtonVariant variant) { m_variant = variant; }
 bool IconButton::checked() const { return m_checked; }
 void IconButton::setChecked(bool checked) { m_checked = checked; }
 const std::optional<Color>& IconButton::color() const { return m_color; }

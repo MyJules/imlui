@@ -28,6 +28,7 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
+import imlui.widgets.top_app_bar;
 
 using namespace imlui;
 
@@ -251,7 +252,7 @@ TEST_F(NavigationElementsTest, TopAppBarRightAlignsActionsAndEmitsOnNavigation) 
     const TopAppBar* bar = m_h.instance<TopAppBar>("bar");
     EXPECT_EQ(bar->title(), "Inbox");
     EXPECT_EQ(bar->navigationIcon(), "menu");
-    EXPECT_EQ(bar->variant(), "small");
+    EXPECT_EQ(bar->variant(), md::TopAppBarVariant::Small);
     EXPECT_FALSE(bar->color().has_value());
 
     const Rect b = rects["bar"];
@@ -266,6 +267,23 @@ TEST_F(NavigationElementsTest, TopAppBarRightAlignsActionsAndEmitsOnNavigation) 
     click({b.min.x + 4.0f + 24.0f, b.min.y + 32.0f}); // the 48dp navigation icon button
     check("navigations == 1");
     expectNoErrors();
+}
+
+// A variant is one of the TopAppBarVariant names: a typo is reported with the names, and the bar keeps its variant.
+TEST_F(NavigationElementsTest, TopAppBarReportsAnUnknownVariant) {
+    run(R"(root = TopAppBar { title = "T", variant = "large" })");
+    frames();
+    EXPECT_EQ(m_h.instance<TopAppBar>("root")->variant(), md::TopAppBarVariant::Large);
+    run(R"(root.variant = "huge")");
+    frames();
+    EXPECT_EQ(m_h.instance<TopAppBar>("root")->variant(), md::TopAppBarVariant::Large);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_TRUE(hasError(
+        R"(TopAppBar.variant: TopAppBarVariant ('small'|'center'|'medium'|'large') expected, got string "huge")"))
+        << luaui::errors()[0];
+    run("root.variant = nil");
+    frames();
+    EXPECT_EQ(m_h.instance<TopAppBar>("root")->variant(), md::TopAppBarVariant::Small);
 }
 
 // An action that doesn't render (its constructor threw) submits no item: the bar read the previous action's rect as

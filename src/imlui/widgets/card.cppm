@@ -13,10 +13,8 @@ import imlui.widgets.surface;
 
 export namespace imlui::md {
 
+/// A card's container style; its Lua names ("elevated", "filled", "outlined") are in imlui.ui.enum_names.
 enum class CardVariant { Elevated, Filled, Outlined };
-
-/// "elevated" (default), "filled", "outlined".
-[[nodiscard]] CardVariant cardVariant(std::string_view n);
 
 /// Begins a card container (auto-height unless `height` > 0). Pair with endCard(), also when it returns false.
 /// `width` follows resolveSize (itemWidth): 0 is the natural 320dp, -1 fills (the Card element passes -1 when its
@@ -56,12 +54,6 @@ void dropStale() {
 }
 
 } // namespace
-
-CardVariant cardVariant(std::string_view n) {
-    if (n == "filled") return CardVariant::Filled;
-    if (n == "outlined") return CardVariant::Outlined;
-    return CardVariant::Elevated;
-}
 
 bool beginCard(const char* id, CardVariant v, float width, float padding, float height, std::optional<Color> color,
                float rounding) {

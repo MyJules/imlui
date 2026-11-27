@@ -27,6 +27,7 @@ import imlui.widgets.snackbar;
 import imlui.widgets.surface;
 import imlui.widgets.text;
 import imlui.test.headless_frame;
+import imlui.widgets.top_app_bar;
 
 using namespace imlui;
 
@@ -367,11 +368,14 @@ TEST_F(FluentContainersTest, ChromeHooksGiveFluentValues) {
     EXPECT_EQ(table.selectedText, c.text);
     EXPECT_FLOAT_EQ(table.cellPaddingX, dp(12));
     EXPECT_FLOAT_EQ(table.headerHeight, dp(32));
-    for (const auto& [variant, height] : {std::pair{"small", 48.0f}, std::pair{"center", 48.0f},
-                                          std::pair{"medium", 104.0f}, std::pair{"large", 128.0f}}) {
+    using md::TopAppBarVariant;
+    for (const auto& [name, variant, height] :
+         {std::tuple{"small", TopAppBarVariant::Small, 48.0f}, std::tuple{"center", TopAppBarVariant::Center, 48.0f},
+          std::tuple{"medium", TopAppBarVariant::Medium, 104.0f},
+          std::tuple{"large", TopAppBarVariant::Large, 128.0f}}) {
         const Skin::TopAppBarChrome bar = f.topAppBarChrome(variant);
-        EXPECT_FLOAT_EQ(bar.rowHeight, dp(48)) << variant;
-        EXPECT_FLOAT_EQ(bar.height, dp(height)) << variant;
+        EXPECT_FLOAT_EQ(bar.rowHeight, dp(48)) << name;
+        EXPECT_FLOAT_EQ(bar.height, dp(height)) << name;
         EXPECT_EQ(bar.title, c.text);
     }
     EXPECT_EQ(f.separatorTextColor(), c.textSecondary);

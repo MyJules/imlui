@@ -35,6 +35,7 @@ import imlui.ui.layout_cache;
 import imlui.color;
 import imlui.widgets.card;
 import imlui.widgets.surface;
+import imlui.widgets.tabs;
 
 using namespace imlui;
 
@@ -1119,7 +1120,7 @@ TEST_F(LayoutTest, CardDefaultsAndPadding) {
         custom = Card { variant = "outlined", padding = 30, color = "primary", rounding = 2, b })");
     Card* plain = m_h.instance<Card>("plain");
     ASSERT_NE(plain, nullptr);
-    EXPECT_EQ(plain->variant(), "elevated");
+    EXPECT_EQ(plain->variant(), md::CardVariant::Elevated);
     EXPECT_FLOAT_EQ(plain->padding(), 16.0f);
     EXPECT_FALSE(plain->color().has_value());
     EXPECT_FALSE(plain->rounding().has_value());
@@ -1128,7 +1129,7 @@ TEST_F(LayoutTest, CardDefaultsAndPadding) {
     m_h.renderFrames("custom", 2);
     Card* custom = m_h.instance<Card>("custom");
     ASSERT_NE(custom, nullptr);
-    EXPECT_EQ(custom->variant(), "outlined");
+    EXPECT_EQ(custom->variant(), md::CardVariant::Outlined);
     EXPECT_EQ(custom->rounding(), 2.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().x - a.x, 14.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().y - a.y, 14.0f);
@@ -1175,7 +1176,7 @@ TEST_F(LayoutTest, TabBarShowsTheCurrentTabAndWritesBackClicks) {
                         onCurrentChanged = function(self, i) changed = i end })");
     TabBar* bar = m_h.instance<TabBar>("root");
     ASSERT_NE(bar, nullptr);
-    EXPECT_EQ(bar->variant(), "primary");
+    EXPECT_EQ(bar->variant(), md::TabsVariant::Primary);
     Tab* t2 = m_h.instance<Tab>("t2");
     ASSERT_NE(t2, nullptr);
     EXPECT_EQ(t2->title(), "Two");

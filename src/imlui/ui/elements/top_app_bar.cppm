@@ -11,6 +11,7 @@ import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
@@ -35,8 +36,8 @@ public:
     /// An icon name; empty for none.
     [[nodiscard]] const std::string& navigationIcon() const;
     void setNavigationIcon(std::string icon);
-    [[nodiscard]] const std::string& variant() const;
-    void setVariant(std::string variant);
+    [[nodiscard]] md::TopAppBarVariant variant() const;
+    void setVariant(md::TopAppBarVariant variant);
     /// The container color; unset: the current surface.
     [[nodiscard]] const std::optional<Color>& color() const;
     void setColor(std::optional<Color> color);
@@ -44,7 +45,7 @@ public:
 private:
     std::string m_title;
     std::string m_navigationIcon;
-    std::string m_variant = "small";
+    md::TopAppBarVariant m_variant = md::TopAppBarVariant::Small;
     std::optional<Color> m_color;
 };
 
@@ -74,7 +75,7 @@ void TopAppBar::declare(TypeBuilder<TopAppBar>& type) {
 }
 
 void TopAppBar::render(Frame& frame) {
-    const bool medium = m_variant == "medium", large = m_variant == "large";
+    const bool medium = m_variant == md::TopAppBarVariant::Medium, large = m_variant == md::TopAppBarVariant::Large;
     const Skin::TopAppBarChrome chrome = skin().topAppBarChrome(m_variant);
     const float barH = chrome.rowHeight;
     const float h = chrome.height;
@@ -123,7 +124,7 @@ void TopAppBar::render(Frame& frame) {
     } else {
         const TextStyle ts = TextStyle::TitleLarge;
         const ImVec2 tsz = font(ts)->CalcTextSizeA(fontPixels(ts), 3.4e38f, 0.0f, m_title.c_str());
-        const float tx = m_variant == "center" ? p.x + (w - tsz.x) * 0.5f : titleX;
+        const float tx = m_variant == md::TopAppBarVariant::Center ? p.x + (w - tsz.x) * 0.5f : titleX;
         dl->AddText(font(ts), fontPixels(ts), {tx, p.y + (barH - tsz.y) * 0.5f}, titleColor, m_title.c_str());
     }
     ImGui::SetCursorScreenPos(p);
@@ -151,8 +152,8 @@ const std::string& TopAppBar::title() const { return m_title; }
 void TopAppBar::setTitle(std::string title) { m_title = std::move(title); }
 const std::string& TopAppBar::navigationIcon() const { return m_navigationIcon; }
 void TopAppBar::setNavigationIcon(std::string icon) { m_navigationIcon = std::move(icon); }
-const std::string& TopAppBar::variant() const { return m_variant; }
-void TopAppBar::setVariant(std::string variant) { m_variant = std::move(variant); }
+md::TopAppBarVariant TopAppBar::variant() const { return m_variant; }
+void TopAppBar::setVariant(md::TopAppBarVariant variant) { m_variant = variant; }
 const std::optional<Color>& TopAppBar::color() const { return m_color; }
 void TopAppBar::setColor(std::optional<Color> color) { m_color = color; }
 

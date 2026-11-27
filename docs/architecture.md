@@ -965,8 +965,7 @@ with `registerSkin(name, factory)` ([Skins](extending.md#skins)).
 The engine's error overlay draws its buttons through the skin too. **What stays a direct `md::` call** decides no
 look: the drawing helpers (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `strokeCircle`, `hLine`, `vLine`,
 `drawIcon`; the Canvas painter uses them), the `Text` and `Icon` items (`md::text`/`textSize`, `md::icon`/`iconSize`),
-`itemWidth`, `scopedWindowName`, the constants (`hugeExtent`, `maxIconPixels`), the vocabulary parsers
-(`buttonVariant`, `chipVariant`, `cardVariant`, `iconButtonVariant`) and the widgets' own stacks: the surface stack
+`itemWidth`, `scopedWindowName`, the constants (`hugeExtent`, `maxIconPixels`) and the widgets' own stacks: the surface stack
 (`pushSurface`/`popSurface`/`surfaceColor`) carries the color an element chose, and `cardDepth`/`surfaceDepth` with
 their restores undo what a render pass an error cut short left open. The vocabulary types (`md::ButtonVariant`,
 `md::TextFieldOptions`, ...) are the skin functions' parameter types. Inside, the Material widgets keep calling each
@@ -1242,7 +1241,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.dropdown` | `dropdown` (+ `DropdownOptions`) |
 | `imlui.widgets.spin_box` | `spinBox` |
 | `imlui.widgets.color_field` | `colorField` (swatch and picker popup) |
-| `imlui.widgets.tabs` | `tabs` (+ `TabInfo`) |
+| `imlui.widgets.tabs` | `tabs` (+ `TabInfo`, `TabsVariant`: the TabBar's `variant`) |
 | `imlui.widgets.navigation` | Navigation destinations: `navigationItem` (drawer), `navigationBarItem`, `navigationRailItem` |
 | `imlui.widgets.navigation_drawer` | `beginModalDrawer`/`endModalDrawer`: scrim and sliding sheet in a window above the app |
 | `imlui.widgets.list` | `listItem` (+ `ListItemOptions`), `expander` |
@@ -1251,6 +1250,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.snackbar` | `snackbar` |
 | `imlui.widgets.chart` | `chart` (+ `ChartOptions`), `chartSize`, `chartAxis` (+ `ChartAxis`: the y axis, shared with the Fluent chart) |
 | `imlui.widgets.table` | `tableHeaderCell`, `tableCell` |
+| `imlui.widgets.top_app_bar` | `TopAppBarVariant` (the TopAppBar element draws the bar; `Skin::topAppBarChrome` takes the variant) |
 | `imlui.widgets` | Umbrella: `export import` of all widget modules |
 
 ### Skin (`src/imlui/skin/`)

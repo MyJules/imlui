@@ -25,3 +25,4 @@ export import imlui.widgets.dialog;
 export import imlui.widgets.snackbar;
 export import imlui.widgets.chart;
 export import imlui.widgets.table;
+export import imlui.widgets.top_app_bar;

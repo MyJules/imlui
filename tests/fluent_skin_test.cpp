@@ -23,6 +23,7 @@ import imlui.types.type_builder;
 import imlui.widgets.button;
 import imlui.widgets.common;
 import imlui.test.headless_frame;
+import imlui.widgets.top_app_bar;
 
 using namespace imlui;
 
@@ -307,11 +308,14 @@ TEST_F(FluentSkinTest, MaterialChromeIsTheElementsOldLook) {
     EXPECT_FLOAT_EQ(material.scrollViewRounding(), dp(theme().shape.medium));
     EXPECT_EQ(material.navigationBarColor(), s.surfaceContainer);
     EXPECT_EQ(material.navigationRailColor(), s.surface);
-    for (const auto& [variant, height] : {std::pair{"small", 64.0f}, std::pair{"center", 64.0f},
-                                          std::pair{"medium", 112.0f}, std::pair{"large", 152.0f}}) {
+    using md::TopAppBarVariant;
+    for (const auto& [name, variant, height] :
+         {std::tuple{"small", TopAppBarVariant::Small, 64.0f}, std::tuple{"center", TopAppBarVariant::Center, 64.0f},
+          std::tuple{"medium", TopAppBarVariant::Medium, 112.0f},
+          std::tuple{"large", TopAppBarVariant::Large, 152.0f}}) {
         const Skin::TopAppBarChrome bar = material.topAppBarChrome(variant);
-        EXPECT_FLOAT_EQ(bar.rowHeight, dp(64)) << variant;
-        EXPECT_FLOAT_EQ(bar.height, dp(height)) << variant;
+        EXPECT_FLOAT_EQ(bar.rowHeight, dp(64)) << name;
+        EXPECT_FLOAT_EQ(bar.height, dp(height)) << name;
         EXPECT_EQ(bar.title, s.onSurface);
     }
     const Skin::TableChrome table = material.tableChrome();
