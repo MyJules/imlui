@@ -168,7 +168,10 @@ void Canvas::render(Frame& frame) {
     ImDrawList* dl = frame.drawList();
     dl->PushClipRect(p, {p.x + w, p.y + h}, true);
     luaui::beginPaint(dl, p);
-    luaui::safeCall(state, luaui::scopedArgs(state, n.index(), 2), 0);
+    {
+        const luaui::ElementScope scope{state, n.index(), 2};
+        luaui::safeCall(state, scope.nargs(), 0);
+    }
     luaui::endPaint();
     dl->PopClipRect();
 }

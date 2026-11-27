@@ -39,6 +39,9 @@ public:
     class Child {
     public:
         Child(const Frame& frame, const luaui::Node& node);
+        /// A child forEachChild() met: what the passes over its siblings learned of it on this frame is reused
+        /// (Renderer::ChildRef).
+        Child(const Frame& frame, const Renderer::ChildRef& ref);
 
         /// Renders the child at the ImGui cursor, through the renderer's per-element wrapper. False when it's
         /// hidden or of an unknown type. A rendered visual child is the last ImGui item afterwards (its group),
@@ -109,6 +112,7 @@ public:
     private:
         const Frame& m_frame;
         luaui::Node m_node;
+        Renderer::ChildRef m_ref;
         /// Its identity and kind, looked up once (Renderer::identity): render() needs no other lookup.
         Renderer::Types::Identity m_identity;
         ImGuiID m_id;
@@ -152,11 +156,9 @@ public:
     /// The same for the children of another element.
     template <class F>
     void forEachChild(const luaui::Node& parent, F&& f) const {
-        lua::State* state = parent.state();
-        m_renderer.forEachChild(parent, [&](int idx) {
-            const luaui::Node node{state, idx};
-            if (!shown(node)) return;
-            Child child{*this, node};
+        m_renderer.forEachChild(parent, [&](const Renderer::ChildRef& ref) {
+            if (!ref.shown()) return;
+            Child child{*this, ref};
             f(child);
         });
     }
@@ -250,8 +252,13 @@ namespace imlui {
 // ------------------------------------------------------------ Frame::Child
 
 Frame::Child::Child(const Frame& frame, const luaui::Node& node)
-    : m_frame{frame}, m_node{node}, m_identity{frame.m_renderer.identity(node)}, m_id{Renderer::imguiId(m_identity.id)},
+    : m_frame{frame}, m_node{node}, m_ref{frame.m_renderer, node.state(), node.index()},
+      m_identity{frame.m_renderer.identity(node)}, m_id{Renderer::imguiId(m_identity.id)},
       m_visual{m_identity.kind == Renderer::Types::Kind::Visual} {}
+
+Frame::Child::Child(const Frame& frame, const Renderer::ChildRef& ref)
+    : m_frame{frame}, m_node{ref.node()}, m_ref{ref}, m_identity{ref.identity()},
+      m_id{Renderer::imguiId(m_identity.id)}, m_visual{m_identity.kind == Renderer::Types::Kind::Visual} {}
 
 // Every Child is made right after its `visible` was read as true (forEachChild, withElementProp, ListView), so the
 // render doesn't read it again.
@@ -265,11 +272,7 @@ bool Frame::Child::render(float right) {
 bool Frame::Child::renderUnseen() { return m_frame.m_renderer.renderUnseen(m_node.state(), m_node.index()); }
 
 bool Frame::Child::isVisual() const { return m_visual; }
-bool Frame::Child::fillsWidth() const {
-    const float w = sizeProp(m_node, "width");
-    if (w != 0.0f) return w < 0.0f;
-    return m_frame.m_renderer.fillsWidth(m_node.state(), m_node.index());
-}
+bool Frame::Child::fillsWidth() const { return m_ref.fillsWidth(); }
 const luaui::Node& Frame::Child::node() const { return m_node; }
 std::string Frame::Child::type() const { return m_node.type(); }
 ImGuiID Frame::Child::id() const { return m_id; }

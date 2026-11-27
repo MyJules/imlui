@@ -27,6 +27,7 @@ import imlui.ui.culling;
 import imlui.ui.layout_box;
 import imlui.ui.layout_cache;
 import imlui.ui.frame_request;
+import imlui.ui.id_map;
 import imlui.ui.item_size;
 import imlui.types.lua_convert;
 import imlui.ui.enum_names;
@@ -113,40 +114,101 @@ public:
     /// container that renders a child's children itself (TabBar renders the current Tab's content).
     void pushElementId(const luaui::Node& node);
 
-    /// Calls f(stackIndex) for every child element. Children come from the
-    /// element's array part, or from its `__children(self)` function
-    /// (Repeater / ListView / If / Loader on the Lua side), called once a frame per element (pushChildren).
-    /// Inline containers are spliced into the parent.
+private:
+    struct ChildMemo;
+
+public:
+    /// A child that forEachChild() visits: its table at a stack index, and what the passes over its container's
+    /// children learned of it on this frame. A layout asks the same of a child on every pass (a Row's fills, sizes and
+    /// render; its parent's contentFillsWidth and size questions), so each answer (`visible`, the kind and identity,
+    /// the `width`) is looked up once a frame while luaui::changes() stands still and the container's child at its
+    /// place is the same table (ChildMemo): a handler that ran in between, or a changed child list, looks it up again.
+    /// Valid only inside the forEachChild() callback that gives it.
+    class ChildRef {
+    public:
+        /// A child with nothing remembered (not met by forEachChild(): a ListView's item): every answer is looked up.
+        ChildRef(Renderer& renderer, lua::State* state, int idx);
+
+        [[nodiscard]] lua::State* state() const { return m_state; }
+        [[nodiscard]] int index() const { return m_index; }
+        [[nodiscard]] luaui::Node node() const { return {m_state, m_index}; }
+        /// imlui::shown(): its `visible`.
+        [[nodiscard]] bool shown() const;
+        /// Types::kind(): what the element is, without creating its instance.
+        [[nodiscard]] Types::Kind kind() const;
+        /// Types::identity(): its instance's id (the instance created now if it has none) and its kind.
+        [[nodiscard]] Types::Identity identity() const;
+        /// sizeProp(node, "width"): its `width` (or `fillWidth`) in pixels.
+        [[nodiscard]] float width() const;
+        /// Whether it fills the available width: a fill or fill-minus width(), or none on an element that fills
+        /// (Renderer::fillsWidth).
+        [[nodiscard]] bool fillsWidth() const;
+
+        /// What a ChildMemo holds of a child, taken on `frame` at luaui::changes() `changes` from `table`.
+        struct Fact {
+            const void* table = nullptr;
+            int frame = -1;
+            std::uint64_t changes = 0;
+            bool element = false;     ///< it has a `__type`
+            bool inl = false;         ///< `__inline`
+            std::int8_t visible = -1; ///< -1: not read yet
+            std::int8_t kind = -1;    ///< a Types::Kind, -1: not looked up yet
+            std::int8_t fills = -1;   ///< fillsWidth(), -1: not asked yet
+            bool hasId = false;
+            bool hasWidth = false;
+            float width = 0.0f;
+            std::uint64_t id = 0;
+        };
+
+    private:
+        friend class Renderer;
+        ChildRef(Renderer& renderer, lua::State* state, int idx, ChildMemo* memo, std::size_t pos);
+        /// What the memo holds of this child while it is of this frame, of this luaui::changes() and of this table;
+        /// else null. Not kept across a call into Lua: the memo may grow meanwhile.
+        [[nodiscard]] Fact* fact() const;
+
+        Renderer* m_renderer;
+        lua::State* m_state;
+        int m_index;
+        ChildMemo* m_memo = nullptr; ///< null: nothing remembered
+        std::size_t m_pos = 0;       ///< its place in m_memo
+    };
+
+    /// What a forEachChild() does with the container's children memo (ChildRef).
+    enum class Memo {
+        /// Remembers what it learns of the children, for the passes after it: a layout that asks about its children
+        /// before it renders them (Frame::forEachChild: a Row's plan, contentFillsWidth, a stack's size).
+        Record,
+        /// Uses what earlier passes of the frame remembered, and remembers nothing new: a container's render pass,
+        /// often the only pass over its children (a long page's stack, most of whose children are culled), where
+        /// recording would cost more than it saves.
+        Reuse,
+    };
+
+    /// Calls f(ChildRef&) for every child element, or f(stackIndex) for an `f` that takes an int. Children come from
+    /// the element's array part, or from its `__children(self)` function (Repeater / ListView / If / Loader on the
+    /// Lua side), called once a frame per element (pushChildren). Inline containers are spliced into the parent.
     template <class F>
     void forEachChild(const luaui::Node& node, F&& f) {
+        forEachChild(node, Memo::Record, f);
+    }
+    /// The same, with what it does with the children memo.
+    template <class F>
+    void forEachChild(const luaui::Node& node, Memo memo, F&& f) {
         lua::State* state = node.state();
         // Room for pushChildren() and a child: each inline container spliced in nests a level on the Lua stack.
         if (!lua::checkstack(state, 16) || !pushChildren(node)) return;
         const int src = lua::gettop(state);
-        const lua::Integer len = lua::rawlen(state, src);
-        for (lua::Integer i = 1; i <= len; ++i) {
-            lua::rawgeti(state, src, i);
-            if (lua::istable(state, -1)) {
-                lua::getfield(state, -1, "__type");
-                bool element = lua::isstring(state, -1);
-                lua::pop(state);
-                lua::rawget(state, -1, luaui::keys::inlined); // raw: only the table's own marker counts
-                bool inl = lua::toboolean(state, -1);
-                lua::pop(state);
-                if (element && inl) {
-                    luaui::Node c{state, lua::gettop(state)};
-                    const Nesting level{*this};
-                    if (level && shown(c)) forEachChild(c, f);
-                } else if (element) {
-                    f(lua::gettop(state));
-                }
-            }
-            lua::settop(state, src);
+        {
+            ChildWalk walk{*this, node, memo};
+            walkChildren(walk, src, f);
         }
         lua::settop(state, src - 1);
     }
 
     void renderChildren(const luaui::Node& node);
+    /// render() of a child that forEachChild() gave.
+    bool render(const ChildRef& child);
 
     /// True when the element at `idx` is of a registered visual type: false for the non-visual types (Timer,
     /// Dialog, ...) and for an unknown type, which render() only reports, so neither takes a layout slot.
@@ -256,14 +318,14 @@ public:
         /// a frame its width changed (a resize, a scrollbar that appeared), where only they may be culled: by their
         /// last sizes (at the old width) or, never measured, by an estimate, which place nothing in view.
         [[nodiscard]] bool cullsBelow() const { return m_cullsBelow; }
-        /// Moves to the next child, at stack index `idx`; returns whether it is visual (isVisual()), from the memo
-        /// when its table is the one at this position last frame.
-        bool next(int idx);
+        /// Moves to the next child; returns whether it is visual (isVisual()), from the memo when its table is the one
+        /// at this position last frame.
+        bool next(const ChildRef& child);
         /// The current child's elementImGuiId(): from the memo when it may be culled (`fresh` false), else looked
         /// up (and remembered). A memo entry can only be stale for a table Lua collected and reallocated at the
         /// same address and position since the last frame: then a culled child is laid out at the dead one's size
         /// until it comes into view, where it renders and is looked up afresh.
-        ImGuiID key(const luaui::Node& child, bool fresh);
+        ImGuiID key(const ChildRef& child, bool fresh);
         /// Whether the current child's subtree holds a non-visual element (Renderer::holdsNonVisual), remembered
         /// with its memo entry: walked once per child table.
         bool holdsNonVisual(const luaui::Node& child);
@@ -312,6 +374,76 @@ private:
     /// (luaui::reportError, which reports a message once).
     static void reportTooDeep(int depth, bool stack);
 
+    /// What the passes over a container's children on a frame learned of them (ChildRef), by their place in the walk
+    /// (inline containers' children spliced in, the inline containers themselves too). Kept per container table;
+    /// each fact holds the frame, the luaui::changes() and the child table it was taken at, so a handler that ran
+    /// since, or a child list that changed (another table at a place), has the child looked up again.
+    struct ChildMemo {
+        lua::State* state = nullptr;
+        int frame = -1; ///< the last frame a walk used it
+        int walks = 0;  ///< walks of it running (a container that holds itself, cut at maxDepth)
+        std::vector<ChildRef::Fact> facts;
+    };
+    struct ChildMemos {
+        ImGuiContext* context = nullptr;
+        int swept = 0;
+        int walks = 0; ///< walks running: memos are dropped only while none runs (a ChildRef points into one)
+        IdMap<std::unique_ptr<ChildMemo>> byTable; ///< (a ChildRef points into a memo: they stay put)
+    };
+
+    /// One forEachChild() over a container: its memo (null outside a frame), and the place of the next child.
+    class ChildWalk {
+    public:
+        ChildWalk(Renderer& renderer, const luaui::Node& node, Memo mode);
+        ~ChildWalk();
+        ChildWalk(const ChildWalk&) = delete;
+        ChildWalk& operator=(const ChildWalk&) = delete;
+        ChildWalk(ChildWalk&&) = delete;
+        ChildWalk& operator=(ChildWalk&&) = delete;
+
+        /// The table at stack index `idx`, the next item of the walk.
+        struct Item {
+            bool element; ///< it has a `__type`
+            bool inl;     ///< an inline container (`__inline`): its children are spliced in
+            ChildRef ref;
+        };
+        [[nodiscard]] Item next(int idx);
+        [[nodiscard]] lua::State* state() const { return m_state; }
+
+    private:
+        Renderer& m_renderer;
+        lua::State* m_state;
+        ChildMemo* m_memo = nullptr;
+        std::size_t m_pos = 0;
+        bool m_record;
+    };
+
+    /// forEachChild()'s loop over the children list at stack index `src`, inline containers spliced in.
+    template <class F>
+    void walkChildren(ChildWalk& walk, int src, F& f) {
+        lua::State* state = walk.state();
+        const lua::Integer len = lua::rawlen(state, src);
+        for (lua::Integer i = 1; i <= len; ++i) {
+            lua::rawgeti(state, src, i);
+            if (lua::istable(state, -1)) {
+                const int idx = lua::gettop(state);
+                ChildWalk::Item item = walk.next(idx);
+                if (item.element && item.inl) {
+                    const Nesting level{*this};
+                    if (level && item.ref.shown() && lua::checkstack(state, 16) &&
+                        pushChildren(luaui::Node{state, idx}))
+                        walkChildren(walk, lua::gettop(state), f);
+                } else if (item.element) {
+                    if constexpr (std::invocable<F&, int>)
+                        f(idx);
+                    else
+                        f(item.ref);
+                }
+            }
+            lua::settop(state, src);
+        }
+    }
+
     /// Pushes the table that holds the children of `node`: the node itself, or what its `__children(self)` returned.
     /// That call (a read: the model function, the delegates it builds) runs once a frame per element while
     /// luaui::changes() stands still, so the passes of a layout (a Row's: which children fill, their sizes, the
@@ -332,11 +464,12 @@ private:
     struct CullMemos {
         ImGuiContext* context = nullptr;
         int swept = 0;
-        std::unordered_map<ImGuiID, CullMemo> byId;
+        IdMap<std::unique_ptr<CullMemo>> byId; ///< (a Culling points into its memo: they stay put)
     };
 
     Types& m_types;
     CullMemos m_cullMemos;
+    ChildMemos m_childMemos;
     std::string m_title{"imlui"};
     ImageCache* m_images = nullptr;
     int m_depth = 0;          ///< levels of nesting entered (Nesting)
@@ -559,7 +692,188 @@ bool Renderer::pushChildren(const Node& node) {
 }
 
 void Renderer::renderChildren(const Node& node) {
-    forEachChild(node, [&](int idx) { render(node.state(), idx); });
+    forEachChild(node, Memo::Reuse, [&](const ChildRef& c) { render(c); });
+}
+
+bool Renderer::render(const ChildRef& child) {
+    lua::checkstack(child.state(), 32);
+    const Types::Kind kind = child.kind();
+    const Node n = child.node();
+    if (kind == Types::Kind::Unknown) {
+        luaui::reportError("unknown element type '" + n.type() + "'");
+        return false;
+    }
+    if (!child.shown()) return false;
+    return renderElement(n, kind, child.identity().id);
+}
+
+// ------------------------------------------------------------ the children memo
+
+namespace {
+
+/// The current ImGui frame; -1 without a context (nothing is remembered then).
+int memoFrame() { return ImGui::GetCurrentContext() ? ImGui::GetFrameCount() : -1; }
+
+} // namespace
+
+Renderer::ChildRef::ChildRef(Renderer& renderer, lua::State* state, int idx)
+    : m_renderer{&renderer}, m_state{state}, m_index{lua::absindex(state, idx)} {}
+
+Renderer::ChildRef::ChildRef(Renderer& renderer, lua::State* state, int idx, ChildMemo* memo, std::size_t pos)
+    : m_renderer{&renderer}, m_state{state}, m_index{idx}, m_memo{memo}, m_pos{pos} {}
+
+Renderer::ChildRef::Fact* Renderer::ChildRef::fact() const {
+    if (!m_memo || m_pos >= m_memo->facts.size()) return nullptr;
+    Fact& f = m_memo->facts[m_pos];
+    if (f.frame < 0 || f.frame != memoFrame() || f.changes != luaui::changes() ||
+        f.table != lua::topointer(m_state, m_index))
+        return nullptr;
+    return &f;
+}
+
+// Each answer is stored only when the fact still holds after the lookup: a lookup that counted as a change (a binding
+// that failed) leaves nothing, like the prop memo (imlui.ui.props).
+bool Renderer::ChildRef::shown() const {
+    if (const Fact* f = fact(); f && f->visible >= 0) return f->visible != 0;
+    const bool v = imlui::shown(node());
+    if (Fact* f = fact()) f->visible = v ? 1 : 0;
+    return v;
+}
+
+Renderer::Types::Kind Renderer::ChildRef::kind() const {
+    if (const Fact* f = fact(); f && f->kind >= 0) return static_cast<Types::Kind>(f->kind);
+    const Types::Kind k = m_renderer->m_types.kind(node());
+    if (Fact* f = fact()) f->kind = static_cast<std::int8_t>(k);
+    return k;
+}
+
+Renderer::Types::Identity Renderer::ChildRef::identity() const {
+    if (const Fact* f = fact(); f && f->hasId) return {f->id, static_cast<Types::Kind>(f->kind)};
+    const Types::Identity identity = m_renderer->identity(node());
+    if (Fact* f = fact()) {
+        f->hasId = true;
+        f->id = identity.id;
+        f->kind = static_cast<std::int8_t>(identity.kind);
+    }
+    return identity;
+}
+
+float Renderer::ChildRef::width() const {
+    if (const Fact* f = fact(); f && f->hasWidth) return f->width;
+    const float w = sizeProp(node(), "width");
+    if (Fact* f = fact()) {
+        f->hasWidth = true;
+        f->width = w;
+    }
+    return w;
+}
+
+bool Renderer::ChildRef::fillsWidth() const {
+    if (const Fact* f = fact(); f && f->fills >= 0) return f->fills != 0;
+    const float w = width();
+    const bool fills = w != 0.0f ? w < 0.0f : m_renderer->fillsWidth(m_state, m_index);
+    if (Fact* f = fact()) f->fills = fills ? 1 : 0;
+    return fills;
+}
+
+Renderer::ChildWalk::ChildWalk(Renderer& renderer, const Node& node, Memo mode)
+    : m_renderer{renderer}, m_state{node.state()}, m_record{mode == Memo::Record} {
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    if (!context) return; // outside a frame: nothing is remembered
+    ChildMemos& memos = renderer.m_childMemos;
+    const int frame = ImGui::GetFrameCount();
+    if (memos.walks == 0) {
+        // Memos are dropped only while no walk runs: a ChildRef points into its container's.
+        if (memos.context != context) {
+            memos.byTable.clear();
+            memos.context = context;
+            memos.swept = frame;
+        }
+        // Containers that stopped rendering leave their memo, whose facts are of an old frame: dropped every
+        // layout::ageSweepFrames.
+        if (frame - memos.swept >= layout::ageSweepFrames || frame < memos.swept) {
+            memos.swept = frame;
+            memos.byTable.eraseIf(
+                [&](std::uint64_t, const std::unique_ptr<ChildMemo>& m) { return m->frame != frame; });
+        }
+    } else if (memos.context != context) {
+        return;
+    }
+    const auto key = reinterpret_cast<std::uintptr_t>(node.ptr());
+    ChildMemo* found = nullptr;
+    if (m_record) {
+        std::unique_ptr<ChildMemo>& slot = memos.byTable[key];
+        if (!slot) slot = std::make_unique<ChildMemo>();
+        found = slot.get();
+    } else {
+        const std::unique_ptr<ChildMemo>* slot = memos.byTable.find(key);
+        if (!slot || (*slot)->state != m_state || (*slot)->frame != frame) return; // nothing of this frame to reuse
+        found = slot->get();
+    }
+    ChildMemo& memo = *found;
+    if (memo.state != m_state) {
+        if (memo.walks > 0) return; // (another state's walk of a table at this address: none to share)
+        memo.state = m_state;
+        memo.facts.clear();
+    }
+    memo.frame = frame;
+    ++memo.walks;
+    ++memos.walks;
+    m_memo = &memo;
+}
+
+Renderer::ChildWalk::~ChildWalk() {
+    if (!m_memo) return;
+    --m_memo->walks;
+    --m_renderer.m_childMemos.walks;
+    // A shorter child list than at the last walk: its facts past the end are of children no longer there.
+    if (m_record && m_memo->walks == 0 && m_memo->facts.size() > m_pos) m_memo->facts.resize(m_pos);
+}
+
+Renderer::ChildWalk::Item Renderer::ChildWalk::next(int idx) {
+    const auto look = [&](bool& element, bool& inl) {
+        // `__type` is the table's own field in every element: read raw first (through its Key), and only a table
+        // without one through its metatable (a script's __index may answer).
+        if (lua::rawget(m_state, idx, luaui::keys::type) == lua::Type::Nil) {
+            lua::pop(m_state);
+            lua::getfield(m_state, idx, "__type");
+        }
+        element = lua::isstring(m_state, -1);
+        lua::pop(m_state);
+        lua::rawget(m_state, idx, luaui::keys::inlined); // raw: only the table's own marker counts
+        inl = lua::toboolean(m_state, -1);
+        lua::pop(m_state);
+    };
+    if (!m_memo) {
+        Item item{false, false, ChildRef{m_renderer, m_state, idx, nullptr, 0}};
+        look(item.element, item.inl);
+        return item;
+    }
+    const std::size_t pos = m_pos++;
+    const void* table = lua::topointer(m_state, idx);
+    const int frame = ImGui::GetFrameCount();
+    const std::uint64_t changes = luaui::changes();
+    if (pos < m_memo->facts.size()) {
+        const ChildRef::Fact& f = m_memo->facts[pos];
+        if (f.table == table && f.frame == frame && f.changes == changes)
+            return {f.element, f.inl, ChildRef{m_renderer, m_state, idx, m_memo, pos}};
+    }
+    if (!m_record) {
+        Item item{false, false, ChildRef{m_renderer, m_state, idx, nullptr, 0}};
+        look(item.element, item.inl);
+        return item;
+    }
+    if (pos >= m_memo->facts.size()) m_memo->facts.resize(pos + 1);
+    Item item{false, false, ChildRef{m_renderer, m_state, idx, m_memo, pos}};
+    look(item.element, item.inl); // (a `__type` read through a script's __index runs Lua: `f` is looked up again)
+    ChildRef::Fact& g = m_memo->facts[pos];
+    g = ChildRef::Fact{};
+    g.table = table;
+    g.frame = frame;
+    g.changes = changes;
+    g.element = item.element;
+    g.inl = item.inl;
+    return item;
 }
 
 bool Renderer::isVisual(lua::State* state, int idx) const {
@@ -631,13 +945,14 @@ float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
     float knownHeights = 0.0f;
     int known = 0;
     bool first = true;
-    forEachChild(node, [&](int idx) {
-        if (!culling.next(idx)) {
-            render(state, idx);
+    forEachChild(node, Memo::Reuse, [&](const ChildRef& ref) {
+        if (!culling.next(ref)) {
+            render(ref);
             return;
         }
-        Node c{state, idx};
-        if (!shown(c)) return;
+        if (!ref.shown()) return;
+        const int idx = ref.index();
+        const Node c{state, idx};
         if (!first && spacing)
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
                                  ImGui::GetStyle().ItemSpacing.y);
@@ -650,7 +965,7 @@ float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
         if (cullBelow) {
             // Out of view: only its size from the layout cache, placed where `align` would place it.
             if (const auto culled =
-                    skipOutOfView(culling.key(c, false), ImGui::GetCursorScreenPos(), avail, align, !cull)) {
+                    skipOutOfView(culling.key(ref, false), ImGui::GetCursorScreenPos(), avail, align, !cull)) {
                 if (align > 0.0f) widest = std::max(widest, culled->size.x);
                 right = std::max(right, culled->at.x + culled->size.x);
                 knownHeights += culled->size.y;
@@ -661,7 +976,7 @@ float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
             // Never measured (a long page's first frame), below the view, and past this frame's converging renders:
             // laid out at the average height of its siblings so far (no width: it widens nothing), and measured on a
             // later frame (asked for). Not when its subtree holds a non-visual element: that renders now, to pin it.
-            const ImGuiID k = culling.key(c, false);
+            const ImGuiID k = culling.key(ref, false);
             if (known > 0 && cull::belowView(ImGui::GetCursorScreenPos().y) && !cull::pinned(k) &&
                 !layout::lastSize(k) && !takeConvergeRenders() && !culling.holdsNonVisual(c)) {
                 ImGui::Dummy({0.0f, knownHeights / static_cast<float>(known)});
@@ -671,10 +986,10 @@ float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
                 return;
             }
         }
-        const ImGuiID key = pins ? culling.key(c, true) : align > 0.0f ? elementImGuiId(c) : 0;
+        const ImGuiID key = pins ? culling.key(ref, true) : align > 0.0f ? imguiId(ref.identity().id) : 0;
         if (align > 0.0f) {
-            const float width = sizeProp(c, "width");
-            if (width != 0.0f ? width < 0.0f : fillsWidth(state, idx)) {
+            const float width = ref.width();
+            if (ref.fillsWidth()) {
                 // A fill or fill-minus child's width is known up front: the box's width (less N). It is placed by it
                 // and rendered in a box that starts where it does and is as wide as the stack's, so it resolves to
                 // that width again: settled on its first frame, with no cached width (which, read back through its
@@ -702,9 +1017,9 @@ float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
             rendered = renderUnseen(state, idx);
         } else if (fillOffset > 0.0f) {
             const layout::BoxScope box{layout::insetBox(-fillOffset)};
-            rendered = renderShown(state, idx);
+            rendered = renderShown(c, ref.identity());
         } else {
-            rendered = renderShown(state, idx);
+            rendered = renderShown(c, ref.identity());
         }
         if (pins && rendered && cull::held(watch)) cull::pin(key);
         if (rendered) {
@@ -758,9 +1073,12 @@ Renderer::Culling::Culling(Renderer& renderer, const Node& node, float width)
     // Containers that stopped rendering leave their memo: dropped once it is old, checked every keepFrames.
     if (frame - memos.swept >= layout::keepFrames) {
         memos.swept = frame;
-        std::erase_if(memos.byId, [&](const auto& e) { return frame - e.second.frame >= layout::keepFrames; });
+        memos.byId.eraseIf(
+            [&](std::uint64_t, const std::unique_ptr<CullMemo>& m) { return frame - m->frame >= layout::keepFrames; });
     }
-    CullMemo& memo = memos.byId[ImGui::GetID("##imlui.cull")];
+    std::unique_ptr<CullMemo>& slot = memos.byId[ImGui::GetID("##imlui.cull")];
+    if (!slot) slot = std::make_unique<CullMemo>();
+    CullMemo& memo = *slot;
     if (memo.frame == frame) return; // rendered twice in a frame (one element in two places): no memo, no culling
     m_cullsBelow = true;
     // The cached sizes are in pixels: a zoom or another monitor's scale changes them, as a resize does.
@@ -776,28 +1094,28 @@ Renderer::Culling::~Culling() {
     if (m_children && m_children->size() > m_index) m_children->resize(m_index);
 }
 
-bool Renderer::Culling::next(int idx) {
+bool Renderer::Culling::next(const ChildRef& child) {
     if (!m_children) {
         m_hit = false;
-        return m_renderer.isVisual(m_state, idx);
+        return child.kind() == Types::Kind::Visual;
     }
-    const void* table = lua::topointer(m_state, idx);
+    const void* table = lua::topointer(m_state, child.index());
     const std::size_t i = m_index++;
     if (i < m_children->size() && (*m_children)[i].table == table) {
         m_hit = true;
         return (*m_children)[i].visual;
     }
     m_hit = false;
-    const bool visual = m_renderer.isVisual(m_state, idx);
+    const bool visual = child.kind() == Types::Kind::Visual;
     if (i >= m_children->size()) m_children->resize(i + 1);
     (*m_children)[i] = {table, 0, visual};
     return visual;
 }
 
-ImGuiID Renderer::Culling::key(const Node& child, bool fresh) {
+ImGuiID Renderer::Culling::key(const ChildRef& child, bool fresh) {
     Child* c = m_children && m_index > 0 ? &(*m_children)[m_index - 1] : nullptr;
     if (c && m_hit && !fresh && c->key != 0) return c->key;
-    const ImGuiID id = m_renderer.elementImGuiId(child);
+    const ImGuiID id = imguiId(child.identity().id);
     if (c) c->key = id;
     return id;
 }
@@ -813,12 +1131,10 @@ bool Renderer::Culling::holdsNonVisual(const Node& child) {
 bool Renderer::holdsNonVisual(const Node& node) {
     const Nesting level{*this};
     if (!level) return true; // too deep (a cycle): rendered, which reports it
-    lua::State* state = node.state();
     bool holds = false;
-    forEachChild(node, [&](int idx) {
+    forEachChild(node, Memo::Reuse, [&](const ChildRef& c) {
         if (holds) return;
-        const Node c{state, idx};
-        holds = m_types.kind(c) != Types::Kind::Visual || holdsNonVisual(c);
+        holds = c.kind() != Types::Kind::Visual || holdsNonVisual(c.node());
     });
     return holds;
 }
@@ -859,10 +1175,10 @@ std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth, std:
     const float lineGap = ImGui::GetStyle().ItemSpacing.y;
     float width = 0.0f, bottom = 0.0f, y = 0.0f;
     bool first = true, known = true;
-    forEachChild(node, [&](int idx) {
-        if (!known || !isVisual(state, idx)) return;
+    forEachChild(node, [&](const ChildRef& ref) {
+        if (!known || ref.kind() != Types::Kind::Visual || !ref.shown()) return;
+        const int idx = ref.index();
         const Node c{state, idx};
-        if (!shown(c)) return;
         if (!first && spacing) y += static_cast<float>(*spacing) * dpiScale() - lineGap;
         const std::optional<ImVec2> size = intrinsicSize(c, maxWidth);
         if (!size) {
@@ -872,8 +1188,8 @@ std::optional<ImVec2> Renderer::stackSize(const Node& node, float maxWidth, std:
         float offset = 0.0f;
         if (align > 0.0f) {
             // Placed like renderStack places it: a fill by the box's width (less N), anything else by its own.
-            const float w = sizeProp(c, "width");
-            const bool fills = w != 0.0f ? w < 0.0f : fillsWidth(state, idx);
+            const float w = ref.width();
+            const bool fills = ref.fillsWidth();
             const float placed = fills ? resolveSize(w != 0.0f ? w : -1.0f, maxWidth, 0.0f) : size->x;
             offset = std::max(0.0f, (maxWidth - placed) * align);
         }

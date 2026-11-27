@@ -67,6 +67,9 @@ ui.ids = weakIds()
 -- scope keeps it to itself, and the pops of its to-be-closed POP_SCOPEs (when it resumes, or is closed) apply to it.
 -- A plain coroutine a script creates (coroutine.create, coroutine.wrap) has one too (see coResume).
 local scopes = {}
+-- [1] is the scope stack in use (`scopes`, swapped while an async function runs): C++ pushes an element's scope on it
+-- around a call of the element's function, and pops it after, as inScope does (luaui::ElementScope).
+local scopeStack = { scopes }
 
 -- The elements registered under an id since the last ui.__tick. Ids are weak, so until then, while a script still
 -- builds its tree (`Text { id = "title" }` as a statement, used by name in the root later), they're kept here.
@@ -90,7 +93,7 @@ end
 -- component instance's `ids`. An element built at app level isn't here: its functions run in whatever scope is
 -- active, which is app level whenever the engine calls them.
 local scopeOf = setmetatable({}, { __mode = "k" })
-if native.setScopeHooks then native.setScopeHooks(scopeOf, inScope) end
+if native.setScopeHooks then native.setScopeHooks(scopeOf, inScope, scopeStack) end
 
 -- `fn` as a function that runs in the current scope when called later (a timer, a watcher, a future's handler): at
 -- app level too, when set up there, whatever scope is active when it is called (a component's handler that changes a
@@ -1612,8 +1615,10 @@ local tasks = setmetatable({}, { __mode = "k" })
 local function closeTask(task)
     local saved = scopes
     scopes = task.scopes
+    scopeStack[1] = scopes
     rawClose(task.co) -- returns an error a __close raised; never raises
     scopes = saved
+    scopeStack[1] = scopes
 end
 
 -- After a resume of `task`, with its scope stack still in place (`saved` is the resumer's): puts `saved` back and
@@ -1621,6 +1626,7 @@ end
 -- fails: nothing would ever resume it.
 local function finish(task, saved, ok, ...)
     scopes = saved
+    scopeStack[1] = scopes
     local co = task.co
     if rawStatus(co) == "dead" then
         tasks[co] = nil
@@ -1644,6 +1650,7 @@ local function step(task, ...)
     task.waiting = nil
     local saved = scopes
     scopes = task.scopes
+    scopeStack[1] = scopes
     return finish(task, saved, rawResume(task.co, ...)) -- resume never raises: `saved` is always put back
 end
 
@@ -1700,6 +1707,7 @@ local coScopes = setmetatable({}, { __mode = "k" })
 -- Puts the resumer's stack `saved` back and returns the results of the resume or close.
 local function coRestore(saved, ...)
     scopes = saved
+    scopeStack[1] = scopes
     return ...
 end
 
@@ -1718,6 +1726,7 @@ local function coResume(co, ...)
     if own == nil or own == scopes then return rawResume(co, ...) end
     local saved = scopes
     scopes = own
+    scopeStack[1] = scopes
     return coRestore(saved, rawResume(co, ...))
 end
 
@@ -1730,6 +1739,7 @@ local function coClose(co)
     if own == nil or own == scopes or (status ~= "suspended" and status ~= "dead") then return rawClose(co) end
     local saved = scopes
     scopes = own
+    scopeStack[1] = scopes
     return coRestore(saved, rawClose(co))
 end
 

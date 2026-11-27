@@ -28,6 +28,7 @@ inline constexpr const char* sharedMetaMarker = "__imlui_shared";
 
 /// The fields imlui reads from every element, every frame, as lua::Keys (read with no lookup of the name).
 namespace keys {
+inline const lua::Key type{"__type"};
 inline const lua::Key visible{"visible"};
 inline const lua::Key enabled{"enabled"};
 inline const lua::Key tooltip{"tooltip"};
@@ -194,7 +195,8 @@ lua::Type Node::push(const lua::Key& key) const {
 lua::Type Node::resolveTop() const {
     if (lua::isfunction(m_state, -1)) {
         lua::pushvalue(m_state, m_index);
-        if (!safeRead(m_state, scopedArgs(m_state, m_index, 1), 1)) lua::pushnil(m_state);
+        const ElementScope scope{m_state, m_index, 1};
+        if (!safeRead(m_state, scope.nargs(), 1)) lua::pushnil(m_state);
     } else if (isBind(m_state, -1)) {
         resolveBind(-1);
     }
@@ -350,7 +352,8 @@ bool Node::emit(const char* signal, std::initializer_list<Value> args) const {
     lua::pushvalue(m_state, m_index);
     for (const auto& a : args)
         pushValue(m_state, a);
-    return safeCall(m_state, scopedArgs(m_state, m_index, 1 + static_cast<int>(args.size())), 0);
+    const ElementScope scope{m_state, m_index, 1 + static_cast<int>(args.size())};
+    return safeCall(m_state, scope.nargs(), 0);
 }
 
 std::optional<Color> Node::colorFromTable(lua::State* state, int idx) {

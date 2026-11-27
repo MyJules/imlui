@@ -182,6 +182,33 @@ TEST_F(SignalsTest, ConnectWorksInsideCoroutines) {
     expectNoErrors();
 }
 
+// A handler that C++ calls while a plain coroutine runs gets its element's scope on that coroutine's scope stack (the
+// one in use), not on the main thread's: what it builds is its component's, and the coroutine's code around the
+// call stays at the coroutine's own level.
+TEST_F(SignalsTest, AHandlerCalledFromACoroutineRunsInItsElementsScope) {
+    run(R"(
+        keep = {}
+        Gauge = component(function(props, ids)
+            gaugeIds = ids
+            return Meter { onValueChanged = function() keep.slot = Text { id = "inSlot" } end }
+        end)
+        g = Gauge {}
+        local ok, err = pcall(coroutine.wrap(function()
+            g:bump()
+            keep.after = Text { id = "afterBump" }
+            coroutine.yield()
+        end))
+        assert(ok, err)
+        assert(keep.slot ~= nil and gaugeIds.inSlot == keep.slot and ui.ids.inSlot == nil,
+               "the handler didn't run in its element's scope")
+        assert(keep.after ~= nil and ui.ids.afterBump == keep.after and gaugeIds.afterBump == nil,
+               "the coroutine's code after the call ran in the handler's scope")
+        top = Text { id = "appLevel" }
+        assert(ui.ids.appLevel == top and gaugeIds.appLevel == nil, "the handler's scope stayed pushed")
+    )");
+    expectNoErrors();
+}
+
 // An element built in an async function after an await is constructed on the coroutine's thread: it links to the main
 // thread anyway, so connect accepts it, its signals reach Lua after the coroutine finished and was collected, and
 // emit/notify from C++ (outside every Lua call) don't run on the dead coroutine.

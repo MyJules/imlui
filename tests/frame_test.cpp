@@ -75,6 +75,24 @@ public:
     std::vector<std::optional<ImVec2>> expected;
 };
 
+/// Walks its children twice a frame and runs its `onBetween` handler between the passes (Lua that may change
+/// anything): what each pass saw (type and whether it fills), then renders them.
+class TwoPass final : public Element {
+public:
+    static void declare(TypeBuilder<TwoPass>&) {}
+    void render(Frame& frame) override {
+        passes.clear();
+        for (int pass = 0; pass < 2; ++pass) {
+            std::vector<std::pair<std::string, bool>> seen;
+            frame.forEachChild([&](Frame::Child& c) { seen.emplace_back(c.type(), c.fillsWidth()); });
+            passes.push_back(std::move(seen));
+            if (pass == 0) frame.node().emit("onBetween");
+        }
+        frame.renderChildren();
+    }
+    std::vector<std::vector<std::pair<std::string, bool>>> passes;
+};
+
 /// A non-visual element that counts its renders.
 class Tick final : public Element {
 public:
@@ -182,6 +200,7 @@ protected:
         m_h.registerType<Sized>("Sized");
         m_h.registerType<Filler>("Filler");
         m_h.registerType<Expect>("Expect");
+        m_h.registerType<TwoPass>("TwoPass");
     }
 
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
@@ -278,7 +297,7 @@ TEST_F(FrameTest, AliasesAreSeparateNamesForOneClass) {
         a = Leaf { w = 3 }
         b = Block { w = 4 }
         names = table.concat(ui.types(), ",")
-        assert(names == "Area,Block,Expect,Field,Filler,Leaf,Row,Sized,Tick", names))");
+        assert(names == "Area,Block,Expect,Field,Filler,Leaf,Row,Sized,Tick,TwoPass", names))");
     Leaf* a = instance<Leaf>("a");
     Leaf* b = instance<Leaf>("b");
     ASSERT_NE(a, nullptr);
@@ -325,6 +344,47 @@ TEST_F(FrameTest, ExpectedSizesAreIntrinsicElseLastFrames) {
     ASSERT_TRUE(e->expected[1]);
     EXPECT_EQ(e->expected[1]->x, 30.0f);
     EXPECT_EQ(e->expected[1]->y, 4.0f);
+}
+
+// The passes over a container's children share what they learn of them on a frame (visible, kind, width, whether
+// they fill), while nothing that may change tables runs: a handler between two passes makes the second see the
+// children as they are now, a hidden child, a new width and a changed child list (also of a Repeater spliced in).
+TEST_F(FrameTest, PassesOverChildrenSeeWhatAHandlerBetweenThemChanged) {
+    using Seen = std::vector<std::pair<std::string, bool>>;
+    run(R"(
+        change = nil
+        n = 1
+        root = TwoPass {
+            onBetween = function(self) if change then change(self) end end,
+            Leaf { w = 1 }, Filler {}, Leaf { w = 2 },
+            Repeater { model = function() return n end, delegate = function(i) return Block { w = i } end },
+        })");
+    renderFrame("root");
+    TwoPass* t = instance<TwoPass>("root");
+    ASSERT_NE(t, nullptr);
+    const Seen before{{"Leaf", false}, {"Filler", true}, {"Leaf", false}, {"Block", false}};
+    ASSERT_EQ(t->passes.size(), 2u);
+    EXPECT_EQ(t->passes[0], before);
+    EXPECT_EQ(t->passes[1], before);
+
+    run(R"(change = function(self)
+        change = nil
+        self[1].visible = false
+        self[2].width = 10
+        self[3].fillWidth = true
+        table.insert(self, 1, Block { w = 5 })
+        n = 2
+    end)");
+    renderFrame("root");
+    ASSERT_EQ(t->passes.size(), 2u);
+    EXPECT_EQ(t->passes[0], before);
+    const Seen after{{"Block", false}, {"Filler", false}, {"Leaf", true}, {"Block", false}, {"Block", false}};
+    EXPECT_EQ(t->passes[1], after);
+
+    renderFrame("root"); // and on the next frame
+    EXPECT_EQ(t->passes[0], after);
+    EXPECT_EQ(t->passes[1], after);
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
 // The size policy lives in the type: an unset width of a type declared fillsWidth() is a fill (-1) for

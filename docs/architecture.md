@@ -271,6 +271,27 @@ so the handler already sees the new state.
   call. Lua that may change tables (a handler) running in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them; a
   `Repeater` whose count didn't change (and that has no `key`) returns the list it built last time without a loop.
 
+The passes over a container's children also share what they learn of each child: `forEachChild` hands every child
+over as a `Renderer::ChildRef`, which answers `shown()` (`visible`), `kind()`, `identity()` (the instance's id and
+kind, the instance created if it has none), `width()` (`sizeProp(node, "width")`) and `fillsWidth()` (a fill width, or
+none on an element that fills: `Renderer::fillsWidth`) from the container's **children memo** (`Renderer::ChildMemo`,
+one per container table, in an `IdMap`): a fact per place in the walk (inline containers' children spliced in), each
+holding the child's table, whether it is an element and inline, and the answers looked up so far. A fact holds while
+the ImGui frame and `luaui::changes()` are the ones it was taken at and its place still holds the same table: a
+handler that ran since (the count moved) or a changed child list (another table at a place) has the child looked up
+again, and a new frame starts afresh, so a hot reload (a new state, between frames) never meets an old fact. An answer
+is stored only when the count didn't move while it was looked up (a binding that failed). So a `Row`'s plan, its
+render and its parent's `contentFillsWidth` and size questions read a child's props, find its instance and ask whether
+it fills once a frame. Like the sync skip below, it trusts the count: a write that bypassed it (a raw `lua_setfield`
+from C++, a binding that writes another element's plain `visible`) reaches the layout's questions on the next frame
+(the render still syncs; a debug build reports such a write to a declared field). The walks that ask before they render
+(`Frame::forEachChild`, `stackSize`) record facts (`Renderer::Memo::Record`); a container's render pass (`renderStack`,
+`renderChildren`, `Grid`) and `holdsNonVisual` only reuse what is there (`Memo::Reuse`): it is often the only pass over
+a long list, most of whose children are culled, where recording would cost more than it saves. Memos of containers
+that stopped rendering are dropped every `layout::ageSweepFrames`, while no walk runs (a `ChildRef` points into one).
+`Frame::Child` keeps its `ChildRef`, so `child.fillsWidth()` and `child.render()` reuse the facts; a `Child` made
+without one (a `ListView` item) looks everything up.
+
 Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
 own children are laid out as direct children of the parent. That's why a `Repeater` inside a `Row` flows
 horizontally. `visible = false` on an inline container hides all of its children. `ListView` isn't inline. It's
@@ -451,8 +472,9 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   element, or Lua that may change tables, drops them. The props every pass reads of every child before any sync,
   `visible`, `width`, `fillWidth` and `height` (`imlui::shown`, `sizeProp` in `imlui.ui.props`), are memoized the same
   way when they are bindings: per element table and binding, for the frame while `luaui::changes()` stands still
-  (a plain value is read directly, which costs less than the lookup). Each pass also takes a child's identity and
-  kind with one lookup of its instance (`Renderer::Types::identity`), and its render reuses them. The skip
+  (a plain value is read directly, which costs less than the lookup). A child's identity and kind come from one
+  lookup of its instance (`Renderer::Types::identity`), and the passes of a frame share them, its `visible`, `width`
+  and whether it fills through the children memo (above). The skip
   doesn't trust the count alone: each sync keeps a fingerprint of the element table's declared fields (their raw
   values: numbers and booleans by value, strings by Lua's identity of them (`lua::strid`: object, length and hash),
   tables and functions by identity), and a skip compares it, so a
@@ -633,12 +655,16 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
   DSL replaces `coroutine.create`, `resume`, `wrap` and `close` with ones that keep a stack per coroutine (`coScopes`,
   weak keys) and swap it in for each resume and close. A coroutine that yields inside a scope then keeps it to itself
   instead of leaving it on the resumer's stack.
-- **Functions in their element's scope.** At load the DSL hands `scopeOf` and `inScope(scope, fn, ...)` to C++
-  (`native.setScopeHooks`, kept at registry keys by `imlui.lua.element_scope`). Every C++ call of an element's
-  function goes through `luaui::scopedArgs(state, element, nargs)`: when the element has a scope, it inserts
-  `inScope` and the scope below the function and the call goes through them; otherwise the call is unchanged (one
-  registry lookup and one table lookup). The callers: `Node::push` (bindings), `Node::emit`, `ScriptObject::emit`
-  and `notify` (typed signals, `on<Name>Changed`), `Canvas`'s `onPaint`. On the Lua side, `resolve` (`model`,
+- **Functions in their element's scope.** At load the DSL hands `scopeOf`, `inScope(scope, fn, ...)` and
+  `scopeStack` (whose `[1]` is the scope stack in use: `step`, `finish` and `closeTask` update it when they swap an
+  async function's stack in and out, and the coroutine wrappers when they swap a plain coroutine's) to C++
+  (`native.setScopeHooks`, kept at registry keys by `imlui.lua.element_scope`). Every C++ call of an element's function runs inside a `luaui::ElementScope`: when the
+  element has a scope, it appends the scope to the stack in use (`stack[#stack + 1] = scope`) before the call and,
+  when it goes, removes the innermost one from the stack in use then, as `inScope`'s to-be-closed `POP_SCOPE` does,
+  with no Lua call in between; otherwise the call is unchanged (one registry lookup and one table lookup). Without the
+  stack table (or on a full Lua stack) it falls back to `luaui::scopedArgs`, which inserts `inScope` and the scope
+  below the function. The callers: `Node::push` (bindings), `Node::emit`, `ScriptObject::emit` and `notify` (typed
+  signals, `on<Name>Changed`), `Canvas`'s `onPaint`. On the Lua side, `resolve` (`model`,
   `condition`, `Loader.item`, `Responsive` class functions) does the same with `scopeOf[self]`, and `setTimeout`,
   `setInterval`, `watch`, `onFrame` and `connect` run their callback in the scope active when they are called.
 - **Callbacks owned by a scope.** What holds those callbacks (the watcher lists, the frame callbacks, the timers,
@@ -1433,6 +1459,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.lua.protected_render` | `renderProtected`: runs a render pass in protected mode, reporting an escaped Lua error and recovering ImGui's stacks |
 | `imlui.lua.value` | `Value` variant (nil/bool/number/string), `pushValue`, `isBind`, `toFloat` (a Lua number narrowed safely) |
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
+| `imlui.lua.element_scope` | `setScopeHooks` (the DSL's `scopeOf`, `inScope` and scope stack, at registry keys), `ElementScope` (a C++ call of an element's function runs in the element's id scope, pushed on the DSL's stack), `scopedArgs` (the same through `inScope`) |
 | `imlui.lua.listeners` | `setListenerDispatch` (the DSL's `connect` dispatch, at a registry key), `callListeners` (what `ScriptObject::emit`/`notify` call after the slot), `changedSignal` (`"value"` -> `"onValueChanged"`) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
 | `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint`; `setPainterFaultForTesting` (tests: throws inside the methods' C++-exception guard) |
@@ -1517,7 +1544,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `settledSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `keepFrames`/`keepSeconds`/`maxEntries`/`capTarget`/`capRetryFrames`/`capRetryGrowth`, `cacheEntries`: the last measured sizes by ImGui ID (kept while hidden, bounded by age and an LRU cap), and another frame when a layout placed something by a stale size (convergence) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
-| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `stackSize`, `renderUnseen`, culling (`cullsChildren`, `skipOutOfView`, `Culling`: the children memo), `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
+| `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild` (`ChildRef`, `Memo`: the children memo the passes of a frame share), `renderChildren`, `renderStack`, `stackSize`, `renderUnseen`, culling (`cullsChildren`, `skipOutOfView`, `Culling`: the children by position from the last frame), `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
+| `imlui.ui.id_map` | `IdMap<V>`: an open-addressing hash map from 64-bit ids (table addresses, ImGui IDs) for the renderer's per-container memos |
 | `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view`, `list_view` (extends `ScrollView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer`; and `stack_props` (`stackProps`, `rawCullProp`, `StackAlign`: the stacking containers' raw `spacing` and `cull` for the definitions, and their `align` property) |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: registers every built-in class under its Lua name and aliases |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |

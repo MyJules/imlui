@@ -677,8 +677,12 @@ bool ScriptObject::callSignal(int self, int handler, const char* signal) {
             for (int i = 0; i <= nargs; ++i)
                 lua::pushvalue(state, fn + i);
         }
-        const int n = m_singleton ? nargs : luaui::scopedArgs(state, self, nargs);
-        ok = luaui::safeCall(state, n, 0);
+        if (m_singleton) {
+            ok = luaui::safeCall(state, nargs, 0);
+        } else {
+            const luaui::ElementScope scope{state, self, nargs};
+            ok = luaui::safeCall(state, scope.nargs(), 0);
+        }
     }
     if (connected) ok = luaui::callListeners(state, self, signal, fn + 1, nargs) || ok;
     return ok;

@@ -96,7 +96,6 @@ void Grid::render(Frame& frame) {
         // aren't entered, so the rows after it start where they would. A row is measured as the distance to the
         // next row's top, so the last row is never culled. A row whose cells held the active item, the nav focus,
         // an open popup or a non-visual element is pinned (cull::pin) and renders on the next frame too.
-        lua::State* state = frame.node().state();
         Renderer::Culling culling{r, frame.node(), width};
         int cell = cols;        // cells taken in the current row; `cols`: the next visual child starts a row
         bool rowCulled = false; // the current row is culled: its cells are skipped
@@ -110,9 +109,9 @@ void Grid::render(Frame& frame) {
         const auto endRow = [&] {
             if (rowKey != 0 && !rowCulled && cull::held(rowWatch)) cull::pin(rowKey);
         };
-        r.forEachChild(frame.node(), [&](int idx) {
-            if (!culling.next(idx)) {
-                r.render(state, idx);
+        r.forEachChild(frame.node(), Renderer::Memo::Reuse, [&](const Renderer::ChildRef& child) {
+            if (!culling.next(child)) {
+                r.render(child);
                 return;
             }
             if (cell == cols) {
@@ -130,9 +129,8 @@ void Grid::render(Frame& frame) {
                         knownRowHeights += rowTop - lastTop;
                         ++knownRows;
                     }
-                    const luaui::Node c{state, idx};
                     rowKey = ImGui::GetID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
-                        culling.key(c, false)))); // not the child's own ID: GetID hashes it again
+                        culling.key(child, false)))); // not the child's own ID: GetID hashes it again
                     rowCulled = false;
                     rowEstimated = false;
                     rowProvisional = r.provisionals();
@@ -173,13 +171,13 @@ void Grid::render(Frame& frame) {
             if (rowCulled) {
                 // In a row laid out at an estimate, a cell whose subtree holds a non-visual element (a Dialog, a
                 // Timer) renders anyway, in its column, so it pins what it holds (Renderer::holdsNonVisual).
-                if (!rowEstimated || !culling.holdsNonVisual(luaui::Node{state, idx})) return;
+                if (!rowEstimated || !culling.holdsNonVisual(child.node())) return;
                 ImGui::TableSetColumnIndex(cell - 1);
             } else {
                 ImGui::TableNextColumn();
             }
             const layout::BoxScope box{layout::regionBox()}; // the cell is the child's box
-            r.render(state, idx);
+            r.render(child);
         });
         if (culling.pins()) endRow();
         ImGui::EndTable();
