@@ -540,6 +540,94 @@ TEST_F(ElementScopesTest, AnAwaitingComponentBuilderKeepsItsScopeToItself) {
     EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
 }
 
+// A plain coroutine (not an async function) that yields inside a component's builder keeps the builder's scope to
+// itself, as an async function does: the resumer's code after the yield runs at its own level, the builder has its
+// scope again when it resumes, and closing the suspended coroutine pops the scope from the coroutine's stack, not the
+// closer's. A coroutine created inside a component runs in its scope wherever it is resumed; coroutine.wrap gets the
+// same.
+TEST_F(ElementScopesTest, APlainCoroutineThatYieldsInAScopeKeepsItToItself) {
+    run(R"(
+        Paused = component(function(props, ids)
+            props.out.ids = ids
+            local _ <close> = setmetatable({}, { __close = function() props.out.closed = true end })
+            coroutine.yield("paused")
+            return Column { Text { id = "late" } }
+        end)
+        first = {}
+        local co = coroutine.create(function() return Paused { out = first } end)
+        local ok, what = coroutine.resume(co)
+        assert(ok and what == "paused", tostring(what))
+        during = Text { id = "duringYield" }
+        assert(ui.ids.duringYield == during and first.ids.duringYield == nil, "the yielded builder's scope stayed active")
+        local ok2, root = coroutine.resume(co)
+        assert(ok2 and type(root) == "table", tostring(root))
+        assert(coroutine.status(co) == "dead" and first.closed)
+        assert(first.ids.late ~= nil and ui.ids.late == nil, "the builder resumed outside its scope")
+        afterResume = Text { id = "afterResume" }
+        assert(ui.ids.afterResume == afterResume and first.ids.afterResume == nil)
+
+        second = {}
+        local wrapped = coroutine.wrap(function() return Paused { out = second } end)
+        assert(wrapped() == "paused")
+        duringWrapped = Text { id = "duringWrapped" }
+        assert(ui.ids.duringWrapped == duringWrapped and second.ids.duringWrapped == nil)
+        assert(type(wrapped()) == "table" and second.ids.late ~= nil)
+
+        Outer = component(function(props, ids)
+            outerIds = ids
+            innerCo = coroutine.create(function()
+                coroutine.yield()
+                innerText = Text { id = "fromInner" }
+            end)
+            coroutine.resume(innerCo)
+            return Column { Text { id = "own" } }
+        end)
+        Outer {}
+        coroutine.resume(innerCo) -- resumed at app level: runs in Outer's scope, where it was created
+        assert(outerIds.fromInner == innerText and ui.ids.fromInner == nil, "the coroutine left its creator's scope")
+
+        third = {}
+        local paused = coroutine.create(function() Paused { out = third } end)
+        coroutine.resume(paused)
+        Closer = component(function(props, ids)
+            closerIds = ids
+            assert(coroutine.close(paused) and third.closed)
+            return Text { id = "afterClose" }
+        end)
+        Closer {}
+        assert(closerIds.afterClose ~= nil and third.ids.afterClose == nil, "closing popped the closer's scope")
+        afterAll = Text { id = "afterAll" }
+        assert(ui.ids.afterAll == afterAll and closerIds.afterAll == nil and third.ids.afterAll == nil))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
+// The coroutine functions scripts get keep the library's behavior: wrap raises a coroutine's error in the caller (with
+// the caller's position for a string, after closing the coroutine), and bad arguments are errors.
+TEST_F(ElementScopesTest, ScriptCoroutinesBehaveLikeLuasOwn) {
+    run(R"(
+        local closed = false
+        local failing = coroutine.wrap(function()
+            local _ <close> = setmetatable({}, { __close = function() closed = true end })
+            error("boom", 0)
+        end)
+        local ok, err = pcall(failing)
+        assert(not ok and err:find("boom", 1, true) and closed, tostring(err))
+        local obj = {}
+        local ok2, err2 = pcall(coroutine.wrap(function() error(obj) end))
+        assert(not ok2 and err2 == obj)
+        assert(not pcall(coroutine.resume, 42) and not pcall(coroutine.create, 42) and not pcall(coroutine.wrap, 1))
+        assert(not pcall(coroutine.close, coroutine.running()))
+        local gen = coroutine.wrap(function() for i = 1, 3 do coroutine.yield(i) end end)
+        assert(gen() == 1 and gen() == 2 and gen() == 3)
+        local co = coroutine.create(function(a, b) local c = coroutine.yield(a + b); return c * 2 end)
+        local _, s = coroutine.resume(co, 1, 2)
+        local _, d = coroutine.resume(co, 5)
+        assert(s == 3 and d == 10 and coroutine.status(co) == "dead")
+        local okDead, msg = coroutine.resume(co)
+        assert(not okDead and msg:find("dead", 1, true)))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
 TEST_F(ElementScopesTest, ParentLinksKeepOtherFieldsAndMethodsWorking) {
     run(R"(
         t = Timer { interval = 100 }

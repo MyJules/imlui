@@ -55,7 +55,9 @@ app-level watcher that a component's handler triggers (by writing the state) bui
 component's `ids`. So do a future's `next`/`catch`/`onProgress` handlers and an async function's coroutine. The scope
 is popped however the call ends (a to-be-closed variable), so a handler that raises can't leave it behind. An async
 function keeps its scopes to itself: one that awaits while a component it builds is in its scope doesn't leave that
-scope active for other code while it waits, gets it back when it resumes, and pops it when it's cancelled. Not covered: the getter and
+scope active for other code while it waits, gets it back when it resumes, and pops it when it's cancelled. A plain
+coroutine (`coroutine.create`, `coroutine.wrap`) does the same: it runs in the scope it was created in, wherever it is
+resumed, a scope it yields inside stays with it, and `coroutine.close` pops it from the coroutine's stack. Not covered: the getter and
 setter of a `bind(getter, setter)` (they run in whatever scope is active, app level when imlui calls them), and
 functions of an app-level element, which run in whatever scope is active (app level whenever the engine calls them).
 

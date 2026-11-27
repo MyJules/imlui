@@ -54,6 +54,7 @@ ui.ids = weakIds()
 -- (atAppLevel). Empty: app level too. `scopes[#scopes] or nil` is the current scope, nil at app level. Each async
 -- function's coroutine has a stack of its own, swapped in while it runs (see step): a coroutine that awaits inside a
 -- scope keeps it to itself, and the pops of its to-be-closed POP_SCOPEs (when it resumes, or is closed) apply to it.
+-- A plain coroutine a script creates (coroutine.create, coroutine.wrap) has one too (see coResume).
 local scopes = {}
 
 -- The elements registered under an id since the last ui.__tick. Ids are weak, so until then, while a script still
@@ -1564,6 +1565,10 @@ function ui.future()
     return f
 end
 
+-- The coroutine library's own functions: scripts get coroutine.create, resume, wrap and close that give each
+-- coroutine a scope stack of its own (see coResume); the async functions' coroutines keep theirs in their task.
+local rawCreate, rawResume, rawClose, rawStatus = coroutine.create, coroutine.resume, coroutine.close, coroutine.status
+
 -- Async functions. tasks[coroutine] = { co, future, scopes = its scope stack, waiting = the future it awaits,
 -- cancelled }. The stack starts with the scope the async function was called in (false: app level).
 local tasks = setmetatable({}, { __mode = "k" })
@@ -1573,7 +1578,7 @@ local tasks = setmetatable({}, { __mode = "k" })
 local function closeTask(task)
     local saved = scopes
     scopes = task.scopes
-    coroutine.close(task.co) -- returns an error a __close raised; never raises
+    rawClose(task.co) -- returns an error a __close raised; never raises
     scopes = saved
 end
 
@@ -1583,7 +1588,7 @@ end
 local function finish(task, saved, ok, ...)
     scopes = saved
     local co = task.co
-    if coroutine.status(co) == "dead" then
+    if rawStatus(co) == "dead" then
         tasks[co] = nil
         if ok then
             settle(task.future, "done", ...)
@@ -1605,7 +1610,7 @@ local function step(task, ...)
     task.waiting = nil
     local saved = scopes
     scopes = task.scopes
-    return finish(task, saved, coroutine.resume(task.co, ...)) -- resume never raises: `saved` is always put back
+    return finish(task, saved, rawResume(task.co, ...)) -- resume never raises: `saved` is always put back
 end
 
 --- async(fn) -> function. Calling the result runs fn(...) in a new coroutine, which may `await`, and returns a future
@@ -1616,7 +1621,7 @@ function ui.async(fn)
     if type(fn) ~= "function" then error("async: a function expected, got " .. type(fn), 2) end
     return function(...)
         local f = newFuture()
-        local task = { co = coroutine.create(fn), future = f, scopes = { scopes[#scopes] or false } }
+        local task = { co = rawCreate(fn), future = f, scopes = { scopes[#scopes] or false } }
         tasks[task.co] = task
         f.__cancel = function()
             task.cancelled = true
@@ -1624,7 +1629,7 @@ function ui.async(fn)
             local waiting = task.waiting
             task.waiting = nil
             if waiting then release(waiting) end
-            if coroutine.status(task.co) == "suspended" then closeTask(task) end
+            if rawStatus(task.co) == "suspended" then closeTask(task) end
         end
         step(task, ...)
         return f
@@ -1650,6 +1655,70 @@ function ui.await(f)
     if f.state == "done" then return table.unpack(f.__values, 1, f.__values.n) end
     error(f.error, 0)
 end
+
+-- Plain coroutines. coScopes[co] is the scope stack of a coroutine a script created, swapped in while it runs, as an
+-- async function's is: it starts with the scope the coroutine was created in (false: app level), and a coroutine that
+-- yields inside a scope (a component's builder, a handler) keeps the scope to itself instead of leaving it on the
+-- resumer's stack, where the code after the resume would run in it and the coroutine's pop, once it resumes, would
+-- pop the resumer's scope. A coroutine without one (an async function's, the main thread) runs on the resumer's.
+local coScopes = setmetatable({}, { __mode = "k" })
+
+-- Puts the resumer's stack `saved` back and returns the results of the resume or close.
+local function coRestore(saved, ...)
+    scopes = saved
+    return ...
+end
+
+local function coCreate(fn)
+    if type(fn) ~= "function" then error("bad argument #1 to 'create' (function expected)", 2) end
+    local co = rawCreate(fn)
+    coScopes[co] = { scopes[#scopes] or false }
+    return co
+end
+
+-- coroutine.resume with the coroutine's own scope stack in place. Neither resume nor this raises once `co` is a
+-- coroutine, so the resumer's stack is always put back.
+local function coResume(co, ...)
+    if type(co) ~= "thread" then error("bad argument #1 to 'resume' (coroutine expected)", 2) end
+    local own = coScopes[co]
+    if own == nil or own == scopes then return rawResume(co, ...) end
+    local saved = scopes
+    scopes = own
+    return coRestore(saved, rawResume(co, ...))
+end
+
+-- coroutine.close with the coroutine's own stack in place, for the pops of its pending POP_SCOPEs. A coroutine that
+-- is running or resuming another one can't be closed: close raises, with the stack left as it is.
+local function coClose(co)
+    if type(co) ~= "thread" then error("bad argument #1 to 'close' (coroutine expected)", 2) end
+    local own = coScopes[co]
+    local status = rawStatus(co)
+    if own == nil or own == scopes or (status ~= "suspended" and status ~= "dead") then return rawClose(co) end
+    local saved = scopes
+    scopes = own
+    return coRestore(saved, rawClose(co))
+end
+
+-- The results of a coroutine.wrap function's resume: its values, or its error raised in the caller, like Lua's own
+-- wrap: a coroutine that raised is closed first (an error its __close raises replaces the error) and a string error
+-- gets the caller's position. Tail-called, so level 2 is the wrap function's caller.
+local function wrapResults(co, ok, ...)
+    if ok then return ... end
+    local err = ...
+    if rawStatus(co) == "dead" then
+        local closed, closeErr = coClose(co)
+        if not closed then err = closeErr end
+    end
+    error(err, type(err) == "string" and 2 or 0)
+end
+
+local function coWrap(fn)
+    if type(fn) ~= "function" then error("bad argument #1 to 'wrap' (function expected)", 2) end
+    local co = coCreate(fn)
+    return function(...) return wrapResults(co, coResume(co, ...)) end
+end
+
+coroutine.create, coroutine.resume, coroutine.close, coroutine.wrap = coCreate, coResume, coClose, coWrap
 
 --- sleep(ms) -> future, done after `ms` milliseconds (a timer, like setTimeout). Cancelling it clears the timer.
 function ui.sleep(ms)

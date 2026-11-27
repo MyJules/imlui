@@ -603,7 +603,11 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
 - **Id scopes.** A stack of scopes, each `{ ids, what }`. `ui.component(fn)` pushes a new scope around
   `fn(props, ids)` and `repeaterChildren` one around each `delegate(item, index, ids)` it builds. Every element
   built while the stack isn't empty is recorded in `scopeOf[element] = scope` (weak keys). The resource searcher
-  runs a module's top level with an empty stack.
+  runs a module's top level with an empty stack. An async function's coroutine has a stack of its own (in its task),
+  swapped in while it runs, which starts with the scope it was called in; so does a coroutine a script creates: the
+  DSL replaces `coroutine.create`, `resume`, `wrap` and `close` with ones that keep a stack per coroutine (`coScopes`,
+  weak keys) and swap it in for each resume and close. A coroutine that yields inside a scope then keeps it to itself
+  instead of leaving it on the resumer's stack.
 - **Functions in their element's scope.** At load the DSL hands `scopeOf` and `inScope(scope, fn, ...)` to C++
   (`native.setScopeHooks`, kept at registry keys by `imlui.lua.element_scope`). Every C++ call of an element's
   function goes through `luaui::scopedArgs(state, element, nargs)`: when the element has a scope, it inserts
