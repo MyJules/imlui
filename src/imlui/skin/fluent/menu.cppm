@@ -22,6 +22,7 @@ import imlui.theme.fluent_colors;
 import imlui.theme.icons;
 import imlui.theme.typography;
 import imlui.ui.layout_box;
+import imlui.widgets.anchored_popup;
 import imlui.widgets.common;
 import imlui.widgets.menu;
 
@@ -49,87 +50,13 @@ namespace imlui::fluent {
 namespace {
 
 constexpr float rowExtra = 8.0f;      // dp over compactHeight
-constexpr float flyoutPadY = 2.0f;    // dp above the first row and below the last
 constexpr float minRowWidth = 160.0f; // dp
 constexpr float shortcutGap = 24.0f;  // dp between the label and the shortcut, at the least
 constexpr float anchorGap = 2.0f;     // dp between the anchor and its flyout
-constexpr float shadowLevel = 2.0f;   // md::drawShadow's level
 constexpr int visibleRows = 8;        // an anchored menu's height before it scrolls
-constexpr TextStyle captionStyle = TextStyle::BodySmall;
 
-// The anchored flyout's size, recorded in the anchor window's storage at the popup key's offsets md's anchored popup
-// uses for the same values, so a switch of design keeps the placement.
-constexpr ImGuiID widthSlot = 3;
-constexpr ImGuiID heightSlot = 4;
-constexpr ImGuiID shownSlot = 5;
-
-/// Four style vars (WindowPadding, PopupRounding, PopupBorderSize, ItemSpacing: the last, so beginMenu can pop it
-/// alone) and two colors (PopupBg, Border).
-void pushFlyoutStyle(const Look& look) {
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, look.colors.flyout.vec4());
-    ImGui::PushStyleColor(ImGuiCol_Border, look.colors.flyoutStroke.vec4());
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, dp(flyoutPadY)});
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, overlayRadius(look));
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, strokeWidth(look));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
-}
-
-void popFlyoutStyle() {
-    ImGui::PopStyleVar(4);
-    ImGui::PopStyleColor(2);
-}
-
-/// Where a popup of `size` goes next to the anchor [a, b]: md's placement (below, left edges aligned; else right
-/// edges aligned and/or above; clamped to the main viewport).
-ImVec2 placeInViewport(ImVec2 a, ImVec2 b, ImVec2 size, float gap) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const ImVec2 lo = vp->Pos, hi{vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y};
-    float x = a.x;
-    if (x + size.x > hi.x) x = b.x - size.x;
-    x = std::max(lo.x, std::min(x, hi.x - size.x));
-    float y = b.y + gap;
-    if (y + size.y > hi.y) {
-        const float above = a.y - gap - size.y;
-        if (above >= lo.y || a.y - lo.y > hi.y - b.y) y = above;
-    }
-    y = std::max(lo.y, std::min(y, hi.y - size.y));
-    return {x, y};
-}
-
-struct Flyout {
-    ImGuiStorage* storage = nullptr;
-    ImGuiID key = 0;
-};
-
-/// Positions the next window next to [a, b] and draws its shadow (in the anchor's window, behind the popup, at last
-/// frame's size), with the overlay radius.
-Flyout placeFlyout(const Look& look, const char* popupId, ImVec2 a, ImVec2 b, float minWidth) {
-    Flyout f{ImGui::GetStateStorage(), ImGui::GetID(popupId)};
-    const ImVec2 size{std::max(minWidth, f.storage->GetFloat(f.key + widthSlot, 0.0f)),
-                      f.storage->GetFloat(f.key + heightSlot, 0.0f)};
-    const ImVec2 pos = placeInViewport(a, b, size, dp(anchorGap));
-    ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
-    if (ImGui::IsPopupOpen(popupId) && f.storage->GetBool(f.key + shownSlot, false) && size.y > 0) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->PushClipRectFullScreen();
-        md::drawShadow(dl, pos, {pos.x + size.x, pos.y + size.y}, overlayRadius(look), shadowLevel);
-        dl->PopClipRect();
-    }
-    return f;
-}
-
-/// Records the flyout's size for the next frame (call right after BeginPopup, with its result).
-void trackFlyout(const Flyout& f, bool open) {
-    if (!open) {
-        f.storage->SetBool(f.key + shownSlot, false);
-        return;
-    }
-    // The appearing frame is laid out hidden, with a provisional size: no shadow for it yet.
-    f.storage->SetBool(f.key + shownSlot, !ImGui::IsWindowAppearing());
-    const ImVec2 sz = ImGui::GetWindowSize();
-    f.storage->SetFloat(f.key + widthSlot, sz.x);
-    f.storage->SetFloat(f.key + heightSlot, sz.y);
-}
+/// The flyout's padding: flyoutPaddingY above and below the rows, none at the sides.
+ImVec2 menuPadding() { return {0, dp(flyoutPaddingY)}; }
 
 } // namespace
 
@@ -183,11 +110,9 @@ bool menuItem(const Look& look, const char* id, std::string_view label, std::str
 }
 
 bool beginMenu(const Look& look, const char* label, float minWidth) {
-    pushFlyoutStyle(look);
-    ImGui::PopStyleVar(); // keep the menu bar's own item spacing
+    pushFlyoutStyle(look, menuPadding()); // the menu bar's own item spacing stays for BeginMenu's item
     const bool open = ImGui::BeginMenu(label);
-    ImGui::PopStyleVar(3);
-    ImGui::PopStyleColor(2);
+    popFlyoutStyle();
     if (open) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
         md::pushMenuBox(minWidth);
@@ -202,13 +127,17 @@ void endMenu() {
 }
 
 bool beginAnchoredMenu(const Look& look, const char* popupId, ImVec2 a, ImVec2 b, float minWidth) {
-    const Flyout f = placeFlyout(look, popupId, a, b, minWidth);
-    ImGui::SetNextWindowSizeConstraints({minWidth, 0},
-                                        {md::hugeExtent, menuRowHeight(look) * visibleRows + 2.0f * dp(flyoutPadY)});
-    pushFlyoutStyle(look);
+    // beginFlyout's steps, with the rows' zero item spacing already set for BeginPopup (md's anchored menu sets it
+    // there too: ImGui sizes a window's menu columns from it).
+    const md::AnchoredPopup placed = placeFlyout(look, popupId, a, b, minWidth, dp(anchorGap));
+    ImGui::SetNextWindowSizeConstraints(
+        {minWidth, 0}, {md::hugeExtent, menuRowHeight(look) * visibleRows + 2.0f * dp(flyoutPaddingY)});
+    pushFlyoutStyle(look, menuPadding());
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
     const bool open = ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
+    ImGui::PopStyleVar();
     popFlyoutStyle();
-    trackFlyout(f, open);
+    md::trackAnchoredPopup(placed, open);
     if (open) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
         md::pushMenuBox(minWidth);

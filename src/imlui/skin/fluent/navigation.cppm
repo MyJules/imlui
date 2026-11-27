@@ -57,7 +57,6 @@ constexpr float navIconExtra = 4.0f;    // dp over iconSize
 constexpr float labelGap = 4.0f;        // dp between a destination's icon and its label
 constexpr float badgeHeight = 16.0f;    // dp
 constexpr float badgeDot = 3.0f;        // dp: a dot badge's radius
-constexpr TextStyle captionStyle = TextStyle::BodySmall;
 constexpr TextStyle badgeStyle = TextStyle::LabelSmall;
 
 float navIconDp(const Look& look) { return iconSize(look) + navIconExtra; }

@@ -43,12 +43,11 @@ namespace imlui::fluent {
 
 namespace {
 
-constexpr float rowExtra = 8.0f;                         // dp over controlHeight: a one-line row (40dp)
-constexpr float twoLineExtra = 24.0f;                    // dp over controlHeight: a row with a supporting line (56dp)
-constexpr float expanderExtra = 16.0f;                   // dp over controlHeight: an expander header (48dp)
-constexpr float expanderTwoExtra = 32.0f;                // with a supporting line (64dp)
-constexpr float naturalWidth = 320.0f;                   // dp: a row's and a header's natural width, md's
-constexpr TextStyle captionStyle = TextStyle::BodySmall; // Fluent's caption (12dp): supporting and trailing text
+constexpr float rowExtra = 8.0f;          // dp over controlHeight: a one-line row (40dp)
+constexpr float twoLineExtra = 24.0f;     // dp over controlHeight: a row with a supporting line (56dp)
+constexpr float expanderExtra = 16.0f;    // dp over controlHeight: an expander header (48dp)
+constexpr float expanderTwoExtra = 32.0f; // with a supporting line (64dp)
+constexpr float naturalWidth = 320.0f;    // dp: a row's and a header's natural width, md's
 
 float density(const Look& look) { return look.tokens.density; }
 
