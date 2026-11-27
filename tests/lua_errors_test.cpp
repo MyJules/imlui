@@ -174,6 +174,7 @@ TEST(SafeCallTest, AFullStackIsReportedNotOverrun) {
     EXPECT_FALSE(luaui::callListeners(state, 1, "onClicked", 1, 0));
     EXPECT_EQ(luaui::scopedArgs(state, 1, 0), 0);
     EXPECT_EQ(lua::gettop(state), top);
+    EXPECT_TRUE(lua::isfunction(state, -1)) << "the function to call (a nil here) is replaced by one doing nothing";
     ASSERT_EQ(luaui::errors().size(), 3u);
     for (const std::string& e : luaui::errors())
         EXPECT_TRUE(e.starts_with("stack overflow")) << e;
