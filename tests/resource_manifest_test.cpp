@@ -723,6 +723,27 @@ TEST(EncodingCache, ResourceCompilerRerunsGiveTheSameBlob) {
     EXPECT_EQ(*tools::readFile(blob), *first);
 }
 
+// The generated module names its manifest relative to the output folder, so two checkouts generate the same module
+// (only --dev-paths and --source-dirs write absolute folders).
+TEST(ResourceCompiler, TheModuleNamesItsManifestRelativeToTheOutput) {
+    test::TempDir dir;
+    dir.write("src/main.lua", "return 1");
+    dir.write("src/resources.lua", R"(return { prefix = "app", include = { "*.lua" } })");
+    const std::string manifestPath = tools::utf8(dir.path() / "src" / "resources.lua");
+    const std::string out = tools::utf8(dir.path() / "build" / "out");
+    for (const char* mode : {"", "--source-dirs"}) {
+        std::vector<std::string> args{manifestPath, "res", out};
+        if (*mode) args.insert(args.begin(), mode);
+        ASSERT_EQ(tools::runRc(args), 0) << mode;
+        const auto module = tools::readFile(dir.path() / "build" / "out" / "res.cppm");
+        ASSERT_TRUE(module);
+        const std::string text{reinterpret_cast<const char*>(module->data()), module->size()};
+        const std::string firstLine = text.substr(0, text.find('\n'));
+        EXPECT_NE(firstLine.find(" from ../../src/resources.lua. Do not edit."), std::string::npos) << firstLine;
+        if (!*mode) EXPECT_EQ(text.find(tools::utf8(dir.path())), std::string::npos) << "an absolute path";
+    }
+}
+
 // ------------------------------------------------------------------ .pak archives of several groups
 
 TEST(ResourceManifest, GroupsMergeIntoOneArchiveUnderTheirCommonFolder) {
