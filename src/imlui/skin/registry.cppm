@@ -1,5 +1,5 @@
 // The skin registry: skin() is the active skin, the one registered under theme().design; registerSkin() adds one.
-// "material" (the Skin base class) and "fluent" (FluentSkin) are built in.
+// "material" (MaterialSkin) and "fluent" (FluentSkin) are built in.
 //
 // The active skin: skin() is resolved from theme().design when the theme generation moved, so a design switches
 // with the theme, between frames (themeGeneration() moves only in applyPendingTheme()), never mid-frame. The theme
@@ -13,6 +13,7 @@ import std;
 import imlui.log;
 import imlui.skin.base;
 import imlui.skin.fluent.fluent_skin;
+import imlui.skin.material.material_skin;
 import imlui.theme.fluent_colors;
 import imlui.theme.theme;
 
@@ -46,7 +47,7 @@ namespace imlui {
 namespace {
 
 /// The design every theme starts with, always registered.
-constexpr std::string_view materialDesign = "material";
+constexpr std::string_view materialDesign = material::designName;
 
 /// Last resort when a factory gives no skin: the base class is Material.
 const Skin materialFallback{};
@@ -59,7 +60,7 @@ struct Registry {
 Registry& registry() {
     static Registry r = [] {
         Registry init;
-        init.factories.emplace(std::string{materialDesign}, [] { return std::make_unique<Skin>(); });
+        init.factories.emplace(std::string{materialDesign}, [] { return std::make_unique<MaterialSkin>(); });
         init.factories.emplace(std::string{fluent::designName}, [] { return std::make_unique<FluentSkin>(); });
         return init;
     }();

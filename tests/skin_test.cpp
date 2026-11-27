@@ -95,6 +95,12 @@ TEST_F(SkinTest, MaterialIsTheDefault) {
     EXPECT_EQ(skin().name(), "material");
 }
 
+// "material" is made from its own class, MaterialSkin, like "fluent" from FluentSkin.
+TEST_F(SkinTest, MaterialIsAMaterialSkin) {
+    EXPECT_NE(dynamic_cast<const MaterialSkin*>(&skin()), nullptr);
+    EXPECT_EQ(MaterialSkin{}.name(), material::designName);
+}
+
 // The test skin draws and measures the Button; a Checkbox, which it doesn't override, keeps its Material size.
 TEST_F(SkinTest, ARegisteredSkinDrawsTheControlsItOverrides) {
     run(R"(
