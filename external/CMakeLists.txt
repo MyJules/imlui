@@ -80,6 +80,36 @@ else()
     add_library(ext::glfw ALIAS glfw)
 endif()
 
+# ---------------------------------------------------------------- SDL 3.4.20 (`SDL3-static`, see the top of this file)
+# Windowing, input and events (src/wrap/window.cppm). Trimmed to what its CMake build needs: no test/, examples/,
+# docs/, build-scripts/ or IDE projects. Only the static library, and only the parts imlui uses: video (with OpenGL)
+# and events. The other subsystems (audio, GPU, the 2D renderer, camera, joystick and gamepad, haptic, HIDAPI, power,
+# sensor, dialogs) are off; their functions still exist and fail (imgui_impl_sdl3 asks for gamepads and gets none).
+if(TARGET SDL3::SDL3)
+    _imlui_use_app_library(sdl3 SDL3::SDL3)
+else()
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    foreach(option SDL_SHARED SDL_TEST_LIBRARY SDL_TESTS SDL_EXAMPLES SDL_INSTALL SDL_UNINSTALL SDL_INSTALL_DOCS
+                   SDL_AUDIO SDL_GPU SDL_RENDER SDL_CAMERA SDL_JOYSTICK SDL_HAPTIC SDL_HIDAPI SDL_POWER SDL_SENSOR
+                   SDL_DIALOG SDL_VULKAN SDL_XINPUT)
+        set(${option} OFF CACHE BOOL "" FORCE)
+    endforeach()
+    # A GitHub archive has no REVISION.txt: without a revision SDL would ask git, which would describe imlui's checkout.
+    set(SDL_REVISION "SDL-release-3.4.20" CACHE STRING "" FORCE)
+    add_subdirectory(SDL EXCLUDE_FROM_ALL)
+    # Its own install rules are off; ours install the library and its headers under the private folder instead.
+    set_target_properties(SDL3-static PROPERTIES SYSTEM ON EXPORT_NAME ext_sdl3)
+    if(WIN32) # its fallbacks to the CRT's itoa family, which the CRT headers mark deprecated
+        target_compile_definitions(SDL3-static PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+    endif()
+    set_target_properties(SDL3_Headers PROPERTIES SYSTEM ON EXPORT_NAME ext_sdl3_headers)
+    # The generated SDL_revision.h first, as SDL's own target has it.
+    set(sdl_build_include ${CMAKE_CURRENT_BINARY_DIR}/SDL/include-revision ${CMAKE_CURRENT_SOURCE_DIR}/SDL/include)
+    set_property(TARGET SDL3_Headers PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+                 "$<BUILD_INTERFACE:${sdl_build_include}>" $<INSTALL_INTERFACE:${ext_include}/SDL>)
+    add_library(ext::sdl3 ALIAS SDL3-static)
+endif()
+
 # ---------------------------------------------------------------- Dear ImGui
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
 add_library(imlui_ext_imgui STATIC
