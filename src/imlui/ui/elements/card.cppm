@@ -10,8 +10,11 @@ import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
+import imlui.ui.enum_names;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -28,9 +31,8 @@ public:
     /// Its width, and around its stack (Frame::stackSize) when no `height` is set.
     [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
-    /// "elevated" | "filled" | "outlined".
-    [[nodiscard]] const std::string& variant() const;
-    void setVariant(std::string variant);
+    [[nodiscard]] md::CardVariant variant() const;
+    void setVariant(md::CardVariant variant);
     [[nodiscard]] float padding() const; ///< dp
     void setPadding(float padding);
     [[nodiscard]] std::optional<Color> color() const; ///< container color; unset uses the variant's
@@ -41,16 +43,16 @@ public:
     [[nodiscard]] std::optional<double> spacing() const;
     void setSpacing(std::optional<double> spacing);
     /// Horizontal alignment of the children. Frame::renderStack() applies it.
-    [[nodiscard]] const std::string& align() const;
-    void setAlign(std::string align);
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
 
 private:
-    std::string m_variant = "elevated";
+    md::CardVariant m_variant = md::CardVariant::Elevated;
     float m_padding = 16.0f;
     std::optional<Color> m_color;
     std::optional<float> m_rounding;
     std::optional<double> m_spacing;
-    std::string m_align = "start";
+    Align m_align = Align::Start;
 };
 
 } // namespace imlui
@@ -84,8 +86,8 @@ void Card::render(Frame& frame) {
     // Clipped away (scrolled out of view): the content isn't rendered, so its sizes in the layout cache stay what
     // they were, instead of the near-zero sizes items get under SkipItems (settle frames now, a misplaced frame
     // when it scrolls back).
-    if (skin().beginCard("##card", md::cardVariant(m_variant), frame.size("width"), m_padding,
-                         frame.resolvedHeight(0.0f), m_color, m_rounding.value_or(-1.0f))) {
+    if (skin().beginCard("##card", m_variant, frame.size("width"), m_padding, frame.resolvedHeight(0.0f), m_color,
+                         m_rounding.value_or(-1.0f))) {
         const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
         frame.renderStack();
     }
@@ -103,8 +105,8 @@ std::optional<ImVec2> Card::intrinsicSize(const Frame& frame, float maxWidth) {
     return skin().cardSize(width, m_padding, 0.0f, stack->y);
 }
 
-const std::string& Card::variant() const { return m_variant; }
-void Card::setVariant(std::string variant) { m_variant = std::move(variant); }
+md::CardVariant Card::variant() const { return m_variant; }
+void Card::setVariant(md::CardVariant variant) { m_variant = variant; }
 float Card::padding() const { return m_padding; }
 void Card::setPadding(float padding) { m_padding = padding; }
 std::optional<Color> Card::color() const { return m_color; }
@@ -113,7 +115,7 @@ std::optional<float> Card::rounding() const { return m_rounding; }
 void Card::setRounding(std::optional<float> rounding) { m_rounding = rounding; }
 std::optional<double> Card::spacing() const { return m_spacing; }
 void Card::setSpacing(std::optional<double> spacing) { m_spacing = spacing; }
-const std::string& Card::align() const { return m_align; }
-void Card::setAlign(std::string align) { m_align = std::move(align); }
+Align Card::align() const { return m_align; }
+void Card::setAlign(Align align) { m_align = align; }
 
 } // namespace imlui

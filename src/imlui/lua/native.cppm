@@ -20,8 +20,10 @@ import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.theme_table;
 import imlui.lua.value;
+import imlui.types.lua_convert;
 import imlui.ui.clock;
 import imlui.ui.culling;
+import imlui.ui.enum_names;
 import imlui.ui.frame_request;
 import imlui.ui.size_class;
 
@@ -274,8 +276,11 @@ constexpr NativeFn nativeFns[] = {
          if (!lua::isstring(state, 1)) lua::error(state, "textSize expects a string");
          std::string_view s = lua::tostring(state, 1);
          TextStyle st = TextStyle::BodyLarge;
-         if (lua::type(state, 2) == lua::Type::String)
-             if (auto t = textStyleFromName(lua::tostring(state, 2))) st = *t;
+         if (!lua::isnoneornil(state, 2)) {
+             if (!LuaConvert<TextStyle>::check(state, 2))
+                 lua::error(state, "textSize: style: " + LuaConvert<TextStyle>::mismatch(state, 2));
+             st = LuaConvert<TextStyle>::get(state, 2);
+         }
          const FontFaceScope face{lua::type(state, 3) == lua::Type::String ? lua::tostring(state, 3) : ""};
          ImVec2 sz = font(st)->CalcTextSizeA(fontPixels(st), 3.4e38f, 0.0f, s.data(), s.data() + s.size());
          lua::pushnumber(state, static_cast<double>(sz.x / dpiScale()));

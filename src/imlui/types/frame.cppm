@@ -200,8 +200,8 @@ public:
     [[nodiscard]] float widthIn(float maxWidth, float natural = 0.0f) const;
     /// "Label###id": the visible text may change every frame without changing the ImGui ID.
     [[nodiscard]] static std::string labelId(std::string_view text, const char* id);
-    /// "start" -> 0, "center" -> 0.5, "end" / "right" / "bottom" -> 1.
-    [[nodiscard]] static float alignFactor(std::string_view align);
+    /// Align::Start -> 0, Center -> 0.5, End -> 1 (imlui::alignFactor).
+    [[nodiscard]] static float alignFactor(Align align);
 
     // ---- environment
 
@@ -349,7 +349,7 @@ float Frame::resolvedHeight(float natural) const {
 }
 float Frame::widthIn(float maxWidth, float natural) const { return resolveSize(size("width"), maxWidth, natural); }
 std::string Frame::labelId(std::string_view text, const char* id) { return imlui::labelId(text, id); }
-float Frame::alignFactor(std::string_view align) { return imlui::alignFactor(align); }
+float Frame::alignFactor(Align align) { return imlui::alignFactor(align); }
 
 float Frame::dp(float v) const { return imlui::dp(v); }
 ImDrawList* Frame::drawList() const { return ImGui::GetWindowDrawList(); }

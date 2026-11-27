@@ -26,10 +26,8 @@ bool switchToggle(const char* label, bool* v, bool withIcons = true);
 /// The size of switchToggle(label).
 [[nodiscard]] ImVec2 switchSize(const char* label);
 
+/// A chip's kind; its Lua names ("filter", "assist", ...) are in imlui.ui.enum_names.
 enum class ChipVariant { Filter, Assist, Suggestion, Input };
-
-/// "filter" (default), "assist", "suggestion", "input".
-[[nodiscard]] ChipVariant chipVariant(std::string_view n);
 
 /// Chip. Returns true when clicked.
 bool chip(const char* label, bool selected, ChipVariant v = ChipVariant::Filter, std::string_view leadingIcon = {});
@@ -205,13 +203,6 @@ bool switchToggle(const char* label, bool* v, bool withIcons) {
         drawTextV(dl, TextStyle::BodyLarge, p.x + tw + dp(12), a.y + th * 0.5f, dis ? disabledContent() : s.onSurface,
                   text);
     return clicked;
-}
-
-ChipVariant chipVariant(std::string_view n) {
-    if (n == "assist") return ChipVariant::Assist;
-    if (n == "suggestion") return ChipVariant::Suggestion;
-    if (n == "input") return ChipVariant::Input;
-    return ChipVariant::Filter;
 }
 
 bool chip(const char* label, bool selected, ChipVariant v, std::string_view leadingIcon) {

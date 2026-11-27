@@ -26,8 +26,7 @@ ui = {}
 ---A color scheme: `{ role = "#RRGGBB" }`.
 ---@alias Scheme table<string, string>
 
----A text style of the Material type scale.
----@alias TextStyle "displayLarge"|"displayMedium"|"displaySmall"|"headlineLarge"|"headlineMedium"|"headlineSmall"|"titleLarge"|"titleMedium"|"titleSmall"|"bodyLarge"|"bodyMedium"|"bodySmall"|"labelLarge"|"labelMedium"|"labelSmall"
+-- `TextStyle` (ui.textSize's style) is declared in types.lua, with the other C++ enums.
 
 -------------------------------------------------------------------------------
 -- Elements

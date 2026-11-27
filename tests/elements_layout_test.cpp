@@ -32,9 +32,11 @@ import imlui.ui.frame_request;
 import imlui.ui.item_size;
 import imlui.ui.renderer;
 import imlui.ui.layout_cache;
+import imlui.ui.props;
 import imlui.color;
 import imlui.widgets.card;
 import imlui.widgets.surface;
+import imlui.widgets.tabs;
 
 using namespace imlui;
 
@@ -329,12 +331,12 @@ TEST_F(LayoutTest, ColumnDefaultsAndAlias) {
     ASSERT_NE(col, nullptr);
     EXPECT_FLOAT_EQ(col->padding(), 0.0f);
     EXPECT_FALSE(col->spacing().has_value());
-    EXPECT_EQ(col->align(), "start");
+    EXPECT_EQ(col->align(), Align::Start);
     Column* item = m_h.instance<Column>("item"); // Item is the same class
     ASSERT_NE(item, nullptr);
     EXPECT_FLOAT_EQ(item->padding(), 4.0f);
     EXPECT_EQ(item->spacing(), 6.0);
-    EXPECT_EQ(item->align(), "center");
+    EXPECT_EQ(item->align(), Align::Center);
 }
 
 TEST_F(LayoutTest, ColumnPaddingSpacingWidthAndAlign) {
@@ -351,6 +353,61 @@ TEST_F(LayoutTest, ColumnPaddingSpacingWidthAndAlign) {
     EXPECT_FLOAT_EQ(probe("b").itemWidth(), 200.0f - 2.0f * 10.0f); // the width less the padding on each side
     EXPECT_FLOAT_EQ(b.x - a.x, probe("a").w() + ImGui::GetStyle().ItemSpacing.x + 10.0f); // and on the left
     EXPECT_FLOAT_EQ(probe("d").itemWidth(), 100.0f);
+}
+
+// An `align` is an Align name: a typo is reported once with the names (not on every frame), and the stack places the
+// children at the start meanwhile. The instance keeps the value it had, like any property given a bad value.
+TEST_F(LayoutTest, ColumnReportsAnUnknownAlignOnce) {
+    run(R"(a = Probe { w = 40 } root = Column { width = 200, align = "end", a })");
+    m_h.renderFrames("root", 2);
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    EXPECT_FLOAT_EQ(probe("a").pos().x, x0 + 160.0f);
+    run(R"(root.align = "middle")");
+    m_h.renderFrames("root", 3);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(R"(Column.align: Align ('start'|'center'|'end') expected, got string "middle")"),
+              std::string::npos)
+        << luaui::errors()[0];
+    EXPECT_FLOAT_EQ(probe("a").pos().x, x0);
+    EXPECT_EQ(m_h.instance<Column>("root")->align(), Align::End);
+    // Reported when the field was written, not again on the frames after it.
+    luaui::clearErrors();
+    m_h.renderFrames("root", 3);
+    EXPECT_TRUE(luaui::errors().empty());
+    // The old aliases are typos too.
+    run(R"(root.align = "right")");
+    m_h.renderFrame("root");
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(R"(got string "right")"), std::string::npos) << luaui::errors()[0];
+}
+
+// A Row's `justify` is a RowJustify name: a typo is reported with the names, and the row keeps its justification.
+TEST_F(LayoutTest, RowReportsAnUnknownJustify) {
+    run(R"(
+        a = Probe { w = 50 } b = Probe { w = 30 }
+        root = Row { width = 400, spacing = 0, justify = "end", a, b })");
+    m_h.renderFrames("root", 2);
+    const float x0 = ImGui::GetStyle().WindowPadding.x;
+    EXPECT_FLOAT_EQ(probe("a").pos().x, x0 + 320.0f);
+    run(R"(root.justify = "spaceAround")");
+    m_h.renderFrames("root", 3);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(R"(Row.justify: RowJustify ('start'|'center'|'end'|'spaceBetween') expected, )"
+                                      R"(got string "spaceAround")"),
+              std::string::npos)
+        << luaui::errors()[0];
+    EXPECT_EQ(m_h.instance<Row>("root")->justify(), Row::Justify::End);
+    EXPECT_FLOAT_EQ(probe("a").pos().x, x0 + 320.0f);
+    // `end` isn't a vertical alignment (it used to place the children at the top).
+    // (A full sync, after any write to the element, reports a field still wrong again: set right first.)
+    run(R"(root.justify = "end")");
+    luaui::clearErrors();
+    run(R"(root.align = "end")");
+    m_h.renderFrame("root");
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(R"(Row.align: RowAlign ('top'|'center'|'bottom') expected, got string "end")"),
+              std::string::npos)
+        << luaui::errors()[0];
 }
 
 // A fixed width is the children's available width: `align` and fills measure the column, not the window.
@@ -528,8 +585,8 @@ TEST_F(LayoutTest, RowSpacingAlignAndDefaults) {
         root = Row { id = "row", spacing = 10, a, b })");
     Row* row = m_h.instance<Row>("root");
     ASSERT_NE(row, nullptr);
-    EXPECT_EQ(row->align(), "center");
-    EXPECT_EQ(row->justify(), "start");
+    EXPECT_EQ(row->align(), Row::Align::Center);
+    EXPECT_EQ(row->justify(), Row::Justify::Start);
     EXPECT_EQ(row->spacing(), 10.0);
     m_h.renderFrames("root", 3);
     EXPECT_FLOAT_EQ(probe("b").pos().x - probe("a").pos().x, 60.0f);
@@ -1119,7 +1176,7 @@ TEST_F(LayoutTest, CardDefaultsAndPadding) {
         custom = Card { variant = "outlined", padding = 30, color = "primary", rounding = 2, b })");
     Card* plain = m_h.instance<Card>("plain");
     ASSERT_NE(plain, nullptr);
-    EXPECT_EQ(plain->variant(), "elevated");
+    EXPECT_EQ(plain->variant(), md::CardVariant::Elevated);
     EXPECT_FLOAT_EQ(plain->padding(), 16.0f);
     EXPECT_FALSE(plain->color().has_value());
     EXPECT_FALSE(plain->rounding().has_value());
@@ -1128,7 +1185,7 @@ TEST_F(LayoutTest, CardDefaultsAndPadding) {
     m_h.renderFrames("custom", 2);
     Card* custom = m_h.instance<Card>("custom");
     ASSERT_NE(custom, nullptr);
-    EXPECT_EQ(custom->variant(), "outlined");
+    EXPECT_EQ(custom->variant(), md::CardVariant::Outlined);
     EXPECT_EQ(custom->rounding(), 2.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().x - a.x, 14.0f);
     EXPECT_FLOAT_EQ(probe("b").pos().y - a.y, 14.0f);
@@ -1175,7 +1232,7 @@ TEST_F(LayoutTest, TabBarShowsTheCurrentTabAndWritesBackClicks) {
                         onCurrentChanged = function(self, i) changed = i end })");
     TabBar* bar = m_h.instance<TabBar>("root");
     ASSERT_NE(bar, nullptr);
-    EXPECT_EQ(bar->variant(), "primary");
+    EXPECT_EQ(bar->variant(), md::TabsVariant::Primary);
     Tab* t2 = m_h.instance<Tab>("t2");
     ASSERT_NE(t2, nullptr);
     EXPECT_EQ(t2->title(), "Two");

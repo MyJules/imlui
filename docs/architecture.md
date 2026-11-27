@@ -965,8 +965,7 @@ with `registerSkin(name, factory)` ([Skins](extending.md#skins)).
 The engine's error overlay draws its buttons through the skin too. **What stays a direct `md::` call** decides no
 look: the drawing helpers (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `strokeCircle`, `hLine`, `vLine`,
 `drawIcon`; the Canvas painter uses them), the `Text` and `Icon` items (`md::text`/`textSize`, `md::icon`/`iconSize`),
-`itemWidth`, `scopedWindowName`, the constants (`hugeExtent`, `maxIconPixels`), the vocabulary parsers
-(`buttonVariant`, `chipVariant`, `cardVariant`, `iconButtonVariant`) and the widgets' own stacks: the surface stack
+`itemWidth`, `scopedWindowName`, the constants (`hugeExtent`, `maxIconPixels`) and the widgets' own stacks: the surface stack
 (`pushSurface`/`popSurface`/`surfaceColor`) carries the color an element chose, and `cardDepth`/`surfaceDepth` with
 their restores undo what a render pass an error cut short left open. The vocabulary types (`md::ButtonVariant`,
 `md::TextFieldOptions`, ...) are the skin functions' parameter types. Inside, the Material widgets keep calling each
@@ -1242,7 +1241,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.dropdown` | `dropdown` (+ `DropdownOptions`) |
 | `imlui.widgets.spin_box` | `spinBox` |
 | `imlui.widgets.color_field` | `colorField` (swatch and picker popup) |
-| `imlui.widgets.tabs` | `tabs` (+ `TabInfo`) |
+| `imlui.widgets.tabs` | `tabs` (+ `TabInfo`, `TabsVariant`: the TabBar's `variant`) |
 | `imlui.widgets.navigation` | Navigation destinations: `navigationItem` (drawer), `navigationBarItem`, `navigationRailItem` |
 | `imlui.widgets.navigation_drawer` | `beginModalDrawer`/`endModalDrawer`: scrim and sliding sheet in a window above the app |
 | `imlui.widgets.list` | `listItem` (+ `ListItemOptions`), `expander` |
@@ -1251,6 +1250,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.snackbar` | `snackbar` |
 | `imlui.widgets.chart` | `chart` (+ `ChartOptions`), `chartSize`, `chartAxis` (+ `ChartAxis`: the y axis, shared with the Fluent chart) |
 | `imlui.widgets.table` | `tableHeaderCell`, `tableCell` |
+| `imlui.widgets.top_app_bar` | `TopAppBarVariant` (the TopAppBar element draws the bar; `Skin::topAppBarChrome` takes the variant) |
 | `imlui.widgets` | Umbrella: `export import` of all widget modules |
 
 ### Skin (`src/imlui/skin/`)
@@ -1294,7 +1294,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.main_timers` | C++ main-thread timers: `addMainTimer(seconds, fn)` / `removeMainTimer(id)` on the app clock, no Lua state needed; the engine's loop runs the due ones (`runDueMainTimers`, after the posts, outside a frame) and sleeps at most until the next (`secondsUntilMainTimer`); `clearMainTimers` drops them at shutdown. What `delay()` uses |
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
 | `imlui.ui.background` | The background pool: `runInBackground(work)` (any thread; `work(std::stop_token)` on up to `backgroundThreadLimit()` workers, `hardware_concurrency() - 1` clamped to [2, 8], started lazily; a throw reported on the main thread), `shutdownBackground(wait)` (tokens stopped, queue dropped, workers joined within `wait` or detached; a later task starts a new pool; `Engine::run()` calls it), `backgroundTaskCount` |
-| `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `alignFactor` |
+| `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `Align` and `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
 | `imlui.ui.culling` | Culling (namespace `imlui::cull`): `enabled`/`setEnabled` (`ui.setCulling`), `outOfView` (the clip rect, `margin`, widened during nav moves), `watch`/`held`/`noteNonVisual` and `pin`/`pinned` (children that must render: the active item, nav focus, open popups, non-visual elements), `nextTableRow`/`reserveTableRow` (`Grid` rows). See [Culling](#culling) |
@@ -1302,7 +1302,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `stackSize`, `renderUnseen`, culling (`cullsChildren`, `skipOutOfView`, `Culling`: the children memo), `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |
-| `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view`, `list_view` (extends `ScrollView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer`; and `stack_props` (`rawStackProps`, `rawCullProp`: the stacking containers' raw `spacing`, `align`, `cull` for the definitions) |
+| `imlui.ui.elements.<name>` | One built-in element class per module, named after it in snake case: `application_window` (`ApplicationWindow`), `window`, `dialog`, `snackbar`, `imgui_demo`, `column` (also `Item`), `row`, `grid`, `scroll_view`, `list_view` (extends `ScrollView`), `card`, `tab_bar`, `tab`, `section` (also `Expander`), `tree_node`, `inline_container` (`Repeater`, `If`, `Loader`, `Responsive`), `top_app_bar`, `navigation_item`, `navigation_bar`, `navigation_rail`, `modal_navigation_drawer`, `menu_bar`, `menu`, `menu_item`, `text` (also `Label`), `icon`, `image`, `link`, `divider`, `separator` (extends `Divider`), `spacer`, `button`, `icon_button`, `checkbox`, `switch_toggle` (`Switch`), `radio_button`, `radio_group`, `chip`, `segmented_button`, `list_item`, `slider`, `spin_box`, `text_field`, `text_area` (extends `TextField`), `combo_box`, `color_picker`, `progress_bar`, `circular_progress`, `busy_indicator`, `plot`, `table`, `canvas`, `timer`; and `stack_props` (`stackProps`, `rawCullProp`, `StackAlign`: the stacking containers' raw `spacing` and `cull` for the definitions, and their `align` property) |
 | `imlui.ui.elements.builtin` | `registerBuiltinTypes(TypeRegistry&)`: registers every built-in class under its Lua name and aliases |
 | `imlui.ui.elements` | Umbrella: `export import` of all element modules, including `builtin` |
 
@@ -1352,7 +1352,7 @@ See [Registering C++ types](extending.md).
 | Module | Purpose |
 |---|---|
 | `imlui.image.decode` | `decodeImage(bytes)`: PNG/JPEG to RGBA8, at most `maxImageBytes` (256 MiB) of pixels (`DecodedImage`, move-only: `width`, `height`, `rgba` (a view of the decoder's buffer, `pixels`, not a copy), `error`) |
-| `imlui.image.fill_mode` | `FillMode` (`Stretch`, `Fit`, `Crop`, `Tile`), `parseFillMode`, `imageSize(natural, scale, w, h)` (natural size x dp, aspect from one side), `placeImage` (the `ImageQuad`s: screen rects and texture coordinates per fill mode) |
+| `imlui.image.fill_mode` | `FillMode` (`Stretch`, `Fit`, `Crop`, `Tile`; its Lua names are in `imlui.ui.enum_names`), `imageSize(natural, scale, w, h)` (natural size x dp, aspect from one side), `placeImage` (the `ImageQuad`s: screen rects and texture coordinates per fill mode) |
 | `imlui.image.image_cache` | `ImageCache`: one decode per resource name, kept as an ImGui user texture (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`), within a byte budget (`budget`/`setBudget`, `bytes`, `defaultBudget`: the least recently drawn images are evicted after a frame) |
 
 ### App (`src/imlui/app/`)

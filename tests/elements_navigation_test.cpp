@@ -28,6 +28,8 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
+import imlui.widgets.top_app_bar;
+import imlui.ui.props;
 
 using namespace imlui;
 
@@ -128,28 +130,25 @@ TEST_F(NavigationElementsTest, TextTakesItsPropsAndPositionalTextAndLabelIsAnAli
             Text { id = "positional", "hello" },
             Text { id = "styled", text = function() return s.t end, style = "titleMedium", color = "#FF0000",
                    wrap = true, align = "center" },
-            Text { id = "unknownStyle", text = "x", style = "nope" },
             Label { id = "label", "a label" },
         })");
     frames();
     const Text* plain = m_h.instance<Text>("plain");
     ASSERT_NE(plain, nullptr);
     EXPECT_EQ(plain->text(), "");
-    EXPECT_EQ(plain->style(), "bodyLarge");
-    EXPECT_EQ(plain->textStyle(), TextStyle::BodyLarge);
+    EXPECT_EQ(plain->style(), TextStyle::BodyLarge);
     EXPECT_FALSE(plain->color().has_value());
     EXPECT_FALSE(plain->wrap());
-    EXPECT_EQ(plain->align(), "start");
+    EXPECT_EQ(plain->align(), Align::Start);
 
     EXPECT_EQ(m_h.instance<Text>("positional")->text(), "hello");
     const Text* styled = m_h.instance<Text>("styled");
     EXPECT_EQ(styled->text(), "bound");
-    EXPECT_EQ(styled->textStyle(), TextStyle::TitleMedium);
+    EXPECT_EQ(styled->style(), TextStyle::TitleMedium);
     ASSERT_TRUE(styled->color().has_value());
     EXPECT_EQ(*styled->color(), (Color{1.0f, 0.0f, 0.0f, 1.0f}));
     EXPECT_TRUE(styled->wrap());
-    EXPECT_EQ(styled->align(), "center");
-    EXPECT_EQ(m_h.instance<Text>("unknownStyle")->textStyle(), TextStyle::BodyLarge);
+    EXPECT_EQ(styled->align(), Align::Center);
     ASSERT_NE(m_h.instance<Text>("label"), nullptr);
     EXPECT_EQ(m_h.instance<Text>("label")->text(), "a label");
 
@@ -159,6 +158,20 @@ TEST_F(NavigationElementsTest, TextTakesItsPropsAndPositionalTextAndLabelIsAnAli
     // A non-empty text takes space; an empty one is a zero-width line.
     EXPECT_GT(rects["positional"].width(), 0.0f);
     expectNoErrors();
+}
+
+// A style is one of the TextStyle names: a typo is reported with the names, and the text keeps its style.
+TEST_F(NavigationElementsTest, TextReportsAnUnknownStyle) {
+    run(R"(root = Probe { Text { id = "t", "x", style = "titleSmall" } })");
+    frames();
+    run(R"(t.style = "titelSmall")");
+    frames();
+    EXPECT_EQ(m_h.instance<Text>("t")->style(), TextStyle::TitleSmall);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(R"(Text.style: TextStyle ('displayLarge'|)"), std::string::npos)
+        << luaui::errors()[0];
+    EXPECT_NE(luaui::errors()[0].find(R"(|'labelSmall') expected, got string "titelSmall")"), std::string::npos)
+        << luaui::errors()[0];
 }
 
 TEST_F(NavigationElementsTest, IconPicksNameThenIconThenText) {
@@ -251,7 +264,7 @@ TEST_F(NavigationElementsTest, TopAppBarRightAlignsActionsAndEmitsOnNavigation) 
     const TopAppBar* bar = m_h.instance<TopAppBar>("bar");
     EXPECT_EQ(bar->title(), "Inbox");
     EXPECT_EQ(bar->navigationIcon(), "menu");
-    EXPECT_EQ(bar->variant(), "small");
+    EXPECT_EQ(bar->variant(), md::TopAppBarVariant::Small);
     EXPECT_FALSE(bar->color().has_value());
 
     const Rect b = rects["bar"];
@@ -266,6 +279,23 @@ TEST_F(NavigationElementsTest, TopAppBarRightAlignsActionsAndEmitsOnNavigation) 
     click({b.min.x + 4.0f + 24.0f, b.min.y + 32.0f}); // the 48dp navigation icon button
     check("navigations == 1");
     expectNoErrors();
+}
+
+// A variant is one of the TopAppBarVariant names: a typo is reported with the names, and the bar keeps its variant.
+TEST_F(NavigationElementsTest, TopAppBarReportsAnUnknownVariant) {
+    run(R"(root = TopAppBar { title = "T", variant = "large" })");
+    frames();
+    EXPECT_EQ(m_h.instance<TopAppBar>("root")->variant(), md::TopAppBarVariant::Large);
+    run(R"(root.variant = "huge")");
+    frames();
+    EXPECT_EQ(m_h.instance<TopAppBar>("root")->variant(), md::TopAppBarVariant::Large);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_TRUE(hasError(
+        R"(TopAppBar.variant: TopAppBarVariant ('small'|'center'|'medium'|'large') expected, got string "huge")"))
+        << luaui::errors()[0];
+    run("root.variant = nil");
+    frames();
+    EXPECT_EQ(m_h.instance<TopAppBar>("root")->variant(), md::TopAppBarVariant::Small);
 }
 
 // An action that doesn't render (its constructor threw) submits no item: the bar read the previous action's rect as
@@ -335,7 +365,7 @@ TEST_F(NavigationElementsTest, NavigationRailStacksDestinationsBelowItsHeader) {
     frames(2);
     const NavigationRail* rail = m_h.instance<NavigationRail>("rail");
     EXPECT_FLOAT_EQ(rail->spacing(), 12.0f);
-    EXPECT_EQ(rail->align(), "top");
+    EXPECT_EQ(rail->align(), NavigationRail::Align::Top);
     const Rect r = rects["rail"];
     EXPECT_FLOAT_EQ(r.width(), 80.0f);
     EXPECT_FLOAT_EQ(r.height(), 500.0f);

@@ -13,6 +13,10 @@ import imlui.widgets.common;
 
 export namespace imlui::md {
 
+/// A tabs header's style; its Lua names ("primary", "secondary") are in imlui.ui.enum_names. md::tabs and the skin take
+/// it as `secondary`.
+enum class TabsVariant { Primary, Secondary };
+
 struct TabInfo {
     std::string label, icon;
 };

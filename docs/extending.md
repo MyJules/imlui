@@ -135,7 +135,7 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `size(key)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values; 0 when unset). An unset `width` of a type declared [`fillsWidth()`](#nonvisual-defaultpropertyname-and-fillswidth) reads as `-1` (fill): the size policy lives in the type, not in the widget. Pass it to the `md::` widgets, which resolve it (0 is their natural size). |
 | `available()` | The space available at the cursor (`ImVec2`, pixels): the width to the right edge of the layout box the parent gave (a fixed `Column`, a `Row` share, a `Grid` cell, else the window's content region), and the height left in the window. Use it instead of `ImGui::GetContentRegionAvail()`, which only knows the window. |
 | `resolvedWidth(natural = 0)`, `resolvedHeight(natural = 0)` | `width` / `height` (`size()`) resolved to pixels against `available()` with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset; a type that fills by default fills. Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
-| `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; `"start"`/`"center"`/`"end"` as 0/0.5/1. |
+| `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; an `Align` (`Align::Start`/`Center`/`End`, module `imlui.ui.props`) as 0/0.5/1. |
 | `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
 | `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes; they build nothing outside the clip rect, and `md::rectVisible(dl, a, b)` lets your own drawing skip an off-screen element the same way. |
 | `requestFrame()`, `requestFrameAfter(s)` | Frames are [rendered on demand](architecture.md#on-demand-rendering): anything that changes on its own asks for the next one. |
@@ -300,8 +300,10 @@ type.rawProperty<double>("size")                                // type from Lua
 - It takes a [`doc`](#docs-doctext), shares the one namespace of member names, and is inherited by
   [`extends<Base>()`](#subclasses-extendsbase) (`docMember` replaces its doc).
 - The stacking containers' `spacing`, `align` and `cull` (read by `Frame::renderStack`) are declared with
-  `rawStackProps(type)` / `rawCullProp(type)` (module `imlui.ui.elements.stack_props`): call them in your own
-  stacking element's `declare` too.
+  `stackProps(type)` / `rawCullProp(type)` (module `imlui.ui.elements.stack_props`): call them in your own
+  stacking element's `declare` too. `stackProps` declares raw `spacing` and `cull` and the property `align` (an
+  `Align`), so the element derives from `StackAlign` too (`class Panel final : public Element, public StackAlign`):
+  the sync then reports a name that isn't an `Align` once, when the script writes it.
 
 ### Signals
 
@@ -700,7 +702,7 @@ results, and signal arguments. Built in:
 | `std::pair<A, B>`, `std::tuple<Ts...>` | sequence `{a, b, ...}` | Element *i* converts as the *i*-th type. A longer sequence, or any other key, fails; a missing trailing element is `nil` (a `std::optional` element takes it). |
 | `std::variant<Ts...>` | any alternative | Pushes the active alternative. Reads the **first** alternative whose check passes, so list the specific ones first: `bool` takes every value, `std::string` takes numbers, an integer takes numeric strings. A vector and a map tell sequences from string-keyed tables in either order; `{}` is both an empty sequence and an empty map, so the one listed first takes it. |
 | `std::monostate` | `nil` | The empty alternative of a variant. |
-| an enum with [`EnumNames<E>`](#enums-and-structs) | one of its names | Pushes the name. Reads the names only (case-sensitive): an integer or an unknown name fails. A value without a name pushes its underlying integer, which doesn't read back. |
+| an enum with [`EnumNames<E>`](#enums-and-structs) | one of its names | Pushes the name (the first one listed for the value). Reads the names only (case-sensitive): an integer or an unknown name fails. A value without a name pushes its underlying integer, which doesn't read back. |
 | a struct with [`LuaFields<T>`](#enums-and-structs) | table | One key per field. A missing field keeps its default (see below). |
 | [`imlui::LuaFunction`](#lua-functions-luafunction) | function | A callback the script hands to C++. |
 
@@ -759,9 +761,14 @@ type.property("series", &Plot::series, &Plot::setSeries); // const Series& serie
 Plot { series = { label = "cpu", points = { { x = 0, y = 1 }, { x = 1, y = 3 } }, quality = "low" } }
 ```
 
-- `EnumNames<E>::values` lists `{value, "name"}` pairs. An optional `name` replaces the default error name
-  (`'low'|'high'`) and makes the enum an `---@alias` in the [Lua definitions](#editor-support-lua-definitions);
-  an optional `doc` is its hover text there.
+- `EnumNames<E>::values` lists `{value, "name"}` pairs. A value may have several names: each reads as it, and it
+  pushes the first, so list the canonical name first and an alias (an older spelling) after it. An optional `name`
+  makes the enum an `---@alias` in the [Lua definitions](#editor-support-lua-definitions) and leads its errors
+  (`Quality ('low'|'high') expected, got string "medium"`; without one, `'low'|'high' expected, ...`); an optional
+  `doc` is its hover text there.
+- The built-in elements use the same traits: their enums' names are in `imlui.ui.enum_names` (`md::ButtonVariant`
+  is `ButtonVariant`, ...), so a property of yours can take one of them too (`type.property("variant", ...)` with a
+  `md::ButtonVariant` getter and setter).
 - `LuaFields<T>::fields` is a tuple of `imlui::field("key", &T::member)` (an `imlui::LuaField<T, M>`). An optional
   `name` replaces the default error name (`{x, y}`) and makes the struct a `---@class` in the Lua definitions. `T`
   must be default-constructible.
@@ -1279,7 +1286,7 @@ declaration order, so they can be committed and diffed.
 
 | File | What |
 |---|---|
-| `imlui.lua` | The DSL (`---@meta imlui`, so `require "imlui"` is typed too): `state`, `watch`, `bind`, `component`, the theme, timers, `async`/`await`/`sleep`/`all`/`future`, `snackbar`, `log`, `ui.resource`, the misc functions, `native`, all also as `ui.*`; the classes `Element` (the common props), `ElementProps` (what every constructor takes: the common props and the children), `Binding`, `Future<T>`, `ListModel<T>`, the aliases `Color`, `SizeClass`, `Scheme`, `TextStyle`, and the Lua-side props of `Repeater`, `ListView`, `If`, `Loader`, `Responsive`. Hand-written, shipped with the library's files as `imlui:/definitions/imlui.lua` (`src/resources/definitions/imlui.lua`) and copied as it is. |
+| `imlui.lua` | The DSL (`---@meta imlui`, so `require "imlui"` is typed too): `state`, `watch`, `bind`, `component`, the theme, timers, `async`/`await`/`sleep`/`all`/`future`, `snackbar`, `log`, `ui.resource`, the misc functions, `native`, all also as `ui.*`; the classes `Element` (the common props), `ElementProps` (what every constructor takes: the common props and the children), `Binding`, `Future<T>`, `ListModel<T>`, the aliases `Color`, `SizeClass`, `Scheme`, and the Lua-side props of `Repeater`, `ListView`, `If`, `Loader`, `Responsive`. Hand-written, shipped with the library's files as `imlui:/definitions/imlui.lua` (`src/resources/definitions/imlui.lua`) and copied as it is. |
 | `types.lua` | Generated from the `TypeRegistry`. Per element type `Gauge`: `GaugeProps: ElementProps` (each writable property as its value, a binding function or a `bind`; the `on*` handlers), `Gauge: Element` (the element table: properties, handlers, methods), the constructor `Gauge(props)` and `ui.Gauge`, and the alias `GaugeSignal` (its signal names). Per singleton `backend`: a class `backend` and the global (a singleton that is a [list model](#list-models): the global, typed `ListModel<T>`). The named structs and enums the members use. `connect`, with an overload per type and the alias `ImluiSignal` of every signal name. |
 
 ```lua

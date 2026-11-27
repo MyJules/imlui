@@ -27,6 +27,7 @@ import imlui.widgets.list;
 import imlui.widgets.selection;
 import imlui.widgets.tabs;
 import imlui.widgets.text_field;
+import imlui.widgets.top_app_bar;
 // ---- (A) buttons, toggles and ranges: imports
 import imlui.skin.fluent.button;
 import imlui.skin.fluent.chip;
@@ -167,7 +168,7 @@ public:
     void tableCell(std::string_view text, float rowH, std::optional<Color> color) const override;
     void chart(const char* id, const std::vector<float>& values, const md::ChartOptions& o) const override;
     [[nodiscard]] ImVec2 chartSize(const md::ChartOptions& o) const override;
-    [[nodiscard]] TopAppBarChrome topAppBarChrome(std::string_view variant) const override;
+    [[nodiscard]] TopAppBarChrome topAppBarChrome(md::TopAppBarVariant variant) const override;
     [[nodiscard]] TableChrome tableChrome() const override;
     [[nodiscard]] Color separatorTextColor() const override;
     [[nodiscard]] std::optional<Color> linkColor() const override;
@@ -343,7 +344,7 @@ void FluentSkin::chart(const char* id, const std::vector<float>& values, const m
     fluent::chart(look(), id, values, o);
 }
 ImVec2 FluentSkin::chartSize(const md::ChartOptions& o) const { return fluent::chartSize(look(), o); }
-Skin::TopAppBarChrome FluentSkin::topAppBarChrome(std::string_view variant) const {
+Skin::TopAppBarChrome FluentSkin::topAppBarChrome(md::TopAppBarVariant variant) const {
     return fluent::topAppBarChrome(look(), variant);
 }
 Skin::TableChrome FluentSkin::tableChrome() const { return fluent::tableChrome(look()); }

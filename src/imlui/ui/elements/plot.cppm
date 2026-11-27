@@ -9,17 +9,21 @@ import imlui.widgets.chart;
 import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_builder;
 
 export namespace imlui {
 
 /// A line or bar chart with a hover readout.
 ///
-/// Props:   values = {}, kind = "lines" ("bars", "histogram"), fill = true, title = unset (the label), label = "",
-///          color = unset (primary), min = unset, max = unset (either one turns off the automatic range)
+/// Props:   values = {}, kind = "lines" ("bars"; "histogram" is bars), fill = true, title = unset (the label),
+///          label = "", color = unset (primary), min = unset, max = unset (either one turns off the automatic range)
 /// Raw:     width, height
 class Plot final : public Element {
 public:
+    /// What the values are drawn as.
+    enum class Kind { Lines, Bars };
+
     static void declare(TypeBuilder<Plot>& type);
 
     void render(Frame& frame) override;
@@ -28,8 +32,8 @@ public:
 
     [[nodiscard]] const std::vector<float>& values() const;
     void setValues(std::vector<float> values);
-    [[nodiscard]] const std::string& kind() const;
-    void setKind(std::string kind);
+    [[nodiscard]] Kind kind() const;
+    void setKind(Kind kind);
     [[nodiscard]] bool fill() const;
     void setFill(bool fill);
     /// Wins over `label` when set.
@@ -47,7 +51,7 @@ public:
 
 private:
     std::vector<float> m_values;
-    std::string m_kind = "lines";
+    Kind m_kind = Kind::Lines;
     bool m_fill = true;
     std::optional<std::string> m_title;
     std::string m_label;
@@ -57,6 +61,17 @@ private:
 };
 
 } // namespace imlui
+
+template <>
+struct imlui::EnumNames<imlui::Plot::Kind> {
+    static constexpr std::string_view name = "PlotKind";
+    static constexpr std::string_view doc = "What a Plot draws its values as.";
+    static constexpr std::pair<imlui::Plot::Kind, std::string_view> values[] = {
+        {imlui::Plot::Kind::Lines, "lines"},
+        {imlui::Plot::Kind::Bars, "bars"},
+        {imlui::Plot::Kind::Bars, "histogram"},
+    };
+};
 
 module :private;
 
@@ -88,7 +103,7 @@ void Plot::declare(TypeBuilder<Plot>& type) {
 
 void Plot::render(Frame& frame) {
     md::ChartOptions o;
-    o.bars = m_kind == "bars" || m_kind == "histogram";
+    o.bars = m_kind == Kind::Bars;
     o.fill = m_fill;
     o.width = frame.size("width");
     o.height = frame.resolvedHeight(0.0f);
@@ -104,8 +119,8 @@ void Plot::render(Frame& frame) {
 
 const std::vector<float>& Plot::values() const { return m_values; }
 void Plot::setValues(std::vector<float> values) { m_values = std::move(values); }
-const std::string& Plot::kind() const { return m_kind; }
-void Plot::setKind(std::string kind) { m_kind = std::move(kind); }
+Plot::Kind Plot::kind() const { return m_kind; }
+void Plot::setKind(Kind kind) { m_kind = kind; }
 bool Plot::fill() const { return m_fill; }
 void Plot::setFill(bool fill) { m_fill = fill; }
 const std::optional<std::string>& Plot::title() const { return m_title; }

@@ -58,6 +58,12 @@ Each element has a short description, a props table, then **Signals** and **Two-
 - Signal handlers get `self` first: `onToggled = function(self, checked) ... end`. A handler runs after the prop
   it reports on has been written back.
 - Indices (`currentIndex`, `currentRow`, ...) are 1-based.
+- **Names from a fixed set** (a `variant`, an `align`, `justify`, a text `style`, `fillMode`, ...) are strings,
+  checked against the names the Notes list: a name that isn't one of them is reported with the names it takes
+  (`Button.variant: ButtonVariant ('filled'|'tonal'|...) expected, got string "tonla"`) and the element keeps its
+  previous value. Each set is an `---@alias` in the [Lua definitions](extending.md#editor-support-lua-definitions)
+  (`ButtonVariant`, `Align`, ...), so the editor completes the names. Some sets accept an older spelling too
+  (`fillMode = "preserveAspectFit"`); the Notes say which.
 - **Non-visual** elements take no layout space and aren't a layout item: put them anywhere among the children,
   for example a `Dialog` or a `Timer` inside a `Row`.
 
@@ -107,7 +113,7 @@ Elements that stack their children top to bottom (`ApplicationWindow`, `Window`,
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `spacing` | number | ImGui item spacing | Vertical gap between visible children, in dp. Declared by `Column`, `ScrollView`, `ListView` and `Card`; *raw* on the others. |
-| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it; a fill-minus child (`width = -40`) is the stack's width less 40dp, and `align` places it in the stack (centered: 20dp on each side). Declared like `spacing`. |
+| `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child in the available width, by its width (see below). A child that fills is as wide as the stack, so `align` doesn't move it; a fill-minus child (`width = -40`) is the stack's width less 40dp, and `align` places it in the stack (centered: 20dp on each side). A property of every stacking container: another name (a typo, the old `"right"` or `"bottom"`) is reported, once, when it is written, with the names it takes, and the children are placed at the start meanwhile. |
 | `cull` | bool | `true` | *Raw.* `false` renders every child, also those out of view. By default a child out of view whose size is known is skipped and only its size is laid out (its bindings don't run); positions and the scroll range are the same either way. See [Culling](architecture.md#culling); `ui.setCulling(false)` turns it off everywhere. |
 
 Non-visual children are rendered in place and don't count for the spacing. Children that hold the item being edited
@@ -186,7 +192,7 @@ The root element. It fills the native window, with no decoration, and stacks its
 | `scrollable` | bool | `true` | `false` hides the scrollbar. |
 | `imageCacheBudget` | integer | — | Bytes of decoded image pixels (4 per pixel) the image cache keeps; `0`: no limit, a negative value reads as `0`. Applied every frame while the prop exists (so it can be a binding); without it the cache keeps its default, 256 MiB. Over the budget, the images drawn least recently are evicted after a frame (never one drawn in that frame or the one before) and decoded again when next drawn. |
 | `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem) at the top. |
-| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |
 
 ### Window
 
@@ -203,7 +209,7 @@ when the title changes.
 | `autoResize` | bool | — | Fits the window to its content, every frame: it grows and shrinks back with it. Unset: `true` when neither `width` nor `height` is set. Inside, a fill (`width = -1`, a `TextField`, a `Divider`, ...) is `width` wide less the padding, or 240dp when `width` is unset, never the window's current width (which follows the content); text wraps where the window would reach the viewport's right edge. |
 | `titleBar`, `resizable`, `movable` | bool | `true` | Window chrome. |
 | `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem). |
-| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |
 
 **Signals:** `onClosed(self)` after the close button wrote `open = false`.
 **Two-way:** `open`.
@@ -222,7 +228,7 @@ nested in one another) show one at a time: one whose `open` turns true while ano
 | `title` | string | `""` | Headline. |
 | `icon` | icon | `""` | Hero icon above the title, which is then centered. |
 | `width` | size | — | *Raw.* A fixed width. Unset: 280–560dp, fitting the content: the dialog grows with its widest child and shrinks back with it, and wrapping text wraps at 560dp. A fill inside (`width = -1`, a `TextField`, a `Divider`, ...) is as wide as the minimum (232dp, inside the 24dp padding) or the title, whichever is wider, never the dialog's current width; `align` places the children in the widest of them. |
-| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |
 
 **Signals:** `onClosed(self)` when the dialog closes.
 **Two-way:** `open`.
@@ -487,7 +493,7 @@ whichever tab is selected, so a `Dialog` declared in a `TabBar` opens from any t
 |---|---|---|---|
 | `title` | string | `"Tab"` | Header label. |
 | `icon` | icon | `""` | Header icon. |
-| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |
 
 `visible = false` on a `Tab` hides the tab and its header. A `Tab` outside a `TabBar` renders its content inline.
 
@@ -510,6 +516,7 @@ A collapsible header (48dp, or 64dp with supporting text). The children are inde
 | `supportingText` | string | `""` | Second line. |
 | `expanded` | bool | `true` | **two-way.** Open state. |
 | `width` | size | `0` (fill) | *Raw.* |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |
 
 **Signals:** `onToggled(self, expanded)`.
 **Two-way:** `expanded`.
@@ -652,7 +659,7 @@ drawer first). Non-visual: put it anywhere, for example as a child of the `Appli
 |---|---|---|---|
 | `open` | bool | `false` | **two-way** (see below). Shown while true. |
 | `width` | number | `360` | Sheet width in dp, at most 80% of the window. |
-| `spacing`, `align` | | | *Raw.* See [stacking containers](#stacking-containers). |
+| `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |
 
 **Signals:** `onClosed(self)` when the scrim or Escape closes it, after `open` was updated.
 **Two-way:** `open`, in three forms:
@@ -724,7 +731,7 @@ ApplicationWindow { menuBar = MenuBar {
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `text` | string | `""` | Positional. Content. |
-| `style` | style | `"bodyLarge"` | Type-scale role. Unknown names draw as `bodyLarge`. |
+| `style` | `TextStyle`: `"displayLarge"` \| ... \| `"labelSmall"` | `"bodyLarge"` | Type-scale role, one of the 15 [type scale](theming.md#typography) names. An unknown name is reported (with the names) and the text keeps its style. |
 | `color` | color | — | Text color. Unset: the theme's text color (`onSurface`). |
 | `wrap` | bool | `false` | Wraps at the available width (a fixed `Column`'s, a `Grid` cell's, ...). In a `Row`, wrapping text takes a share of the free width and wraps at it. |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. Aligned text fills: it is as wide as the available width (its offset and its line), and takes a share of a `Row`. |
@@ -753,12 +760,12 @@ and drawn as a texture. It's drawn at its natural size times the DPI scale (one 
 |---|---|---|---|
 | `source` | string | `""` | Positional. A resource name: `app:/img/logo.png`, or relative (`logo.png`, `../img/x.jpg`) to the folder of the script that created the `Image` (a relative name from a binding too). Empty: nothing is drawn and no space is taken. |
 | `width`, `height` | size | `0` | *Raw.* Unset: the natural size times the DPI scale. Only one set: the other follows the image's aspect ratio. Fill values work. |
-| `fillMode` | `"stretch"` \| `"fit"` \| `"crop"` \| `"tile"` | `"stretch"` | How the image fills its size when the aspect ratios differ: stretched; scaled to fit inside, centered (`preserveAspectFit` too); scaled to cover, centered and cut off (`preserveAspectCrop` too); repeated at its natural size from the top left. An unknown name is reported and stretches. |
+| `fillMode` | `"stretch"` \| `"fit"` \| `"crop"` \| `"tile"` | `"stretch"` | How the image fills its size when the aspect ratios differ: stretched; scaled to fit inside, centered; scaled to cover, centered and cut off; repeated at its natural size from the top left. QML's `"preserveAspectFit"` and `"preserveAspectCrop"` are aliases of `"fit"` and `"crop"`. An unknown name is reported (with the names) and the image keeps its fill mode. |
 | `radius` | number | `0` | Corner radius (dp). With `fit`, the corners of the drawn image; not applied to `tile`. `radius` = half the size and `crop` make a circle. |
 | `opacity` | number | `1` | 0 to 1. |
 | `tint` | color | — | Multiplies the pixels (`"primary"`, `"#FFFFFF80"`); its alpha multiplies the opacity. |
 | `smooth` | bool | `true` | `false` samples the nearest pixel (pixel art, scaled-up icons) instead of filtering. |
-| `status` | string | — | *Read-only.* `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render. Decoding happens on the first render that needs it. |
+| `status` | `"loading"` \| `"ready"` \| `"error"` \| `"none"` | — | *Read-only* (`ImageStatus`). `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render. Decoding happens on the first render that needs it. |
 | `implicitWidth`, `implicitHeight` | number | `0` | *Read-only.* The image's size in pixels (dp at its natural size); 0 until it's ready. |
 
 Images are PNG or JPEG, at most 16384 pixels on a side and 256 MiB of pixels (4 bytes each, 8192 x 8192:
@@ -977,7 +984,7 @@ A numeric field (56dp) with decrement and increment icon buttons.
 | `stepSize` | number | `1` | Button step. |
 | `decimals` | integer | `0` | Shown decimals, clamped to 0..15. |
 | `label` | string | `""` | Floating label. |
-| `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
+| `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
 | `width` | size | `0` (200dp) | *Raw.* |
 
 **Signals:** `onValueModified(self, value)`.
@@ -993,12 +1000,12 @@ multi-line. Clicking anywhere in the container (but the trailing icon) focuses t
 | `text` | string | `""` | **two-way.** Content. |
 | `label` | string | `""` | Floating label. |
 | `placeholderText` | string | `""` | Hint, shown while focused (or always if there's no label). Single-line only. |
-| `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
+| `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
 | `leadingIcon`, `trailingIcon` | icon | `""` | Icons. The trailing icon is clickable. |
 | `supportingText` | string | `""` | Helper text below. Error-colored while `error` is set. |
 | `error` | bool | `false` | Error colors. |
 | `password` | bool | `false` | Masks the input and adds a visibility toggle, unless `trailingIcon` is set. |
-| `echoMode` | string | `""` | `"password"` does the same as `password = true`. |
+| `echoMode` | `"normal"` \| `"password"` | `"normal"` | `"password"` does the same as `password = true`. `""` is an alias of `"normal"`. |
 | `readOnly` | bool | `false` | |
 | `width` | size | `0` (fill) | *Raw.* |
 | `height` | size | `0` (`TextArea`: 120dp) | *Raw.* **`TextArea` only;** a single-line field is always 56dp. |
@@ -1025,7 +1032,7 @@ A Material exposed dropdown menu: a text-field look, with the menu anchored belo
 | `label` | string | `""` | Floating label. |
 | `leadingIcon` | icon | `""` | |
 | `supportingText` | string | `""` | |
-| `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
+| `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
 | `error` | bool | `false` | |
 | `width` | size | `0` (240dp) | *Raw.* |
 
@@ -1086,7 +1093,7 @@ A line or bar chart with a grid, a gradient area and a hover readout.
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `values` | list of numbers | `{}` | Data. Non-finite values (NaN, ±inf) are gaps: no point, bar or readout, the line breaks around them, and the automatic range ignores them. |
-| `kind` | `"lines"` \| `"bars"` \| `"histogram"` | `"lines"` | `histogram` is the same as `bars`. |
+| `kind` | `"lines"` \| `"bars"` | `"lines"` | `"histogram"` is an alias of `"bars"`. An unknown name is reported. |
 | `fill` | bool | `true` | Gradient area under lines. |
 | `title` | string | — | Chart title. Unset: `label`. |
 | `label` | string | `""` | Chart title when `title` isn't set. |
@@ -1151,7 +1158,7 @@ use ImGui's anti-aliased lines.
 | `p:line(x1, y1, x2, y2, color, thickness)` | `color = "onSurface"`, `thickness = 1` |
 | `p:rect(x, y, w, h, color, rounding, outline, thickness)` | `color = "primary"`, `rounding = 0`, `outline = false` (filled), `thickness = 1` |
 | `p:circle(cx, cy, r, color, outline, thickness)` | `color = "primary"`, `outline = false` (filled), `thickness = 1` |
-| `p:text(x, y, text, color, style, font)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"`, `font` = a [named font](theming.md#fonts) (unset: the style's face) |
+| `p:text(x, y, text, color, style, font)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"` (a `TextStyle` name; any other value raises an error), `font` = a [named font](theming.md#fonts) (unset: the style's face) |
 | `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"`; a size below a pixel draws nothing, the glyph is at most 1024 pixels |
 | `p:polyline({x1, y1, x2, y2, ...}, color, thickness, closed)` | `color = "primary"`, `thickness = 1`, `closed = false` |
 

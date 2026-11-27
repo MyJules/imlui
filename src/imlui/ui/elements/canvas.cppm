@@ -8,6 +8,7 @@ import std;
 import lua;
 import imgui;
 import imlui.theme.dpi;
+import imlui.theme.typography;
 import imlui.lua.element_scope;
 import imlui.lua.errors;
 import imlui.lua.node;
@@ -18,6 +19,7 @@ import imlui.types.lua_convert;
 import imlui.types.lua_types;
 import imlui.types.type_builder;
 import imlui.ui.clock;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
@@ -56,6 +58,7 @@ struct LuaConvert<CanvasPainter> {
     static std::string luaType(LuaTypes& types) {
         constexpr std::string_view name = "CanvasPainter";
         if (types.claim(name)) {
+            luaTypeOf<TextStyle>(types); // declares the TextStyle alias, the type of p:text's style
             types.define(
                 name,
                 "---The painter `p` of `Canvas.onPaint`: draws into the canvas, clipped to it, only while `onPaint` "
@@ -79,7 +82,7 @@ struct LuaConvert<CanvasPainter> {
                 "---@field circle (fun(self: CanvasPainter, cx: number, cy: number, r: number, color?: Color, "
                 "outline?: boolean, thickness?: number)) A circle, filled (`primary`) or with `outline` a stroke.\n"
                 "---@field text (fun(self: CanvasPainter, x: number, y: number, text: string, color?: Color, "
-                "style?: string, font?: string)) Text with its top-left at (x, y): `onSurface`, `style` "
+                "style?: TextStyle, font?: string)) Text with its top-left at (x, y): `onSurface`, `style` "
                 "`\"bodyMedium\"`, `font` a named font (unset: the style's face).\n"
                 "---@field icon (fun(self: CanvasPainter, cx: number, cy: number, name: string, size?: number, "
                 "color?: Color)) A Material icon centered on (cx, cy): `size` 24, `onSurfaceVariant`.\n"

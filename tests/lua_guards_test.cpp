@@ -269,6 +269,11 @@ TEST_F(LuaGuardsTest, TextSizeChecksItsArgument) {
     EXPECT_NE(m_h.run("ui.native.textSize({})").find("textSize expects a string"), std::string::npos);
     run("local w, h = ui.native.textSize('abc'); assert(w > 0 and h > 0)");
     run("local w, h = ui.native.textSize(12); assert(w > 0 and h > 0)");
+    // The style is a TextStyle name (nil: bodyLarge); a typo is an error that lists the names.
+    run("local a = ui.textSize('abc'); local b = ui.textSize('abc', nil); local c = ui.textSize('abc', 'bodyLarge');"
+        "assert(a == b and b == c); assert(ui.textSize('abc', 'displayLarge') > a)");
+    EXPECT_NE(m_h.run("ui.textSize('abc', 'huge')").find(R"(textSize: style: TextStyle ('displayLarge'|)"),
+              std::string::npos);
 }
 
 // An interval of nil, 0, a negative or a non-finite number would fire every frame (or never): an error.

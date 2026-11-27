@@ -16,6 +16,8 @@ import imlui.theme.theme;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.lua.value;
+import imlui.types.lua_convert;
+import imlui.ui.enum_names;
 import imlui.widgets.common;
 
 export namespace imlui::luaui {
@@ -112,8 +114,11 @@ int text(lua::State* state) {
     std::string_view s = lua::tostring(state, 4);
     Color c = colorArg(state, 5, theme().scheme.onSurface);
     TextStyle st = TextStyle::BodyMedium;
-    if (lua::type(state, 6) == lua::Type::String)
-        if (auto t = textStyleFromName(lua::tostring(state, 6))) st = *t;
+    if (!lua::isnoneornil(state, 6)) {
+        if (!LuaConvert<TextStyle>::check(state, 6))
+            lua::error(state, "painter:text: style: " + LuaConvert<TextStyle>::mismatch(state, 6));
+        st = LuaConvert<TextStyle>::get(state, 6);
+    }
     const FontFaceScope face{lua::type(state, 7) == lua::Type::String ? lua::tostring(state, 7) : ""};
     target->AddText(font(st), fontPixels(st), p, u32(c), s.data(), s.data() + s.size());
     return 0;

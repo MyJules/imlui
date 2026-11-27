@@ -13,10 +13,8 @@ import imlui.widgets.common;
 
 export namespace imlui::md {
 
+/// A common button's emphasis; its Lua names ("filled", "tonal", ...) are in imlui.ui.enum_names.
 enum class ButtonVariant { Filled, Tonal, Outlined, Text, Elevated, Fab };
-
-/// "filled" (default), "tonal", "outlined", "text", "elevated", "fab".
-[[nodiscard]] ButtonVariant buttonVariant(std::string_view name);
 
 /// Common button. `iconName` is an optional leading Material icon.
 /// A FAB with an empty label is a regular 56dp FAB, otherwise extended.
@@ -30,10 +28,8 @@ bool button(const char* label, ButtonVariant variant = ButtonVariant::Filled, Im
 /// The size of iconButton(): the 48dp touch target.
 [[nodiscard]] ImVec2 iconButtonSize();
 
+/// An icon button's emphasis; its Lua names ("standard", "filled", ...) are in imlui.ui.enum_names.
 enum class IconButtonVariant { Standard, Filled, Tonal, Outlined };
-
-/// "standard" (default), "filled", "tonal", "outlined".
-[[nodiscard]] IconButtonVariant iconButtonVariant(std::string_view n);
 
 /// Icon button (40dp container, 48dp touch target). `toggle` enables the
 /// selected/unselected look.
@@ -45,15 +41,6 @@ bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v =
 module :private;
 
 namespace imlui::md {
-
-ButtonVariant buttonVariant(std::string_view name) {
-    if (name == "tonal") return ButtonVariant::Tonal;
-    if (name == "outlined") return ButtonVariant::Outlined;
-    if (name == "text") return ButtonVariant::Text;
-    if (name == "elevated") return ButtonVariant::Elevated;
-    if (name == "fab") return ButtonVariant::Fab;
-    return ButtonVariant::Filled;
-}
 
 namespace {
 
@@ -145,13 +132,6 @@ bool button(const char* label, ButtonVariant variant, ImVec2 size, std::string_v
     }
     if (!text.empty()) drawText(dl, TextStyle::LabelLarge, {x, textTop(TextStyle::LabelLarge, cy)}, fg, text);
     return clicked;
-}
-
-IconButtonVariant iconButtonVariant(std::string_view n) {
-    if (n == "filled") return IconButtonVariant::Filled;
-    if (n == "tonal") return IconButtonVariant::Tonal;
-    if (n == "outlined") return IconButtonVariant::Outlined;
-    return IconButtonVariant::Standard;
 }
 
 bool iconButton(const char* id, std::string_view iconName, IconButtonVariant v, bool toggle, bool selected,

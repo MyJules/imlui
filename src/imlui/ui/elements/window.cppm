@@ -11,14 +11,16 @@ import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// A floating ImGui window with Material surface colors that stacks its children. Non-visual.
 ///
 /// Props:   title = "Window", open = true, x = 60, y = 60, width = 0, height = 0, autoResize = unset,
-///          titleBar = true, resizable = true, movable = true
-/// Raw:     menuBar (a MenuBar), spacing, align, cull
+///          titleBar = true, resizable = true, movable = true, align = "start" ("center", "end"; the children's,
+///          StackAlign)
+/// Raw:     menuBar (a MenuBar), spacing, cull
 /// Signals: onClosed(self)
 /// Two-way: open
 ///
@@ -27,7 +29,7 @@ export namespace imlui {
 /// nor height is set. An auto-resized window takes its content's size, at least width x height; a fill inside it
 /// is `width` wide (240dp when unset), never the window's current width, so the window shrinks back with its
 /// content.
-class Window final : public Element {
+class Window final : public Element, public StackAlign {
 public:
     /// The width of a fill in an auto-resized window without a `width` (dp).
     static constexpr float defaultFillWidth = 240.0f;
@@ -110,7 +112,7 @@ void Window::declare(TypeBuilder<Window>& type) {
         .rawProperty("menuBar", "Element|false")
         .doc("A `MenuBar { ... }` below the title bar.")
         .nonVisual();
-    rawStackProps(type);
+    stackProps(type);
 }
 
 void Window::render(Frame& frame) {

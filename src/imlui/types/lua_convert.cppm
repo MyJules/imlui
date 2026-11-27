@@ -702,13 +702,20 @@ struct LuaConvert<E> {
     /// One of the names, as a string (case-sensitive). Numbers don't convert.
     static bool check(lua::State* s, int idx) { return find(s, idx).has_value(); }
     static E get(lua::State* s, int idx) { return find(s, idx).value_or(E{}); }
-    /// Shows the string it got: `'low'|'high' expected, got string "medium"`.
+    /// Shows the string it got and, for a named enum, its names too: `'low'|'high' expected, got string "medium"`,
+    /// `Quality ('low'|'high') expected, got string "medium"`.
     static std::string mismatch(lua::State* s, int idx) {
         if (lua::type(s, idx) != lua::Type::String) return lua_convert_detail::expectedGot(name, s, idx);
-        return std::string{name} + " expected, got string " + lua_convert_detail::quoted(lua::tostring(s, idx));
+        return expectedNames() + " expected, got string " + lua_convert_detail::quoted(lua::tostring(s, idx));
     }
 
 private:
+    /// What a mismatch says was expected: the names, after the enum's own name when it has one.
+    static std::string expectedNames() {
+        constexpr std::string_view names = lua_convert_detail::builtName<lua_convert_detail::EnumName<E>>;
+        if (name == names) return std::string{names};
+        return std::string{name} + " (" + std::string{names} + ")";
+    }
     static constexpr std::string_view enumDoc() {
         if constexpr (requires { std::string_view{EnumNames<E>::doc}; })
             return EnumNames<E>::doc;

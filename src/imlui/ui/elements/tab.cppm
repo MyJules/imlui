@@ -8,14 +8,15 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.elements.stack_props;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// One tab of a TabBar; a Tab outside a TabBar renders its content inline.
 ///
-/// Props:   title = "Tab", icon = ""
-/// Raw:     spacing, align, cull (the TabBar stacks the content with them)
-class Tab final : public Element {
+/// Props:   title = "Tab", icon = "", align = "start" ("center", "end"; the content's, StackAlign)
+/// Raw:     spacing, cull (the TabBar stacks the content with them and `align`)
+class Tab final : public Element, public StackAlign {
 public:
     static void declare(TypeBuilder<Tab>& type);
 
@@ -45,7 +46,7 @@ void Tab::declare(TypeBuilder<Tab>& type) {
         .doc("The header's label, `\"Tab\"` by default.")
         .property("icon", &Tab::icon, &Tab::setIcon)
         .doc("The header's Material icon name; `\"\"` for none.");
-    rawStackProps(type);
+    stackProps(type);
 }
 
 void Tab::render(Frame& frame) { frame.renderStack(); }

@@ -190,7 +190,7 @@ TEST_F(ElementReference, ClassDocCommentsListTheirMembers) {
             lineEnd = lineStart;
         }
         const std::size_t baseStart = sources.find("public ", at) + std::string_view{"public "}.size();
-        const std::string base = sources.substr(baseStart, sources.find_first_of(" {\r\n", baseStart) - baseStart);
+        const std::string base = sources.substr(baseStart, sources.find_first_of(" ,{\r\n", baseStart) - baseStart);
         if (base != "Element" && depth < 4) block += self(base, self, depth + 1);
         return block;
     };
