@@ -84,6 +84,12 @@ public:
         return m_types.registerType<T>(std::move(name));
     }
 
+    /// Changes the display size from the next frame on (a window resize).
+    void setSize(float width, float height) {
+        m_options.width = width;
+        m_options.height = height;
+    }
+
     [[nodiscard]] Renderer& renderer();
     [[nodiscard]] TypeRegistry& types();
     /// The harness's resources. Mount more (e.g. `app:/` on a temporary folder) before start().

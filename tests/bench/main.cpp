@@ -25,6 +25,7 @@ import imlui.types.lua_convert;
 import imlui.types.script_object;
 import imlui.types.type_builder;
 import imlui.types.vector_model;
+import imlui.ui.layout_cache;
 import imlui.test.headless_frame;
 
 namespace bench {
@@ -89,6 +90,11 @@ struct Result {
     double firstMs = 0.0;
     Series anim;
     Series idle;
+    /// Presented frames while the window's width changes on every frame (a live resize drag), each rendered again
+    /// while its layout was stale, up to Engine::resizePasses (3) passes, as the Engine does after a size change.
+    Series resize;
+    int resizeStale = 0;       ///< of those, the frames whose first pass was stale (a frame late without the passes)
+    double resizePasses = 0.0; ///< passes per presented frame
     int vertices = 0; ///< ImGui vertices in the last animated frame's draw data
     std::vector<std::string> errors;
 };
@@ -134,6 +140,30 @@ Result runScenario(const std::string& script, const std::string& scenario, int c
     // Idle: nothing changes, a frame is forced anyway (the cost of any redraw: a hover, a caret blink).
     check(h, "collectgarbage()");
     r.idle = summarize(timeFrames(h, options.frames));
+
+    // Resize: nothing changes but the window's width, a few pixels on every frame (a live resize drag).
+    {
+        std::vector<double> times;
+        times.reserve(static_cast<std::size_t>(options.frames));
+        for (int i = 0; i < options.frames; ++i) {
+            const float step = static_cast<float>(i % 40 < 20 ? i % 20 : 20 - i % 20);
+            h.setSize(options.width - 6.0f * step - 3.0f, options.height);
+            const auto t = Clock::now();
+            for (int pass = 1;; ++pass) {
+                const std::uint64_t stale = imlui::layout::staleCount();
+                h.renderFrame("root");
+                r.resizePasses += 1.0;
+                const bool again = imlui::layout::staleCount() != stale;
+                if (again && pass == 1) ++r.resizeStale;
+                if (!again || pass >= 3) break;
+            }
+            times.push_back(msSince(t));
+        }
+        r.resizePasses /= static_cast<double>(options.frames);
+        h.setSize(options.width, options.height);
+        h.renderFrames("root", options.warmup);
+        r.resize = summarize(std::move(times));
+    }
 
     // Animated: the Timer bumps stress.s.tick every frame, and every item reads it through a binding.
     check(h, "stress.s.animate = true");
@@ -350,8 +380,9 @@ int main(int argc, char** argv) {
 
     std::cout << std::format("imlui_bench: {}x{} px, {} frames measured after {} to settle; times in ms\n\n",
                              options.width, options.height, options.frames, options.warmup);
-    std::cout << std::format("{:<10} {:>6} {:>9} {:>9} {:>10} {:>10} {:>10} {:>10} {:>9}\n", "scenario", "count",
-                             "build", "first", "anim med", "anim mean", "idle med", "idle mean", "vertices");
+    std::cout << std::format("{:<10} {:>6} {:>9} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>6} {:>6} {:>9}\n",
+                             "scenario", "count", "build", "first", "anim med", "anim mean", "idle med", "idle mean",
+                             "resize med", "resize max", "stale", "passes", "vertices");
     int failures = 0;
     for (const std::string& scenario : options.scenarios) {
         if (isModelScenario(scenario)) continue;
@@ -359,8 +390,10 @@ int main(int argc, char** argv) {
             try {
                 const Result r = runScenario(script, scenario, count, options);
                 std::cout << std::format(
-                    "{:<10} {:>6} {:>9.1f} {:>9.1f} {:>10.2f} {:>10.2f} {:>10.2f} {:>10.2f} {:>9}\n", r.scenario,
-                    r.count, r.buildMs, r.firstMs, r.anim.median, r.anim.mean, r.idle.median, r.idle.mean, r.vertices);
+                    "{:<10} {:>6} {:>9.1f} {:>9.1f} {:>10.2f} {:>10.2f} {:>10.2f} {:>10.2f} {:>10.2f} {:>10.2f} {:>6} "
+                    "{:>6.2f} {:>9}\n",
+                    r.scenario, r.count, r.buildMs, r.firstMs, r.anim.median, r.anim.mean, r.idle.median, r.idle.mean,
+                    r.resize.median, r.resize.max, r.resizeStale, r.resizePasses, r.vertices);
                 for (const std::string& e : r.errors)
                     std::cout << "  script error: " << e << "\n";
                 failures += r.errors.empty() ? 0 : 1;

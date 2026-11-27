@@ -153,7 +153,21 @@ theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself wh
 `glfwWaitEventsTimeout()` doesn't return. The engine registers a **refresh callback** that runs the posted functions
 and the due C++ main timers and then `renderFrame()`, and GLFW calls it from its refresh and framebuffer-size callbacks
 (only inside `waitEvents()`, so never during a frame). The UI then lays itself out again during the drag, and worker
-results and `delay()`s don't stall until it ends.
+results and `delay()`s don't stall until it ends. Each step of the drag sends a new framebuffer size and then a
+repaint at that size: the repaint is skipped when the frame just presented has that size (`Window::refreshDuringEvents`),
+and vsync is off for the rest of the poll (`glfwSwapInterval(0)`, back to 1 when it returns), so a step costs one
+frame, not two waits for a vertical blank, and the content keeps up with the edge (the compositor presents a windowed
+app's frames without tearing).
+
+**Frames after a size change.** Some layouts place children by the sizes they had on the last frame (a `Row`'s widths,
+a stack's `align`, the TopAppBar's actions, an element rendered unseen on its first frame: a branch a new size class
+switches on). On the frame after a resize they are a frame late, and a live resize presents each size once, so the
+layout would trail the window. `renderFrame()` therefore draws a frame into the back buffer (`renderPass()`,
+`Window::draw`) and, when the framebuffer size or `dpiScale()` changed since the last presented frame and the frame
+was stale (`layout::staleCount()` moved: a size differed from the one a layout assumed, or `layout::noteStale()` from
+`renderUnseen`), renders it again before presenting (`Window::present`), up to `Engine::resizePasses` (3) passes. A
+frame that rendered nothing stale, and every frame at an unchanged size, is presented after one pass. Input is taken
+by the first pass (ImGui's events are consumed there), so a click runs its handler once.
 
 **Error overlay.** All calls into Lua go through `luaui::safeCall`, which runs `pcall` with a traceback handler.
 Errors are logged with the source tag `lua`, deduplicated, and capped at the last 32. While any are recorded, a
