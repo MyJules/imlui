@@ -18,6 +18,7 @@ import imlui.theme.icons;
 import imlui.theme.skin_tokens;
 import imlui.theme.theme;
 import imlui.theme.typography;
+import imlui.widgets.anchored_popup;
 import imlui.widgets.common;
 
 export namespace imlui::fluent {
@@ -49,6 +50,8 @@ struct Look {
 
 /// Fluent's body text (14dp): control labels, menu items, list rows.
 inline constexpr TextStyle bodyStyle = TextStyle::BodyMedium;
+/// Fluent's caption (12dp): supporting and trailing text, an input's description, a shortcut, a rail label.
+inline constexpr TextStyle captionStyle = TextStyle::BodySmall;
 
 /// A control's visual state, in the order Fluent resolves it: disabled wins, then pressed, then hover.
 enum class State { Rest, Hover, Pressed, Disabled };
@@ -156,11 +159,29 @@ inline constexpr float indicatorPressedLength = 10.0f;
 /// `disabled`).
 void drawIndicator(ImDrawList* dl, ImVec2 c, float length, bool vertical, bool disabled, const Look& look);
 
-// -- (C2) flyouts
+// ---- Flyouts: floating surfaces (menus, a combo box's list, a color field's picker, an InfoBar, a readout)
 
-/// Draws a flyout's background in [a, b] (a floating surface: a snackbar's InfoBar, a chart's readout): the opaque
-/// `flyout` fill and a `flyoutStroke` border of the stroke width. `radius` in pixels.
+/// Draws a flyout's background in [a, b] (a floating surface drawn in a window of its own: a snackbar's InfoBar, a
+/// chart's readout): the opaque `flyout` fill and a `flyoutStroke` border of the stroke width. `radius` in pixels.
 void drawFlyout(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, const Look& look);
+
+/// A list flyout's padding above its first row and below its last, dp (a menu, a combo box's list).
+inline constexpr float flyoutPaddingY = 2.0f;
+
+/// Pushes the style a flyout popup is begun with (before ImGui::BeginPopup or ImGui::BeginMenu): the `flyout` fill
+/// (PopupBg), a `flyoutStroke` border (Border) of the stroke width, the overlay radius, `padding` (pixels) as the
+/// window padding. Two colors and three style vars; popFlyoutStyle() right after the Begin call.
+void pushFlyoutStyle(const Look& look, ImVec2 padding);
+void popFlyoutStyle();
+/// Positions the next window next to the anchor [a, b] (call right before ImGui::BeginPopup(popupId), in the anchor's
+/// window): md::placeAnchoredPopup's placement (below, `gap` pixels away, kept inside the main viewport) and its
+/// stored size, the shadow with the overlay radius. Pass the result to md::trackAnchoredPopup() after BeginPopup.
+md::AnchoredPopup placeFlyout(const Look& look, const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap);
+/// Begins a flyout popup anchored to [a, b]: placeFlyout(), at least `minWidth` wide and at most `maxHeight` high, the
+/// flyout style with `padding`, ImGui::BeginPopup(popupId, NoMove), md::trackAnchoredPopup(). Returns true while
+/// open; then ImGui::EndPopup().
+bool beginFlyout(const Look& look, const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap, ImVec2 padding,
+                 float maxHeight);
 
 } // namespace imlui::fluent
 
@@ -407,11 +428,39 @@ void drawIndicator(ImDrawList* dl, ImVec2 c, float length, bool vertical, bool d
                       disabled ? look.colors.accentDisabled : look.colors.accent);
 }
 
-// -- (C2) flyouts
+// ---- Flyouts
 
 void drawFlyout(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, const Look& look) {
     drawControl(dl, a, b, radius, {look.colors.flyout, look.colors.flyoutStroke, look.colors.flyoutStroke, {}},
                 strokeWidth(look));
+}
+
+void pushFlyoutStyle(const Look& look, ImVec2 padding) {
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, look.colors.flyout.vec4());
+    ImGui::PushStyleColor(ImGuiCol_Border, look.colors.flyoutStroke.vec4());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, overlayRadius(look));
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, strokeWidth(look));
+}
+
+void popFlyoutStyle() {
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+}
+
+md::AnchoredPopup placeFlyout(const Look& look, const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap) {
+    return md::placeAnchoredPopup(popupId, a, b, minWidth, gap, overlayRadius(look));
+}
+
+bool beginFlyout(const Look& look, const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap, ImVec2 padding,
+                 float maxHeight) {
+    const md::AnchoredPopup placed = placeFlyout(look, popupId, a, b, minWidth, gap);
+    ImGui::SetNextWindowSizeConstraints({minWidth, 0}, {md::hugeExtent, maxHeight});
+    pushFlyoutStyle(look, padding);
+    const bool open = ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
+    popFlyoutStyle();
+    md::trackAnchoredPopup(placed, open);
+    return open;
 }
 
 } // namespace imlui::fluent

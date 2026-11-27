@@ -1,6 +1,7 @@
 // Fluent snackbar: WinUI's InfoBar (informational) floating at the bottom of the viewport. The flyout fill with a
 // flyout-stroke border, the control radius, an accent "info" icon, the message in body text (textPrimary), the action
-// a standard button (fluent::button, variant outlined), the close button a subtle icon button as high as a control.
+// a standard button (fluent::button, variant outlined), the close button a standard icon button (fluent::iconButton:
+// subtle, as high as a control).
 //
 // md::snackbar's behavior: `t` slides it in from 24dp lower and fades it, it returns whether the action was clicked
 // and sets `*closed` when the close button was; the width comes from the content within 344-672dp, at most the
@@ -14,6 +15,7 @@ import imgui;
 import imlui.color;
 import imlui.skin.fluent.button;
 import imlui.skin.fluent.common;
+import imlui.skin.fluent.icon_button;
 import imlui.theme.dpi;
 import imlui.theme.fluent_colors;
 import imlui.widgets.button;
@@ -63,22 +65,6 @@ constexpr float linePad = 14.0f;       ///< dp above and below the lines
 constexpr float minHeight = 48.0f;     ///< dp, InfoBar's minimum
 constexpr float slideDistance = 24.0f; ///< dp the bar slides in from
 
-/// A subtle icon button with the "close" glyph, `side` pixels square. A stand-in for group (A)'s Fluent iconButton,
-/// which is written in parallel: switch to it once it lands.
-bool closeButton(const Look& look, const char* id, float side) {
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    const bool clicked = invisibleButton(id, {side, side});
-    const ItemState item = itemState();
-    const ControlColors c = controlColors(look, Fill::Subtle, stateOf(item));
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 q{p.x + side, p.y + side};
-    const float radius = controlRadius(look);
-    drawControl(dl, p, q, radius, c, strokeWidth(look));
-    md::drawIcon(dl, "close", {p.x + side * 0.5f, p.y + side * 0.5f}, iconSize(look), c.text);
-    if (item.focused) drawFocusRect(dl, p, q, radius, look);
-    return clicked;
-}
-
 /// Multiplies the alpha of the vertices `dl` got from `from` on by `alpha` (the bar's fade: its parts draw with
 /// explicit colors, which ignore ImGui's style alpha).
 void fade(ImDrawList* dl, int from, float alpha) {
@@ -102,7 +88,7 @@ SnackbarLayout snackbarLayout(const Look& look, std::string_view message, std::s
     const float end = closeIcon ? dp(padEndClose) : dp(padEnd);
     if (!action.empty())
         l.actionSize = buttonSize(look, snackbarActionLabel(action).c_str(), md::ButtonVariant::Outlined, {}, {});
-    if (closeIcon) l.closeSize = {controlHeight(look), controlHeight(look)};
+    if (closeIcon) l.closeSize = iconButtonSize(look);
     float right = 0;
     if (!action.empty()) right += dp(actionGap) + l.actionSize.x;
     if (closeIcon) right += dp(closeGap) + l.closeSize.x;
@@ -160,7 +146,8 @@ bool snackbar(const Look& look, std::string_view message, std::string_view actio
     }
     if (closeIcon) {
         ImGui::SetCursorPos(l.closePos);
-        if (closeButton(look, "##snack_close", l.closeSize.x) && closed) *closed = true;
+        if (iconButton(look, "##snack_close", "close", md::IconButtonVariant::Standard, false, false, {}) && closed)
+            *closed = true;
     }
     fade(dl, from, ease);
     md::popSurface();

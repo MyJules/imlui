@@ -22,8 +22,12 @@ struct AnchoredPopup {
 /// Positions the next window (call right before ImGui::BeginPopup(popupId), in the anchor's window) next to the
 /// anchor rect [a, b]: below it, left edges aligned. When that would overflow the main viewport it aligns the right
 /// edges instead and/or opens above the anchor, and clamps to the viewport as a last resort. Also draws the
-/// popup's elevation shadow at that position.
+/// popup's elevation shadow at that position, with Material's extra-small corner radius.
 AnchoredPopup placeAnchoredPopup(const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap);
+/// The same with the shadow's corner radius `shadowRadius` (pixels): a skin whose popups have other corners (the
+/// Fluent flyouts).
+AnchoredPopup placeAnchoredPopup(const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap,
+                                 float shadowRadius);
 
 /// Records the popup's size for the next frame's placement and shadow. Call right after BeginPopup() with its
 /// result (while inside the popup when it is open).
@@ -63,6 +67,11 @@ ImVec2 placeInViewport(ImVec2 a, ImVec2 b, ImVec2 size, float gap) {
 } // namespace
 
 AnchoredPopup placeAnchoredPopup(const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap) {
+    return placeAnchoredPopup(popupId, a, b, minWidth, gap, dp(shape().extraSmall));
+}
+
+AnchoredPopup placeAnchoredPopup(const char* popupId, ImVec2 a, ImVec2 b, float minWidth, float gap,
+                                 float shadowRadius) {
     AnchoredPopup popup{ImGui::GetStateStorage(), ImGui::GetID(popupId)};
     ImGuiStorage* st = popup.storage;
     // Before the first open the size is unknown: assume the minimum width.
@@ -74,7 +83,7 @@ AnchoredPopup placeAnchoredPopup(const char* popupId, ImVec2 a, ImVec2 b, float 
     if (ImGui::IsPopupOpen(popupId) && st->GetBool(popup.key + shownSlot, false) && size.y > 0) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->PushClipRectFullScreen();
-        drawShadow(dl, pos, {pos.x + size.x, pos.y + size.y}, dp(shape().extraSmall), 2.0f);
+        drawShadow(dl, pos, {pos.x + size.x, pos.y + size.y}, shadowRadius, 2.0f);
         dl->PopClipRect();
     }
     return popup;

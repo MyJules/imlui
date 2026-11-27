@@ -946,7 +946,7 @@ Material. Apps add skins with `registerSkin(name, factory)` ([Skins](extending.m
 
 **What goes through the skin** is every call that decides a look (shape, colors, metrics, natural size):
 
-| Group | Skin functions |
+| Group | Skin functions (all done) |
 |---|---|
 | Buttons | `button`/`buttonSize`, `iconButton`/`iconButtonSize` |
 | Selection | `checkbox`/`checkboxSize`, `radio`/`radioSize`, `switchToggle`/`switchSize`, `chip`/`chipSize`, `segmented`/`segmentedSize` |
@@ -1005,6 +1005,7 @@ its children by their intrinsic sizes lays out at the new sizes on the first fra
 
 How a Fluent control is added to `FluentSkin`, written so that several are added at once without conflicts. The
 Button is the reference: read `src/imlui/skin/fluent/button.cppm` and its tests in `tests/fluent_skin_test.cpp` first.
+Every `Skin` function has its Fluent override now (all three groups are done); a new control follows the same steps.
 
 **The groups.** `FluentSkin`'s declaration (`src/imlui/skin/fluent/fluent_skin.cppm`) has three sections, each in
 three places: its imports (`// ---- (A) ...: imports` to `// ---- end (A) imports`), its override declarations
@@ -1014,9 +1015,9 @@ the file, so groups merge cleanly:
 
 | Group | Skin functions |
 |---|---|
-| (A) buttons, toggles and ranges | `button`/`buttonSize`, `iconButton`/`iconButtonSize`, `checkbox`/`checkboxSize`, `radio`/`radioSize`, `switchToggle`/`switchSize`, `chip`/`chipSize`, `segmented`/`segmentedSize`, `slider`/`sliderSize`, `progress`/`progressSize`, `circularProgress`/`circularProgressSize` (all done: the modules `button`, `icon_button`, `toggles` (checkbox, radio, switch), `chip`, `segmented`, `slider`, `progress`) |
-| (B) inputs | `textField`/`textFieldSize`, `spinBox`/`spinBoxSize`, `dropdown`/`dropdownSize`, `colorField`/`colorFieldSize` |
-| (C) lists, menus, navigation, containers, messages, chrome | `listItem`/`listItemSize`, `expander`/`expanderSize`, `menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu`, `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `beginModalDrawer`/`endModalDrawer`, `beginCard`/`endCard`/`cardSize`, `beginDialog`/`endDialog`, `snackbar`, `tooltip`, `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize`; the chrome hooks `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` (in `imlui.skin.fluent.chrome`, which already has `applicationBackground`, `windowChrome`, `scrollViewRounding`) |
+| (A) buttons, toggles and ranges | `button`/`buttonSize`, `iconButton`/`iconButtonSize`, `checkbox`/`checkboxSize`, `radio`/`radioSize`, `switchToggle`/`switchSize`, `chip`/`chipSize`, `segmented`/`segmentedSize`, `slider`/`sliderSize`, `progress`/`progressSize`, `circularProgress`/`circularProgressSize` (the modules `button`, `icon_button`, `toggles` (checkbox, radio, switch), `chip`, `segmented`, `slider`, `progress`) |
+| (B) inputs | `textField`/`textFieldSize`, `spinBox`/`spinBoxSize`, `dropdown`/`dropdownSize`, `colorField`/`colorFieldSize` (the module `inputs`) |
+| (C) lists, menus, navigation, containers, messages, chrome | `listItem`/`listItemSize`, `expander`/`expanderSize`, `menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu`, `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `beginModalDrawer`/`endModalDrawer`, `beginCard`/`endCard`/`cardSize`, `beginDialog`/`endDialog`, `snackbar`, `tooltip`, `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize`; the chrome hooks `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` (C1: the modules `list` (list item, expander), `menu`, `tabs`, `navigation`, `navigation_drawer`; C2: `card`, `dialog`, `snackbar`, `tooltip`, `divider`, `table`, `chart`, and `chrome` with the hooks and `applicationBackground`, `windowChrome`, `scrollViewRounding`) |
 
 **Steps for one control family** (say the checkbox and radio, in group A):
 
@@ -1025,8 +1026,9 @@ the file, so groups merge cleanly:
    widget's parameters after a leading `const Look& look` (`bool checkbox(const Look& look, const char* label,
    bool* v)`, `ImVec2 checkboxSize(const Look& look, const char* label)`), plus any option structs of its own. It
    imports `imlui.skin.fluent.common`, the `md::` module of its vocabulary types (`imlui.widgets.selection`), and
-   `imlui.widgets.common` / `imlui.theme.dpi` for the helpers. It never imports `imlui.skin` or another family's
-   module (shared code goes to `common`, see below).
+   `imlui.widgets.common` / `imlui.theme.dpi` for the helpers. It never imports `imlui.skin`, nor another family's
+   module for shared code (that goes to `common`, see below); only a composite imports the families of the Fluent
+   controls it draws (step 4).
 2. **One layout function** in the private part, used by both the draw and the size function, so layouts measure
    exactly what is drawn (the Button's `buttonLayout`). Sizes come from the tokens through `controlHeight(look)`,
    `compactHeight`, `paddingX`, `gap`, `controlRadius`, `overlayRadius`, `strokeWidth`, `iconSize`; widths resolve
@@ -1043,9 +1045,11 @@ the file, so groups merge cleanly:
    shapes. Return what the `md::` widget returns (clicked, changed). Keep per-control state in ImGui (keyed by the
    item ID), not in statics.
 4. **Composites** (`spinBox`, `dropdown`, `colorField`, `snackbar`, menus with their items, a dialog's buttons) are
-   drawn whole by the Fluent function: call the other Fluent functions (`fluent::button(look, ...)`), not `md::`
-   and not `skin()`. A family that needs another group's control before it lands draws a private stand-in and says
-   so in a comment.
+   drawn whole by the Fluent function: call the other Fluent functions (`fluent::button(look, ...)`,
+   `fluent::iconButton`, `fluent::textField`), importing their family modules (`imlui.skin.fluent.button`,
+   `imlui.skin.fluent.icon_button`), not `md::` and not `skin()`. The family graph stays acyclic: a family a
+   composite imports never imports it back. A popup anchored to a control (a menu, a combo box's list, a color
+   field's picker) is a flyout from `common` (`beginFlyout`, or `placeFlyout` and `pushFlyoutStyle` for the steps).
 5. **Declare and forward** in `fluent_skin.cppm`, inside the group's markers: the import above `// ---- end (X)
    imports`; the overrides above `// ======== end (X) ========` in the class (`bool checkbox(const char* label,
    bool* v) const override;` with `[[nodiscard]]` on the size function, exactly the base signature); the forwards
@@ -1074,7 +1078,7 @@ the file, so groups merge cleanly:
 (`Accent`, `Standard`, `Subtle`), `ControlColors` (`fill`, `stroke`, `bottomStroke`, `text`), `controlColors(look,
 fill, state)` (accent follows `buttonFill`); `drawControl(dl, a, b, radius, colors, stroke)`, `drawUnderline(dl, a,
 b, radius, color, width)`, `drawFocusRect(dl, a, b, radius, look)`; `Content` and `content(look, text, icon, style,
-iconDp)`, `drawContent(dl, content, x, cy, color, style)`. Group A's block: `darkColors(look)` (lighter text than background),
+iconDp)`, `drawContent(dl, content, x, cy, color, style)`; `captionStyle` (12dp: supporting and trailing text). Group A's block: `darkColors(look)` (lighter text than background),
 `solidControlFill(look)` (Fluent's opaque ControlSolidFillColorDefault: a slider's thumb), `accentToggleFill(look,
 state)` and `accentToggleGlyph(look, state)` (a checked checkbox, radio or switch, a slider's value, whatever
 `buttonFill`), `altFill(look, state)` and `strongStroke(look, state)` (an unchecked checkbox, radio or switch). For row-like items (list rows, menu rows, navigation
@@ -1083,8 +1087,14 @@ items, tabs): `plateInsetX`, `plateInsetY` (the highlight's inset in its row, dp
 subtle item: the subtle fills one step on), `rowColors(look, state, selected)` (unselected to selected by an animated
 0..1), `drawIndicator(dl, center, length, vertical, disabled, look)` (the accent pill).
 
-Added with the containers (group C2): `drawFlyout(dl, a, b, radius, look)`, a floating surface's background (the
-opaque `flyout` fill, a `flyoutStroke` border of the stroke width): the snackbar's InfoBar, a chart's readout.
+Flyouts, the floating surfaces: `drawFlyout(dl, a, b, radius, look)`, the background of one drawn in a window of its
+own (the opaque `flyout` fill, a `flyoutStroke` border of the stroke width): the snackbar's InfoBar, a chart's
+readout, a slider's value tip. For a popup anchored to a control (the menus, the combo box, the color field):
+`beginFlyout(look, popupId, a, b, minWidth, gap, padding, maxHeight)` (then `ImGui::EndPopup()`), made of
+`placeFlyout(look, popupId, a, b, minWidth, gap)` (md's anchored placement and stored size, the shadow with the
+overlay radius; `md::trackAnchoredPopup` after BeginPopup), `pushFlyoutStyle(look, padding)`/`popFlyoutStyle()` (the
+popup's fill, border, overlay radius and padding; also for a menu-bar `BeginMenu`), and `flyoutPaddingY` (2dp, a
+list flyout's padding above and below its rows).
 
 ## Repository layout
 
@@ -1219,10 +1229,11 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.text` | `text`, `textSize`, `icon`, `iconSize`, `tooltip`, `divider` |
 | `imlui.widgets.button` | `button`, `buttonSize` (+ `ButtonVariant`), `iconButton`, `iconButtonSize` (+ `IconButtonVariant`) |
 | `imlui.widgets.selection` | `checkbox`, `radio`, `switchToggle`, `chip` (+ `ChipVariant`), `segmented` |
-| `imlui.widgets.slider` | `slider` |
+| `imlui.widgets.slider` | `slider`, `sliderSize`; `checkedSliderFormat` (an invalid format reported once) and `snapToStep`, shared with the Fluent slider |
 | `imlui.widgets.progress` | `progress` (linear), `circularProgress` |
 | `imlui.widgets.field` | Shared text-field plumbing (`FieldFrame`, decoration, background, supporting text) |
 | `imlui.widgets.text_field` | `textField` (+ `TextFieldOptions`, `TextFieldResult`) |
+| `imlui.widgets.anchored_popup` | `placeAnchoredPopup` (below the anchor, kept in the main viewport, the shadow at last frame's size; a shadow radius for other skins) and `trackAnchoredPopup` (+ `AnchoredPopup`): the menus', dropdowns' and pickers' placement, the Fluent flyouts' too |
 | `imlui.widgets.menu` | Menu styling, `menuItem`, `menuDivider`, `beginMenu`/`endMenu` (menu-bar menus, submenus), `beginAnchoredMenu`/`endAnchoredMenu` |
 | `imlui.widgets.dropdown` | `dropdown` (+ `DropdownOptions`) |
 | `imlui.widgets.spin_box` | `spinBox` |
@@ -1246,10 +1257,16 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.skin.registry` | `skin()` (the active skin: the one registered under `theme().design`, resolved again after a theme change), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames`; `"material"` and `"fluent"` built in |
 | `imlui.skin` | Umbrella: `export import` of `base`, `registry` and `fluent.fluent_skin` |
 | `imlui.skin.fluent.fluent_skin` | `FluentSkin` (`"fluent"`): `tokens()`, `colors()`, `look()`, and the overrides, one-line forwards in groups (A), (B), (C) (see [Adding a Fluent control](#adding-a-fluent-control)) |
-| `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout, the row selection (`selectedColors`, `rowColors`, `drawIndicator`) |
+| `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout, the row selection (`selectedColors`, `rowColors`, `drawIndicator`), the flyouts (`drawFlyout`, `beginFlyout`, `placeFlyout`, `pushFlyoutStyle`/`popFlyoutStyle`) |
 | `imlui.skin.fluent.button` | `fluent::button`, `buttonSize`, `variantFill` |
+| `imlui.skin.fluent.icon_button` | `fluent::iconButton`, `iconButtonSize`, `iconButtonFill` |
+| `imlui.skin.fluent.toggles` | `fluent::checkbox`, `radio`, `switchToggle` and their sizes (WinUI's CheckBox, RadioButton, ToggleSwitch) |
+| `imlui.skin.fluent.chip` | `fluent::chip`, `chipSize`, `chipFill` (a ToggleButton) |
+| `imlui.skin.fluent.segmented` | `fluent::segmented`, `segmentedSize` |
+| `imlui.skin.fluent.slider` | `fluent::slider`, `sliderSize` (WinUI's Slider; md's format check and snapping) |
+| `imlui.skin.fluent.progress` | `fluent::progress`, `circularProgress` and their sizes (ProgressBar, ProgressRing) |
 | `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` |
-| `imlui.skin.fluent.inputs` | Fluent's inputs (group B): `fluent::textField`, `spinBox`, `dropdown`, `colorField` and their sizes; `headerHeight`, `descriptionHeight`, `flyoutRowHeight` and the Fluent constants without a token (`innerButtonWidth`, `innerButtonMargin`, `descriptionGap`, `flyoutGap`, `flyoutPaddingY`, `rowInsetX`/`Y`, `swatchInset`, `pickerPadding`, `pickerWidth`). Privately, a list flyout (`beginFlyout`, `flyoutRow`) for the combo box until group (C)'s Fluent menus land |
+| `imlui.skin.fluent.inputs` | Fluent's inputs (group B): `fluent::textField`, `spinBox`, `dropdown`, `colorField` and their sizes; `headerHeight`, `descriptionHeight`, `flyoutRowHeight` and the Fluent constants without a token (`innerButtonWidth`, `innerButtonMargin`, `descriptionGap`, `flyoutGap`, `swatchInset`, `pickerPadding`, `pickerWidth`). The combo box and the color field open `common`'s flyout; privately, the combo box's rows (`flyoutRow`: WinUI's ComboBoxItem, with the selection indicator) |
 | `imlui.skin.fluent.list` | `fluent::listItem`/`listItemSize` (WinUI's list row), `expander`/`expanderSize` (the Expander header) |
 | `imlui.skin.fluent.menu` | `fluent::menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu` (WinUI's MenuFlyout), `menuRowHeight` |
 | `imlui.skin.fluent.tabs` | `fluent::tabs`, `tabsSize`: primary as a SelectorBar, secondary as a TabView |

@@ -27,6 +27,13 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step = 0
 /// The size of slider() with `width` (resolved like itemWidth(): 0 is the natural 200dp).
 [[nodiscard]] ImVec2 sliderSize(float width);
 
+/// slider()'s format check, shared with the other skins' sliders: `format` when isValidFloatFormat(), else
+/// defaultValueFormat, an invalid format being reported once (whichever slider meets it first).
+[[nodiscard]] const char* checkedSliderFormat(const char* format);
+/// slider()'s snapping: `vmin + k * step` for the step nearest to `v` and at most `vmax`, rounded to 15 significant
+/// digits. `step` > 0, the range finite and not empty.
+[[nodiscard]] double snapToStep(double v, double vmin, double vmax, double step);
+
 } // namespace imlui::md
 
 module :private;
@@ -38,7 +45,9 @@ namespace {
 /// Formats already reported as invalid, so each is logged once rather than every frame.
 std::unordered_set<std::string> reportedFormats;
 
-const char* checkedFormat(const char* format) {
+} // namespace
+
+const char* checkedSliderFormat(const char* format) {
     if (isValidFloatFormat(format)) return format;
     if (reportedFormats.emplace(format).second)
         log::warn("Slider: invalid format \"{}\" (expected one %f, %e or %g conversion); using \"{}\"", format,
@@ -57,8 +66,6 @@ double snapToStep(double v, double vmin, double vmax, double step) {
     if (std::snprintf(buf, sizeof buf, "%.15g", snapped) < 0) return snapped;
     return std::strtod(buf, nullptr);
 }
-
-} // namespace
 
 ImVec2 sliderSize(float width) { return {itemWidth(width, dp(200)), dp(44)}; }
 
@@ -113,10 +120,10 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
 
     if (act && valueFormat && *valueFormat) {
         char buf[64] = {};
-        const char* format = checkedFormat(valueFormat);
-        // The format is the Slider's `format` prop, chosen by the script, so it can't be a literal. checkedFormat()
-        // only lets through a format with exactly one floating conversion (and `%%`), which matches the one double
-        // argument, so -Wformat-nonliteral is off for this call only.
+        const char* format = checkedSliderFormat(valueFormat);
+        // The format is the Slider's `format` prop, chosen by the script, so it can't be a literal.
+        // checkedSliderFormat() only lets through a format with exactly one floating conversion (and `%%`), which
+        // matches the one double argument, so -Wformat-nonliteral is off for this call only.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
         if (std::snprintf(buf, sizeof buf, format, *v) < 0) buf[0] = char{};

@@ -15,13 +15,12 @@ import std;
 
 import imgui;
 import imlui.color;
-import imlui.log;
 import imlui.skin.fluent.common;
 import imlui.theme.dpi;
 import imlui.theme.fluent_colors;
 import imlui.theme.typography;
 import imlui.widgets.common;
-import imlui.widgets.value_format;
+import imlui.widgets.slider;
 
 export namespace imlui::fluent {
 
@@ -49,35 +48,13 @@ constexpr float trackDp = 4.0f;
 constexpr float dotDp = 12.0f, dotHoverDp = 14.0f, dotPressedDp = 10.0f;
 constexpr float tickDp = 4.0f;
 
-/// Formats already reported as invalid, so each is logged once rather than every frame.
-std::unordered_set<std::string> reportedFormats;
-
-/// md::slider's format check: an invalid format is reported once and replaced by defaultValueFormat.
-const char* checkedFormat(const char* format) {
-    if (md::isValidFloatFormat(format)) return format;
-    if (reportedFormats.emplace(format).second)
-        log::warn("Slider: invalid format \"{}\" (expected one %f, %e or %g conversion); using \"{}\"", format,
-                  md::defaultValueFormat);
-    return md::defaultValueFormat;
-}
-
-/// md::slider's snapping (a private helper there): `vmin + k * step` for the step nearest to `v` and at most `vmax`,
-/// rounded to 15 significant digits, which drops the binary multiplication's noise.
-double snapToStep(double v, double vmin, double vmax, double step) {
-    const double last = std::floor((vmax - vmin) / step + 1e-6);
-    const double snapped = vmin + std::clamp(std::round((v - vmin) / step), 0.0, last) * step;
-    char buf[32] = {};
-    if (std::snprintf(buf, sizeof buf, "%.15g", snapped) < 0) return snapped;
-    return std::strtod(buf, nullptr);
-}
-
 /// The value tooltip above the thumb at (x, top), on the foreground: a flyout with the formatted value.
 void drawValueTip(const Look& look, float x, float top, double value, const char* valueFormat) {
     char buf[64] = {};
-    const char* format = checkedFormat(valueFormat);
-    // The format is the Slider's `format` prop, chosen by the script, so it can't be a literal. checkedFormat() only
-    // lets through a format with exactly one floating conversion (and `%%`), which matches the one double argument,
-    // so -Wformat-nonliteral is off for this call only.
+    const char* format = md::checkedSliderFormat(valueFormat);
+    // The format is the Slider's `format` prop, chosen by the script, so it can't be a literal.
+    // md::checkedSliderFormat() only lets through a format with exactly one floating conversion (and `%%`), which
+    // matches the one double argument, so -Wformat-nonliteral is off for this call only.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
     if (std::snprintf(buf, sizeof buf, format, value) < 0) buf[0] = char{};
@@ -87,9 +64,8 @@ void drawValueTip(const Look& look, float x, float top, double value, const char
     const float bw = ts.x + 2.0f * dp(8), bh = ts.y + dp(12);
     const ImVec2 a{std::round(x - bw * 0.5f), std::round(top - dp(8) - bh)}, b{a.x + bw, a.y + bh};
     ImDrawList* fg = ImGui::GetForegroundDrawList();
-    const Colors& c = look.colors;
-    drawControl(fg, a, b, controlRadius(look), {c.flyout, c.flyoutStroke, c.flyoutStroke, c.text}, strokeWidth(look));
-    md::drawText(fg, style, {x - ts.x * 0.5f, md::textTop(style, (a.y + b.y) * 0.5f)}, c.text, buf);
+    drawFlyout(fg, a, b, controlRadius(look), look);
+    md::drawText(fg, style, {x - ts.x * 0.5f, md::textTop(style, (a.y + b.y) * 0.5f)}, look.colors.text, buf);
 }
 
 } // namespace
@@ -119,7 +95,7 @@ bool slider(const Look& look, const char* id, double* v, double vmin, double vma
     if (dragging && ranged) {
         const float mt = std::clamp((ImGui::GetMousePos().x - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
         double nv = vmin + static_cast<double>(mt) * range;
-        if (step > 0) nv = snapToStep(nv, vmin, vmax, step);
+        if (step > 0) nv = md::snapToStep(nv, vmin, vmax, step);
         nv = std::clamp(nv, vmin, vmax); // the last step's slack
         if (nv != *v) {
             *v = nv;

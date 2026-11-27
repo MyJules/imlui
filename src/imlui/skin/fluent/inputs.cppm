@@ -31,7 +31,6 @@ import imlui.theme.scheme;
 import imlui.theme.typography;
 import imlui.ui.frame_request;
 import imlui.ui.layout_box;
-import imlui.widgets.anchored_popup;
 import imlui.widgets.button;
 import imlui.widgets.common;
 import imlui.widgets.dropdown;
@@ -45,9 +44,6 @@ inline constexpr float innerButtonWidth = 30.0f;  ///< a text box's inner button
 inline constexpr float innerButtonMargin = 4.0f;  ///< its margin inside the box (right, top, bottom)
 inline constexpr float descriptionGap = 4.0f;     ///< between a box and its description below
 inline constexpr float flyoutGap = 4.0f;          ///< between a control and its flyout
-inline constexpr float flyoutPaddingY = 2.0f;     ///< a list flyout's padding above and below its rows
-inline constexpr float rowInsetX = 4.0f;          ///< a flyout row's highlight inset, left and right
-inline constexpr float rowInsetY = 2.0f;          ///< the same above and below
 inline constexpr float swatchInset = 6.0f;        ///< a color field's swatch inset from the box's top and bottom
 inline constexpr float pickerPadding = 16.0f;     ///< the color flyout's padding
 inline constexpr float pickerWidth = 240.0f;      ///< the color picker's width (md::colorField's)
@@ -90,7 +86,6 @@ namespace imlui::fluent {
 namespace {
 
 constexpr Color clear{0, 0, 0, 0};
-constexpr TextStyle captionStyle = TextStyle::BodySmall;
 
 /// Fluent's critical color (validation errors): the scheme's error role, which Fluent's colors don't carry.
 Color critical() { return md::scheme().error; }
@@ -177,36 +172,15 @@ void popInputStyle() {
     ImGui::PopStyleColor(7);
 }
 
-// ---- Flyout
-// A flyout surface anchored below a control, and its rows. Group (C) builds Fluent menus (menuItem,
-// beginAnchoredMenu) with the same look; until those land, the combo box draws these private ones.
+// ---- Combo box rows
 
-/// Begins a flyout popup anchored to [a, b] (md::placeAnchoredPopup's placement: below, kept in the viewport), at
-/// least `minWidth` wide and at most `maxHeight` high, with `padding`. Returns true while open; then ImGui::EndPopup().
-bool beginFlyout(const Look& look, const char* popupId, ImVec2 a, ImVec2 b, float minWidth, ImVec2 padding,
-                 float maxHeight) {
-    // The elevation shadow is md::placeAnchoredPopup's, drawn behind the popup.
-    const md::AnchoredPopup placed = md::placeAnchoredPopup(popupId, a, b, minWidth, dp(flyoutGap));
-    ImGui::SetNextWindowSizeConstraints({minWidth, 0}, {md::hugeExtent, maxHeight});
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, look.colors.flyout.vec4());
-    ImGui::PushStyleColor(ImGuiCol_Border, look.colors.flyoutStroke.vec4());
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, overlayRadius(look));
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, strokeWidth(look));
-    const bool open = ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
-    ImGui::PopStyleVar(3);
-    ImGui::PopStyleColor(2);
-    md::trackAnchoredPopup(placed, open);
-    return open;
-}
-
-/// One row of a list flyout (a combo box item): `controlHeight` high, as wide as the widest row (layout::claimWidth
-/// in the flyout's shrink-to-fit box). A subtle highlight inset in the row, the selected row's accent pill. Returns
-/// true when chosen (the popup closes).
+/// One row of a combo box's list flyout (WinUI's ComboBoxItem, not a menu row: `controlHeight` high, and the selected
+/// row carries the accent pill): as wide as the widest row (layout::claimWidth in the flyout's shrink-to-fit box), a
+/// subtle highlight inset in the row (plateInsetX/plateInsetY). Returns true when chosen (the popup closes).
 bool flyoutRow(const Look& look, const char* id, std::string_view label, std::string_view icon, bool selected) {
     const Content ct = content(look, label, icon);
     const float h = flyoutRowHeight(look);
-    const float insetX = dp(rowInsetX), insetY = dp(rowInsetY);
+    const float insetX = dp(plateInsetX), insetY = dp(plateInsetY);
     const float w = layout::claimWidth(2.0f * insetX + 2.0f * paddingX(look) + ct.width);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::PushStyleColor(ImGuiCol_Header, clear.vec4());
@@ -217,29 +191,22 @@ bool flyoutRow(const Look& look, const char* id, std::string_view label, std::st
     ImGui::PopStyleColor(4);
     const ItemState item = itemState();
     const State state = stateOf(item);
-    const Colors& c = look.colors;
-
-    Color fill = clear;
-    switch (state) {
-    case State::Rest: fill = selected ? c.subtleHover : c.subtle; break;
-    case State::Hover: fill = selected ? c.subtlePressed : c.subtleHover; break;
-    case State::Pressed: fill = selected ? c.subtleHover : c.subtlePressed; break;
-    case State::Disabled: break;
-    }
-    const Color text = state == State::Disabled ? c.textDisabled : (state == State::Pressed ? c.textSecondary : c.text);
+    // The subtle fills, one step on when selected (selectedColors); a disabled row shows no selection fill.
+    const ControlColors c =
+        selected && state != State::Disabled ? selectedColors(look, state) : controlColors(look, Fill::Subtle, state);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 ha{p.x + insetX, p.y + insetY}, hb{p.x + w - insetX, p.y + h - insetY};
     const float radius = controlRadius(look);
-    if (fill.a > 0) md::fillRoundRect(dl, ha, hb, radius, fill);
+    if (c.fill.a > 0) md::fillRoundRect(dl, ha, hb, radius, c.fill);
     const float cy = p.y + h * 0.5f;
     if (selected) {
-        // Fluent's selection indicator: a 3 x 16dp accent pill at the highlight's left edge.
-        const float pw = dp(3), ph = std::min(dp(16), hb.y - ha.y);
+        // Fluent's selection indicator (indicatorThickness x indicatorLength) at the highlight's left edge.
+        const float pw = dp(indicatorThickness), ph = std::min(dp(indicatorLength), hb.y - ha.y);
         md::fillRoundRect(dl, {ha.x, cy - ph * 0.5f}, {ha.x + pw, cy + ph * 0.5f}, pw * 0.5f,
-                          state == State::Disabled ? c.accentDisabled : c.accent);
+                          state == State::Disabled ? look.colors.accentDisabled : look.colors.accent);
     }
-    drawContent(dl, ct, ha.x + paddingX(look), cy, text);
+    drawContent(dl, ct, ha.x + paddingX(look), cy, c.text);
     if (item.focused) drawFocusRect(dl, ha, hb, radius, look);
     return clicked;
 }
@@ -573,7 +540,7 @@ bool dropdown(const Look& look, const char* id, const std::vector<std::string>& 
     bool changed = false;
     const float rowH = flyoutRowHeight(look);
     const float padY = dp(flyoutPaddingY);
-    if (beginFlyout(look, "##menu", a, b, l.w, {0, padY}, rowH * 8 + 2.0f * padY)) {
+    if (beginFlyout(look, "##menu", a, b, l.w, dp(flyoutGap), {0, padY}, rowH * 8 + 2.0f * padY)) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
         // The flyout takes its rows' width, at least the control's; a row fills the widest, never the current width.
         layout::pushBox(layout::shrinkToFitBox(l.w, md::hugeExtent));
@@ -660,7 +627,7 @@ bool colorField(const Look& look, const char* id, Color* c, std::string_view lab
     bool changed = false;
     // The picker and the padding on each side: the width assumed before the first open.
     const float pad = dp(pickerPadding), pw = dp(pickerWidth);
-    if (beginFlyout(look, "##picker", a, b, pw + 2.0f * pad, {pad, pad}, md::hugeExtent)) {
+    if (beginFlyout(look, "##picker", a, b, pw + 2.0f * pad, dp(flyoutGap), {pad, pad}, md::hugeExtent)) {
         // The popup takes its content's width: a fill in it doesn't read the popup's width.
         layout::pushBox(layout::shrinkToFitBox(pw, pw));
         float v[4] = {c->r, c->g, c->b, c->a};
