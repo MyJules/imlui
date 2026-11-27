@@ -1074,7 +1074,11 @@ the file, so groups merge cleanly:
 (`Accent`, `Standard`, `Subtle`), `ControlColors` (`fill`, `stroke`, `bottomStroke`, `text`), `controlColors(look,
 fill, state)` (accent follows `buttonFill`); `drawControl(dl, a, b, radius, colors, stroke)`, `drawUnderline(dl, a,
 b, radius, color, width)`, `drawFocusRect(dl, a, b, radius, look)`; `Content` and `content(look, text, icon, style,
-iconDp)`, `drawContent(dl, content, x, cy, color, style)`.
+iconDp)`, `drawContent(dl, content, x, cy, color, style)`. For row-like items (list rows, menu rows, navigation
+items, tabs): `plateInsetX`, `plateInsetY` (the highlight's inset in its row, dp), `indicatorThickness`,
+`indicatorLength`, `indicatorPressedLength` (the selection indicator, dp), `selectedColors(look, state)` (a selected
+subtle item: the subtle fills one step on), `rowColors(look, state, selected)` (unselected to selected by an animated
+0..1), `drawIndicator(dl, center, length, vertical, disabled, look)` (the accent pill).
 
 ## Repository layout
 
@@ -1236,9 +1240,14 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.skin.registry` | `skin()` (the active skin: the one registered under `theme().design`, resolved again after a theme change), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames`; `"material"` and `"fluent"` built in |
 | `imlui.skin` | Umbrella: `export import` of `base`, `registry` and `fluent.fluent_skin` |
 | `imlui.skin.fluent.fluent_skin` | `FluentSkin` (`"fluent"`): `tokens()`, `colors()`, `look()`, and the overrides, one-line forwards in groups (A), (B), (C) (see [Adding a Fluent control](#adding-a-fluent-control)) |
-| `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout |
+| `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout, the row selection (`selectedColors`, `rowColors`, `drawIndicator`) |
 | `imlui.skin.fluent.button` | `fluent::button`, `buttonSize`, `variantFill` |
-| `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding` |
+| `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor` |
+| `imlui.skin.fluent.list` | `fluent::listItem`/`listItemSize` (WinUI's list row), `expander`/`expanderSize` (the Expander header) |
+| `imlui.skin.fluent.menu` | `fluent::menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu` (WinUI's MenuFlyout), `menuRowHeight` |
+| `imlui.skin.fluent.tabs` | `fluent::tabs`, `tabsSize`: primary as a SelectorBar, secondary as a TabView |
+| `imlui.skin.fluent.navigation` | `fluent::navigationItem`, `navigationRailItem`, `navigationBarItem` and their sizes (WinUI's NavigationViewItem) |
+| `imlui.skin.fluent.navigation_drawer` | `fluent::beginModalDrawer`/`endModalDrawer` (NavigationView's overlay pane) |
 
 ### UI (`src/imlui/ui/`)
 

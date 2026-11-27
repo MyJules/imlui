@@ -100,6 +100,13 @@ Fluent-drawn so far; the other controls are being added, and until then they dra
 | `ApplicationWindow` | Fluent's solid background (unless `imgui = { WindowBg = ... }` sets it). |
 | `Window` | A layer over the background, a 1dp divider-colored border, title bars of the background color. |
 | `ScrollView` | The overlay radius (8dp) when it has no `rounding`. |
+| `ListItem` | WinUI's list row: `controlHeight` + 8dp high (40dp; + 24dp, 56dp, with `supportingText`; the extras scale with `density`), 320dp natural width. A subtle item: transparent at rest, the subtle hover and press fills on a highlight 4dp inside the row's sides and 2dp inside its top and bottom, `controlRadius` corners. `selected`: the subtle fill one step on (`subtleHover`, hovered `subtlePressed`) and the **selection indicator**, a 3dp x 16dp `accent` pill at the highlight's left edge (10dp while pressed). Body text (14dp), the supporting line and `trailingText` in the caption style (12dp) and `textSecondary`, `iconSize` icons. Keyboard focus shows the focus rectangle. |
+| `Section` (`Expander`) | WinUI's Expander header: a card (`card` fill, `cardStroke` border, `controlRadius`), `controlHeight` + 16dp high (48dp; + 32dp, 64dp, with `supportingText`; scaled by `density`), 320dp natural width; body title, caption supporting text; the chevron on the right in a `controlHeight` square that takes the subtle hover and press fills. |
+| `Menu`, `MenuItem`, a `menu` prop | WinUI's MenuFlyout: the `flyout` color, a `flyoutStroke` border (`strokeWidth`), `overlayRadius` corners, 2dp above and below the rows, a shadow under a dropdown (a `menu` prop's). Rows `compactHeight` + 8dp high (32dp, the 8dp scaled by `density`), at least 160dp wide, with the subtle fills on a highlight inside the row (4dp, 2dp); `paddingX`, the icon slot (`iconSize` + `gap`), the body label, the shortcut in the caption style and `textSecondary`, right-aligned. A dropdown shows 8 rows before it scrolls. Opening, choosing, a checkable item keeping the menu open: as under Material. |
+| `TabBar` | `controlHeight` + 8dp high (40dp) for both variants; the tabs share the width (natural: each as wide as the widest tab's icon and label plus `paddingX` on both sides). `primary` is WinUI's **SelectorBar**: subtle tabs (hover and press fills inside the tab), the icon beside the label (never above it), `textSecondary` on unselected tabs, and the selection indicator (a 16dp x 3dp `accent` pill) under the selected one, sliding to the new tab. `secondary` is WinUI's **TabView**: the selected tab is a `layer` tab with `overlayRadius` top corners standing on a `divider` line along the bar's bottom that stops under it; the others are subtle. |
+| `NavigationItem` | WinUI's NavigationViewItem: a subtle item with the selection indicator at its left edge (the `ListItem`'s fills). As a drawer item (outside a bar or rail, or in a `ModalNavigationDrawer`): `controlHeight` + 8dp high (40dp), 280dp natural width, the icon (`iconSize` + 4dp, 20dp) and the body label; `badge` is an InfoBadge at the right (an `accent` pill with `onAccent` text, a dot for `"."`). In a `NavigationRail`: `controlHeight` + 24dp high (56dp), the icon over a caption label. In a `NavigationBar`: 80dp high (the bar's; no `density`), the icon over a caption label, selected in `accentText` with the indicator under the label. A bar or rail `badge` is an InfoBadge on the icon. |
+| `NavigationBar`, `NavigationRail` | The bar on `layer`, the rail on `background` (NavigationView's pane over Mica), unless they have a `color`. |
+| `ModalNavigationDrawer` | WinUI's NavigationView pane in overlay mode: `smoke` over the window, the pane in `flyout` with a `flyoutStroke` right edge, `overlayRadius` right corners and a shadow, sliding in from the left; its content 4dp from the pane's edges (scaled by `density`). Escape and a click on the smoke close it, as under Material. |
 | ImGui's own style | With the `"material"` preset: `FrameRounding`, `TabRounding` and `GrabRounding` = `controlRadius`; `WindowRounding`, `ChildRounding` and `PopupRounding` = `overlayRadius`; the border sizes = `strokeWidth`; `FramePadding` from `paddingX` and `controlHeight` (an ImGui frame is as high as a Fluent control); `ItemInnerSpacing.x` = `gap`; the colors from the Fluent colors (`WindowBg` = background, `PopupBg` = flyout, `FrameBg` = control fill, `Header*` = subtle fills, `Separator` and table borders = divider, `TextLink` = accent text, `NavCursor` = focus stroke, ...). So raw ImGui (scrollbars, popups, `InputText`, `TreeNode`, menu bars, `ImGuiDemo`) matches. `style` and `imgui` overrides still apply after it; the `imgui-*` presets are untouched. |
 
 ### Tokens
@@ -146,24 +153,24 @@ module `imlui.theme.fluent_colors`). Fluent's neutral brushes are white or black
 
 | Fluent color | Dark | Light | Used for |
 |---|---|---|---|
-| `accent` / `accentHover` / `accentPressed` | `primary` / at 90% / at 80% | the same | accent buttons, checked toggles, sliders, the focused underline |
+| `accent` / `accentHover` / `accentPressed` | `primary` / at 90% / at 80% | the same | accent buttons, checked toggles, sliders, the focused underline, the selection indicator, InfoBadges |
 | `accentDisabled` | white 16% | black 22% | a disabled accent fill |
 | `onAccent` | `onPrimary` | `onPrimary` | text and icons on accent (pressed: at 70%) |
 | `onAccentDisabled` | white 53% | white | text on a disabled accent fill |
 | `accentStroke` / `accentBottomStroke` | white 8% / black 14% | white 8% / black 40% | an accent control's border and its darker bottom edge |
-| `accentText` | `primary` | `primary` | hyperlinks, an outline accent button |
+| `accentText` | `primary` | `primary` | hyperlinks, an outline accent button, a selected navigation bar item |
 | `control` / `controlHover` / `controlPressed` / `controlDisabled` | white 6% / 8% / 3% / 4% | white 70% / 50% / 30% / 30% | standard controls |
 | `controlInputActive` | black 70% | white | a focused text input |
 | `controlStroke` / `controlBottomStroke` | white 7% / white 9% | black 6% / black 16% | a standard control's border and bottom edge |
 | `controlStrongStroke` / `controlStrongStrokeDisabled` | white 54% / 16% | black 45% / 22% | unchecked checkbox and radio outlines, slider tracks, scrollbar thumbs |
 | `controlAlt` / `controlAltHover` / `controlAltPressed` | black 10% / white 4% / white 7% | black 2% / 6% / 9% | an unchecked checkbox's or radio's fill |
-| `subtle` / `subtleHover` / `subtlePressed` | transparent / white 6% / white 4% | transparent / black 4% / black 2% | text buttons, list rows, menu items |
+| `subtle` / `subtleHover` / `subtlePressed` | transparent / white 6% / white 4% | transparent / black 4% / black 2% | text buttons, list rows, menu items, tabs, navigation items (selected: `subtleHover`, hovered `subtlePressed`) |
 | `text` / `textSecondary` / `textTertiary` / `textDisabled` | white / 79% / 54% / 36% | black 90% / 61% / 45% / 36% | text |
-| `background` | `surfaceContainer` | `surfaceContainerLow` | the window background (Mica's solid fallback) |
-| `layer` | `background` 60% toward `surfaceContainerHigh` | `background` 50% toward white | content layers, `Window` |
-| `card` / `cardStroke` | white 5% / black 10% | white 70% / black 6% | cards |
-| `flyout` / `flyoutStroke` | `surfaceContainerHigh` / black 20% | `background` 60% toward white / black 6% | menus, popups, tooltips, dialogs |
-| `smoke` | black 30% | black 30% | the dim behind a modal |
+| `background` | `surfaceContainer` | `surfaceContainerLow` | the window background (Mica's solid fallback), `NavigationRail` |
+| `layer` | `background` 60% toward `surfaceContainerHigh` | `background` 50% toward white | content layers, `Window`, `NavigationBar`, the selected `secondary` tab |
+| `card` / `cardStroke` | white 5% / black 10% | white 70% / black 6% | cards, expander headers |
+| `flyout` / `flyoutStroke` | `surfaceContainerHigh` / black 20% | `background` 60% toward white / black 6% | menus, popups, tooltips, dialogs, the modal navigation drawer |
+| `smoke` | black 30% | black 30% | the dim behind a modal and behind the modal navigation drawer |
 | `divider` | white 8% | black 8% | dividers, table rules |
 | `focusOuter` / `focusInner` | `text` / black 70% | `text` / white 70% | the keyboard focus rectangle |
 

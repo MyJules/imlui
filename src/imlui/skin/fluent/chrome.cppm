@@ -21,6 +21,12 @@ export namespace imlui::fluent {
 /// The overlay radius.
 [[nodiscard]] float scrollViewRounding(const Look& look);
 
+// -- (C1) navigation containers
+/// The NavigationBar's container: a layer over the background.
+[[nodiscard]] Color navigationBarColor(const Look& look);
+/// The NavigationRail's container: the background (NavigationView's pane is transparent over Mica).
+[[nodiscard]] Color navigationRailColor(const Look& look);
+
 } // namespace imlui::fluent
 
 module :private;
@@ -43,5 +49,9 @@ Skin::WindowChrome windowChrome(const Look& look) {
 }
 
 float scrollViewRounding(const Look& look) { return overlayRadius(look); }
+
+// -- (C1) navigation containers
+Color navigationBarColor(const Look& look) { return look.colors.layer; }
+Color navigationRailColor(const Look& look) { return look.colors.background; }
 
 } // namespace imlui::fluent
