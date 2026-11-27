@@ -19,13 +19,12 @@ Follow-ups not scheduled yet:
 - The default test presets skip the slow `package` tests; label the GL smoke tests so CI can skip them.
 - Lua definitions: typed signals (`signal<Args...>`) and parameter names for the built-ins, whose handlers are
   `fun(self, ...: any)` in `types.lua` for now; check the definitions with lua-language-server itself in CI.
-- Per-child cost in big containers: a `Row` builds a `Frame::Child` per pass (fills, sizes, render, and its parent's
-  `contentFillsWidth` / size questions), each an instance lookup and an ImGui ID; in the `nested` bench an element's
-  props are read ~18 times a frame (`visible` 3, `width`/`fillWidth` 3, `__children` 2.5). Keep a container's
-  children (table, kind, id, `visible`, size props) for the frame while `luaui::changes()` stands still. The kind is
-  answered from the `__native` box already.
-- The Lua call path: read `bind(t, k)` without a pcall when `t` has no metatable or a plain `__index` table; push a
-  delegate's scope from C++ instead of Lua `inScope`; reuse the `__children` cache entry instead of a new table.
+- Per-child cost left after the children memo: every question that reaches the `TypeRegistry` (`fillsWidth` once a
+  frame, each `intrinsicSize`, the render) runs the sync's skip check, which takes the fingerprint of the element's
+  declared fields (~10% of a `nested` frame: `syncInstance`, `mixValue`, the raw reads); an element's own
+  `width`/`height` are read through `Frame::size` on each of its passes (not memoized when plain); a render pass over
+  a long list still reads `__type`/`__inline` of every child (the memo is per frame). A `bind(t, k)` read without the
+  pcall (a plain table or `__index` table) was tried and measured no gain (a protected call is a try/catch here).
 - First frame of a big page: only what is in view (and 256 children below it) renders now, and elements cost about
   half as much to build (a pool allocator per Lua state, the constructors' short path: `ui.Text` ~0.6 µs against
   0.06 µs for a plain table). What's left is mostly building every `Repeater` delegate in Lua: the C++ instance's own
