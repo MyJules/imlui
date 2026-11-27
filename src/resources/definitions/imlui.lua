@@ -123,7 +123,6 @@ function ListModel:revision() end
 ---@field model? ModelValue|(fun(self: Element): ModelValue)|Binding The items: a list, a C++ list model, or a number n for 1..n.
 ---@field delegate? fun(item: any, index: integer, ids: Ids): Element? Builds one item's element.
 ---@field key? fun(item: any, index: integer): any Keeps delegates by key instead of by index (a list model's own keys without it).
----@field itemHeight? number dp, for items that all have the same height.
 
 ---@class IfProps
 ---@field condition any|(fun(self: Element): any)|Binding Shows the children while truthy.

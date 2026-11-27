@@ -70,7 +70,8 @@ if(IMLUI_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# ------------------------------------------------------------------ clang-tidy (`--target tidy`, top level only)
+# ------------------------------------------------------------------ `tidy` (clang-tidy), `lua_check` (LuaLS): top level only
 if(PROJECT_IS_TOP_LEVEL)
     include(ImluiTidy)
+    include(ImluiLuaCheck)
 endif()

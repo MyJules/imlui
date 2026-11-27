@@ -96,7 +96,7 @@ public:
             ::operator delete(p);
     }
 
-    Recycled() { addresses.push_back(this); }
+    Recycled() { m_addresses.push_back(this); }
     void render(Frame&) override {}
     void tick(double) override {
         ++m_ticks;
@@ -107,7 +107,7 @@ public:
     [[nodiscard]] int ticks() const { return m_ticks; }
 
     /// Where each Recycled was constructed, in order.
-    inline static std::vector<const void*> addresses;
+    inline static std::vector<const void*> m_addresses;
 
 private:
     alignas(std::max_align_t) inline static std::byte m_slot[512];
@@ -120,11 +120,11 @@ class Bomb final : public Element {
 public:
     static void declare(TypeBuilder<Bomb>&) {}
     Bomb() {
-        ++constructions;
+        ++m_constructions;
         throw std::runtime_error("bomb constructor exploded");
     }
     void render(Frame&) override {}
-    inline static int constructions = 0;
+    inline static int m_constructions = 0;
 };
 
 /// A ticking element that never renders: start() turns ticking on.
@@ -148,8 +148,8 @@ protected:
         m_h.registerType<Exploder>("Exploder");
         m_h.registerType<Recycled>("Recycled");
         m_h.registerType<Bomb>("Bomb");
-        Recycled::addresses.clear();
-        Bomb::constructions = 0;
+        Recycled::m_addresses.clear();
+        Bomb::m_constructions = 0;
     }
     void run(std::string_view code) { ASSERT_EQ(m_h.run(code), ""); }
 
@@ -165,14 +165,14 @@ TEST_F(LuaGuardsTest, AThrowingConstructorIsTriedOnce) {
         bomb = Bomb { }
         root = Row { Column { }, bomb })");
     m_h.renderFrames("root", 4);
-    EXPECT_EQ(Bomb::constructions, 1);
+    EXPECT_EQ(Bomb::m_constructions, 1);
     EXPECT_EQ(secondsUntilFrame(), std::numeric_limits<double>::infinity()); // settled: the Row stops asking
     int reported = 0;
     for (const auto& e : luaui::errors())
         if (e.find("Bomb: constructor failed: bomb constructor exploded") != std::string::npos) ++reported;
     EXPECT_EQ(reported, 1);
     EXPECT_EQ(m_h.syncElement("bomb"), nullptr);
-    EXPECT_EQ(Bomb::constructions, 1);
+    EXPECT_EQ(Bomb::m_constructions, 1);
 }
 
 // componentComplete() that throws is reported (from a render and from a method call's lazy sync); the element
@@ -277,8 +277,8 @@ TEST_F(LuaGuardsTest, AnElementDestroyedMidTickIsNotReplacedByOneAtItsAddress) {
         assert(victim:ticks() == 0)
         root = Column {})");
     m_h.renderFrame("root");
-    ASSERT_EQ(Recycled::addresses.size(), 3u);                 // victim, killer, fresh
-    EXPECT_EQ(Recycled::addresses[2], Recycled::addresses[0]); // fresh lives at the victim's address
+    ASSERT_EQ(Recycled::m_addresses.size(), 3u);                   // victim, killer, fresh
+    EXPECT_EQ(Recycled::m_addresses[2], Recycled::m_addresses[0]); // fresh lives at the victim's address
     EXPECT_EQ(m_h.run("assert(fresh:ticks() == 0, 'ticked in the dead victim slot')"), "");
     m_h.renderFrame("root");
     EXPECT_EQ(m_h.run("assert(fresh:ticks() == 1)"), "");
