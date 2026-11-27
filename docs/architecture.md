@@ -1688,7 +1688,8 @@ INTERFACE target that links the app's and sees its headers as system headers), a
 configure for SDL3 and spdlog (an install can't carry the app's copy). See
 `external/CMakeLists.txt` and [Getting started](getting-started.md#1-adding-imlui-to-your-project).
 
-- **Dear ImGui 1.92.9b** is built with the SDL3 (`imgui_impl_sdl3`, from the `v1.92.9b` tag) and OpenGL 3 backends, `IMGUI_DISABLE_OBSOLETE_FUNCTIONS`, and a
+- **Dear ImGui 1.92.9b, docking branch** (`v1.92.9b-docking`, the core files and both backends unchanged from that
+  tag; docking and multi-viewports are compiled in but not enabled) is built with the SDL3 (`imgui_impl_sdl3`) and OpenGL 3 backends, `IMGUI_DISABLE_OBSOLETE_FUNCTIONS`, and a
   user config (`external/imlui_imconfig.h`). The config routes `IM_ASSERT` to a handler that reports the failing
   expression and the ImGui window it happened in, then aborts. ImGui 1.92 rasterizes glyphs on demand, so every
   text size and icon size stays sharp.
