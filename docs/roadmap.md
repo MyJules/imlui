@@ -31,18 +31,11 @@ Follow-ups not scheduled yet:
   factory that knows the type's size), Lua's incremental GC steps and the `Box` userdata. A lazily built `Repeater`
   would change what it means (all its children exist), so long lists stay `ListView`'s job.
 - Lua's generational GC made no measurable difference on the bench (tried; not switched).
-- `ListView`: a prop for the delegate cache size; `followBottom` and `positionViewAtIndex` for a `ListView`
-  without `delegate` (its own children).
-- List models: `ListView` heights per row identity instead of per index (an insertion above the view keeps each
-  index's old height until it renders); Lua signals on models (`onRowsInserted`; `followBottom` covers "scroll to
-  the end"); a write path from Lua (`model:set(i, v)`); a delegate's `item` typed by the model in the Lua
-  definitions (LuaLS doesn't infer a callback parameter from a generic field).
 - `font_check` assumes glyphs up to ~128 px; `fontScale` is capped at 4, but zoom × DPI can still exceed it: cap the
   final pixel size.
 - A file reached through a linked folder is readable but not listed, so hot reload sees it only once loaded.
 - `TextField` copies its text every frame (`md::textField` edits in place).
-- Left over from the November 2026 fixes: with measured heights (no `itemHeight`), a negative `spacing` of at least an
-  item's height still builds every delegate; a plain user coroutine (not an async task) that yields inside `inScope`
+- Left over from the November 2026 fixes: a plain user coroutine (not an async task) that yields inside `inScope`
   shares the global scope stack; bare hex without `#` (`"face"`) is a documented color spec, so a mistyped role made of
   hex digits reads as a color — decide whether to require `#` for roles; `boxAt`-style forgery aside, scripts have the
   full `debug` library.

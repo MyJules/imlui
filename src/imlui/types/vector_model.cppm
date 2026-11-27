@@ -10,6 +10,7 @@
 //   logs.set(0, {1, "started (2 s)"});      // rowsChanged(0, 1), only when the value differs
 //   logs.replace(std::move(fresh));          // keeps the rows (and delegates) whose key and value are the same
 //   logs.setMaxRows(1000);                   // a cap: edits that add rows erase the oldest (first) rows beyond it
+//   logs.setScriptWritable(true);            // scripts may write rows: model:set(i, v) is set(i - 1, v)
 //
 // Main thread only, like every ListModel. appender() gives worker threads a thread-safe appender whose rows reach the
 // model in one batch per main-loop iteration (one rowsInserted), like Live<T>; appender(onApplied) one whose applies
@@ -98,6 +99,16 @@ public:
     [[nodiscard]] std::optional<Key> key(std::size_t row) const override {
         if (!m_keyOf) return std::nullopt;
         return m_keyOf(m_rows.at(row));
+    }
+    /// model:set(i, v): set(row, v) with v converted (LuaConvert<T>), once setScriptWritable(true) allowed it.
+    void setFromLua(lua::State* state, std::size_t row, int idx) override {
+        if constexpr (LuaReadable<T>) {
+            if (!m_scriptWritable) throw std::logic_error{"the model is read-only (setScriptWritable allows writes)"};
+            if (!LuaConvert<T>::check(state, idx)) throw std::invalid_argument{luaMismatch<T>(state, idx)};
+            set(row, LuaConvert<T>::get(state, idx));
+        } else {
+            ListModel::setFromLua(state, row, idx); // T can't be read from Lua: read-only
+        }
     }
 
     // ---- reading
@@ -227,6 +238,12 @@ public:
         rowsRemoved(0, n);
     }
 
+    /// Whether scripts may write rows with `model:set(i, v)` (false, the default: the model is read-only to them). A
+    /// write is set(i - 1, v) with v converted by LuaConvert<T> (T must be readable from Lua), so it notifies like
+    /// any other edit; a value that doesn't convert raises at the call.
+    [[nodiscard]] bool scriptWritable() const { return m_scriptWritable; }
+    void setScriptWritable(bool writable) { m_scriptWritable = writable; }
+
     /// The most rows the model keeps (0, the default: no cap). See the editing members.
     [[nodiscard]] std::size_t maxRows() const { return m_maxRows; }
     /// Sets the cap (0: none). Lowering it below size() erases the oldest rows now (one rowsRemoved).
@@ -351,6 +368,7 @@ private:
     std::vector<T> m_rows;
     std::function<Key(const T&)> m_keyOf;
     std::size_t m_maxRows = 0;      ///< 0: no cap
+    bool m_scriptWritable = false;  ///< model:set from Lua
     std::shared_ptr<Batch> m_batch; ///< appender()'s shared batch
     /// m_maxRows for the batches, which read it on the appending threads; made by the first appender.
     std::shared_ptr<std::atomic<std::size_t>> m_sharedMaxRows;

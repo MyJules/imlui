@@ -569,13 +569,14 @@ lab = {}
 -- connect
 
 ---Every signal name of the registered types and singletons (`connect` raises for any other).
----@alias ImluiSignal DialSignal|FineDialSignal|GaugeSignal|labSignal
+---@alias ImluiSignal DialSignal|FineDialSignal|GaugeSignal|labSignal|ListModelSignal
 
 ---Adds a listener to a signal of a C++ element or singleton: `fn` runs whenever `target` emits `signal`, after its handler.
 ---@param target Element|table
 ---@param signal ImluiSignal
 ---@param fn function
 ---@return fun() disconnect
+---@overload fun(target: ListModel<any>, signal: ListModelSignal, fn: fun(...: integer)): fun()
 ---@overload fun(target: Dial, signal: "onTurned", fn: (fun(self: Dial))): fun()
 ---@overload fun(target: Dial, signal: "onAngleChanged", fn: (fun(self: Dial, value: number))): fun()
 ---@overload fun(target: FineDial, signal: "onTurned", fn: (fun(self: FineDial))): fun()

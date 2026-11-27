@@ -543,24 +543,42 @@ end
 -- is a record (see newRecord): one made in a component instance or delegate scope goes with the scope.
 -- Disconnecting empties the record, so a dispatch that took it already skips it.
 local connections = setmetatable({}, { __mode = "k" })
+-- The same for C++ list models (imlui.types.list_model), with strong keys: a model's Lua value is found again by the
+-- model only while Lua holds it, so its connections hold it until they are disconnected.
+local modelConnections = {}
+
+-- The functions of a C++ list model's value (see modelFns below), or nil.
+local function modelFnsOf(v)
+    if type(v) ~= "userdata" then return nil end
+    local mt = getmetatable(v)
+    return type(mt) == "table" and rawget(mt, "__imlui_model") or nil
+end
 
 --- Calls fn with the arguments of `signal` whenever `target` emits it: a C++ element (typed or built-in) as
 --- fn(self, ...), a singleton as fn(...), like its `on*` handler. The signal is one the type declares or a property's
---- `on<Name>Changed`. After the handler, in connect order; each listener's error is reported, and the others still
+--- `on<Name>Changed`; for a C++ list model, one of its notifications as fn(...) (onRowsInserted(first, count), ...).
+--- After the handler, in connect order; each listener's error is reported, and the others still
 --- run. A listener connected during a dispatch runs from the next one on; one disconnected during it doesn't run.
 --- Returns a function that disconnects it (calling it again does nothing). Made inside a component instance or
 --- delegate, the listener runs in its scope and is dropped with it (when its elements are collected).
 function ui.connect(target, signal, fn)
     if type(signal) ~= "string" then error("connect: signal name expected, got " .. type(signal), 2) end
     if type(fn) ~= "function" then error("connect: function expected, got " .. type(fn), 2) end
-    if types == nil then error("connect: no C++ types (the library runs without an engine)", 2) end
-    local ok, why = types.listen(target, signal)
+    local mfns = modelFnsOf(target)
+    local ok, why
+    if mfns ~= nil then
+        ok, why = mfns.listen(target, signal)
+    else
+        if types == nil then error("connect: no C++ types (the library runs without an engine)", 2) end
+        ok, why = types.listen(target, signal)
+    end
     if not ok then error("connect: " .. why, 2) end
     local rec = newRecord(fn, false)
-    local signals = connections[target]
+    local all = mfns ~= nil and modelConnections or connections
+    local signals = all[target]
     if signals == nil then
         signals = {}
-        connections[target] = signals
+        all[target] = signals
     end
     local list = signals[signal]
     if list == nil then
@@ -571,14 +589,19 @@ function ui.connect(target, signal, fn)
     return function()
         dropRecord(rec)
         removeFrom(list, rec)
+        -- A model's last connection gone: its value no longer needs holding.
+        if mfns ~= nil and #list == 0 and signals[signal] == list then
+            signals[signal] = nil
+            if next(signals) == nil and modelConnections[target] == signals then modelConnections[target] = nil end
+        end
     end
 end
 
 -- dispatch(target, signal, ...): ScriptObject::emit and notify call it after the handler, once the object has had a
--- listener (imlui.lua.listeners). Calls the listeners connected when it starts. Returns whether one ran without an
--- error.
+-- listener (imlui.lua.listeners), and a list model after each notification. Calls the listeners connected when it
+-- starts. Returns whether one ran without an error.
 local function dispatch(target, signal, ...)
-    local signals = connections[target]
+    local signals = connections[target] or modelConnections[target]
     local list = signals and signals[signal]
     local n = list and #list or 0
     if n == 0 then return false end
@@ -644,11 +667,7 @@ local function numberItem(_, i) return i end
 -- changed one as a new table). The containers use that: with a model, a delegate is kept only while its item is the
 -- same, the model's keys keep delegates without a `key` function, and nothing is compared while the model's revision
 -- stands still. modelFns(v) returns those functions, or nil for any other model.
-local function modelFns(model)
-    if type(model) ~= "userdata" then return nil end
-    local mt = getmetatable(model)
-    return type(mt) == "table" and rawget(mt, "__imlui_model") or nil
-end
+local modelFns = modelFnsOf
 
 -- The key function of a container: its `key` (a function) or, without one, the keys of a list model that has them
 -- (`fns` its modelFns; the second result is true then). nil: delegates are kept by index. `memo` (the container's
@@ -810,8 +829,9 @@ function ui.Repeater(p)
 end
 
 -- A ListView with a delegate is virtualized: its C++ element (imlui.ui.elements.list_view) asks for the delegates of
--- the indices it shows, and only those are built. Each render calls __count(self), which resolves the model, and then
--- __range(self, first, last) for the delegates of indices first..last. Built delegates are cached in self.__view:
+-- the indices it shows, and only those are built. Each render calls __count(self, cacheSize), which resolves the
+-- model, then __range(self, first, last) for the delegates of indices first..last. Built delegates are cached in
+-- self.__view:
 --   model, n      the model the last __count resolved (nil for a numeric model: the items are the indices), its length
 --   fns, revision a list model's functions (modelFns) and its revision at that __count; nil for any other model
 --   keyFn, rawKey the key function __range uses (keyFunction: `key`, or a list model's keys), and `key` itself
@@ -827,9 +847,9 @@ end
 -- An entry is { item, key, node, pass } (see buildDelegate). An entry the model no longer has is dropped as soon as
 -- that is known cheaply: an index past the end or whose item changed, and with a key, a key gone from a model of at
 -- most LIST_KEEP items (counted again only when an item changed: a key is a function of its item and index). Beyond
--- that the cache keeps at most max(LIST_KEEP, 4 x shown) entries, dropping the ones shown longest ago. With a list
--- model, an entry is also dropped when its item isn't the row's any more (the row changed), and a pass at an
--- unchanged revision drops nothing.
+-- that the cache keeps at most max(cacheSize, 4 x shown) entries (the C++ element's `cacheSize`, LIST_KEEP by
+-- default), dropping the ones shown longest ago. With a list model, an entry is also dropped when its item isn't the
+-- row's any more (the row changed), and a pass at an unchanged revision drops nothing.
 local LIST_KEEP = 256
 
 -- One entry of a ListView's cache is gone (the caller unlinked it).
@@ -910,9 +930,10 @@ local function sameItems(st, model, n, keyFn)
     return same
 end
 
--- __count(self): resolves the model for this render's __range calls, drops the entries it no longer has, and returns
--- its length.
-local function listCount(self)
+-- __count(self, cacheSize): resolves the model for this render's __range calls, drops the entries it no longer has
+-- (keeping at most max(cacheSize, 4 x shown)), and returns its length and, for a C++ list model, the model (the C++
+-- element follows its rows' heights through it).
+local function listCount(self, cacheSize)
     local model = resolve(self, self.model)
     local n, fns
     if type(model) == "number" then
@@ -972,7 +993,8 @@ local function listCount(self)
             end
         end
     end
-    local limit = math.max(LIST_KEEP, 4 * st.shown)
+    if math.type(cacheSize) ~= "integer" or cacheSize < 0 then cacheSize = LIST_KEEP end
+    local limit = math.max(cacheSize, 4 * st.shown)
     if st.built > limit then trimView(st, limit * 3 // 4) end
     -- The items seen are what the next sameItems compares with only when this pass counted them: a pass without a
     -- count (a bigger model, no entries, another kind of model) may build entries for other keys.
@@ -985,6 +1007,7 @@ local function listCount(self)
     end
     st.pass = st.pass + 1
     st.shown = 0
+    if fns ~= nil then return n, model end
     return n
 end
 

@@ -6,7 +6,8 @@
 // whose owner (an element) is destroyed and a model that outlives its Lua state (a hot reload), a model edited inside
 // a delegate, frame requests from notifications, the thread-safe appender and the Lua definitions. The row cap
 // (setMaxRows: erasing the oldest rows in the same step as the append), appender(onApplied), and filling a model
-// with runAsyncThen, whose future carries only a report to Lua.
+// with runAsyncThen, whose future carries only a report to Lua. The change log (changesSince), the Lua signals of the
+// notifications (connect(model, "onRowsInserted", fn), ...) and writes from Lua (model:set(i, v)) on a writable model.
 #include <gtest/gtest.h>
 
 import std;
@@ -903,6 +904,170 @@ TEST_F(ListModelTest, AFillResolvesWithAReportAndLeavesTheRowsInCxx) {
     EXPECT_EQ(m_backend.plainModel.converted(), converted + 1); // only the row the check read
     EXPECT_TRUE(luaui::errors().empty());
     shutdownBackground(std::chrono::seconds{10});
+}
+
+// ------------------------------------------------------------ the change log
+
+// changesSince() gives the notifications after a revision, once its first call started the log: each one revision, a
+// repair (a missed notification) as a Reset, only the latest sort with its mapping; nullopt for what the log no longer
+// holds (or never held).
+TEST(ListModelRows, TheChangeLogGivesTheNotificationsSinceARevision) {
+    using Kind = ListModel::Change::Kind;
+    VectorModel<int> m;
+    m.appendRows({1, 2, 3});
+    const std::uint64_t r0 = m.revision();
+    ASSERT_TRUE(m.changesSince(r0)); // starts the log
+    EXPECT_TRUE(m.changesSince(r0)->empty());
+    EXPECT_FALSE(m.changesSince(r0 - 1)); // from before it started
+    m.insert(0, 0);
+    m.erase(3);
+    m.set(1, 10);
+    m.move(0, 1, 2);
+    const auto changes = m.changesSince(r0);
+    ASSERT_TRUE(changes);
+    ASSERT_EQ(changes->size(), 4u);
+    EXPECT_EQ((*changes)[0].kind, Kind::Inserted);
+    EXPECT_EQ((*changes)[0].first, 0u);
+    EXPECT_EQ((*changes)[0].count, 1u);
+    EXPECT_EQ((*changes)[1].kind, Kind::Removed);
+    EXPECT_EQ((*changes)[1].first, 3u);
+    EXPECT_EQ((*changes)[2].kind, Kind::Changed);
+    EXPECT_EQ((*changes)[3].kind, Kind::Moved);
+    EXPECT_EQ((*changes)[3].destination, 2u);
+    EXPECT_EQ(m.changesSince(m.revision() - 1)->size(), 1u);
+    EXPECT_FALSE(m.changesSince(m.revision() + 1));
+
+    // Two sorts: only the latest keeps its mapping, the older reads as a Reset.
+    const std::uint64_t r1 = m.revision();
+    m.sort();
+    m.sort(std::greater<>{});
+    const auto sorts = m.changesSince(r1);
+    ASSERT_EQ(sorts->size(), 2u);
+    EXPECT_EQ((*sorts)[0].kind, Kind::Reset);
+    EXPECT_EQ((*sorts)[1].kind, Kind::Remapped);
+    ASSERT_NE((*sorts)[1].previous, nullptr);
+    EXPECT_EQ((*sorts)[1].previous->size(), m.size());
+
+    // A model whose notifications don't match its rows (here a read after an unnotified change) logs a Reset.
+    class Raw final : public ListModel {
+    public:
+        [[nodiscard]] std::size_t count() const override { return rows; }
+        void pushItem(lua::State* state, std::size_t row) const override {
+            lua::pushinteger(state, static_cast<lua::Integer>(row));
+        }
+        std::size_t rows = 2;
+    } raw;
+    (void)raw.rowId(0);
+    const std::uint64_t r2 = raw.revision();
+    ASSERT_TRUE(raw.changesSince(r2));
+    raw.rows = 3; // no notification
+    (void)raw.rowId(0);
+    ASSERT_EQ(raw.changesSince(r2)->size(), 1u);
+    EXPECT_EQ((*raw.changesSince(r2))[0].kind, Kind::Reset);
+
+    // More than the log keeps: what is older is gone.
+    const std::uint64_t r3 = m.revision();
+    for (std::size_t i = 0; i <= ListModel::maxLoggedChanges; ++i)
+        m.append(static_cast<int>(i));
+    EXPECT_FALSE(m.changesSince(r3));
+    EXPECT_EQ(m.changesSince(m.revision() - ListModel::maxLoggedChanges)->size(), ListModel::maxLoggedChanges);
+}
+
+// ------------------------------------------------------------ signals
+
+// connect(model, signal, fn): each notification calls the listeners right after the change, with 1-based indices
+// (onRowsMoved's destination is an index after the move, as in rowsMoved); a sort is onRowsRemapped, a reset onReset.
+TEST_F(ListModelTest, ScriptsConnectToTheNotificationsOfAModel) {
+    run(R"lua(got = {}
+        local function on(name) return function(...) got[#got + 1] = name .. "(" .. table.concat({...}, ",") .. ")" end end
+        for _, name in ipairs { "onRowsInserted", "onRowsRemoved", "onRowsChanged", "onRowsMoved", "onRowsRemapped",
+                                "onReset" } do
+            connect(backend.logs, name, on(name))
+        end
+        stop = connect(backend.logs, "onRowsInserted", function(first, count) seen = #backend.logs end))lua");
+    run("backend:add('new')"); // a C++ method called from Lua: the listeners run inside it
+    check("got[1] == 'onRowsInserted(21,1)' and seen == 21");
+    run("backend:dropFirst()");
+    check("got[2] == 'onRowsRemoved(1,1)'");
+    m_backend.logsModel.set(4, {5, "five"});
+    m_backend.logsModel.move(0, 2, 5);
+    m_backend.logsModel.sort([](const LogLine& a, const LogLine& b) { return a.id > b.id; });
+    m_backend.logsModel.reset();
+    check("got[3] == 'onRowsChanged(5,1)' and got[4] == 'onRowsMoved(1,2,6)'");
+    check("got[5] == 'onRowsRemapped()' and got[6] == 'onReset()' and #got == 6");
+    // A disconnected listener doesn't run; a model collected in between keeps its connections (they hold its value).
+    run("stop(); seen = nil; collectgarbage(); collectgarbage()");
+    m_backend.logsModel.append({7000, "x"});
+    check("seen == nil and got[7] == 'onRowsInserted(21,1)'");
+    // A listener's error is reported; the others still run.
+    run("connect(backend.logs, 'onRowsChanged', function() error('boom') end)");
+    m_backend.logsModel.set(0, {1, "one"});
+    check("got[8] == 'onRowsChanged(1,1)'");
+    ASSERT_FALSE(luaui::errors().empty());
+    EXPECT_NE(luaui::errors().back().find("boom"), std::string::npos);
+    luaui::clearErrors();
+    // Unknown signals raise, like on an element; a model without listeners in this state pays nothing more.
+    EXPECT_NE(
+        m_h->run("connect(backend.logs, 'onRowsAdded', function() end)").find("ListModel has no signal 'onRowsAdded'"),
+        std::string::npos);
+    m_backend.plainModel.append({1, "plain"});
+    // A closed state is no longer called: its listeners are gone with it.
+    makeHarness();
+    m_backend.logsModel.append({7001, "after"});
+    run("n = 0; connect(backend.logs, 'onRowsRemoved', function(first, count) n = n + count end)");
+    m_backend.logsModel.erase(0, 3);
+    check("n == 3");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A listener may edit the model it listens to: the edit is notified in turn, after the first listener returned.
+TEST_F(ListModelTest, AListenerMayEditItsModel) {
+    run(R"(count = 0
+        connect(backend.logs, "onRowsInserted", function(first, n)
+            count = count + 1
+            if #backend.logs > 22 then backend:dropFirst() end
+        end))");
+    run("backend:add('a'); backend:add('b'); backend:add('c')");
+    check("count == 3 and #backend.logs == 22");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ writing from Lua
+
+// model:set(i, v) replaces row i (1-based) when the C++ side allows writes: the value is converted like a method
+// argument, the row notifies (its delegate is rebuilt, the listeners run), and a value equal to the row changes
+// nothing. Read-only models, bad values and indices out of range raise.
+TEST_F(ListModelTest, AWritableModelTakesRowsFromLua) {
+    EXPECT_NE(m_h->run("backend.logs:set(1, { id = 1, text = 'x' })").find("read-only"), std::string::npos);
+    m_backend.logsModel.setScriptWritable(true);
+    run(R"(built = 0
+        changed = {}
+        connect(backend.logs, "onRowsChanged", function(first, n) changed[#changed + 1] = first end)
+        root = ListView { height = 600, spacing = 0, model = backend.logs,
+                          delegate = function(l) built = built + 1; return Box { h = 20 } end })");
+    m_h->renderFrames("root", 3);
+    check("built == 20");
+    const std::uint64_t revision = m_backend.logsModel.revision();
+    run("backend.logs:set(3, { id = 3, text = 'three' })");
+    EXPECT_EQ(m_backend.logsModel.at(2).text, "three");
+    EXPECT_GT(m_backend.logsModel.revision(), revision);
+    check("backend.logs[3].text == 'three' and changed[1] == 3");
+    m_h->renderFrame("root");
+    check("built == 21");                                   // only row 3's delegate
+    run("backend.logs:set(3, { id = 3, text = 'three' })"); // the same value: no change
+    check("#changed == 1");
+    const std::string bad = m_h->run("backend.logs:set(4, { id = 'four' })");
+    EXPECT_NE(bad.find("ListModel:set"), std::string::npos) << bad;
+    EXPECT_NE(bad.find("id"), std::string::npos) << bad;
+    EXPECT_NE(m_h->run("backend.logs:set(21, { id = 21, text = '' })").find("out of range (1..20)"), std::string::npos);
+    EXPECT_NE(m_h->run("backend.logs:set(0, { id = 0, text = '' })").find("out of range"), std::string::npos);
+    EXPECT_EQ(m_backend.logsModel.at(3).id, 4);
+    // A model of plain values, and one whose owner is gone.
+    run("o = Owner {}; m = o:rows()");
+    EXPECT_NE(m_h->run("m:set(1, 5)").find("read-only"), std::string::npos);
+    run("o = nil; collectgarbage(); collectgarbage()");
+    EXPECT_NE(m_h->run("m:set(1, 5)").find("destroyed"), std::string::npos);
+    EXPECT_TRUE(luaui::errors().empty());
 }
 
 // ------------------------------------------------------------ Lua definitions

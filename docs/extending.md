@@ -980,6 +980,7 @@ Button { text = "Reload", onClicked = function() backend:load("app.log") end }
 | `std::size_t count() const` | The number of rows. |
 | `void pushItem(lua::State*, std::size_t row) const` | Pushes exactly one value, row `row`'s item (0-based), usually `LuaConvert<Row>::push(state, rows[row])`. Called only for a row Lua reads and hasn't cached; it must not call into Lua scripts. An exception becomes a Lua error where the row is read. |
 | `bool hasKeys() const`, `std::optional<Key> key(std::size_t row) const` | *Optional.* A stable identity per row, `Key = std::variant<std::int64_t, std::string>`. With keys, delegates follow their rows (below). |
+| `void setFromLua(lua::State*, std::size_t row, int idx)` | *Optional.* `model:set(i, v)` from Lua: replace row `row` (0-based) with the value at `idx` and notify. Throw for a value that doesn't convert (it becomes the Lua error). The default throws "the model is read-only". |
 
 and call a notification on the main thread **after** each change (when `count()` already gives the new count):
 
@@ -993,7 +994,13 @@ and call a notification on the main thread **after** each change (when `count()`
 | `reset()` | anything changed |
 
 Each one bumps `revision()` and requests a frame; bindings that read the model (`#backend.logs`) run again on it.
-A subclass that forgot one is caught at the next read (the counts don't match): every row then counts as new.
+A subclass that forgot one is caught at the next read (the counts don't match): every row then counts as new. Each is
+also a Lua signal scripts `connect` to (`onRowsInserted(first, count)`, ..., 1-based: see
+[Lua API](lua-api.md#c-list-models)), called right after the change while a script listens, and an entry of the
+model's **change log**: `changesSince(revision)` returns the notifications since a revision read earlier (a span of
+`ListModel::Change`: kind, first, count, destination, and a sort's mapping), or `std::nullopt` once more than
+`ListModel::maxLoggedChanges` (64) came since. The log starts with the first call; a `ListView` uses it to keep its
+measured heights with their rows.
 
 **`VectorModel<T>`** (`T` with a `LuaConvert`, typically a `LuaFields` struct) keeps the rows in a vector and calls the
 notifications itself:
@@ -1010,6 +1017,7 @@ notifications itself:
 | `sort(less = {})` | A stable sort, `rowsRemapped`: every row keeps its identity |
 | `replace(vector)` | `rowsRemapped`: a new row equal to an old one keeps that row's identity, matched by key when the model has keys (else at the same index) |
 | `setMaxRows(n)`, `maxRows()` | A cap (0, the default: none). See below |
+| `setScriptWritable(bool)`, `scriptWritable()` | Lets scripts write rows: `model:set(i, v)` is `set(i - 1, v)` with `v` converted by `LuaConvert<T>` (off by default: read-only to scripts) |
 | `appender()`, `appender(onApplied)` | A thread-safe `Appender` (below) |
 
 An index past the end throws `std::out_of_range`. Like a `std::vector`, inserting near the front moves the rows after
@@ -1027,10 +1035,10 @@ new rows are built; without keys, every index whose row changed is rebuilt (all 
 `const VectorModel<T>&`), a method result (`VectorModel<T>&` or `ListModel*`, which don't keep it alive, or
 `std::shared_ptr<M>`, which Lua then keeps alive while it holds the value: a method that builds a model for a query),
 a signal argument, or a singleton global of its own (`engine.registerSingleton("logs", logs)` makes `logs` the model
-itself). Each model has one Lua value per state, a read-only userdata: `model[i]` (1-based, nil out of range),
-`#model`, `ipairs(model)`, and the methods `count()`, `key(i)`, `hasKeys()` and `revision()` (see
-[Lua API](lua-api.md#c-list-models)). The Lua definitions type it as `ListModel<T>`, from `VectorModel<T>::Item`
-(`model[i]` is a `T`, `#model` an integer).
+itself). Each model has one Lua value per state, a userdata: `model[i]` (1-based, nil out of range),
+`#model`, `ipairs(model)`, and the methods `count()`, `key(i)`, `hasKeys()`, `revision()` and `set(i, v)` (a write,
+for a model that takes one) (see [Lua API](lua-api.md#c-list-models)). The Lua definitions type it as `ListModel<T>`,
+from `VectorModel<T>::Item` (`model[i]` is a `T`, `#model` an integer).
 
 **How the containers use it.** Rows are converted only when read: `#model` converts nothing, and a `ListView` reads
 only the rows it builds. Each row has an identity that stays with it while it only moves (an insertion or removal
@@ -1432,8 +1440,12 @@ another type isn't always flagged. An element's class has what the C++ side hold
 though a field a script set to a binding function holds that function. `state(init)` returns a
 `table<string, any>` (a field initialized to `nil` would otherwise be typed `nil` for good), and `await(f)` unwraps a
 `Future<T>` to `T` (anything else passes through as `any`). A `Repeater`'s or `ListView`'s delegate gets its `item`
-as `any`, also for a `ListModel<T>` model (LuaLS 3.19 doesn't infer a callback's parameter from a generic table
-field): annotate it, `---@param line LogLine` above the delegate function.
+as `any`, also for a `ListModel<T>` model: LuaLS 3.19 doesn't infer a callback's parameter from a generic table
+field, nor from a generic constructor (`---@generic T` over a props table) or class (`ListViewProps<T>`), and
+overloads per row type cancel each other out once there are two. Type it where it is written, with the `Delegate<T>`
+alias of the prelude's definitions (`KeyFunction<T>` for a `key`): `---@type Delegate<LogLine>` on the line above
+`delegate = function(line) ... end`, or `---@param line LogLine` above the function. `connect(model, signal, fn)`
+checks the signal against `ListModelSignal`.
 
 ## Threading and frame requests
 

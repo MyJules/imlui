@@ -400,7 +400,12 @@ ListView { height = 400, model = backend.logs,
 Text { text = function() return #backend.logs .. " lines" end }
 ```
 
-Scripts read it like a read-only list (a write raises an error):
+In the editor, the delegate's `item` is `any` unless typed where it is written: `---@type Delegate<LogLine>` on the
+line above `delegate = ...` makes `line` a `LogLine` (LuaLS doesn't infer it from the model; see
+[Editor support](extending.md#editor-support-lua-definitions)).
+
+Scripts read it like a list (`model[i] = v` raises an error; a model the C++ side made writable takes
+`model:set(i, v)`):
 
 | Lua | |
 |---|---|
@@ -409,6 +414,7 @@ Scripts read it like a read-only list (a write raises an error):
 | `ipairs(model)` | The rows in order. |
 | `model:key(i)`, `model:hasKeys()` | Row `i`'s key (an integer or a string; `nil` without keys); whether the model has keys. |
 | `model:revision()` | A number that changes with every change of the model (`-1` once the model was destroyed). |
+| `model:set(i, v)` | Replaces row `i` (1-based, `1..#model`) with `v`, converted to the row type like a method argument (a struct from a table), when the C++ side allows writes (`VectorModel::setScriptWritable(true)`); else, for an index out of range, a value that doesn't convert or a destroyed model, it raises. It notifies like a C++ edit (`onRowsChanged`, the row's delegate rebuilt); a value equal to the row changes nothing. `model[i]` reads the converted row back, a new table. |
 
 The same model is the same value every time (`rawequal(backend.logs, backend.logs)`). Changes come from C++, row by
 row; each one renders a frame, so bindings that read the model (`#backend.logs`) follow. A model that was destroyed (its
@@ -422,13 +428,38 @@ a hot reload loads. What the containers do with one:
   the top builds one delegate, a removal, move or sort none. Without keys, delegates are kept **per index** as for a
   Lua list: an insertion at the top rebuilds the delegate of every index whose row moved (in a `ListView`, of the
   ones built).
+- A `ListView`'s measured item heights follow their rows, keys or not: an insertion above the view leaves every row
+  with its own height (see [ListView](elements.md#listview)).
+
+**Signals.** Each change is a signal to [`connect`](#connecttarget-signal-fn---disconnect) to, called right after the
+change with 1-based indices, like a singleton's listeners (no `self`):
+
+| Signal | After |
+|---|---|
+| `onRowsInserted(first, count)` | rows `first .. first + count - 1` were inserted |
+| `onRowsRemoved(first, count)` | the `count` rows from `first` were removed (`first` is where they were) |
+| `onRowsChanged(first, count)` | rows `first .. first + count - 1` have new contents (a C++ edit or `model:set`) |
+| `onRowsMoved(first, count, destination)` | the `count` rows at `first` moved, unchanged, to start at `destination` (an index after the move) |
+| `onRowsRemapped()` | every row was replaced: a sort, a refreshed query (`replace`) |
+| `onReset()` | anything changed |
+
+```lua
+connect(backend.logs, "onRowsInserted", function(first, count)
+    s.unread = s.unread + count
+end)
+```
+
+A listener may read and edit the model (an edit it makes is signalled in turn). The connections hold the model's Lua
+value, so `connect(backend:query("..."), ...)` keeps a model that Lua owns alive until it is disconnected. For
+"scroll to the end as rows come", a `ListView`'s `followBottom` needs no signal.
 
 ### `ListView`
 
 A scrolling `Repeater`: a `ScrollView` whose children come from `model`/`delegate`. It isn't inline. Without
 `delegate`, its array children are used. Its delegates get `ids` like a `Repeater`'s, and the `ListView` is
 their `parent`. It takes all `ScrollView` props (`height`, `width`, `padding`, `color`,
-`rounding`, `border`, `spacing`, `align`), and `itemHeight` (dp) for items that are all the same height.
+`rounding`, `border`, `spacing`, `align`), `itemHeight` (dp) for items that are all the same height, and `cacheSize`
+(256): how many built delegates it keeps, at most max(`cacheSize`, 4 x the items shown).
 
 A `ListView` is **virtualized**: it builds and renders only the delegates of the items in view and a margin around
 it, so a model of a hundred thousand items costs about what the dozen on screen do. A delegate is built when its
@@ -457,6 +488,8 @@ Scrolling from a script (see [Scrolling a ListView from a script](elements.md#sc
   never built: it scrolls by the known heights and corrects over the next frames as the items there are measured.
   `list:positionViewAtBeginning()`, `list:positionViewAtEnd()`. They work before the first render.
 - `list.firstVisibleIndex` (read-only) is the first item in view, with `onFirstVisibleIndexChanged(self, index)`.
+- Without `delegate`, `followBottom` and `positionViewAtIndex` work on its own children (the visible ones, an inline
+  container's spliced in, counted from 1); `firstVisibleIndex` stays 0.
 
 ```lua
 ListView { id = "chat", height = 400, followBottom = true, model = backend.messages,

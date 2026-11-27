@@ -280,7 +280,7 @@ std::string connectDefinitions(const std::vector<std::string>& aliases, const st
         out += "---@alias ImluiSignal ";
         for (std::size_t i = 0; i < aliases.size(); ++i)
             out += (i ? "|" : "") + aliases[i];
-        out += "\n\n";
+        out += "|ListModelSignal\n\n"; // a list model's signals (the prelude's definitions)
     }
     out += "---Adds a listener to a signal of a C++ element or singleton: `fn` runs whenever `target` emits `signal`, "
            "after its handler.\n";
@@ -288,6 +288,7 @@ std::string connectDefinitions(const std::vector<std::string>& aliases, const st
     out += "---@param signal ImluiSignal\n";
     out += "---@param fn function\n";
     out += "---@return fun() disconnect\n";
+    out += "---@overload fun(target: ListModel<any>, signal: ListModelSignal, fn: fun(...: integer)): fun()\n";
     for (const Connectable& c : connectables)
         out += "---@overload fun(target: " + c.type + ", signal: " + LuaTypes::quoted(c.signal) +
                ", fn: " + LuaTypes::grouped(c.handler) + "): fun()\n";
