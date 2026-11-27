@@ -476,6 +476,66 @@ void pushPreludeFunction(lua::State* state, const char* name) {
 using WeakCore = std::weak_ptr<Core>;
 using StrongCore = std::shared_ptr<Core>;
 
+// The userdata of this module (a WeakCore: a Lua future's __core and its canceller's upvalue; a StrongCore: an adopted
+// future's receiver upvalue) hold a tag's address in their first bytes, then the value. They are recognized by their
+// size and tag, like the registry's boxes (boxAt), not by their metatable: a script can reach a metatable's __gc
+// (debug.getmetatable) and call it on anything, and `debug.setmetatable` gives any userdata (io.stdout, whose size is a
+// weak_ptr's) this module's metatable; but no Lua code can write this address into a userdata's bytes.
+constexpr char weakTag = 0;
+constexpr char strongTag = 0;
+
+/// Where a tagged userdata of a T holds it, and its size.
+template <class T>
+constexpr std::size_t taggedOffset = std::max(sizeof(const void*), alignof(T));
+template <class T>
+constexpr std::size_t taggedSize = taggedOffset<T> + sizeof(T);
+// Lua aligns a userdata's memory for LUAI_MAXALIGN: 8 bytes.
+static_assert(alignof(WeakCore) <= 8 && alignof(StrongCore) <= 8);
+
+/// Pushes a new userdata holding `tag` and `value`, and returns the value in it.
+template <class T>
+T* newTagged(lua::State* state, const char& tag, T value) {
+    auto* p = static_cast<std::byte*>(lua::newuserdata(state, taggedSize<T>));
+    const void* address = &tag;
+    std::memcpy(p, &address, sizeof address);
+    return std::construct_at(static_cast<T*>(static_cast<void*>(p + taggedOffset<T>)), std::move(value));
+}
+
+/// The T in the userdata at `idx` (an upvalue index too) when it is one newTagged<T> made with `tag`; nullptr for
+/// any other value.
+template <class T>
+T* taggedAt(lua::State* state, int idx, const char& tag) {
+    if (lua::type(state, idx) != lua::Type::UserData ||
+        lua::rawlen(state, idx) != static_cast<lua::Integer>(taggedSize<T>))
+        return nullptr;
+    auto* p = static_cast<std::byte*>(lua::touserdata(state, idx));
+    const void* address = nullptr;
+    std::memcpy(&address, p, sizeof address); // a foreign userdata of this size holds anything: read it as bytes
+    return address == &tag ? std::launder(static_cast<T*>(static_cast<void*>(p + taggedOffset<T>))) : nullptr;
+}
+
+/// A __gc of a tagged T: destroys the value and leaves an empty one, so a second call (a script may call the __gc
+/// itself) and the C functions that read it later (luaCancel, luaReceive, Core::linked) find nothing.
+template <class T>
+void finalizeTagged(T* value) {
+    std::destroy_at(value);
+    std::construct_at(value);
+}
+
+/// Pushes the metatable kept under registry key `key`, made on first use with `gc` as its __gc. Its __metatable hides
+/// it from getmetatable (scripts have no use for it).
+void pushTaggedMeta(lua::State* state, const char* key, lua::CFunction gc) {
+    if (lua::getfield(state, lua::registryIndex, key) == lua::Type::Table) return;
+    lua::pop(state);
+    lua::createtable(state, 0, 2);
+    lua::pushcfunction(state, gc);
+    lua::setfield(state, -2, "__gc");
+    lua::pushboolean(state, false);
+    lua::setfield(state, -2, "__metatable");
+    lua::pushvalue(state, -1);
+    lua::setfield(state, lua::registryIndex, key);
+}
+
 } // namespace
 
 Core::~Core() = default;
@@ -517,10 +577,20 @@ void Core::setProgress(double value) {
     // Keep this state alive while the handlers and Lua run: one of them may drop the last Future.
     const std::shared_ptr<Core> self = shared_from_this();
     m_progress = value;
-    const std::vector<std::function<void(double)>> handlers = m_progressHandlers; // a handler may add one
+    // The handlers are moved out while they run, instead of copying every std::function on each apply (once a frame
+    // during a download). A handler may add one: it lands in the emptied member, is appended back after these, and
+    // runs from the next apply on. A handler may settle the future, which clears the member but not the handler that
+    // runs. A nested apply (a handler that reports progress) runs only the handlers added since.
+    std::vector<std::function<void(double)>> handlers = std::exchange(m_progressHandlers, {});
     for (const auto& fn : handlers) {
         if (m_status != FutureStatus::Pending) break; // a handler settled it
         luaui::reportCxx([&] { fn(value); }, "Future::onProgress");
+    }
+    if (m_status == FutureStatus::Pending) {
+        if (!m_progressHandlers.empty()) // added while they ran: after them, in the order they came
+            handlers.insert(handlers.end(), std::make_move_iterator(m_progressHandlers.begin()),
+                            std::make_move_iterator(m_progressHandlers.end()));
+        m_progressHandlers = std::move(handlers); // the usual case: the same buffer goes back
     }
     if (m_status == FutureStatus::Pending && !m_adopted) notifyProgress();
     requestFrame();
@@ -657,11 +727,8 @@ std::shared_ptr<Core> Core::linked(lua::State* state, int idx) {
     lua::checkstack(state, 3);
     idx = lua::absindex(state, idx);
     std::shared_ptr<Core> core;
-    if (lua::rawgetfield(state, idx, "__core") == lua::Type::UserData && lua::getmetatable(state, -1) != 0) {
-        lua::getfield(state, lua::registryIndex, cancellerMetaKey);
-        if (lua::rawequal(state, -1, -2)) core = static_cast<const WeakCore*>(lua::touserdata(state, -3))->lock();
-        lua::pop(state, 2);
-    }
+    lua::rawgetfield(state, idx, "__core");
+    if (const WeakCore* weak = taggedAt<WeakCore>(state, -1, weakTag)) core = weak->lock();
     lua::pop(state);
     return core;
 }
@@ -681,16 +748,11 @@ void Core::receive(lua::State* state) {
 }
 
 void Core::pushWeak(lua::State* state) {
-    void* memory = lua::newuserdata(state, sizeof(WeakCore));
-    std::construct_at(static_cast<WeakCore*>(memory), weak_from_this());
-    if (lua::getfield(state, lua::registryIndex, cancellerMetaKey) != lua::Type::Table) {
-        lua::pop(state);
-        lua::createtable(state, 0, 1);
-        lua::pushcfunction(state, &cancellerGc);
-        lua::setfield(state, -2, "__gc");
-        lua::pushvalue(state, -1);
-        lua::setfield(state, lua::registryIndex, cancellerMetaKey);
-    }
+    // The metatable first: once the userdata holds the reference it must get its finalizer without another allocation
+    // (which could raise) in between.
+    pushTaggedMeta(state, cancellerMetaKey, &cancellerGc);
+    newTagged<WeakCore>(state, weakTag, weak_from_this());
+    lua::insert(state, -2);
     lua::setmetatable(state, -2);
 }
 
@@ -704,23 +766,15 @@ void Core::pushCanceller(lua::State* state) {
 void Core::pushReceiver(lua::State* state) {
     // The metatable first: once the userdata holds the reference it must get its finalizer without another allocation
     // (which could raise) in between.
-    if (lua::getfield(state, lua::registryIndex, receiverMetaKey) != lua::Type::Table) {
-        lua::pop(state);
-        lua::createtable(state, 0, 1);
-        lua::pushcfunction(state, &receiverGc);
-        lua::setfield(state, -2, "__gc");
-        lua::pushvalue(state, -1);
-        lua::setfield(state, lua::registryIndex, receiverMetaKey);
-    }
-    void* memory = lua::newuserdata(state, sizeof(StrongCore));
-    std::construct_at(static_cast<StrongCore*>(memory), shared_from_this());
+    pushTaggedMeta(state, receiverMetaKey, &receiverGc);
+    newTagged<StrongCore>(state, strongTag, shared_from_this());
     lua::insert(state, -2);
     lua::setmetatable(state, -2);
     lua::pushcclosure(state, &luaReceive, 1);
 }
 
 int Core::luaReceive(lua::State* state) {
-    const auto* strong = static_cast<const StrongCore*>(lua::touserdata(state, lua::upvalueindex(1)));
+    const auto* strong = taggedAt<StrongCore>(state, lua::upvalueindex(1), strongTag);
     if (!strong || !*strong) return 0;
     const std::shared_ptr<Core> core = *strong; // a handler may drop the receiver
     luaui::catchCxx(state, [&] { core->receive(state); }, "Future");
@@ -731,16 +785,16 @@ int Core::luaReceive(lua::State* state) {
 // future's handlers until it settles. It is collected then, or when the Lua state closes, which cancels the state. The
 // state is released in a posted function: its link must not be released inside a finalizer of a closing state.
 int Core::receiverGc(lua::State* state) {
-    auto* strong = static_cast<StrongCore*>(lua::touserdata(state, 1));
+    auto* strong = taggedAt<StrongCore>(state, 1, strongTag);
     if (!strong) return 0;
     if (std::shared_ptr<Core> core = std::move(*strong))
         imlui::post([core = std::move(core)] { core->cancel(); }); // does nothing once settled
-    std::destroy_at(strong);
+    finalizeTagged(strong);
     return 0;
 }
 
 int Core::luaCancel(lua::State* state) {
-    const auto* weak = static_cast<const WeakCore*>(lua::touserdata(state, lua::upvalueindex(1)));
+    const auto* weak = taggedAt<WeakCore>(state, lua::upvalueindex(1), weakTag);
     if (!weak) return 0;
     if (const std::shared_ptr<Core> core = weak->lock())
         luaui::catchCxx(state, [&] { core->cancelFromLua(); }, "Future:cancel");
@@ -748,7 +802,7 @@ int Core::luaCancel(lua::State* state) {
 }
 
 int Core::cancellerGc(lua::State* state) {
-    if (auto* weak = static_cast<WeakCore*>(lua::touserdata(state, 1))) std::destroy_at(weak);
+    if (auto* weak = taggedAt<WeakCore>(state, 1, weakTag)) finalizeTagged(weak);
     return 0;
 }
 

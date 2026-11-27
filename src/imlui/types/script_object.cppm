@@ -336,6 +336,26 @@ private:
     /// runAsync() without a `fail`: the exception is reported.
     struct ReportFailure {};
 
+    /// A NUL-terminated copy of a signal or property name, for the Lua API's C strings, built in place: emit() and
+    /// notify() run often (a slider dragged notifies every frame), and a std::string of a name past the small-string
+    /// size would allocate on every call. A name that doesn't fit (it never does in practice) goes into a std::string.
+    class CName {
+    public:
+        explicit CName(std::string_view name);
+        /// "on" + property (first letter capitalized) + "Changed", like luaui::changedSignal.
+        [[nodiscard]] static CName changedSignal(std::string_view property);
+        CName(const CName&) = delete;
+        CName& operator=(const CName&) = delete;
+        [[nodiscard]] const char* c_str() const;
+
+    private:
+        /// prefix + name + suffix, the first letter of `name` capitalized when `capitalize` is set.
+        CName(std::string_view prefix, std::string_view name, std::string_view suffix, bool capitalize);
+
+        std::array<char, 64> m_small; // NUL-terminated, unless the name is in m_large
+        std::string m_large;
+    };
+
     /// Calls `work` with the stop token, or without it.
     template <class Work>
     static decltype(auto) invokeWork(Work& work, std::stop_token stop) {
@@ -442,7 +462,7 @@ private:
         lua::checkstack(state, static_cast<int>(sizeof...(Args)) + 8);
         const int top = lua::gettop(state);
         if (!pushSelf()) return false;
-        const std::string key{signal};
+        const CName key{signal};
         // A singleton's handlers are behind its userdata's __index; an element's are fields of its table.
         const lua::Type handler =
             m_singleton ? lua::getfield(state, top + 1, key.c_str()) : luaui::Node{state, top + 1}.pushRaw(key.c_str());
@@ -506,6 +526,30 @@ std::atomic<std::uint64_t> lastObjectId{0};
 lua::Integer linkKey(std::uint64_t id) { return static_cast<lua::Integer>(id); }
 
 } // namespace
+
+ScriptObject::CName::CName(std::string_view name) : CName{{}, name, {}, false} {}
+
+ScriptObject::CName ScriptObject::CName::changedSignal(std::string_view property) {
+    return CName{"on", property, "Changed", true}; // a prvalue: CName can't be copied
+}
+
+ScriptObject::CName::CName(std::string_view prefix, std::string_view name, std::string_view suffix, bool capitalize) {
+    const std::size_t size = prefix.size() + name.size() + suffix.size();
+    char* out = nullptr;
+    if (size < m_small.size()) {
+        out = m_small.data();
+    } else {
+        m_large.resize(size);
+        out = m_large.data();
+    }
+    char* first = std::ranges::copy(prefix, out).out;
+    out = std::ranges::copy(name, first).out;
+    out = std::ranges::copy(suffix, out).out;
+    if (m_large.empty()) *out = '\0';
+    if (capitalize && !name.empty() && *first >= 'a' && *first <= 'z') *first = static_cast<char>(*first - 'a' + 'A');
+}
+
+const char* ScriptObject::CName::c_str() const { return m_large.empty() ? m_small.data() : m_large.c_str(); }
 
 ScriptObject::ScriptObject() : m_objectId{lastObjectId.fetch_add(1, std::memory_order_relaxed) + 1} {}
 
@@ -645,7 +689,7 @@ void ScriptObject::writeBack(std::string_view property) {
     const int top = lua::gettop(state);
     if (!pushSelf()) return;
     const int self = top + 1;
-    const std::string name{property};
+    const CName name{property};
 
     // The current value comes from the getter, through the box metatable's __get(box, name) (installed
     // by TypeRegistry), so this module needs no compile-time knowledge of the type.
@@ -661,7 +705,7 @@ void ScriptObject::writeBack(std::string_view property) {
         lua::getfield(state, -1, "__get");
         lua::remove(state, -2);
         lua::pushvalue(state, box);
-        lua::pushstring(state, name);
+        lua::pushstring(state, property);
         ok = luaui::safeCall(state, 2, 1);
     }
     if (!ok) {
@@ -675,7 +719,7 @@ void ScriptObject::writeBack(std::string_view property) {
         luaui::Node{state, self}.setTop(name.c_str());
     }
 
-    const std::string signal = luaui::changedSignal(property);
+    const CName signal = CName::changedSignal(property);
     const lua::Type handler =
         m_singleton ? lua::getfield(state, self, signal.c_str()) : luaui::Node{state, self}.pushRaw(signal.c_str());
     if (handler == lua::Type::Function || m_connected) {

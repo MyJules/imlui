@@ -875,6 +875,49 @@ TEST_F(LuaFutureTest, AnElementCollectedWithAPendingFillIsSafe) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// The finalizers of a Lua future's userdata (its __core, which is also its canceller's upvalue; an adopted future's
+// receiver) can be reached by a script through debug.getmetatable (getmetatable hides them) and called on anything:
+// twice, on a userdata of another library (io.stdout, the size of a weak_ptr), on a foreign userdata given their
+// metatable. Each call on a real one releases it once and leaves it empty; anything else is left alone.
+TEST_F(LuaFutureTest, CallingAFuturesFinalizersFromLuaIsHarmless) {
+    test::PostWaiter posts;
+    ASSERT_EQ(m_h->run(R"(
+        asked = w:ask()
+        local core = asked.__core
+        assert(type(core) == "userdata" and getmetatable(core) == false)
+        local meta = debug.getmetatable(core)
+        meta.__gc(core)
+        meta.__gc(core)
+        meta.__gc(io.stdout)
+        local stdoutMeta = debug.getmetatable(io.stdout)
+        debug.setmetatable(io.stdout, meta)
+        meta.__gc(io.stdout)
+        debug.setmetatable(io.stdout, stdoutMeta)
+        io.stdout:write("")
+        assert(asked:cancel()) -- the canceller reads an empty reference: only the Lua future is cancelled
+
+        adopted = future()
+        w:keep(adopted)
+        local _, receiver = debug.getupvalue(adopted.__onProgress[1], 1)
+        local _, strong = debug.getupvalue(receiver, 1)
+        assert(type(strong) == "userdata" and getmetatable(strong) == false)
+        local rmeta = debug.getmetatable(strong)
+        rmeta.__gc(strong)
+        rmeta.__gc(strong)
+        rmeta.__gc(io.stdout)
+        rmeta.__gc(core)
+        adopted:resolve({ title = "late", pages = 1 }) -- the receiver is empty: nothing reaches C++
+    )"),
+              "");
+    ASSERT_TRUE(askedFuture.has_value());
+    EXPECT_EQ(askedFuture->status(), FutureStatus::Pending); // its canceller was emptied before the cancel
+    asked->resolve(1);
+    // The first __gc of the receiver posted a cancel of the kept future (once: the second call found it empty).
+    ASSERT_TRUE(posts.runUntil([&] { return keptReport && keptReport->status() == FutureStatus::Cancelled; }));
+    ASSERT_EQ(m_h->run("collectgarbage(); collectgarbage(); assert(asked.state == 'cancelled')"), "");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
 TEST_F(LuaFutureTest, AwaitAValueAStructAndNothing) {
     test::PostWaiter posts;
     ASSERT_EQ(m_h->run(R"(
