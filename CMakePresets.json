@@ -21,7 +21,7 @@
       "name": "clang-release",
       "inherits": "clang-base",
       "displayName": "Clang Release",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "IMLUI_DEV_PATHS_RELEASE_OK": "ON" }
     },
     {
       "name": "clang-ship",

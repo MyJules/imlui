@@ -98,23 +98,11 @@ void chart(const Look& look, const char* id, const std::vector<float>& values, c
             if (finite(i)) pts[static_cast<std::size_t>(i)] = {px(i), py(value(i))};
         if (o.fill && n >= 2) {
             // A vertical gradient under the line, between neighbouring finite points.
-            const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
             const ImU32 cTop = md::col(c.withAlpha(0.24f)), cBot = md::col(c.withAlpha(0.0f));
             for (int i = 0; i + 1 < n; ++i) {
                 if (!finite(i) || !finite(i + 1)) continue;
                 const ImVec2 a = pts[static_cast<std::size_t>(i)], b = pts[static_cast<std::size_t>(i + 1)];
-                dl->PrimReserve(6, 4);
-                const auto base = static_cast<unsigned>(dl->_VtxCurrentIdx);
-                dl->PrimWriteVtx(a, uv, cTop);
-                dl->PrimWriteVtx(b, uv, cTop);
-                dl->PrimWriteVtx({b.x, bottom}, uv, cBot);
-                dl->PrimWriteVtx({a.x, bottom}, uv, cBot);
-                dl->PrimWriteIdx(static_cast<unsigned short>(base));
-                dl->PrimWriteIdx(static_cast<unsigned short>(base + 1));
-                dl->PrimWriteIdx(static_cast<unsigned short>(base + 2));
-                dl->PrimWriteIdx(static_cast<unsigned short>(base));
-                dl->PrimWriteIdx(static_cast<unsigned short>(base + 2));
-                dl->PrimWriteIdx(static_cast<unsigned short>(base + 3));
+                md::fillAreaBelow(dl, a, b, bottom, cTop, cBot);
             }
         }
         // One polyline per run of finite points; a lone point between gaps is a dot.

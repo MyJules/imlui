@@ -90,13 +90,6 @@ constexpr Color clear{0, 0, 0, 0};
 /// Fluent's critical color (validation errors): the scheme's error role, which Fluent's colors don't carry.
 Color critical() { return md::scheme().error; }
 
-float lineHeight(TextStyle style) {
-    pushFont(style);
-    const float h = ImGui::GetFontSize();
-    ImGui::PopFont();
-    return h;
-}
-
 float innerButtonW(const Look& look) { return dp(innerButtonWidth * look.tokens.density); }
 
 /// An inner button's height: the control height less the margins above and below.
@@ -136,7 +129,7 @@ void drawInputState(ImDrawList* dl, const Look& look, ImVec2 a, ImVec2 b, bool e
 /// Draws a header (the label above an input) at `p`.
 void drawHeader(ImDrawList* dl, const Look& look, ImVec2 p, float w, std::string_view label, bool dis) {
     if (label.empty()) return;
-    dl->PushClipRect(p, {p.x + w, p.y + lineHeight(bodyStyle)}, true);
+    dl->PushClipRect(p, {p.x + w, p.y + linePixels(bodyStyle)}, true);
     md::drawText(dl, bodyStyle, p, dis ? look.colors.textDisabled : look.colors.text, label);
     dl->PopClipRect();
 }
@@ -147,7 +140,7 @@ void drawDescription(ImDrawList* dl, const Look& look, ImVec2 at, float w, std::
     if (text.empty()) return;
     const Color c = dis ? look.colors.textDisabled : (error ? critical() : look.colors.textSecondary);
     const ImVec2 p{at.x, at.y + dp(descriptionGap)};
-    dl->PushClipRect(p, {p.x + w, p.y + lineHeight(captionStyle)}, true);
+    dl->PushClipRect(p, {p.x + w, p.y + linePixels(captionStyle)}, true);
     md::drawText(dl, captionStyle, p, c, text);
     dl->PopClipRect();
 }
@@ -236,7 +229,7 @@ TextFieldLayout textFieldLayout(const Look& look, const md::TextFieldOptions& o)
     TextFieldLayout l;
     l.w = md::itemWidth(o.width, dp(280));
     l.headerH = headerHeight(look, o.label);
-    l.lineH = lineHeight(bodyStyle);
+    l.lineH = linePixels(bodyStyle);
     const float ch = controlHeight(look);
     if (o.multiline) {
         // `height` is the header and the box, like md's container (its label is inside).
@@ -265,11 +258,11 @@ TextFieldLayout textFieldLayout(const Look& look, const md::TextFieldOptions& o)
 float flyoutRowHeight(const Look& look) { return controlHeight(look); }
 
 float headerHeight(const Look& look, std::string_view label) {
-    return label.empty() ? 0.0f : lineHeight(bodyStyle) + gap(look);
+    return label.empty() ? 0.0f : linePixels(bodyStyle) + gap(look);
 }
 
 float descriptionHeight(std::string_view text) {
-    return text.empty() ? 0.0f : dp(descriptionGap) + lineHeight(captionStyle);
+    return text.empty() ? 0.0f : dp(descriptionGap) + linePixels(captionStyle);
 }
 
 ImVec2 textFieldSize(const Look& look, const md::TextFieldOptions& o) { return textFieldLayout(look, o).size; }
@@ -386,7 +379,7 @@ SpinBoxLayout spinBoxLayout(const Look& look, std::string_view label, float widt
     l.w = md::itemWidth(width == 0.0f ? dp(200) : width, dp(200));
     l.headerH = headerHeight(look, label);
     l.boxH = controlHeight(look);
-    l.lineH = lineHeight(bodyStyle);
+    l.lineH = linePixels(bodyStyle);
     l.inputDy = (l.boxH - l.lineH) * 0.5f;
     l.buttonW = innerButtonW(look);
     l.buttonH = innerButtonH(look);

@@ -130,7 +130,8 @@ bool slider(const Look& look, const char* id, double* v, double vmin, double vma
     md::fillCircle(dl, {hx, cy}, r, solidControlFill(look));
     if (stroke > 0) md::strokeCircle(dl, {hx, cy}, r, c.controlStroke, stroke);
     const float dot = dragging || state == State::Pressed ? dotPressedDp : state == State::Hover ? dotHoverDp : dotDp;
-    const float dotR = md::animate(item.id + 3, dp(dot) * 0.5f, 20.0f);
+    // Animated in dp, so a zoom or a monitor change resizes the dot at once instead of animating it.
+    const float dotR = dp(md::animate(item.id + 3, dot * 0.5f, 20.0f, md::pixelEpsilon));
     md::fillCircle(dl, {hx, cy}, dotR, accentToggleFill(look, state));
     if (item.focused) drawFocusRect(dl, p, {p.x + w, p.y + h}, controlRadius(look), look);
 

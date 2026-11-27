@@ -132,6 +132,7 @@ class TickOnly final : public Element {
 public:
     void render(Frame&) override {}
     void start() { setTicking(true); }
+    void stop() { setTicking(false); }
 };
 
 bool hasError(std::string_view part) {
@@ -220,6 +221,41 @@ TEST(ElementTicking, AStaleIdDoesntFindAnElementAtTheSameAddress) {
     EXPECT_TRUE(b->isTicking());
     b->~TickOnly();
     EXPECT_EQ(Element::findTicking(b->objectId()), nullptr);
+}
+
+// The ticking list is looked up by id and keeps its order through stops (it leaves stale entries and sweeps them in
+// bulk) and restarts: an element that stops and starts again ticks last, once, and a stopped one isn't found.
+TEST(ElementTicking, TheOrderSurvivesStopsAndARestartTicksLast) {
+    std::vector<std::unique_ptr<TickOnly>> elements(64);
+    for (auto& e : elements) {
+        e = std::make_unique<TickOnly>();
+        e->start();
+    }
+    // Ours only: other suites' elements may still tick.
+    const auto ours = [&] {
+        std::vector<std::uint64_t> ids;
+        for (const std::uint64_t id : Element::tickingElements())
+            if (std::ranges::any_of(elements, [id](const auto& e) { return e && e->objectId() == id; }))
+                ids.push_back(id);
+        return ids;
+    };
+    for (std::size_t i = 1; i < elements.size(); ++i)
+        if (i % 4 != 0) elements[i]->stop(); // three in four: the stale entries outnumber the live ones
+    elements[0]->stop();
+    elements[0]->start();
+    elements[0]->start(); // already ticking: no second entry
+    elements[8].reset();  // destroyed while ticking
+    std::vector<std::uint64_t> expected;
+    for (std::size_t i = 4; i < elements.size(); i += 4)
+        if (elements[i]) expected.push_back(elements[i]->objectId());
+    expected.push_back(elements[0]->objectId());
+    EXPECT_EQ(ours(), expected);
+    EXPECT_EQ(Element::findTicking(elements[1]->objectId()), nullptr);
+    EXPECT_FALSE(elements[1]->isTicking());
+    EXPECT_EQ(Element::findTicking(elements[4]->objectId()), elements[4].get());
+    std::vector<std::uint64_t> reused{1, 2, 3}; // the overload that fills a buffer clears it first
+    Element::tickingElements(reused);
+    EXPECT_EQ(reused, Element::tickingElements());
 }
 
 // A tick() whose handler destroys a ticking element that comes later in this frame's loop and creates one at its

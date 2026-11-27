@@ -250,6 +250,40 @@ TEST_F(FontsTest, ReapplyingReusesAtlasFonts) {
     EXPECT_EQ(libraryFontCount(), cached);
 }
 
+// A font no set needs any more leaves the atlas, its bytes with it: every theme with other fallbacks (or faces) added
+// atlas fonts for good, so going through themes grew the atlas and the memory until the next resetFontLibrary(). The
+// fonts of the set used before stay, so going back and forth between two themes reuses them (above).
+TEST_F(FontsTest, FontsNoSetNeedsAreRemoved) {
+    const std::vector<std::string> fallbacks{"app:/fonts/MaterialIconsRound-Regular.otf",
+                                             "app:/fonts/Roboto-Medium.ttf", "app:/fonts/Roboto-Regular.ttf"};
+    // Each set: the built-in faces with another fallback list, so two atlas fonts of its own.
+    std::vector<std::string> themes;
+    for (const auto& a : fallbacks)
+        for (const auto& b : fallbacks)
+            themes.push_back(R"(ui.theme { fonts = { fallback = { ")" + a + R"(", ")" + b + R"(" } } })");
+    apply("ui.theme {}");
+    const int fonts = atlasFonts();
+    std::size_t most = 0;
+    int mostFonts = 0;
+    for (int round = 0; round < 2; ++round)
+        for (const auto& theme : themes) {
+            apply(theme);
+            most = std::max(most, libraryFontCount());
+            mostFonts = std::max(mostFonts, atlasFonts());
+        }
+    EXPECT_TRUE(luaui::errors().empty());
+    EXPECT_EQ(most, 4u); // the set in use and the one before it, 2 fonts each (20 before: every set's, kept)
+    EXPECT_LE(mostFonts, fonts + 4);
+    m_h.renderFrame("nothing"); // a frame after the removals renders
+
+    // Back to the default set: once it isn't the one before either, only the built-in faces are left.
+    apply("ui.theme {}");
+    apply("ui.theme {}");
+    EXPECT_EQ(libraryFontCount(), 2u);
+    EXPECT_EQ(atlasFonts(), fonts);
+    m_h.renderFrame("nothing");
+}
+
 TEST_F(FontsTest, AChangedFontFileReplacesItsAtlasFont) {
     const auto bytes = m_h.resources().read("app:/fonts/Roboto-Medium.ttf");
     ASSERT_TRUE(bytes);
@@ -889,13 +923,13 @@ TEST(FontCheck, GlyphOutlinesAreReadLikeStbTruetype) {
     EXPECT_EQ(problem({"", far, compositeGlyph({1}, 0x08, {0x7FFF})}),
               "the outline of glyph 2 moves a part out of range");
 
-    // The box ImGui sizes a glyph's bitmap by: not inverted, nor more than 16 times the font's height (1000 here).
+    // The box ImGui sizes a glyph's bitmap by: not inverted, nor more than 8 times the font's height (1000 here).
     EXPECT_EQ(problem({"", glyphHeader(1, {100, 0, 0, 100}).s + triangle.substr(10)}),
               "the outline of glyph 1 has an inverted box");
     EXPECT_EQ(problem({"", glyphHeader(1, {0, 0, 100, -100}).s + triangle.substr(10)}),
               "the outline of glyph 1 has an inverted box");
-    EXPECT_EQ(problem({"", glyphHeader(1, {-8000, 0, 8000, 100}).s + triangle.substr(10)}), accepted);
-    EXPECT_EQ(problem({"", glyphHeader(1, {-8000, 0, 8001, 100}).s + triangle.substr(10)}),
+    EXPECT_EQ(problem({"", glyphHeader(1, {-4000, 0, 4000, 100}).s + triangle.substr(10)}), accepted);
+    EXPECT_EQ(problem({"", glyphHeader(1, {-4000, 0, 4001, 100}).s + triangle.substr(10)}),
               "the outline of glyph 1 is far larger than the font");
 
     // A glyph whose box ends at or below the baseline (found by the `font` fuzz target): its bitmap can start at the

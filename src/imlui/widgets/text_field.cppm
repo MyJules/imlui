@@ -64,9 +64,7 @@ TextFieldLayout textFieldLayout(const TextFieldOptions& o) {
     l.w = itemWidth(o.width, dp(280));
     l.h = o.multiline ? (o.height > 0 ? o.height : dp(120)) : dp(56);
     l.trail = hasIcon(trailingIcon(o, false));
-    pushFont(TextStyle::BodyLarge);
-    l.lineH = ImGui::GetFontSize();
-    ImGui::PopFont();
+    l.lineH = linePixels(TextStyle::BodyLarge); // GetFontSize() inside pushFont(BodyLarge), without the push
     const bool hasLabel = !o.label.empty();
     if (o.multiline) l.inputY = (hasLabel && !o.outlined) ? dp(24) : dp(16);
     else if (hasLabel && !o.outlined) l.inputY = dp(24) + (dp(24) - l.lineH) * 0.5f;

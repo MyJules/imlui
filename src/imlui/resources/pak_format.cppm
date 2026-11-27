@@ -49,18 +49,25 @@ inline constexpr std::uint64_t pakMaxArchiveSize = std::uint64_t{1} << 32;
 /// Archives whose files add up to more than this (decompressed) are rejected as corrupt: a small archive can't make
 /// a mount that reading every file would need terabytes for.
 inline constexpr std::uint64_t pakMaxTotalSize = std::uint64_t{1} << 32;
+/// Paths longer than this (bytes) are rejected: no real resource needs more, and the checks on paths (normalizing,
+/// sorting, the file-and-folder check) get slower with their length.
+inline constexpr std::size_t pakMaxPathLength = 4096;
+/// Paths with more `/`-separated segments than this are rejected, for the same reason.
+inline constexpr std::size_t pakMaxPathSegments = 256;
 
 /// The bytes of an archive holding `files`, mounted at `mountPoint`. nullopt (with a reason in `error`, when given)
 /// when the archive couldn't be read back: a string or the file count doesn't fit its u32 field, a file is larger
 /// than pakMaxFileSize or a stored one's size isn't its stored size, the files add up to more than pakMaxTotalSize,
-/// two files have the same path, a path is a file and a folder (`a` and `a/b`), or the archive would be larger than
+/// two files have the same path, a path is a file and a folder (`a` and `a/b`), a path is longer than
+/// pakMaxPathLength or has more than pakMaxPathSegments segments, or the archive would be larger than
 /// pakMaxArchiveSize. Whether the paths and the mount point are normalized isn't checked here (parsePak() does).
 [[nodiscard]] std::optional<std::vector<std::byte>>
 writePak(std::string_view mountPoint, std::span<const PakFile> files, std::string* error = nullptr);
 
 /// Parses and checks the header and index of `archive`: the magic and version, a mount point that is a canonical
 /// full folder name (`app:/`, `imlui:/fonts/`: not `app:/main.lua`), normalized paths without duplicates and none
-/// that is both a file and a folder, every file's bytes inside the archive, past the index and overlapping no other
+/// that is both a file and a folder, none longer than pakMaxPathLength or deeper than pakMaxPathSegments, every file's
+/// bytes inside the archive, past the index and overlapping no other
 /// file's, and at most pakMaxTotalSize bytes in all once decompressed. nullopt (with a reason in `error`, when given)
 /// for anything else.
 [[nodiscard]] std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string* error = nullptr);
@@ -137,13 +144,36 @@ std::nullopt_t failed(std::string* error, std::string reason) {
 
 constexpr std::uint64_t u32Max = std::numeric_limits<std::uint32_t>::max();
 
-/// The first path of `paths` (sorted, unique) that is also a folder of another one (`a` with `a/b`), or nullopt.
+/// The first path of `paths` (a sorted, unique set) that is also a folder of another one (`a` with `a/b`), or nullopt.
+/// One lookup per path: the paths under folder `p` are those from `p/` up, sorted together right there, so the first
+/// path at or after `p/` starts with it when any does (`a-b` sorts between `a` and `a/b`, but not after `a/`). Looking
+/// up every prefix of every path instead costs O(length²) per path, minutes for a 1 MiB `a/a/a/...` from a hostile
+/// archive (now also capped by pakMaxPathLength).
 template <class Paths>
 std::optional<std::string_view> fileAndFolder(const Paths& paths) {
-    for (const std::string_view path : paths)
-        for (std::size_t slash = path.find('/'); slash != std::string_view::npos; slash = path.find('/', slash + 1))
-            if (paths.contains(path.substr(0, slash))) return path.substr(0, slash);
+    std::string folder;
+    for (const std::string_view path : paths) {
+        folder.assign(path);
+        folder += '/';
+        if (const auto it = paths.lower_bound(folder); it != paths.end() && std::string_view{*it}.starts_with(folder))
+            return path;
+    }
     return std::nullopt;
+}
+
+/// `path` for an error message: its start when it is long.
+std::string shown(std::string_view path) {
+    return path.size() > 64 ? std::string{path.substr(0, 64)} + "..." : std::string{path};
+}
+
+/// Why `path` is too long or too deep for an archive, or "" when it isn't.
+std::string pathLimitProblem(std::string_view path) {
+    if (path.size() > pakMaxPathLength)
+        return "is too long (" + std::to_string(path.size()) + " bytes, at most " + std::to_string(pakMaxPathLength) +
+               ")";
+    if (static_cast<std::size_t>(std::ranges::count(path, '/')) >= pakMaxPathSegments)
+        return "has too many segments (at most " + std::to_string(pakMaxPathSegments) + ")";
+    return {};
 }
 
 } // namespace
@@ -155,7 +185,8 @@ std::optional<std::vector<std::byte>> writePak(std::string_view mountPoint, std:
     if (files.size() > u32Max) return failed(error, "too many files (" + std::to_string(files.size()) + ")");
     std::set<std::string_view> paths;
     for (const auto& f : files) {
-        if (f.path.size() > u32Max) return failed(error, "a path is too long");
+        if (const std::string problem = pathLimitProblem(f.path); !problem.empty())
+            return failed(error, "'" + shown(f.path) + "' " + problem);
         if (f.size > pakMaxFileSize)
             return failed(error, "'" + f.path + "' is too large (" + std::to_string(f.size) + " bytes, at most " +
                                      std::to_string(pakMaxFileSize) + ")");
@@ -231,6 +262,10 @@ std::optional<PakIndex> parsePak(std::span<const std::byte> archive, std::string
         const auto flags = in.number(4);
         if (!in.ok()) return failed(error, "truncated index");
         e.compressed = (flags & flagCompressed) != 0;
+        // Before anything else looks at the path: the checks below are linear in its length, but not all of them
+        // are once a path is compared with many others.
+        if (const std::string problem = pathLimitProblem(e.path); !problem.empty())
+            return failed(error, "path '" + shown(e.path) + "' in the index " + problem);
         const auto normalized = normalizePath(e.path);
         if (!normalized || *normalized != e.path || e.path.empty())
             return failed(error, "invalid path '" + e.path + "' in the index");

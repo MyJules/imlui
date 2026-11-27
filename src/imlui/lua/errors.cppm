@@ -272,7 +272,10 @@ void reportException(std::string_view where, std::string_view detail, const char
 std::string toDisplayString(lua::State* state, int idx) {
     if (lua::type(state, idx) == lua::Type::String) return std::string{lua::tostring(state, idx)};
     idx = lua::absindex(state, idx);
-    lua::checkstack(state, 3);
+    if (!lua::checkstack(state, 3)) { // no room to call __tostring: say so instead of writing past the stack
+        reportError("stack overflow (no room to convert a value to a string)");
+        return {};
+    }
     lua::pushcfunction(state, &toStringFn);
     lua::pushvalue(state, idx);
     if (!safeRead(state, 1, 1)) return {}; // showing a value is a read, not a possible change

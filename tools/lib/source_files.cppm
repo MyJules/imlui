@@ -24,12 +24,18 @@ struct SourceFile {
 [[nodiscard]] std::optional<std::vector<SourceFile>>
 collectFiles(const std::filesystem::path& base, const std::vector<std::filesystem::path>& files, std::string& error);
 
+/// A 64-bit FNV-1a hash of `bytes` (not cryptographic: it tells versions of a file apart).
+[[nodiscard]] std::uint64_t contentHash(std::span<const std::byte> bytes);
+
 /// The contents of `file`; nullopt when it can't be read.
 [[nodiscard]] std::optional<std::vector<std::byte>> readFile(const std::filesystem::path& file);
 
-/// Writes `bytes` to `file` through a temporary file next to it (`<file>.tmp`) renamed over it, so `file` holds
-/// either its old or its new contents, never a partial write (an interrupted build, a full disk). The folder must
-/// exist. False, with the reason in `error` when given, when it can't be written; the old file is then untouched.
+/// Writes `bytes` to `file` through a temporary file next to it (`<file>.tmp-<random>-<n>`, unique, so two runs
+/// writing the same output at once don't write into one temporary file) renamed over it, so `file` holds either its
+/// old or its new contents, never a partial write (an interrupted build, a full disk). A rename that fails because
+/// another process holds `file` open (on Windows: clang reading a module, an indexer or a virus scanner, without
+/// sharing delete access) is retried for about 2 s. The folder must exist. False, with the reason in `error` when
+/// given, when it can't be written; the old file is then untouched and the temporary file removed.
 [[nodiscard]] bool replaceFile(const std::filesystem::path& file, std::span<const std::byte> bytes,
                                std::string* error = nullptr);
 
@@ -116,6 +122,15 @@ int toolMain(std::string_view tool, int argc, const char* const* argv, ToolRun r
     return guardedMain(tool, run, [&] { return std::vector<std::string>{argv + std::min(argc, 1), argv + argc}; });
 }
 
+std::uint64_t contentHash(std::span<const std::byte> bytes) {
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    for (const std::byte b : bytes) {
+        h ^= std::to_integer<std::uint64_t>(b);
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
 std::optional<std::vector<std::byte>> readFile(const fs::path& file) {
     std::error_code ec;
     const auto size = fs::file_size(file, ec);
@@ -127,9 +142,34 @@ std::optional<std::vector<std::byte>> readFile(const fs::path& file) {
     return bytes;
 }
 
+namespace {
+
+/// A suffix no other run (another process, or another call in this one) picks: random bits from the OS, which differ
+/// between processes started at the same moment, and a counter, which differs between calls.
+std::string uniqueSuffix() {
+    static std::atomic<std::uint64_t> counter{0};
+    static const std::uint64_t random = [] {
+        std::random_device device;
+        return (std::uint64_t{device()} << 32) ^ device();
+    }();
+    return std::format(".tmp-{:016x}-{}", random, counter.fetch_add(1));
+}
+
+/// Whether a failed rename may succeed once another process lets go of the file: on Windows a file open without
+/// FILE_SHARE_DELETE can't be replaced (ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, or ERROR_ACCESS_DENIED, which a
+/// file pending deletion gives too).
+bool transient(const std::error_code& ec) {
+    if (ec.category() == std::system_category() && (ec.value() == 5 || ec.value() == 32 || ec.value() == 33))
+        return true;
+    return ec == std::errc::permission_denied || ec == std::errc::device_or_resource_busy ||
+           ec == std::errc::resource_unavailable_try_again;
+}
+
+} // namespace
+
 bool replaceFile(const fs::path& file, std::span<const std::byte> bytes, std::string* error) {
     fs::path temporary = file;
-    temporary += ".tmp";
+    temporary += uniqueSuffix();
     std::error_code ec;
     {
         std::ofstream out{temporary, std::ios::binary | std::ios::trunc};
@@ -141,10 +181,17 @@ bool replaceFile(const fs::path& file, std::span<const std::byte> bytes, std::st
             return false;
         }
     }
-    fs::rename(temporary, file, ec);
+    // Backing off from 10 ms to 250 ms: about 2 s in all, long enough for a compiler or a scanner to close the file.
+    auto delay = std::chrono::milliseconds{10};
+    for (auto waited = std::chrono::milliseconds{0};; waited += delay, delay = std::min(delay * 2, decltype(delay){250})) {
+        fs::rename(temporary, file, ec);
+        if (!ec || !transient(ec) || waited >= std::chrono::seconds{2}) break;
+        std::this_thread::sleep_for(delay);
+    }
     if (ec) {
         if (error) *error = "can't replace '" + utf8(file) + "': " + ec.message();
-        fs::remove(temporary, ec);
+        std::error_code ignored;
+        fs::remove(temporary, ignored);
         return false;
     }
     return true;

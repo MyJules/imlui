@@ -147,7 +147,8 @@ bool radio(const Look& look, const char* label, bool selected) {
         md::strokeCircle(dl, c, r, faded(strongStroke(look, state), 1 - t), strokeWidth(look));
     }
     const float dot = state == State::Pressed ? dotPressedDp : state == State::Hover ? dotHoverDp : dotDp;
-    const float dotR = md::animate(item.id + 2, selected ? dp(dot) * 0.5f : 0.0f, 18.0f);
+    // In dp (as the switch's knob), so a zoom or a monitor change resizes the dot at once instead of animating it.
+    const float dotR = dp(md::animate(item.id + 2, selected ? dot * 0.5f : 0.0f, 18.0f, md::pixelEpsilon));
     if (t > 0.01f) md::fillCircle(dl, c, r, faded(accentToggleFill(look, state), t));
     if (dotR > 0.5f) md::fillCircle(dl, c, dotR, faded(accentToggleGlyph(look, state), t));
     drawLabel(dl, look, l, p, state);
@@ -175,9 +176,13 @@ bool switchToggle(const Look& look, const char* label, bool* v, [[maybe_unused]]
     if (t > 0.01f) md::fillRoundRect(dl, a, b, pill, faded(accentToggleFill(look, state), t));
 
     // The knob: centered on the track's end caps, growing on hover and stretching toward the middle while pressed.
-    const float kh =
-        md::animate(item.id + 2, dp(state == State::Pressed || state == State::Hover ? knobHoverDp : knobDp), 20.0f);
-    const float kw = md::animate(item.id + 3, state == State::Pressed ? dp(knobPressedWidthDp) : kh, 20.0f);
+    // Its sizes animate in dp, settling within a quarter of one (pixelEpsilon), so a zoom or a monitor change
+    // resizes it at once instead of animating it.
+    const float khDp = md::animate(item.id + 2, state == State::Pressed || state == State::Hover ? knobHoverDp : knobDp,
+                                   20.0f, md::pixelEpsilon);
+    const float kh = dp(khDp);
+    const float kw =
+        dp(md::animate(item.id + 3, state == State::Pressed ? knobPressedWidthDp : khDp, 20.0f, md::pixelEpsilon));
     const float cy = a.y + pill;
     const float inset = (l.markH - kh) * 0.5f;
     const float cx =

@@ -84,10 +84,11 @@ bool tabs(const char* id, const std::vector<TabInfo>& items, int* current, bool 
         }
     }
     hLine(dl, p.x, p.x + w, p.y + h - dp(1), s.surfaceVariant, dp(1));
-    // Sliding indicator.
+    // Sliding indicator: its ends in pixels, so they settle within a quarter pixel (pixelEpsilon).
     const ImGuiID k = ImGui::GetID("##ind");
     if (indicator) {
-        const float x0 = p.x + animate(k, indicator->first, 16.0f), x1 = p.x + animate(k + 1, indicator->second, 16.0f);
+        const float x0 = p.x + animate(k, indicator->first, 16.0f, pixelEpsilon);
+        const float x1 = p.x + animate(k + 1, indicator->second, 16.0f, pixelEpsilon);
         float ih = secondary ? dp(2) : dp(3);
         if (x1 > x0)
             fillRoundRect(dl, {x0, p.y + h - ih}, {x1, p.y + h}, secondary ? 0.0f : dp(3), s.primary,

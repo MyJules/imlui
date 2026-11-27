@@ -71,6 +71,11 @@ private:
     bool m_titleBar = true;
     bool m_resizable = true;
     bool m_movable = true;
+    /// The window's name (md::scopedWindowName: the title, and an ID from the element's scope), made again only when
+    /// the title or the scope (m_nameScope, the ID it hashes) changed: formatting it every frame allocates.
+    std::string m_name;
+    std::string m_nameTitle;
+    ImGuiID m_nameScope = 0;
 };
 
 } // namespace imlui
@@ -117,7 +122,12 @@ void Window::declare(TypeBuilder<Window>& type) {
 
 void Window::render(Frame& frame) {
     if (!m_open) return;
-    const std::string title = md::scopedWindowName(m_title, "win");
+    if (const ImGuiID scope = ImGui::GetID("win"); m_name.empty() || scope != m_nameScope || m_title != m_nameTitle) {
+        m_name = md::scopedWindowName(m_title, "win"); // its ID part is this same GetID("win")
+        m_nameScope = scope;
+        m_nameTitle = m_title;
+    }
+    const std::string& title = m_name;
     ImGui::SetNextWindowPos({frame.dp(m_x), frame.dp(m_y)}, ImGuiCond_FirstUseEver);
     const bool autoResize = m_autoResize.value_or(m_width <= 0 && m_height <= 0);
     if (autoResize) {

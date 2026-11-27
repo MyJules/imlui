@@ -5,6 +5,8 @@
 //
 // Formatting uses std::format on the caller side; spdlog only receives the
 // finished string, so no spdlog/fmt templates cross the module boundary.
+// The templates check enabled() first: a message at a level that is off is
+// never formatted (its arguments' formatters don't run).
 module;
 
 #include <spdlog/spdlog.h>
@@ -26,14 +28,28 @@ bool addFileSink(const std::filesystem::path& path);
 
 void setLevel(Level level);
 
-/// Logs an already formatted message; `source` tags it, e.g. "lua".
+/// Whether a message at `level` is logged (spdlog's should_log on the current logger): one atomic load, no lock.
+/// Check it before building a message that costs something; the templates below do.
+[[nodiscard]] bool enabled(Level level);
+
+/// Logs an already formatted message; `source` tags it, e.g. "lua". Does nothing when `level` isn't enabled().
 void write(Level level, std::string_view msg, std::string_view source = {});
 
-template <class... A> void trace(std::format_string<A...> f, A&&... a) { write(Level::Trace, std::format(f, std::forward<A>(a)...)); }
-template <class... A> void debug(std::format_string<A...> f, A&&... a) { write(Level::Debug, std::format(f, std::forward<A>(a)...)); }
-template <class... A> void info(std::format_string<A...> f, A&&... a) { write(Level::Info, std::format(f, std::forward<A>(a)...)); }
-template <class... A> void warn(std::format_string<A...> f, A&&... a) { write(Level::Warn, std::format(f, std::forward<A>(a)...)); }
-template <class... A> void error(std::format_string<A...> f, A&&... a) { write(Level::Error, std::format(f, std::forward<A>(a)...)); }
+template <class... A> void trace(std::format_string<A...> f, A&&... a) {
+    if (enabled(Level::Trace)) write(Level::Trace, std::format(f, std::forward<A>(a)...));
+}
+template <class... A> void debug(std::format_string<A...> f, A&&... a) {
+    if (enabled(Level::Debug)) write(Level::Debug, std::format(f, std::forward<A>(a)...));
+}
+template <class... A> void info(std::format_string<A...> f, A&&... a) {
+    if (enabled(Level::Info)) write(Level::Info, std::format(f, std::forward<A>(a)...));
+}
+template <class... A> void warn(std::format_string<A...> f, A&&... a) {
+    if (enabled(Level::Warn)) write(Level::Warn, std::format(f, std::forward<A>(a)...));
+}
+template <class... A> void error(std::format_string<A...> f, A&&... a) {
+    if (enabled(Level::Error)) write(Level::Error, std::format(f, std::forward<A>(a)...));
+}
 
 } // namespace imlui::log
 
@@ -43,25 +59,33 @@ namespace imlui::log {
 
 namespace {
 
-std::mutex loggerMutex; ///< guards the logger pointer (loggerSlot()), not the logger
+std::mutex loggerMutex; ///< serializes the changes of the logger (addFileSink, setLevel); writers don't take it
 
-/// The current logger. Adding a sink replaces it with a copy that has the sink (a logger's sink list mustn't change
-/// while other threads log through it), so writers log through their own reference (logger()).
-std::shared_ptr<spdlog::logger>& loggerSlot() {
-    static std::shared_ptr<spdlog::logger> instance = [] {
+/// Every logger that was ever current, the current one last. Adding a sink replaces the logger with a copy that has
+/// the sink (a logger's sink list mustn't change while other threads log through it). The replaced one is kept, not
+/// freed: a writer that loaded the pointer just before the swap may still be logging through it. That holds nothing
+/// open the current one doesn't (the copy shares its sinks), and only addFileSink adds one, a handful per process.
+/// So writers need no lock and no reference count: one atomic load (current()), on every message, enabled or not.
+std::vector<std::shared_ptr<spdlog::logger>>& loggers() {
+    static std::vector<std::shared_ptr<spdlog::logger>> all = [] {
         auto sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
         auto lg = std::make_shared<spdlog::logger>("imlui", sink);
         lg->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
         lg->set_level(spdlog::level::debug);
-        return lg;
+        std::vector<std::shared_ptr<spdlog::logger>> list;
+        list.push_back(std::move(lg));
+        return list;
     }();
-    return instance;
+    return all;
 }
 
-std::shared_ptr<spdlog::logger> logger() {
-    std::scoped_lock lock{loggerMutex};
-    return loggerSlot();
+/// The current logger: loggers().back(), published for the writers.
+std::atomic<spdlog::logger*>& current() {
+    static std::atomic<spdlog::logger*> slot{loggers().back().get()};
+    return slot;
 }
+
+spdlog::logger& logger() { return *current().load(std::memory_order_acquire); }
 
 /// Appends to a file opened through std::filesystem::path, so by its UTF-16 name on Windows (spdlog's own file sink
 /// takes a narrow name, which Windows reads in the ANSI code page).
@@ -96,7 +120,6 @@ spdlog::level::level_enum toSpd(Level level) {
 } // namespace
 
 bool addFileSink(const std::filesystem::path& path) {
-    std::shared_ptr<spdlog::logger> previous; // released after the lock: writers may still hold it
     try {
         std::ofstream out{path, std::ios::binary | std::ios::app};
         if (!out) {
@@ -107,10 +130,12 @@ bool addFileSink(const std::filesystem::path& path) {
         auto sink = std::make_shared<FileSink>(std::move(out));
         sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
         std::scoped_lock lock{loggerMutex};
-        auto& slot = loggerSlot();
-        std::shared_ptr<spdlog::logger> withFile = slot->clone(slot->name());
+        auto& all = loggers();
+        all.reserve(all.size() + 1); // the push_back below can't throw once the copy is made
+        std::shared_ptr<spdlog::logger> withFile = all.back()->clone(all.back()->name());
         withFile->sinks().push_back(std::move(sink)); // not shared yet: no other thread logs through it
-        previous = std::exchange(slot, std::move(withFile));
+        all.push_back(std::move(withFile));
+        current().store(all.back().get(), std::memory_order_release); // published with its sink list complete
     } catch (const std::exception& e) { // spdlog::spdlog_ex, out of memory
         write(Level::Error, std::string{"can't add a log file: "} + e.what());
         return false;
@@ -118,13 +143,21 @@ bool addFileSink(const std::filesystem::path& path) {
     return true;
 }
 
-void setLevel(Level level) { logger()->set_level(toSpd(level)); }
+// Under the lock: a level set while addFileSink copies the logger would otherwise be lost with the old one.
+void setLevel(Level level) {
+    std::scoped_lock lock{loggerMutex};
+    logger().set_level(toSpd(level));
+}
+
+bool enabled(Level level) { return logger().should_log(toSpd(level)); }
 
 void write(Level level, std::string_view msg, std::string_view source) {
-    const auto lg = logger();
-    if (source.empty()) lg->log(toSpd(level), "{}", msg);
-    else lg->log(toSpd(level), "[{}] {}", source, msg);
-    if (level >= Level::Warn) lg->flush();
+    spdlog::logger& lg = logger();
+    const auto spdLevel = toSpd(level);
+    if (!lg.should_log(spdLevel)) return; // before the "[source] msg" formatting below
+    if (source.empty()) lg.log(spdLevel, "{}", msg);
+    else lg.log(spdLevel, "[{}] {}", source, msg);
+    if (level >= Level::Warn) lg.flush();
 }
 
 } // namespace imlui::log

@@ -244,6 +244,32 @@ TEST_F(ElementScopesTest, DuplicateIdsAreReportedOnceAndTheFirstKeepsTheId) {
     EXPECT_EQ(luaui::errors().size(), 2u);
 }
 
+// A Capitalized name read before any element has it as its id is an implicit element constructor, but only until
+// the id exists: a binding that tests `Details ~= nil` before a Loader builds the element doesn't turn the id into a
+// constructor for good, and the id isn't reported as colliding with a ui member. Same after a weak id was collected.
+TEST_F(ElementScopesTest, AnIdReadBeforeItsElementExistsIsTheIdOnceItDoes) {
+    run(R"(
+        assert(type(Details) == "function", "no element yet: an implicit constructor")
+        assert(rawget(ui, "Details") == nil, "the implicit constructor isn't cached in ui")
+        local card = Card { id = "Details", title = "x" }
+        assert(Details == card, "the id wins once its element exists")
+        assert(Details.title == "x")
+        assert(type(Probe) == "function" and Probe {}.__type == "Probe", "registered types keep their constructor")
+        assert(type(Gizmo) == "function" and Gizmo {}.__type == "Gizmo", "and so does any other Capitalized name")
+        assert(Gizmo == Gizmo, "an implicit constructor is made once")
+        root = Column {})");
+    EXPECT_EQ(reportedWith("collides"), 0);
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+    // The element goes (only its id referred to it): the name is a constructor again, and a new element takes it.
+    m_h.renderFrame("root");
+    run(R"(
+        collectgarbage()
+        assert(ui.ids.Details == nil and type(Details) == "function")
+        local again = Text { id = "Details", text = "y" }
+        assert(Details == again and Details.text == "y"))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
 // ------------------------------------------------------------------ parent
 
 TEST_F(ElementScopesTest, ParentIsTheElementThatLaysTheChildOut) {

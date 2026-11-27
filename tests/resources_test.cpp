@@ -464,6 +464,35 @@ TEST(DirectoryMount, FindsAFileAddedWithoutChangingTheFolderTime) {
     EXPECT_FALSE(mount.exists("ui/c.lua"));
 }
 
+// Whether a folder holds a selected file is kept per folder while the folder's time is unchanged, and the answer for a
+// folder combines its own entries with its subfolders', each checked against its own time: a file added or removed
+// deep down (which changes only its own folder's time) shows at once in every folder above it.
+TEST(DirectoryMount, FoldersHoldingSelectedFilesFollowChangesDeepDown) {
+    test::TempDir dir;
+    dir.write("a/b/c/notes.txt", "not selected");
+    dir.write("a/other/x.txt", "not selected");
+    DirectoryMount mount{dir.path(), ResourceSelection{.include = {"**/*.lua"}}};
+    // Older than a tick, so the kept answers are used, not listed again (FindsAFileAddedWithoutChangingTheFolderTime).
+    for (const char* folder : {"a", "a/b", "a/b/c", "a/other", ""})
+        dir.touch(folder, -10);
+    for (int i = 0; i < 2; ++i) { // the second time from the kept answers
+        EXPECT_FALSE(mount.exists("a"));
+        EXPECT_EQ(mount.list(""), strings({}));
+        EXPECT_EQ(mount.list("a"), strings({}));
+    }
+    dir.write("a/b/c/deep.lua", "deep");
+    EXPECT_TRUE(mount.exists("a"));
+    EXPECT_TRUE(mount.exists("a/b"));
+    EXPECT_FALSE(mount.exists("a/other"));
+    EXPECT_EQ(mount.list(""), strings({"a/"}));
+    EXPECT_EQ(mount.list("a"), strings({"b/"}));
+    dir.touch("a/b/c", -10);
+    EXPECT_EQ(mount.list("a/b"), strings({"c/"}));
+    dir.remove("a/b/c/deep.lua");
+    EXPECT_FALSE(mount.exists("a"));
+    EXPECT_EQ(mount.list(""), strings({}));
+}
+
 // One entry that can't be queried (a link to nothing) doesn't end the listing of a folder.
 TEST(DirectoryMount, ListsPastAnEntryThatCantBeQueried) {
     test::TempDir dir;
@@ -679,6 +708,39 @@ TEST_F(LuaResourcesTest, RequireFindsInitFilesAndReportsWhatItTried) {
         assert(err:find("no resource 'app:/Nope.lua'", 1, true), err)
         assert(err:find("no resource 'imlui:/Nope.lua'", 1, true), err)
     )");
+}
+
+// `require` reads resources only: Lua's stock file searcher (which on Windows looks in `.\?.lua` first) and the C
+// searchers (DLLs on package.cpath) are gone, and package.path, package.cpath and package.loadlib can't bring them
+// back. Run from a folder holding Stray.lua, the stock searcher would have found it.
+TEST_F(LuaResourcesTest, RequireNeverReadsFilesOrLoadsLibraries) {
+    test::TempDir cwd;
+    cwd.write("Stray.lua", "strayRan = true; return {}");
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(cwd.path());
+    const std::string error = m_frame.run(R"(
+        assert(package.path == "" and package.cpath == "", "no search paths")
+        assert(package.loadlib == nil, "no DLL loading")
+        assert(#package.searchers == 3, "preload, the script folder's and imlui:/'s: " .. #package.searchers)
+
+        local ok, err = pcall(require, "Stray")
+        assert(not ok and strayRan == nil, "a .lua file in the current folder isn't a module")
+        assert(err:find("module 'Stray' not found", 1, true), err)
+        assert(err:find("no field package.preload['Stray']", 1, true), err)
+        assert(err:find("no resource 'imlui:/Stray.lua'", 1, true), err)
+        assert(not err:find("no file", 1, true), "no file searcher was asked: " .. err)
+
+        -- A script that sets the path finds nothing either: no searcher reads it.
+        package.path = "./?.lua"
+        ok = pcall(require, "Stray")
+        assert(not ok and strayRan == nil, "package.path is not searched")
+
+        -- package.preload, for modules a host registers, still works.
+        package.preload.Preloaded = function() return "preloaded" end
+        assert(require("Preloaded") == "preloaded")
+    )");
+    std::filesystem::current_path(previous);
+    EXPECT_EQ(error, "");
 }
 
 TEST_F(LuaResourcesTest, ErrorsNameTheResourceAndLine) {

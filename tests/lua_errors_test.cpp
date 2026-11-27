@@ -7,6 +7,8 @@ import std;
 import lua;
 import imgui;
 import imlui.lua.errors;
+import imlui.lua.element_scope;
+import imlui.lua.listeners;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -145,6 +147,40 @@ TEST(SafeCallTest, DisplayingAValueIsNotAChange) {
     EXPECT_EQ(luaui::toDisplayString(state, -1), "");
     EXPECT_EQ(luaui::errors().size(), 1u);
     EXPECT_EQ(lua::gettop(state), 2);
+    lua::close(state);
+    luaui::clearErrors();
+}
+
+// With the Lua stack full (lua::checkstack fails: LUAI_MAXSTACK slots in use), the helpers that push before a call
+// report a stack overflow and bail out instead of writing past the stack.
+TEST(SafeCallTest, AFullStackIsReportedNotOverrun) {
+    luaui::clearErrors();
+    lua::State* state = lua::newstate();
+    lua::newtable(state); // a value with a __tostring, which toDisplayString would call
+    lua::newtable(state);
+    lua::pushcfunction(state, [](lua::State* s) -> int {
+        lua::pushstring(s, "text");
+        return 1;
+    });
+    lua::setfield(state, -2, "__tostring");
+    lua::setmetatable(state, -2);
+    // The first failing checkstack grows the stack to its error size (LUAI_MAXSTACK plus room for an error message)
+    // and fails; only once that room is used too does it fail every time.
+    while (lua::checkstack(state, 1) || lua::checkstack(state, 1))
+        lua::pushnil(state);
+    const int top = lua::gettop(state);
+
+    EXPECT_EQ(luaui::toDisplayString(state, 1), "");
+    EXPECT_FALSE(luaui::callListeners(state, 1, "onClicked", 1, 0));
+    EXPECT_EQ(luaui::scopedArgs(state, 1, 0), 0);
+    EXPECT_EQ(lua::gettop(state), top);
+    EXPECT_TRUE(lua::isfunction(state, -1)) << "the function to call (a nil here) is replaced by one doing nothing";
+    ASSERT_EQ(luaui::errors().size(), 3u);
+    for (const std::string& e : luaui::errors())
+        EXPECT_TRUE(e.starts_with("stack overflow")) << e;
+
+    lua::settop(state, 1); // with room again, the same value converts
+    EXPECT_EQ(luaui::toDisplayString(state, 1), "text");
     lua::close(state);
     luaui::clearErrors();
 }

@@ -69,6 +69,16 @@ private:
     };
     using Cache = std::map<std::string, Cached, std::less<>>;
 
+    /// What one folder holds for holdsSelected(), as of its modification time: whether a selected file is among its
+    /// own entries, and its subfolders (not links) otherwise. A file added deeper down changes only its own folder's
+    /// time, so the answer for a folder is its own entry and its subfolders' answers, each checked against its time.
+    struct Holding {
+        ResourceTime time;
+        ResourceTime listedAt; ///< when the entries were read (the file system's clock)
+        bool selectedFile = false;
+        std::vector<std::string> subfolders; ///< entry names; empty when `selectedFile`
+    };
+
     /// The entry names of one folder, as of its modification time.
     struct Folder {
         ResourceTime time;
@@ -93,6 +103,9 @@ private:
     /// True when file `path` is one the mount serves (every file without a selection).
     [[nodiscard]] bool selected(std::string_view path) const;
     /// True when folder `path` (`folder` on disk) holds a selected file at any depth (always without a selection).
+    /// Each folder's answer for its own entries is kept while its time is unchanged (Holding), so a listing that asks
+    /// for every subfolder, or a hot-reload poll asking again, times the folders under it instead of listing them and
+    /// matching every file against the selection's patterns.
     [[nodiscard]] bool holdsSelected(std::string_view path, const std::filesystem::path& folder) const;
 
     // The read cache, with m_mutex held.
@@ -114,6 +127,8 @@ private:
     mutable std::mutex m_foldersMutex;
     mutable std::map<std::string, Folder, std::less<>> m_folders; ///< by path ("" is the root)
     mutable std::set<std::string, std::less<>> m_misspelled;      ///< paths already warned about
+    mutable std::mutex m_holdingMutex;
+    mutable std::map<std::string, Holding, std::less<>> m_holding; ///< by path ("" is the root), for holdsSelected()
 };
 
 } // namespace imlui
@@ -210,18 +225,45 @@ bool DirectoryMount::selected(std::string_view path) const { return !m_selection
 bool DirectoryMount::holdsSelected(std::string_view path, const fs::path& folder) const {
     if (!m_selection) return true;
     if (!m_selection->mayContainUnder(path)) return false;
-    std::error_code ec;
-    for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator();
-         it.increment(ec)) {
-        std::error_code entryEc; // one entry that can't be queried mustn't end the search
-        if (it->is_directory(entryEc)) {
-            if (linkedFolder(*it)) it.disable_recursion_pending();
+    std::scoped_lock lock{m_holdingMutex};
+    // Depth first over the folders the selection can reach, each one's own entries from m_holding while its time is
+    // unchanged (as in spelledAsOnDisk(), a listing read within a tick of that time may miss an entry added in the same
+    // tick, so it is read again).
+    std::vector<std::pair<std::string, fs::path>> pending;
+    pending.emplace_back(path, folder);
+    while (!pending.empty()) {
+        auto [current, onDisk] = std::move(pending.back());
+        pending.pop_back();
+        std::error_code ec;
+        const ResourceTime time = fs::last_write_time(onDisk, ec);
+        if (ec) {
+            // Gone, or can't be checked: holds nothing (as the walk this replaces found nothing there).
+            if (const auto it = m_holding.find(current); it != m_holding.end()) m_holding.erase(it);
             continue;
         }
-        if (!it->is_regular_file(entryEc)) continue;
-        if (const auto name = utf8Name(it->path().lexically_relative(folder));
-            name && m_selection->contains(joined(path, *name)))
-            return true;
+        auto it = m_holding.find(current);
+        if (it == m_holding.end() || it->second.time != time || it->second.listedAt - it->second.time < timeTick) {
+            Holding listed{time, fs::file_time_type::clock::now(), false, {}};
+            for (auto entry = fs::directory_iterator(onDisk, ec); !ec && entry != fs::directory_iterator();
+                 entry.increment(ec)) {
+                std::error_code entryEc; // one entry that can't be queried mustn't end the listing
+                const auto name = utf8Name(entry->path().filename());
+                if (!name) continue;
+                if (entry->is_directory(entryEc)) {
+                    if (!linkedFolder(*entry)) listed.subfolders.push_back(*name);
+                } else if (entry->is_regular_file(entryEc) && m_selection->contains(joined(current, *name))) {
+                    listed.selectedFile = true;
+                    listed.subfolders.clear(); // not needed: the folder holds one
+                    break;
+                }
+            }
+            if (ec && !listed.selectedFile) continue; // can't be listed: not cached, holds nothing for now
+            it = m_holding.insert_or_assign(current, std::move(listed)).first;
+        }
+        if (it->second.selectedFile) return true;
+        for (const std::string& sub : it->second.subfolders)
+            if (std::string child = joined(current, sub); m_selection->mayContainUnder(child))
+                if (const auto subPath = pathFromUtf8(sub)) pending.emplace_back(std::move(child), onDisk / *subPath);
     }
     return false;
 }

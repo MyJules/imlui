@@ -765,7 +765,7 @@ and drawn as a texture. It's drawn at its natural size times the DPI scale (one 
 | `opacity` | number | `1` | 0 to 1. |
 | `tint` | color | — | Multiplies the pixels (`"primary"`, `"#FFFFFF80"`); its alpha multiplies the opacity. |
 | `smooth` | bool | `true` | `false` samples the nearest pixel (pixel art, scaled-up icons) instead of filtering. |
-| `status` | `"loading"` \| `"ready"` \| `"error"` \| `"none"` | — | *Read-only* (`ImageStatus`). `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render. Decoding happens on the first render that needs it. |
+| `status` | `"loading"` \| `"ready"` \| `"error"` \| `"none"` | — | *Read-only* (`ImageStatus`). `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render and while the file decodes. Decoding starts on the first render that needs it and runs on the background pool, so a large image doesn't stall the UI; the image takes no size until it is ready (set `width`/`height` to reserve its space), and `onStatusChanged` fires when it is. |
 | `implicitWidth`, `implicitHeight` | number | `0` | *Read-only.* The image's size in pixels (dp at its natural size); 0 until it's ready. |
 
 Images are PNG or JPEG, at most 16384 pixels on a side and 256 MiB of pixels (4 bytes each, 8192 x 8192:

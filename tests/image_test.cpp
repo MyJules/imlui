@@ -13,6 +13,9 @@ import imlui.lua.errors;
 import imlui.resources;
 import imlui.resources.directory_mount;
 import imlui.theme.dpi;
+import imlui.ui.background;
+import imlui.ui.frame_request;
+import imlui.ui.main_thread;
 import imlui.ui.elements.image;
 import imlui.test.headless_frame;
 import imlui.test.temp_dir;
@@ -144,6 +147,40 @@ TEST(ImageDecode, RejectsImagesTooLargeFromTheHeader) {
     const std::string atLimit = pngHeader(8192, 8192);
     const DecodedImage image = decodeImage(std::as_bytes(std::span{atLimit.data(), atLimit.size()}));
     EXPECT_FALSE(image.ok());
+    EXPECT_TRUE(image.error.starts_with("not a PNG or JPEG image")) << image.error;
+}
+
+namespace {
+
+/// The start of a JPEG declaring a `width` x `height` image with 3 components, after an APP0 segment: SOI, APP0, and a
+/// frame header (SOF0 baseline, or SOF2 progressive). Enough for the size check; the decoder fails on it.
+std::string jpegHeader(std::uint16_t width, std::uint16_t height, bool progressive) {
+    std::string jpeg{"\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00", 20};
+    jpeg += progressive ? "\xFF\xC2" : "\xFF\xC0";
+    jpeg += std::string{"\x00\x11\x08", 3}; // length 17, 8 bits
+    for (const std::uint16_t v : {height, width}) {
+        jpeg += static_cast<char>(v >> 8);
+        jpeg += static_cast<char>(v & 0xFF);
+    }
+    jpeg += std::string{"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00", 10}; // 3 components, 1x1, table 0
+    return jpeg;
+}
+
+} // namespace
+
+// stb_image keeps every coefficient of a progressive JPEG until its last scan, about twice a baseline JPEG's peak
+// memory, so a progressive JPEG gets half the pixels (maxProgressiveJpegBytes), told apart by its frame header.
+TEST(ImageDecode, AllowsProgressiveJpegsHalfThePixels) {
+    static_assert(maxProgressiveJpegBytes == maxImageBytes / 2);
+    const std::string progressive = jpegHeader(6000, 6000, true); // 137 MiB of pixels
+    DecodedImage image = decodeImage(std::as_bytes(std::span{progressive.data(), progressive.size()}));
+    EXPECT_EQ(image.error, "too large (6000 x 6000 pixels; at most 128 MiB of pixels are decoded from a progressive "
+                           "JPEG)");
+    const std::string baseline = jpegHeader(6000, 6000, false);
+    image = decodeImage(std::as_bytes(std::span{baseline.data(), baseline.size()}));
+    EXPECT_TRUE(image.error.starts_with("not a PNG or JPEG image")) << "decoded (and failed: no data): " << image.error;
+    const std::string small = jpegHeader(4000, 4000, true);
+    image = decodeImage(std::as_bytes(std::span{small.data(), small.size()}));
     EXPECT_TRUE(image.error.starts_with("not a PNG or JPEG image")) << image.error;
 }
 
@@ -381,6 +418,148 @@ TEST(ImageCache, KeepsFailuresAndAnUnlimitedBudget) {
     EXPECT_EQ(cache.names().size(), 3u);
 }
 
+// Failures are kept up to maxFailures: beyond that, those asked for least recently go (never one asked for in the
+// current or the previous frame), so made-up names can't grow the cache without bound.
+TEST(ImageCache, KeepsAtMostMaxFailures) {
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(IMLUI_TEST_DATA_DIR));
+    ImageCache& cache = h.images();
+    const auto frame = [&] { h.renderFrame("nothing"); };
+    const std::size_t extra = 10;
+    for (std::size_t i = 0; i < ImageCache::maxFailures + extra; ++i)
+        EXPECT_FALSE(cache.get(std::format("app:/missing/{:04}.png", i)).ready());
+    EXPECT_TRUE(cache.get("app:/rgba_4x2.png").ready());
+    frame();
+    EXPECT_EQ(cache.names().size(), ImageCache::maxFailures + extra + 1) << "asked for in the previous frame";
+    // Asked for again now: these stay; the others, asked for longest ago, go first.
+    for (std::size_t i = ImageCache::maxFailures; i < ImageCache::maxFailures + extra; ++i)
+        cache.get(std::format("app:/missing/{:04}.png", i));
+    frame();
+    frame();
+    EXPECT_EQ(cache.names().size(), ImageCache::maxFailures + 1);
+    EXPECT_FALSE(cache.contains("app:/missing/0000.png"));
+    EXPECT_FALSE(cache.contains(std::format("app:/missing/{:04}.png", extra - 1)));
+    EXPECT_TRUE(cache.contains(std::format("app:/missing/{:04}.png", extra)));
+    EXPECT_TRUE(cache.contains(std::format("app:/missing/{:04}.png", ImageCache::maxFailures + extra - 1)));
+    EXPECT_TRUE(cache.contains("app:/rgba_4x2.png")) << "images aren't failures";
+}
+
+// Equivalent names are one image: get() and contains() normalize them.
+TEST(ImageCache, NormalizesNames) {
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(IMLUI_TEST_DATA_DIR));
+    ImageCache& cache = h.images();
+    const auto& image = cache.get("app:/./rgba_4x2.png");
+    ASSERT_TRUE(image.ready()) << image.error();
+    EXPECT_EQ(image.name(), "app:/rgba_4x2.png");
+    EXPECT_EQ(&cache.get("app://x/../rgba_4x2.png"), &image);
+    EXPECT_EQ(&cache.get("app:/rgba_4x2.png"), &image);
+    EXPECT_TRUE(cache.contains("app:/x/../rgba_4x2.png"));
+    EXPECT_EQ(cache.decodeCount(), 1u);
+    EXPECT_EQ(cache.names(), (std::vector<std::string>{"app:/rgba_4x2.png"}));
+    EXPECT_EQ(cache.get("not a name").error(), "image 'not a name' not found");
+}
+
+// The texture takes the decoder's pixel buffer: the pixels are the decoded ones, set up as ImTextureData::Create()
+// would (and freed the decoder's way when the texture goes: ASan would flag a mismatch or a leak).
+TEST(ImageCache, TexturesTakeTheDecodedPixels) {
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(IMLUI_TEST_DATA_DIR));
+    ImageCache& cache = h.images();
+    ImTextureData* texture = cache.get("app:/rgba_4x2.png").texture()._TexData;
+    ASSERT_NE(texture, nullptr);
+    EXPECT_EQ(texture->Format, ImTextureFormat_RGBA32);
+    EXPECT_EQ(texture->BytesPerPixel, 4);
+    EXPECT_EQ(texture->GetSizeInBytes(), 4 * 2 * 4);
+    EXPECT_TRUE(texture->UseColors);
+    const DecodedImage decoded = decodeImage(testFile("rgba_4x2.png"));
+    ASSERT_TRUE(decoded.ok());
+    EXPECT_TRUE(std::ranges::equal(std::span{texture->Pixels, decoded.rgba.size()}, decoded.rgba));
+    cache.clear();
+}
+
+// With setAsync(true), get() returns a loading image at once and the decode runs on the background pool; its result is
+// taken by a later get() or collect() (or waitForPending()), and a frame is asked for through the main-thread queue.
+TEST(ImageCache, DecodesInTheBackground) {
+    test::TempDir dir;
+    dir.write("pic.png", asText(testFile("rgba_4x2.png")));
+    dir.write("other.png", asText(testFile("orange_8x8.jpg")));
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(dir.path()));
+    ImageCache& cache = h.images();
+    EXPECT_FALSE(cache.async());
+    cache.setAsync(true);
+    clearPosted();
+    clearFrameRequests();
+
+    const auto& pic = cache.get("app:/pic.png");
+    EXPECT_TRUE(pic.loading());
+    EXPECT_FALSE(pic.ready());
+    EXPECT_EQ(pic.error(), "");
+    EXPECT_EQ(pic.texture()._TexData, nullptr);
+    EXPECT_EQ(cache.bytes(), 0u);
+    const auto& missing = cache.get("app:/missing.png");
+    EXPECT_TRUE(missing.loading());
+    EXPECT_EQ(cache.decodeCount(), 2u);
+
+    ASSERT_TRUE(cache.waitForPending());
+    EXPECT_EQ(cache.pendingCount(), 0u);
+    EXPECT_EQ(&cache.get("app:/pic.png"), &pic) << "the same entry, now ready";
+    EXPECT_FALSE(pic.loading());
+    ASSERT_TRUE(pic.ready()) << pic.error();
+    EXPECT_EQ(pic.width(), 4);
+    EXPECT_EQ(pic.texture()._TexData->Status, ImTextureStatus_WantCreate);
+    EXPECT_EQ(cache.bytes(), 32u);
+    EXPECT_EQ(missing.error(), "image 'app:/missing.png' not found");
+    EXPECT_EQ(cache.decodeCount(), 2u);
+    // Each finished decode asked for a frame, on the main thread.
+    EXPECT_EQ(postedCount(), 2u);
+    runPosted();
+    EXPECT_EQ(secondsUntilFrame(), 0.0);
+    clearFrameRequests();
+
+    // A file that changes while it decodes: refresh() drops the image, and the late result is ignored.
+    const auto& other = cache.get("app:/other.png");
+    EXPECT_TRUE(other.loading());
+    dir.write("other.png", asText(testFile("rgba_4x2.png")));
+    dir.touch("other.png", 10);
+    EXPECT_EQ(cache.refresh(), 1u);
+    EXPECT_FALSE(cache.contains("app:/other.png"));
+    ASSERT_TRUE(cache.waitForPending());
+    EXPECT_FALSE(cache.contains("app:/other.png")) << "the dropped decode's result went nowhere";
+    const auto& again = cache.get("app:/other.png");
+    ASSERT_TRUE(cache.waitForPending());
+    ASSERT_TRUE(again.ready()) << again.error();
+    EXPECT_EQ(again.width(), 4);
+
+    // collect() (after each frame) takes finished results too.
+    cache.clear();
+    const auto& late = cache.get("app:/pic.png");
+    for (int i = 0; i < 1000 && backgroundTaskCount() > 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    EXPECT_TRUE(late.loading());
+    h.renderFrame("nothing");
+    EXPECT_TRUE(late.ready()) << late.error();
+    clearPosted();
+    clearFrameRequests();
+}
+
+// A cache destroyed while its decodes run: they finish into the shared inbox and are freed with it (ASan would flag a
+// use after free or a leak).
+TEST(ImageCache, OutlivedByItsBackgroundDecodes) {
+    test::HeadlessFrame h;
+    h.resources().mount("app:/", std::make_shared<DirectoryMount>(IMLUI_TEST_DATA_DIR));
+    {
+        ImageCache cache{h.resources()};
+        cache.setAsync(true);
+        for (const char* name : {"app:/rgba_4x2.png", "app:/orange_8x8.jpg", "app:/missing.png"})
+            EXPECT_TRUE(cache.get(name).loading());
+    }
+    for (int i = 0; i < 200 && backgroundTaskCount() > 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    clearPosted();
+}
+
 // ------------------------------------------------------------------ the Image element
 
 namespace {
@@ -437,6 +616,34 @@ TEST_F(ImageElement, DrawsAtItsNaturalSizeTimesTheScale) {
               "");
     EXPECT_TRUE(luaui::errors().empty());
     EXPECT_EQ(m_h.images().decodeCount(), 1u);
+}
+
+// With background decoding (the Engine's setting), the image is "loading" until its decode lands: no error, no
+// placeholder, no size; then "ready" at its natural size, with one onStatusChanged.
+TEST_F(ImageElement, IsLoadingWhileItDecodesInTheBackground) {
+    m_h.images().setAsync(true);
+    clearPosted();
+    ASSERT_EQ(m_h.run(R"(
+        s = state { seen = {} }
+        root = Column { Image { id = "img", source = "rgba_4x2.png",
+                                onStatusChanged = function(self, st) s.seen[#s.seen + 1] = st end } })"),
+              "");
+    m_h.renderFrames("root", 1);
+    Image* img = image();
+    ASSERT_NE(img, nullptr);
+    EXPECT_EQ(img->status(), Image::Status::Loading);
+    EXPECT_EQ(img->implicitWidth(), 0.0);
+    expectNear(img->lastSize(), {0.0f, 0.0f}, "no placeholder while loading");
+    EXPECT_TRUE(luaui::errors().empty()) << "loading is not an error";
+
+    ASSERT_TRUE(m_h.images().waitForPending());
+    runPosted();
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(img->status(), Image::Status::Ready);
+    expectNear(img->lastSize(), {4 * dpiScale(), 2 * dpiScale()});
+    EXPECT_EQ(m_h.run(R"(assert(#s.seen == 1 and s.seen[1] == "ready", table.concat(s.seen, ",")))"), "");
+    EXPECT_TRUE(luaui::errors().empty());
+    clearPosted();
 }
 
 TEST_F(ImageElement, KeepsTheAspectRatioWhenOneSizeIsSet) {

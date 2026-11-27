@@ -9,6 +9,7 @@ import imlui.color;
 import imlui.lua.errors;
 import imlui.test.headless_frame;
 import imlui.theme.dpi;
+import imlui.theme.fluent_colors;
 import imlui.theme.scheme;
 import imlui.theme.theme;
 import imlui.theme.typography;
@@ -146,6 +147,43 @@ TEST(ThemeStyleOverrides, ItemSpacingXIsClampedToWhatMenusStore) {
     applyPendingTheme();
 }
 
+// ImGuiStyle::ScaleAllSizes truncates: below a scale of 1 a 1px border became 0 (ImGui drew none: under Fluent, which
+// sets the window, popup, frame and child borders from its strokeWidth token, every raw ImGui border vanished at zoom
+// 90%), and at 1.5 it became 1 where the skins draw round(dp(1)) = 2. A border or line that is set is at least a
+// pixel at any scale, rounded like the skins' strokes; one that is 0 stays 0.
+TEST(ThemeStyleOverrides, LineWidthsStayVisibleAtAnyScale) {
+    test::HeadlessFrame h;
+    Theme material;
+    Theme fluentTheme;
+    fluentTheme.design = std::string{fluent::designName};
+    for (const float zoom : {0.5f, 0.9f, 1.5f, 2.0f}) {
+        setZoom(zoom);
+        const float stroke = std::max(1.0f, std::round(dp(1.0f))); // a skin's 1dp stroke, as strokeWidth() draws it
+        setTheme(material);
+        applyPendingTheme();
+        const ImGuiStyle& st = ImGui::GetStyle();
+        EXPECT_EQ(st.ChildBorderSize, stroke) << "material, zoom " << zoom;
+        EXPECT_EQ(st.TabBarBorderSize, stroke) << "material, zoom " << zoom;
+        EXPECT_EQ(st.SeparatorTextBorderSize, stroke) << "material, zoom " << zoom;
+        EXPECT_EQ(st.WindowBorderSize, 0.0f) << "material, zoom " << zoom; // Material sets none
+        EXPECT_EQ(st.FrameBorderSize, 0.0f) << "material, zoom " << zoom;
+        EXPECT_GE(st.InputTextCursorSize, 1.0f) << "material, zoom " << zoom; // ImGui's default, 1
+        setTheme(fluentTheme);
+        applyPendingTheme();
+        for (const float width : {st.WindowBorderSize, st.PopupBorderSize, st.FrameBorderSize, st.ChildBorderSize})
+            EXPECT_EQ(width, stroke) << "fluent, zoom " << zoom;
+        // A style override is scaled the same way: 0.5 is still a line.
+        Theme thin;
+        thin.style.push_back({"FrameBorderSize", {0.5f, 0.0f}});
+        setTheme(std::move(thin));
+        applyPendingTheme();
+        EXPECT_EQ(st.FrameBorderSize, std::max(1.0f, std::round(0.5f * zoom))) << "override, zoom " << zoom;
+    }
+    setZoom(1.0f);
+    setTheme(Theme{});
+    applyPendingTheme();
+}
+
 // ------------------------------------------------------------------ imguiColorIndex
 
 TEST_F(ThemeTest, ImGuiColorIndexMatchesEveryName) {
@@ -202,4 +240,65 @@ TEST(Typography, Material3Sizes) {
     EXPECT_FLOAT_EQ(textStyleInfo(TextStyle::BodyMedium).size, 14.0f);
     EXPECT_EQ(textStyleInfo(TextStyle::TitleMedium).weight, Weight::Medium);
     EXPECT_EQ(textStyleInfo(TextStyle::BodyLarge).weight, Weight::Regular);
+}
+
+// linePixels() is what ImGui::GetFontSize() gives inside pushFont(): the text fields and spin boxes read their line
+// height from it instead of pushing and popping a font twice per frame, and must lay out to the same pixel.
+TEST(Typography, LinePixelsIsThePushedFontSize) {
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    int checked = 0;
+    for (const float monitor : {1.0f, 1.25f, 1.5f, 1.75f}) {
+        setContentScale(monitor);
+        for (const float zoom : {minZoom, 0.67f, 0.9f, 1.0f, 1.1f, 1.33f, 2.5f, maxZoom}) {
+            setZoom(zoom);
+            for (const float fontScale : {minFontScale, 0.8f, 1.0f, 1.15f, 1.3f, 2.2f, maxFontScale}) {
+                Theme t;
+                t.fontScale = fontScale;
+                setTheme(std::move(t));
+                applyPendingTheme();
+                ImGui::NewFrame();
+                for (int i = 0; i < static_cast<int>(TextStyle::Count); ++i) {
+                    const auto s = static_cast<TextStyle>(i);
+                    pushFont(s);
+                    EXPECT_EQ(linePixels(s), ImGui::GetFontSize())
+                        << textStyleInfo(s).name << ", monitor " << monitor << ", zoom " << zoom << ", fontScale "
+                        << fontScale;
+                    ImGui::PopFont();
+                    EXPECT_LE(fontPixels(s), maxTextPixels);
+                    ++checked;
+                }
+                ImGui::Render();
+            }
+        }
+    }
+    EXPECT_EQ(checked, 4 * 8 * 7 * static_cast<int>(TextStyle::Count));
+    setContentScale(1.0f);
+    setZoom(1.0f);
+    setTheme(Theme{});
+    applyPendingTheme();
+}
+
+// The largest text: the theme's largest fontScale at the largest zoom on a 4x monitor, displayLarge (57dp) is
+// thousands of pixels before the cap, and ten distinct glyphs that large didn't fit ImGui's 8192-pixel font atlas
+// ("Out of texture memory", an abort). Text is drawn at most maxTextPixels tall, as ImGui draws a pushed font.
+TEST(Typography, TheLargestTextFitsTheFontAtlas) {
+    test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+    ASSERT_EQ(h.run(R"(
+        root = Column { Text { "ABCDEFGHIJ", style = "displayLarge" }, Text { "KLMNOPQRST", style = "headlineLarge" },
+                        Button { "UVWXYZ" }, TextField { value = "abcdefghij" } })"),
+              "");
+    setContentScale(4.0f);
+    setZoom(maxZoom);
+    Theme t;
+    t.fontScale = maxFontScale;
+    setTheme(std::move(t));
+    applyPendingTheme();
+    EXPECT_EQ(fontPixels(TextStyle::DisplayLarge), maxTextPixels);
+    EXPECT_EQ(linePixels(TextStyle::BodyLarge), maxTextPixels);
+    h.renderFrames("root", 2);
+    EXPECT_TRUE(luaui::errors().empty());
+    setContentScale(1.0f);
+    setZoom(1.0f);
+    setTheme(Theme{});
+    applyPendingTheme();
 }

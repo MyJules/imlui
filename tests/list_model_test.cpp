@@ -402,6 +402,35 @@ TEST_F(ListModelTest, AMethodMayReturnANewSharedModel) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// getmetatable(model) shows only `__imlui_model` (what the prelude reads), not the metamethods. A __gc reached anyway
+// (debug.getmetatable) and called by a script, twice or on a userdata that isn't a model (even one given the model
+// metatable), finalizes a model value once and leaves it reading as a dead model; a shared model it held is released
+// once, and the next push makes a fresh value.
+TEST_F(ListModelTest, CallingTheModelFinalizerFromLuaIsHarmless) {
+    run(R"lua(
+        q = backend:query(3)
+        local mt = getmetatable(q)
+        assert(type(mt) == "table" and mt.__gc == nil and mt.__index == nil and type(mt.__imlui_model) == "table")
+        local gc = debug.getmetatable(q).__gc
+        gc(io.stdout)
+        local stdoutMeta = debug.getmetatable(io.stdout)
+        debug.setmetatable(io.stdout, debug.getmetatable(q))
+        gc(io.stdout)
+        debug.setmetatable(io.stdout, stdoutMeta)
+        io.stdout:write("")
+        assert(#q == 3)
+        gc(q)
+        gc(q)
+        assert(#q == 0 and q[1] == nil and tostring(q) == "ListModel (gone)")
+        logs = backend.logs
+        gc(logs)
+        assert(#logs == 0 and #backend.logs == 20) -- a new value for the same model
+    )lua");
+    EXPECT_TRUE(m_backend.lastQuery.expired()); // the shared model was released by the first call
+    run("collectgarbage(); collectgarbage()");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 // A model of an element dies with it: its Lua value then reads as an empty model, and a ListView over it shows none.
 TEST_F(ListModelTest, AModelWhoseOwnerIsDestroyedReadsAsEmpty) {
     run("o = Owner {}; m = o:rows()");

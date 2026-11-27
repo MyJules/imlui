@@ -89,7 +89,9 @@ void requestFrameAfter(double seconds) {
         return;
     }
     const double due = clockNow() + seconds;
-    const auto at = std::lower_bound(pending.begin(), pending.end(), due - mergeWindow) - pending.begin();
+    // Covered only by a frame at `due` or up to mergeWindow after it. Not by an earlier one: that frame would come
+    // before the requester is due (a Timer finds it isn't, asks again, and fires a frame late).
+    const auto at = std::lower_bound(pending.begin(), pending.end(), due) - pending.begin();
     const auto index = static_cast<std::size_t>(at);
     if (index < pending.size() && pending[index] <= due + mergeWindow) return; // already covered
     if (pending.size() >= maxPending) {

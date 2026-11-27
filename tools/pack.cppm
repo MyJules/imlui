@@ -9,7 +9,9 @@
 // the deepest folder that holds every group's mount point, and each group's files are stored under their folder
 // below it (groups at `imlui:/` and `imlui:/fonts/` make an archive at `imlui:/` with `fonts/Roboto-Regular.ttf`).
 // Each file is stored compressed with zstd when that saves enough, like embedded data
-// (imlui.tools.resource_encoding), unless the manifest's `compress` says otherwise.
+// (imlui.tools.resource_encoding), unless the manifest's `compress` says otherwise. With --depfile (a build's run,
+// imlui_add_pak), the encoded files are kept next to the dependency file in `<depfile>.cache/`
+// (imlui.tools.encoding_cache), so a rerun compresses only the files that changed.
 export module imlui.tools.pack;
 
 import std;
@@ -17,6 +19,7 @@ import std;
 import imlui.resources.name;
 import imlui.resources.pak_format;
 import imlui.tools.depfile;
+import imlui.tools.encoding_cache;
 import imlui.tools.resource_encoding;
 import imlui.tools.resource_manifest;
 import imlui.tools.source_files;
@@ -27,9 +30,11 @@ export namespace imlui::tools {
 [[nodiscard]] int runPack(std::vector<std::string> args);
 
 /// The bytes of a .pak archive holding `files`, mounted at `mountPoint`; nullopt (with the reason in `error`) when
-/// the mount point is invalid, a file can't be read or the archive can't hold it (writePak()).
+/// the mount point is invalid, a file can't be read or the archive can't hold it (writePak()). Files are encoded
+/// through `cache` when given (the same result, faster for files encoded before).
 [[nodiscard]] std::optional<std::vector<std::byte>> packFiles(std::string_view mountPoint,
-                                                              const std::vector<SourceFile>& files, std::string& error);
+                                                              const std::vector<SourceFile>& files, std::string& error,
+                                                              EncodingCache* cache = nullptr);
 
 /// The groups of `manifest` as the files of one archive: its mount point (the deepest folder holding every group's
 /// mount point) and every file, named relative to it. nullopt (with the reason in `error`) when the groups have
@@ -104,7 +109,7 @@ std::optional<std::pair<std::string, std::vector<SourceFile>>> mergeGroups(const
 }
 
 std::optional<std::vector<std::byte>> packFiles(std::string_view mountPoint, const std::vector<SourceFile>& files,
-                                                std::string& error) {
+                                                std::string& error, EncodingCache* cache) {
     const auto point = normalizeName(mountPoint);
     if (!point) {
         error = "invalid mount point '" + std::string{mountPoint} + "'";
@@ -124,7 +129,8 @@ std::optional<std::vector<std::byte>> packFiles(std::string_view mountPoint, con
             error = "can't read '" + utf8(f.file) + "'";
             return std::nullopt;
         }
-        const auto& e = encoded.emplace_back(encodeResource(f.path, *data, f.compress));
+        const auto& e = encoded.emplace_back(cache ? cache->encode(f.path, *data, f.compress)
+                                                   : encodeResource(f.path, *data, f.compress));
         entries.push_back({f.path, e.stored, e.size, e.compressed});
     }
     std::string folder = *point;
@@ -166,8 +172,15 @@ int runPack(std::vector<std::string> args) {
         if (!collected) return fail(error);
         files = std::move(*collected);
     }
-    const auto pak = packFiles(mountPoint, files, error);
+    fs::path cacheFolder;
+    if (!depfile.empty()) {
+        cacheFolder = depfile;
+        cacheFolder += ".cache";
+    }
+    EncodingCache cache{cacheFolder}; // no folder: encodes everything
+    const auto pak = packFiles(mountPoint, files, error, &cache);
     if (!pak) return fail(error);
+    cache.prune();
     std::error_code ec;
     // The output's folder (a multi-config generator's per-configuration folder) may not exist yet.
     for (const fs::path& file : {output, depfile})

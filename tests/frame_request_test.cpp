@@ -1,6 +1,9 @@
 // Tests for imlui.ui.frame_request: when the next on-demand frame is due.
 #include <gtest/gtest.h>
 
+import std;
+
+import imlui.ui.clock;
 import imlui.ui.frame_request;
 
 using namespace imlui;
@@ -17,6 +20,7 @@ protected:
         setFrameWakeHandler({});
         setLoopAwake(true);
         clearFrameRequests();
+        setClockSource({});
     }
 };
 
@@ -115,6 +119,25 @@ TEST_F(FrameRequestTest, RepeatedRequestsMerge) {
         requestFrameAfter(10.0);
     requestFrameAfter(1.0);
     EXPECT_LE(secondsUntilFrame(), 1.0);
+}
+
+// Requests within the merge window share a frame only when it doesn't come before one of them: a frame due a little
+// after an earlier request serves it (a few ms late), but an earlier frame doesn't serve a later request (a Timer
+// would find itself not due yet on it, ask again, and fire a frame late). On a simulated clock.
+TEST_F(FrameRequestTest, OnlyAFrameAtOrJustAfterTheDueTimeCoversARequest) {
+    const double start = clockTime(); // the clock never goes back: simulate from where it is
+    double now = start;
+    setClockSource([&now] { return now; });
+    requestFrameAfter(1.0);
+    requestFrameAfter(0.998); // the frame at 1.0 is 2 ms after it: covered
+    requestFrameAfter(1.003); // 3 ms after the frame at 1.0: not covered by it, a frame of its own
+    EXPECT_NEAR(secondsUntilFrame(), 1.0, 1e-9);
+    now = start + 1.0;
+    beginFrameRequests(); // the frame at 1.0 serves the first two
+    EXPECT_NEAR(secondsUntilFrame(), 0.003, 1e-9);
+    now = start + 1.003;
+    beginFrameRequests();
+    EXPECT_EQ(secondsUntilFrame(), inf);
 }
 
 TEST_F(FrameRequestTest, WakeHandlerOnlyWhileAsleep) {

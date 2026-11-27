@@ -370,10 +370,15 @@ bool equalIgnoringAsciiCase(std::string_view a, std::string_view b) {
     return std::ranges::equal(a, b, {}, lower, lower);
 }
 
-/// How existing file `path` (relative to `base`) is spelled on disk when that differs from `path`, else "". On a file
-/// system that ignores case (Windows, macOS) `Main.lua` finds `main.lua`, but the resource would be named `Main.lua`,
-/// which no mount finds (resource names are case-sensitive).
-std::string spellingOnDisk(const fs::path& base, std::string_view path) {
+/// How existing file `path` (relative to `base`) is spelled on disk when that differs from `path`, "" when it is
+/// spelled the same, and nullopt when a segment has no entry of that name at all, in any ASCII case. On a file system
+/// that ignores case (Windows, macOS) `Main.lua` finds `main.lua`, but the resource would be named `Main.lua`, which no
+/// mount finds (resource names are case-sensitive). Win32 also finds a file by names that aren't its own: with a
+/// trailing `.` or space (`main.lua.`, `main.lua `), by its 8.3 short name (`MAINLU~1.LUA`), or differing in case
+/// beyond ASCII. Those name no entry of the folder, so they are nullopt: embedded as `app:/main.lua.`, they would be
+/// found in the release build but not by the dev build's folder mount (DirectoryMount), which matches names against
+/// the folder's listing.
+std::optional<std::string> spellingOnDisk(const fs::path& base, std::string_view path) {
     fs::path folder = base;
     std::string onDisk;
     bool differs = false;
@@ -384,14 +389,15 @@ std::string spellingOnDisk(const fs::path& base, std::string_view path) {
         std::string found;
         std::error_code ec;
         for (auto it = fs::directory_iterator(folder, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
-            const std::string name = utf8(it->path().filename());
-            if (name == segment) {
-                found = name;
+            const auto name = utf8Name(it->path().filename()); // no UTF-8 form: it can't be `segment` either
+            if (!name) continue;
+            if (*name == segment) {
+                found = *name;
                 break;
             }
-            if (found.empty() && equalIgnoringAsciiCase(name, segment)) found = name;
+            if (found.empty() && equalIgnoringAsciiCase(*name, segment)) found = *name;
         }
-        if (found.empty()) found = segment; // can't tell (unlisted, or a difference beyond ASCII case)
+        if (found.empty()) return std::nullopt; // no such entry (or the folder can't be listed: can't tell)
         differs = differs || found != segment;
         onDisk += (onDisk.empty() ? "" : "/") + found;
         if (slash == std::string_view::npos) break;
@@ -399,6 +405,19 @@ std::string spellingOnDisk(const fs::path& base, std::string_view path) {
         start = slash + 1;
     }
     return differs ? onDisk : std::string{};
+}
+
+/// The error for `what` (`file 'x'`, `include folder 'x'`) spelled `spelled` on disk (spellingOnDisk()), or "" when it
+/// is spelled as on disk.
+std::string spellingProblem(std::string_view what, const std::optional<std::string>& spelled) {
+    if (!spelled)
+        return std::string{what} + " isn't the name of an entry on disk, though the file system finds it (a trailing "
+                                   "'.' or space, a short 8.3 name or a case difference beyond ASCII): resource names "
+                                   "must be spelled exactly as on disk";
+    if (!spelled->empty())
+        return std::string{what} + " is spelled '" + *spelled +
+               "' on disk (resource names are case-sensitive: use the same spelling)";
+    return {};
 }
 
 /// Resolves one group's fields against the file system.
@@ -461,9 +480,9 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
             error = where + "'" + path + "' is outside the base folder";
             return std::nullopt;
         }
-        if (const std::string spelled = spellingOnDisk(group.base, path); !spelled.empty()) {
-            error = where + "file '" + path + "' is spelled '" + spelled +
-                    "' on disk (resource names are case-sensitive: use the same spelling)";
+        if (const std::string spelling = spellingProblem("file '" + path + "'", spellingOnDisk(group.base, path));
+            !spelling.empty()) {
+            error = where + spelling;
             return std::nullopt;
         }
         selected[path] = {path, file, std::nullopt};
@@ -480,10 +499,11 @@ std::optional<ResourceGroup> resolveGroup(const GroupFields& fields, const fs::p
         const fs::path folder = root.empty() ? group.base : group.base / pathFromUtf8(root);
         if (!fs::is_directory(folder, ec)) continue;
         // Like a `files` entry: the folder's name in the pattern becomes part of every resource name.
-        if (const std::string spelled = root.empty() ? std::string{} : spellingOnDisk(group.base, root);
-            !spelled.empty()) {
-            error = where + "include folder '" + root + "' is spelled '" + spelled +
-                    "' on disk (resource names are case-sensitive: use the same spelling)";
+        if (const std::string problem =
+                root.empty() ? std::string{}
+                             : spellingProblem("include folder '" + root + "'", spellingOnDisk(group.base, root));
+            !problem.empty()) {
+            error = where + problem;
             return std::nullopt;
         }
         scanned.push_back(folder);

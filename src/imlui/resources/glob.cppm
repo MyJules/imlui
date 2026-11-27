@@ -37,8 +37,11 @@ bool globMatch(std::string_view pattern, std::string_view path) {
     // Dynamic programming over (pattern position, path position), from the ends: O(pattern x path) time, where
     // backtracking over the wildcards took exponential time on patterns like `**a**a**a**b`. at(p, s) is whether
     // pattern[p:] matches path[s:]; row p only needs the rows after it.
+    // The table is reused between calls on a thread: a dev build's folder mount matches every file it lists or
+    // reads against every pattern of its selection, and a fresh allocation per match was most of the cost.
     const std::size_t width = path.size() + 1;
-    std::vector<char> match((pattern.size() + 1) * width, 0);
+    thread_local std::vector<char> match;
+    match.assign((pattern.size() + 1) * width, 0);
     const auto at = [&](std::size_t p, std::size_t s) -> char& { return match[p * width + s]; };
     at(pattern.size(), path.size()) = 1;
     for (std::size_t p = pattern.size(); p-- > 0;) {

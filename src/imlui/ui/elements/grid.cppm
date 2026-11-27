@@ -40,6 +40,7 @@ private:
     int m_columns = 2;
     float m_spacing = 8.0f;
     bool m_border = false;
+    std::string m_message; ///< the buffer the `columns` error is formatted into (see render)
 };
 
 } // namespace imlui
@@ -71,8 +72,14 @@ void Grid::declare(TypeBuilder<Grid>& type) {
 }
 
 void Grid::render(Frame& frame) {
-    if (m_columns > maxColumns)
-        luaui::reportError(std::format("Grid: columns = {}, at most {} are allowed", m_columns, maxColumns));
+    if (m_columns > maxColumns) {
+        // On every frame while it lasts: formatted into a buffer that keeps its capacity, and passed on (a copy)
+        // only when it isn't recorded already (what reportError would find, and drop).
+        m_message.clear();
+        std::format_to(std::back_inserter(m_message), "Grid: columns = {}, at most {} are allowed", m_columns,
+                       maxColumns);
+        if (std::ranges::find(luaui::errors(), m_message) == luaui::errors().end()) luaui::reportError(m_message);
+    }
     const int cols = std::clamp(m_columns, 1, maxColumns);
     ImGuiTableFlags f = ImGuiTableFlags_SizingStretchSame;
     if (m_border) f |= ImGuiTableFlags_Borders;
