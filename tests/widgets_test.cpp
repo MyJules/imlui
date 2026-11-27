@@ -254,6 +254,68 @@ TEST_F(WidgetsTest, ChartSkipsNonFiniteValues) {
     }
 }
 
+// A line chart's filled area indexes its vertices with the draw list's own index type (they were cast to unsigned
+// short, which wrapped onto earlier vertices with 32-bit indices). Next to 65535 vertices, 16-bit indices go on from
+// a new VtxOffset: each quad's indices still land on its own four vertices.
+TEST_F(WidgetsTest, ChartAreaIndicesReachTheirVertices) {
+    for (const int padding : {100, 65533, 65534, 65535}) {
+        frame([&] {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+            for (int i = 0; i < padding; ++i) {
+                dl->PrimReserve(0, 1);
+                dl->PrimWriteVtx({-1.0f, -1.0f}, uv, 0);
+            }
+            const ImVec2 a{10.0f, 20.0f}, b{30.0f, 25.0f};
+            md::fillAreaBelow(dl, a, b, 90.0f, 0xFF0000FFu, 0x000000FFu);
+            const auto& cmd = dl->CmdBuffer.back();
+            ASSERT_GE(cmd.ElemCount, 6u);
+            const ImVec2 expected[] = {a, b, {b.x, 90.0f}, a, {b.x, 90.0f}, {a.x, 90.0f}};
+            const unsigned first = cmd.IdxOffset + cmd.ElemCount - 6;
+            for (unsigned i = 0; i < 6; ++i) {
+                const unsigned vertex = cmd.VtxOffset + dl->IdxBuffer[static_cast<int>(first + i)];
+                ASSERT_LT(vertex, static_cast<unsigned>(dl->VtxBuffer.Size)) << padding;
+                EXPECT_EQ(dl->VtxBuffer[static_cast<int>(vertex)].pos.x, expected[i].x) << padding << ", corner " << i;
+                EXPECT_EQ(dl->VtxBuffer[static_cast<int>(vertex)].pos.y, expected[i].y) << padding << ", corner " << i;
+            }
+            // And a whole filled chart past the boundary: every index reaches a vertex of its command.
+            md::ChartOptions o;
+            o.fill = true;
+            md::chart("##chart", {1.0f, 4.0f, 2.0f, 5.0f, 3.0f}, o);
+            for (const auto& c : dl->CmdBuffer)
+                for (unsigned i = 0; i < c.ElemCount; ++i)
+                    ASSERT_LT(c.VtxOffset + dl->IdxBuffer[static_cast<int>(c.IdxOffset + i)],
+                              static_cast<unsigned>(dl->VtxBuffer.Size))
+                        << padding;
+        });
+    }
+}
+
+// ------------------------------------------------------------------ animate
+
+// A value in pixels settles within pixelEpsilon: a tab indicator sliding 300px stopped requesting frames about 20
+// frames after it had come within a quarter pixel, at the fraction's 0.0015.
+TEST_F(WidgetsTest, PixelValuesSettleWithinAQuarterPixel) {
+    const auto framesToSettle = [&](ImGuiID id, float epsilon) {
+        int frames = 0;
+        frame([&] { md::animate(id, 0.0f, 16.0f, epsilon); });
+        for (bool settled = false; !settled && frames < 1000; ++frames)
+            frame([&] { settled = md::animate(id, 300.0f, 16.0f, epsilon) == 300.0f; });
+        return frames;
+    };
+    const int fine = framesToSettle(0x51DE, md::fractionEpsilon);
+    const int coarse = framesToSettle(0x51DF, md::pixelEpsilon);
+    EXPECT_LT(coarse, fine - 15) << coarse << " vs " << fine;
+    // Settled means at the target, and within a quarter pixel the frame before.
+    float before = 0.0f, after = 0.0f;
+    frame([&] { md::animate(0x51E0, 0.0f, 16.0f, md::pixelEpsilon); });
+    for (int i = 0; i < coarse - 1; ++i)
+        frame([&] { before = md::animate(0x51E0, 300.0f, 16.0f, md::pixelEpsilon); });
+    frame([&] { after = md::animate(0x51E0, 300.0f, 16.0f, md::pixelEpsilon); });
+    EXPECT_EQ(after, 300.0f);
+    EXPECT_GE(300.0f - before, md::pixelEpsilon);
+}
+
 // ------------------------------------------------------------------ Tabs
 
 TEST_F(WidgetsTest, TabIndicatorMovesWithTheBar) {

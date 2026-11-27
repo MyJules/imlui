@@ -136,8 +136,8 @@ bool tabs(const Look& look, const char* id, const std::vector<md::TabInfo>& item
     } else if (indicator) {
         // The sliding indicator, its ends relative to the bar's left edge (no lag when the bar moves), like md's.
         const ImGuiID key = ImGui::GetID("##ind");
-        const float x0 = p.x + md::animate(key, indicator->first, 16.0f);
-        const float x1 = p.x + md::animate(key + 1, indicator->second, 16.0f);
+        const float x0 = p.x + md::animate(key, indicator->first, 16.0f, md::pixelEpsilon);
+        const float x1 = p.x + md::animate(key + 1, indicator->second, 16.0f, md::pixelEpsilon);
         const float th = std::max(1.0f, std::round(dp(indicatorThickness)));
         if (x1 > x0)
             drawIndicator(dl, {(x0 + x1) * 0.5f, p.y + l.h - dp(plateInsetX) - th * 0.5f}, x1 - x0, false,

@@ -33,7 +33,7 @@ theme {
 | `seed` | color | `"#6750A4"` | Seed color: hex, `{r,g,b,a}`, or a role (`"primary"`, `"tertiary/1"`) of the theme currently in effect. An invalid value reports an error and keeps the default. |
 | `dark` | bool | `true` | Dark or light scheme. |
 | `spacing` | number | `8` | Base unit for ImGui paddings and spacings. It's also the default gap in `Column` and `Row`. 0 to 10000. |
-| `fontScale` | number | `1.0` | Multiplies every text size. Glyphs are rasterized at the final size, so text stays sharp. 0.25 to 4: a larger scale makes glyphs that outgrow ImGui's font atlas. |
+| `fontScale` | number | `1.0` | Multiplies every text size. Glyphs are rasterized at the final size, so text stays sharp. 0.25 to 4; text is at most 512 pixels tall whatever the scale, zoom and monitor (see [Typography](#typography)). |
 | `shape` | table | see above | Material shape scale: corner radii in dp, each 0 to 10000. |
 | `colors` | `{ role = color }` | — | Overrides generated roles. Values are [color specs](#color-specs); role names refer to the scheme generated from this table's `seed`/`dark` (before any overrides). An unknown role or invalid color reports an error. |
 | `imgui` | `{ ImGuiColName = color }` | — | Raw ImGui color overrides by name (`"WindowBg"`, `"Text"`, ...), applied after the preset. Values are [color specs](#color-specs), with roles from this table's generated scheme. An unknown name or invalid color reports an error. |
@@ -63,7 +63,12 @@ least 1 pixel at any zoom, and `ItemSpacing.x` is applied as at least 0 (ImGui's
 width; a negative `ItemSpacing.y` is kept).
 
 After the preset and the overrides, every style size is scaled by the DPI factor
-(`ImGuiStyle::ScaleAllSizes`).
+(`ImGuiStyle::ScaleAllSizes`, which truncates to whole pixels). Line widths are the exception: a border or line that
+is set (`WindowBorderSize`, `ChildBorderSize`, `PopupBorderSize`, `FrameBorderSize`, `TabBorderSize`,
+`TabBarBorderSize`, `TabBarOverlineSize`, `SeparatorTextBorderSize`, and ImGui's `SeparatorSize`, `ImageBorderSize`,
+`DragDropTargetBorderSize`, `TreeLinesSize`, `InputTextCursorSize`) becomes `max(1, round(width × scale))`, as the
+skins round their strokes, so a 1dp border is 1px at 50% or 90% zoom (truncated, it was 0 and ImGui drew none) and
+2px at 150%, like a skin's; a width of 0 stays 0.
 
 `theme()` returns the generated scheme. Related functions: `scheme()`, `schemeFor(t)`, `themeState{}` and
 `color.*`. See [Lua API](lua-api.md#theme).
@@ -314,7 +319,12 @@ the theme (see [Fonts](#fonts)).
 | `labelMedium` | 12 | Medium |
 | `labelSmall` | 11 | Medium |
 
-Final pixel size = size × `fontScale` × DPI scale. ImGui 1.92 rasterizes glyphs on demand at each size, so one
+Final pixel size = size × `fontScale` × DPI scale, at most 512 pixels (`maxTextPixels`, ImGui's own limit for a
+pushed font: text measured or drawn with an explicit size keeps to it too). The limit keeps the largest glyph inside
+ImGui's 8192-pixel font atlas: a font's glyphs may be at most 8 font heights wide or tall (`checkFont` rejects a font
+with a larger one, see [Fonts](#fonts)), so one is at most 4096 pixels, where a glyph larger than the atlas would
+abort the program ("Out of texture memory"). Very large text with many distinct glyphs in one frame can still fill
+the atlas; ImGui frees sizes no longer drawn. ImGui 1.92 rasterizes glyphs on demand at each size, so one
 font file per weight covers everything. If a Roboto file is missing, a warning is logged and ImGui's default font
 is used. A theme can replace both faces with the app's own typeface (see [Fonts](#fonts)).
 
@@ -358,7 +368,10 @@ theme {
 - **Unknown names.** An element whose `font` names no declared font draws in its style's face; the name is logged
   once.
 - **Reuse and hot reload.** Each face (with its fallbacks) becomes one atlas font, reused while its file is
-  unchanged: re-applying a theme, `themeState` changes and script reloads don't add fonts. The declared font files
+  unchanged: re-applying a theme, `themeState` changes and script reloads don't add fonts. The fonts of the set in
+  use and of the one before it are kept (switching back and forth between two themes reuses both); a font neither
+  needs leaves the atlas, with its bytes, when another theme is applied, so going through many themes doesn't grow
+  the atlas. The declared font files
   are watched in dev builds: editing one reloads the script and replaces its atlas font (the old one is removed,
   and with it the old file contents: the library holds a font's bytes exactly as long as its atlas font).
 

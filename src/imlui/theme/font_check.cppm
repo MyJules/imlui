@@ -688,9 +688,11 @@ private:
 
 /// The largest glyph box width or height for a font `height` units high (ascender - descender). ImGui gives a glyph
 /// a bitmap of its box's size, scaled by the font size / its height, and a bitmap larger than its atlas (or 65535
-/// pixels) trips an IM_ASSERT. Real fonts stay below 8 heights (tall Arabic ligatures); 16 keeps a 128px font's
-/// largest glyph well inside ImGui's 8192-pixel atlas.
-std::int64_t maxGlyphExtent(std::int64_t height) { return 16 * height; }
+/// pixels) trips an IM_ASSERT ("Out of texture memory"). Text is at most typography's maxTextPixels (512) tall,
+/// ImGui's own limit for a pushed font, so 8 heights keep the largest glyph at 4096 pixels: half the side of ImGui's
+/// 8192-pixel atlas, which leaves room for the glyphs already in it. Real fonts stay below 8 heights (tall Arabic
+/// ligatures). It was 16, which let a 512px glyph fill the whole atlas and overflow it.
+std::int64_t maxGlyphExtent(std::int64_t height) { return 8 * height; }
 
 /// stb_truetype's view of the font (stbtt_InitFont); false when it fails or asserts. Only for a font whose structure
 /// checkSfnt() found sound.

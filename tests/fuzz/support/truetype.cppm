@@ -95,8 +95,8 @@ void readFontLikeImGui(std::span<const std::byte> bytes) {
         if (x0 == x1 || y0 == y1) continue; // ImGui's is_visible
         const int w = x1 - x0 + oversampleH - 1, h = y1 - y0 + oversampleV - 1;
         // ImGui asserts on a size <= 0 (an inverted box) and on one its atlas can't hold. At most 64px, a glyph
-        // checkFont() accepts is at most 16 font heights: 1024 x 2 pixels.
-        if (w <= 0 || h <= 0 || w > 2 * 1024 + 4 || h > 1024 + 4) std::abort();
+        // checkFont() accepts is at most 8 font heights: 512 x 2 pixels.
+        if (w <= 0 || h <= 0 || w > 2 * 512 + 4 || h > 512 + 4) std::abort();
         pixels.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0);
         float subX = 0, subY = 0;
         stbtt_MakeGlyphBitmapSubpixelPrefilter(&font, pixels.data(), w, h, w, scaleX, scaleY, 0, 0, oversampleH,

@@ -42,11 +42,22 @@ void loadFonts(const Resources& resources);
 /// The font of style `s`: the face override of the scope (FontFaceScope), else the theme's face for its weight;
 /// ImGui's current font before loadFonts().
 [[nodiscard]] ImFont* font(TextStyle s);
+/// The largest text size in pixels: ImGui's own limit for a pushed font (IMGUI_FONT_SIZE_MAX), which fontPixels()
+/// keeps to as well, so text measured or drawn with an explicit size never outgrows what PushFont() gives. Together
+/// with font_check's maxGlyphExtent() it bounds a glyph's bitmap to half the side of ImGui's 8192-pixel font atlas:
+/// the size is the theme's fontScale times the zoom times the monitor scale times the style's size, which reaches
+/// thousands of pixels at the extremes (57dp displayLarge x 4 x 3 x a 2x monitor), and a glyph larger than the atlas
+/// trips ImGui's "Out of texture memory" assert.
+inline constexpr float maxTextPixels = 512.0f;
+
 /// Size to pass to ImGui::PushFont (dp, before global scale factors).
 [[nodiscard]] float fontSize(TextStyle s);
-/// Final pixel size, for ImDrawList::AddText with an explicit font.
+/// Final pixel size, for ImDrawList::AddText with an explicit font: at most maxTextPixels.
 [[nodiscard]] float fontPixels(float sizeDp);
 [[nodiscard]] float fontPixels(TextStyle s);
+/// ImGui::GetFontSize() inside pushFont(s), without pushing it: fontPixels(s) rounded to a whole pixel and kept in
+/// 1..maxTextPixels, as ImGui does (UpdateCurrentFontSize). The height of a line of `s` text in an ImGui item.
+[[nodiscard]] float linePixels(TextStyle s);
 void pushFont(TextStyle s);
 
 } // namespace imlui
@@ -90,9 +101,15 @@ ImFont* font(TextStyle s) {
 float fontSize(TextStyle s) { return textStyleInfo(s).size; }
 float fontPixels(float sizeDp) {
     const ImGuiStyle& st = ImGui::GetStyle();
-    return sizeDp * st.FontScaleMain * st.FontScaleDpi;
+    // The same products in the same order as ImGui's (FontSizeBase * FontScaleMain * FontScaleDpi), so linePixels()
+    // matches GetFontSize() to the bit.
+    return std::min(sizeDp * st.FontScaleMain * st.FontScaleDpi, maxTextPixels);
 }
 float fontPixels(TextStyle s) { return fontPixels(fontSize(s)); }
+float linePixels(TextStyle s) {
+    // IM_ROUND, then ImGui's clamp: (float)(int)(v + 0.5f) is floor(v + 0.5f) for the positive sizes here.
+    return std::clamp(std::floor(fontPixels(s) + 0.5f), 1.0f, maxTextPixels);
+}
 void pushFont(TextStyle s) { ImGui::PushFont(font(s), fontSize(s)); }
 
 } // namespace imlui
