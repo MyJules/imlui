@@ -42,7 +42,9 @@ public:
 
     /// A thread-safe, copyable way to append rows from a worker. Its rows reach the model on the main thread, all that
     /// were appended since the last apply in one appendRows (honoring maxRows()), while the model lives; afterwards
-    /// they are dropped. An empty appender (default-constructed) drops them too.
+    /// they are dropped. An empty appender (default-constructed) drops them too. With maxRows() set, rows waiting for
+    /// the apply are kept to about twice the cap (the oldest go first, as the apply would erase them anyway), so a
+    /// worker faster than the main loop doesn't pile up rows that never show.
     class Appender {
     public:
         Appender() = default;
@@ -230,13 +232,14 @@ public:
     /// Sets the cap (0: none). Lowering it below size() erases the oldest rows now (one rowsRemoved).
     void setMaxRows(std::size_t maxRows) {
         m_maxRows = maxRows;
+        if (m_sharedMaxRows) m_sharedMaxRows->store(maxRows, std::memory_order_relaxed);
         trim();
     }
 
     /// Main thread: an appender for worker threads (see Appender). The appenders it returns share one batch: one apply
     /// per main-loop iteration for all of them.
     [[nodiscard]] Appender appender() {
-        if (!m_batch) m_batch = std::make_shared<Batch>(*this, handle(), OnApplied{});
+        if (!m_batch) m_batch = std::make_shared<Batch>(*this, handle(), sharedMaxRows(), OnApplied{});
         return Appender{m_batch};
     }
     /// Main thread: an appender with a batch of its own (shared by its copies), whose every apply calls
@@ -246,20 +249,29 @@ public:
     /// captures must not need the main thread to be destroyed (no Lua references). It may use the model's owner
     /// (`this`) when the owner outlives the model: it runs only while the model lives.
     [[nodiscard]] Appender appender(OnApplied onApplied) {
-        return Appender{std::make_shared<Batch>(*this, handle(), std::move(onApplied))};
+        return Appender{std::make_shared<Batch>(*this, handle(), sharedMaxRows(), std::move(onApplied))};
     }
 
 private:
     struct Batch {
-        Batch(VectorModel& m, ScriptObject::Handle h, OnApplied applied)
-            : model{&m}, handle{std::move(h)}, onApplied{std::move(applied)} {}
+        Batch(VectorModel& m, ScriptObject::Handle h, std::shared_ptr<const std::atomic<std::size_t>> cap,
+              OnApplied applied)
+            : model{&m}, handle{std::move(h)}, maxRows{std::move(cap)}, onApplied{std::move(applied)} {}
         VectorModel* model;          ///< used only by the apply, which runs only while it lives
         ScriptObject::Handle handle; ///< the model's
-        OnApplied onApplied;         ///< called by the apply (main thread); may be empty
+        std::shared_ptr<const std::atomic<std::size_t>> maxRows; ///< the model's maxRows(), readable from any thread
+        OnApplied onApplied;                                     ///< called by the apply (main thread); may be empty
         std::mutex mutex;
-        std::vector<T> pending; ///< guarded by `mutex`
-        bool queued = false;    ///< guarded by `mutex`: an apply is posted and hasn't run yet
+        std::vector<T> pending;  ///< guarded by `mutex`
+        std::size_t dropped = 0; ///< guarded by `mutex`: rows taken off the front of `pending` for the cap
+        bool queued = false;     ///< guarded by `mutex`: an apply is posted and hasn't run yet
     };
+
+    /// The cap the batches read (created with the first appender).
+    std::shared_ptr<const std::atomic<std::size_t>> sharedMaxRows() {
+        if (!m_sharedMaxRows) m_sharedMaxRows = std::make_shared<std::atomic<std::size_t>>(m_maxRows);
+        return m_sharedMaxRows;
+    }
 
     /// Any thread: adds to the batch with `add(pending)` and posts its apply unless one is queued already.
     template <class Add>
@@ -268,26 +280,38 @@ private:
         {
             const std::scoped_lock lock{batch->mutex};
             add(batch->pending);
+            // Beyond the cap, the apply keeps only the last maxRows rows: once twice as many wait, the oldest go now
+            // (once per maxRows appends, so an append stays O(1) on average). Counted, so the apply still reports them.
+            const std::size_t cap = batch->maxRows->load(std::memory_order_relaxed);
+            std::vector<T>& pending = batch->pending;
+            if (cap > 0 && pending.size() > cap && pending.size() - cap >= cap) {
+                const std::size_t extra = pending.size() - cap;
+                pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(extra));
+                batch->dropped += extra;
+            }
             if (batch->queued) return;
             batch->queued = true;
         }
         // A dead model drops the post, and `queued` stays set: nothing posts again.
         batch->handle.post([batch] {
             std::vector<T> rows;
+            std::size_t dropped = 0;
             {
                 const std::scoped_lock lock{batch->mutex};
                 batch->queued = false;
                 rows = std::move(batch->pending);
                 batch->pending.clear();
+                dropped = std::exchange(batch->dropped, 0);
             }
-            const std::size_t appended = rows.size();
-            const std::size_t erased = batch->model->appendCapped(std::move(rows));
+            // The rows trimmed while waiting arrived and went, like the batch's own first rows over the cap.
+            const std::size_t appended = rows.size() + dropped;
+            const std::size_t erased = batch->model->appendCapped(std::move(rows)) + dropped;
             if (batch->onApplied) batch->onApplied(appended, erased);
         });
     }
 
-    /// Appends `rows`, first erasing what maxRows() needs gone: the oldest rows (one rowsRemoved), and the first rows of
-    /// `rows` when it alone is over the cap. Returns how many rows that dropped (old and new).
+    /// Appends `rows`, first erasing what maxRows() needs gone: the oldest rows (one rowsRemoved), and the first rows
+    /// of `rows` when it alone is over the cap. Returns how many rows that dropped (old and new).
     std::size_t appendCapped(std::vector<T> rows) {
         if (rows.empty()) return 0;
         std::size_t dropped = 0;
@@ -328,6 +352,8 @@ private:
     std::function<Key(const T&)> m_keyOf;
     std::size_t m_maxRows = 0;      ///< 0: no cap
     std::shared_ptr<Batch> m_batch; ///< appender()'s shared batch
+    /// m_maxRows for the batches, which read it on the appending threads; made by the first appender.
+    std::shared_ptr<std::atomic<std::size_t>> m_sharedMaxRows;
 };
 
 } // namespace imlui

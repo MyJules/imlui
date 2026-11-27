@@ -326,6 +326,31 @@ TEST(ResourceSelection, ContainsAndFolders) {
     EXPECT_TRUE(s.mayContainUnder("ui/deep/er"));
     EXPECT_FALSE(s.mayContainUnder("docs"));
     EXPECT_FALSE(ResourceSelection{}.mayContainUnder(""));
+    EXPECT_TRUE(s.matchesPatterns("ui/Card.lua"));
+    EXPECT_FALSE(s.matchesPatterns("a/b/listed.txt")) << "`files` aren't patterns";
+    EXPECT_FALSE(s.matchesPatterns("ui/x/Card.lua"));
+}
+
+// A DirectoryMount keeps its selection's `files` and `unmatched` sorted (a bisection per file instead of a scan of the
+// list): a long list in any order, with duplicates, selects exactly its files.
+TEST(DirectoryMount, LooksFilesUpInALongSelectionInAnyOrder) {
+    test::TempDir dir;
+    ResourceSelection selection{.include = {"*.lua"}, .unmatched = {"z.lua", "b.lua", "z.lua"}};
+    for (int i = 199; i >= 0; --i) {
+        const std::string name = "data/f" + std::to_string(i) + ".json";
+        dir.write(name, "{}");
+        if (i % 2 == 0) selection.files.push_back(name);
+    }
+    selection.files.push_back("data/f10.json");
+    for (const char* name : {"a.lua", "b.lua", "z.lua"})
+        dir.write(name, "return 1");
+    DirectoryMount mount{dir.path(), selection};
+    EXPECT_TRUE(mount.exists("data/f0.json"));
+    EXPECT_TRUE(mount.exists("data/f198.json"));
+    EXPECT_FALSE(mount.exists("data/f199.json"));
+    EXPECT_EQ(mount.list("data").size(), 100u);
+    EXPECT_EQ(mount.list(""), strings({"a.lua", "data/"}));
+    EXPECT_EQ(mount.listFiles("").size(), 101u);
 }
 
 // A changed file that can't be opened right now (an editor holding it without sharing while it saves) is served from

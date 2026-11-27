@@ -32,11 +32,14 @@ public:
     /// isn't a folder.
     [[nodiscard]] virtual std::vector<std::string> list(std::string_view path) const = 0;
     /// The files under folder `path` at any depth, relative to it, sorted. Empty when `path` isn't a folder. The
-    /// default walks list(); a mount that can do better in one pass (DirectoryMount) overrides it.
+    /// default walks list(); a mount that can do better in one pass (DirectoryMount, PackedMount) overrides it.
     [[nodiscard]] virtual std::vector<std::string> listFiles(std::string_view path) const;
     /// When file `path` last changed. nullopt for a missing file and for immutable mounts (embedded, .pak),
     /// whose files never change while the program runs.
     [[nodiscard]] virtual std::optional<ResourceTime> modified(std::string_view path) const = 0;
+    /// False for a mount whose files never change while the program runs (embedded, .pak): the Engine's hot reload
+    /// doesn't poll when no mount can change. The default is true, so an unknown mount is polled.
+    [[nodiscard]] virtual bool mayChange() const;
     /// Where the files come from, for logs and errors: `directory 'E:/app'`, `embedded 'imlui'`, `pak 'data.pak'`.
     [[nodiscard]] virtual std::string origin() const = 0;
 };
@@ -46,6 +49,8 @@ public:
 module :private;
 
 namespace imlui {
+
+bool Mount::mayChange() const { return true; }
 
 std::vector<std::string> Mount::listFiles(std::string_view path) const {
     std::vector<std::string> out;

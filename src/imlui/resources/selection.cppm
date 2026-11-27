@@ -19,8 +19,11 @@ struct ResourceSelection {
     std::vector<std::string> unmatched = {};
 
     /// True when file `path` is selected: listed in `files`, or matched by `include` and neither `exclude` nor
-    /// `unmatched`.
+    /// `unmatched`. Searches `files` and `unmatched` from end to end; a mount asking for every file of a folder keeps
+    /// them sorted and uses matchesPatterns() (DirectoryMount).
     [[nodiscard]] bool contains(std::string_view path) const;
+    /// True when `path` is matched by `include` and not by `exclude` (`files` and `unmatched` aren't looked at).
+    [[nodiscard]] bool matchesPatterns(std::string_view path) const;
     /// False when no selected file can lie under folder `folder` ("" is the root): no listed file is in it and no
     /// `include` pattern can match there. True doesn't mean one does.
     [[nodiscard]] bool mayContainUnder(std::string_view folder) const;
@@ -61,9 +64,12 @@ bool mayMatchUnder(std::string_view pattern, const std::vector<std::string_view>
 
 bool ResourceSelection::contains(std::string_view path) const {
     if (std::ranges::find(files, path) != files.end()) return true;
+    return matchesPatterns(path) && std::ranges::find(unmatched, path) == unmatched.end();
+}
+
+bool ResourceSelection::matchesPatterns(std::string_view path) const {
     const auto matches = [&](const std::string& pattern) { return globMatch(pattern, path); };
-    return std::ranges::any_of(include, matches) && !std::ranges::any_of(exclude, matches) &&
-           std::ranges::find(unmatched, path) == unmatched.end();
+    return std::ranges::any_of(include, matches) && !std::ranges::any_of(exclude, matches);
 }
 
 bool ResourceSelection::mayContainUnder(std::string_view folder) const {

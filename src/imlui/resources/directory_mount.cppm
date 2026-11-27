@@ -39,7 +39,8 @@ class DirectoryMount final : public Mount {
 public:
     /// The files under `root`; with a `selection`, only the files it selects (a dev build's source folder serves
     /// exactly what its manifest group embeds): read(), exists() and modified() don't find the others, and list()
-    /// and listFiles() show only selected files and the folders that hold one.
+    /// and listFiles() show only selected files and the folders that hold one. The selection's `files` and
+    /// `unmatched` are kept sorted, so checking a file against them is a bisection, not a scan of the list.
     explicit DirectoryMount(std::filesystem::path root, std::optional<ResourceSelection> selection = std::nullopt);
 
     /// The most bytes of file data the cache keeps alive of its own (the files read most recently): 8 MiB, enough
@@ -118,12 +119,13 @@ private:
     void prune() const;
 
     std::filesystem::path m_root;
-    std::optional<ResourceSelection> m_selection;
+    std::optional<ResourceSelection> m_selection; ///< its `files` and `unmatched` sorted and unique
     mutable std::mutex m_mutex;
     mutable Cache m_cache;                                   ///< the latest buffer of the files read, while it lives
     mutable std::uint64_t m_reads = 0;                       ///< the clock of Cached::lastRead
     mutable std::size_t m_retained = 0;                      ///< the bytes of the Cached::retained buffers
     mutable std::set<std::string, std::less<>> m_unreadable; ///< files that exist but were never read successfully
+    /// Guards m_folders and m_misspelled; not held while a folder is listed or timed (another thread's lookups go on).
     mutable std::mutex m_foldersMutex;
     mutable std::map<std::string, Folder, std::less<>> m_folders; ///< by path ("" is the root)
     mutable std::set<std::string, std::less<>> m_misspelled;      ///< paths already warned about
@@ -207,7 +209,14 @@ R guarded(const DirectoryMount& mount, std::string_view what, std::string_view p
 } // namespace
 
 DirectoryMount::DirectoryMount(fs::path root, std::optional<ResourceSelection> selection)
-    : m_root{std::move(root)}, m_selection{std::move(selection)} {}
+    : m_root{std::move(root)}, m_selection{std::move(selection)} {
+    if (!m_selection) return;
+    for (std::vector<std::string>* paths : {&m_selection->files, &m_selection->unmatched}) {
+        std::ranges::sort(*paths);
+        const auto [first, last] = std::ranges::unique(*paths);
+        paths->erase(first, last);
+    }
+}
 
 const fs::path& DirectoryMount::root() const { return m_root; }
 
@@ -220,7 +229,13 @@ std::optional<fs::path> DirectoryMount::file(std::string_view path) const {
     return m_root / *relative;
 }
 
-bool DirectoryMount::selected(std::string_view path) const { return !m_selection || m_selection->contains(path); }
+bool DirectoryMount::selected(std::string_view path) const {
+    // ResourceSelection::contains(), with `files` and `unmatched` sorted (see the constructor).
+    if (!m_selection) return true;
+    if (std::ranges::binary_search(m_selection->files, path, std::less<>{})) return true;
+    return m_selection->matchesPatterns(path) &&
+           !std::ranges::binary_search(m_selection->unmatched, path, std::less<>{});
+}
 
 bool DirectoryMount::holdsSelected(std::string_view path, const fs::path& folder) const {
     if (!m_selection) return true;
@@ -251,7 +266,7 @@ bool DirectoryMount::holdsSelected(std::string_view path, const fs::path& folder
                 if (!name) continue;
                 if (entry->is_directory(entryEc)) {
                     if (!linkedFolder(*entry)) listed.subfolders.push_back(*name);
-                } else if (entry->is_regular_file(entryEc) && m_selection->contains(joined(current, *name))) {
+                } else if (entry->is_regular_file(entryEc) && selected(joined(current, *name))) {
                     listed.selectedFile = true;
                     listed.subfolders.clear(); // not needed: the folder holds one
                     break;
@@ -269,7 +284,8 @@ bool DirectoryMount::holdsSelected(std::string_view path, const fs::path& folder
 }
 
 bool DirectoryMount::spelledAsOnDisk(std::string_view path) const {
-    std::scoped_lock lock{m_foldersMutex};
+    // m_foldersMutex is held only to look listings up and store them: the folder's time and its listing are read
+    // without it, so a slow disk (or a hot-reload scan on a worker) doesn't hold up another thread's lookups.
     std::size_t start = 0;
     while (true) {
         const std::size_t slash = path.find('/', start);
@@ -282,37 +298,62 @@ bool DirectoryMount::spelledAsOnDisk(std::string_view path) const {
         const fs::path folderPath = folder.empty() ? m_root : m_root / pathFromUtf8(folder).value_or(fs::path{});
         const ResourceTime time = fs::last_write_time(folderPath, ec);
         if (ec) return false; // missing, or can't be checked: not found (a check that can't run doesn't pass)
-        const auto list = [&] {
+
+        // Not there in this spelling: false, with a hint (once per path) when only ASCII case differs. Strict even
+        // when it differs beyond ASCII case, which the file system may also ignore. With m_foldersMutex held.
+        const auto missing = [&](const std::set<std::string, std::less<>>& names) -> std::optional<std::string> {
+            const auto other =
+                std::ranges::find_if(names, [&](const std::string& n) { return equalIgnoringAsciiCase(n, segment); });
+            if (other == names.end() || !m_misspelled.emplace(path).second) return std::nullopt;
+            return folder.empty() ? *other : std::string{folder} + "/" + *other;
+        };
+        const auto warn = [&](const std::optional<std::string>& onDisk) {
+            if (onDisk)
+                log::warn("resource '{}' ({}): not found, the file on disk is spelled '{}' (names are case-sensitive)",
+                          path, origin(), *onDisk);
+        };
+
+        // The kept listing, while the folder's time is unchanged. An entry added within the same tick of the folder's
+        // time (coarse on some file systems) doesn't change it, so a miss in a listing that was read within a tick of
+        // that time lists the folder again. A listing read later is complete: anything added since has a later time.
+        enum class Kept { Found, Missing, Relist } kept = Kept::Relist;
+        std::optional<std::string> hint;
+        {
+            std::scoped_lock lock{m_foldersMutex};
+            if (const auto it = m_folders.find(folder); it != m_folders.end() && it->second.time == time) {
+                if (it->second.names.contains(segment)) {
+                    kept = Kept::Found;
+                } else if (it->second.listedAt - it->second.time >= timeTick) {
+                    kept = Kept::Missing;
+                    hint = missing(it->second.names);
+                }
+            }
+        }
+        if (kept == Kept::Missing) {
+            warn(hint);
+            return false;
+        }
+        if (kept == Kept::Relist) {
             Folder listed{time, fs::file_time_type::clock::now(), {}};
             for (auto entry = fs::directory_iterator(folderPath, ec); !ec && entry != fs::directory_iterator();
                  entry.increment(ec))
                 if (auto name = utf8Name(entry->path().filename())) listed.names.insert(std::move(*name));
-            return ec ? m_folders.end() : m_folders.insert_or_assign(std::string{folder}, std::move(listed)).first;
-        };
-        auto it = m_folders.find(folder);
-        bool fresh = false;
-        if (it == m_folders.end() || it->second.time != time) {
-            it = list();
-            if (it == m_folders.end()) return false;
-            fresh = true;
-        }
-        // An entry added within the same tick of the folder's time (coarse on some file systems) doesn't change
-        // it, so a miss in a kept listing that was read within a tick of that time lists the folder again. A
-        // listing read later is complete: anything added since has a later time.
-        if (!fresh && !it->second.names.contains(segment) && it->second.listedAt - it->second.time < timeTick) {
-            it = list();
-            if (it == m_folders.end()) return false;
-        }
-        const auto& names = it->second.names;
-        if (!names.contains(segment)) {
-            const auto other =
-                std::ranges::find_if(names, [&](const std::string& n) { return equalIgnoringAsciiCase(n, segment); });
-            // Not there in this spelling. Strict even when it differs beyond ASCII case, which the file system may
-            // also ignore; a hint when only ASCII case differs.
-            if (other != names.end() && m_misspelled.emplace(path).second)
-                log::warn("resource '{}' ({}): not found, the file on disk is spelled '{}' (names are case-sensitive)",
-                          path, origin(), folder.empty() ? *other : std::string{folder} + "/" + *other);
-            return false;
+            if (ec) return false;
+            const bool found = listed.names.contains(segment);
+            {
+                std::scoped_lock lock{m_foldersMutex};
+                if (!found) hint = missing(listed.names);
+                // Another thread may have listed the folder meanwhile: the listing read last is kept.
+                const auto it = m_folders.find(folder);
+                if (it == m_folders.end())
+                    m_folders.emplace(std::string{folder}, std::move(listed));
+                else if (it->second.listedAt <= listed.listedAt)
+                    it->second = std::move(listed);
+            }
+            if (!found) {
+                warn(hint);
+                return false;
+            }
         }
         if (slash == std::string_view::npos) return true;
         start = slash + 1;

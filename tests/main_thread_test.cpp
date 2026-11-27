@@ -117,6 +117,55 @@ TEST_F(MainThreadTest, PostFromAnotherThreadRunsOnTheMainThreadAndWakesTheLoop) 
     EXPECT_EQ(runPosted(), 0u);
 }
 
+// Only the post that finds the queue empty wakes the loop: the run it wakes takes the later ones too. A post after
+// that run wakes again, so none waits unseen.
+TEST_F(MainThreadTest, OnlyAPostIntoAnEmptyQueueWakesTheLoop) {
+    std::atomic<int> wakes = 0;
+    setPostWakeHandler([&] { ++wakes; });
+    for (int i = 0; i < 3; ++i)
+        post([] {});
+    EXPECT_EQ(wakes, 1);
+    EXPECT_EQ(runPosted(), 3u);
+    post([] {});
+    EXPECT_EQ(wakes, 2);
+    // A function posting while the queue is run: the queue was taken, so it wakes for the next run.
+    post([] { post([] {}); });
+    EXPECT_EQ(wakes, 2);
+    EXPECT_EQ(runPosted(), 2u);
+    EXPECT_EQ(wakes, 3);
+    EXPECT_EQ(runPosted(), 1u);
+}
+
+// The handler runs without the queue's lock: it may read the queue; setPostWakeHandler waits for a thread inside the
+// old handler before replacing it.
+TEST_F(MainThreadTest, WakeHandlerRunsOutsideTheLockAndIsReplacedSafely) {
+    std::atomic<bool> inside = false;
+    std::atomic<bool> release = false;
+    std::atomic<std::size_t> seen = 0;
+    setPostWakeHandler([&] {
+        seen = postedCount(); // would deadlock under the queue's lock
+        inside = true;
+        while (!release)
+            std::this_thread::yield();
+    });
+    std::thread poster{[] { post([] {}); }};
+    while (!inside)
+        std::this_thread::yield();
+    EXPECT_EQ(seen, 1u);
+    std::atomic<bool> replaced = false;
+    std::thread replacer{[&] {
+        setPostWakeHandler({});
+        replaced = true;
+    }};
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    EXPECT_FALSE(replaced) << "waits for the poster to leave the handler";
+    release = true;
+    poster.join();
+    replacer.join();
+    EXPECT_TRUE(replaced);
+    EXPECT_EQ(runPosted(), 1u);
+}
+
 // No loop running (no wake handler): the function waits for the next runPosted().
 TEST_F(MainThreadTest, PostWithoutALoopIsKeptForTheNextRun) {
     int ran = 0;
@@ -192,7 +241,9 @@ TEST_F(MainThreadTest, ManyThreadsPostConcurrently) {
         w.join();
     runPosted();
     EXPECT_EQ(total, threads * perThread);
-    EXPECT_EQ(wakes, threads * perThread);
+    // Only a post into an empty queue wakes the loop.
+    EXPECT_GE(wakes, 1);
+    EXPECT_LE(wakes, threads * perThread);
     EXPECT_TRUE(ordered);
     EXPECT_TRUE(onMain);
 }
