@@ -34,6 +34,25 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step = 0
 /// digits. `step` > 0, the range finite and not empty.
 [[nodiscard]] double snapToStep(double v, double vmin, double vmax, double step);
 
+/// A slider's range and step as slider() reads them; the value logic below is every skin's slider's.
+struct SliderRange {
+    double vmin = 0, vmax = 0;
+    double range = 0;    ///< vmax - vmin
+    double step = 0;     ///< > 0, or 0: continuous (also for a step that isn't finite)
+    bool ranged = false; ///< the range is finite and not empty; else the value is left alone
+};
+[[nodiscard]] SliderRange sliderRange(double vmin, double vmax, double step);
+/// Moves `*v` to the value under `mouseX` on a track from `x0` to `x1`: snapped to the step, clamped to the range,
+/// written only when it differs. Returns whether it did; nothing happens without a range.
+bool sliderDragTo(double* v, const SliderRange& r, float mouseX, float x0, float x1);
+/// Where `v` lies on the track, 0..1 (0 without a range).
+[[nodiscard]] float sliderFraction(double v, const SliderRange& r);
+/// The last tick: ticks 0..sliderStops() mark the whole steps inside the range (range 1, step 0.4: 0, 0.4, 0.8);
+/// -1 when there are none (continuous, no range, or more than 40 steps).
+[[nodiscard]] int sliderStops(const SliderRange& r);
+/// Where tick `i` lies on the track, 0..1.
+[[nodiscard]] float sliderStopAt(const SliderRange& r, int i);
+
 } // namespace imlui::md
 
 module :private;
@@ -67,6 +86,42 @@ double snapToStep(double v, double vmin, double vmax, double step) {
     return std::strtod(buf, nullptr);
 }
 
+SliderRange sliderRange(double vmin, double vmax, double step) {
+    SliderRange r;
+    r.vmin = vmin;
+    r.vmax = vmax;
+    // inf - inf is NaN and inf - x is inf: a finite, positive range means finite bounds too.
+    r.range = vmax - vmin;
+    r.ranged = std::isfinite(r.range) && r.range > 0;
+    r.step = std::isfinite(step) && step > 0 ? step : 0.0;
+    return r;
+}
+
+bool sliderDragTo(double* v, const SliderRange& r, float mouseX, float x0, float x1) {
+    if (!r.ranged) return false;
+    const float mt = std::clamp((mouseX - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
+    double nv = r.vmin + static_cast<double>(mt) * r.range;
+    if (r.step > 0) nv = snapToStep(nv, r.vmin, r.vmax, r.step);
+    nv = std::clamp(nv, r.vmin, r.vmax); // the last step's slack
+    if (nv == *v) return false;
+    *v = nv;
+    return true;
+}
+
+float sliderFraction(double v, const SliderRange& r) {
+    return r.ranged ? static_cast<float>(std::clamp((v - r.vmin) / r.range, 0.0, 1.0)) : 0.0f;
+}
+
+int sliderStops(const SliderRange& r) {
+    if (!(r.step > 0 && r.ranged && r.range / r.step <= 40)) return -1;
+    // The small slack keeps the last tick when the division comes out just below a whole number (1 / 0.1 = 9.999...).
+    return static_cast<int>(std::floor(r.range / r.step + 1e-6));
+}
+
+float sliderStopAt(const SliderRange& r, int i) {
+    return static_cast<float>(std::min(1.0, static_cast<double>(i) * r.step / r.range));
+}
+
 ImVec2 sliderSize(float width) { return {itemWidth(width, dp(200)), dp(44)}; }
 
 bool slider(const char* id, double* v, double vmin, double vmax, double step, float width, const char* valueFormat) {
@@ -81,19 +136,9 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
 
     const float r = dp(10);
     const float x0 = p.x + r, x1 = p.x + w - r;
-    // inf - inf is NaN and inf - x is inf: a finite, positive range means finite bounds too.
-    const double range = vmax - vmin;
-    const bool ranged = std::isfinite(range) && range > 0;
-    if (!std::isfinite(step)) step = 0;
-    bool changed = false;
-    if (act && ranged) {
-        const float mt = std::clamp((ImGui::GetMousePos().x - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
-        double nv = vmin + static_cast<double>(mt) * range;
-        if (step > 0) nv = snapToStep(nv, vmin, vmax, step);
-        nv = std::clamp(nv, vmin, vmax); // the last step's slack
-        if (nv != *v) { *v = nv; changed = true; }
-    }
-    const float t = ranged ? static_cast<float>(std::clamp((*v - vmin) / range, 0.0, 1.0)) : 0.0f;
+    const SliderRange range = sliderRange(vmin, vmax, step);
+    const bool changed = act && sliderDragTo(v, range, ImGui::GetMousePos().x, x0, x1);
+    const float t = sliderFraction(*v, range);
     float tv = animate(iid + 2, t, 30.0f);
 
     Color active = dis ? s.onSurface.withAlpha(0.38f) : s.primary;
@@ -103,16 +148,10 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
     const float hx = x0 + (x1 - x0) * tv;
     fillRoundRect(dl, {x0, cy - th * 0.5f}, {x1, cy + th * 0.5f}, th * 0.5f, inactive);
     if (hx > x0) fillRoundRect(dl, {x0, cy - th * 0.5f}, {hx, cy + th * 0.5f}, th * 0.5f, active);
-    if (step > 0 && ranged && range / step <= 40) {
-        // Only whole steps inside the range (range 1, step 0.4: 0, 0.4, 0.8). The small slack keeps the last tick
-        // when the division comes out just below a whole number (1 / 0.1 = 9.999...).
-        const int stops = static_cast<int>(std::floor(range / step + 1e-6));
-        for (int i = 0; i <= stops; ++i) {
-            const double at = std::min(1.0, static_cast<double>(i) * step / range);
-            const float sx = x0 + (x1 - x0) * static_cast<float>(at);
-            fillCircle(dl, {sx, cy}, dp(1),
-                       sx <= hx ? s.onPrimary.withAlpha(0.7f) : s.onSecondaryContainer.withAlpha(0.7f));
-        }
+    for (int i = 0, stops = sliderStops(range); i <= stops; ++i) {
+        const float sx = x0 + (x1 - x0) * sliderStopAt(range, i);
+        fillCircle(dl, {sx, cy}, dp(1),
+                   sx <= hx ? s.onPrimary.withAlpha(0.7f) : s.onSecondaryContainer.withAlpha(0.7f));
     }
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
     if (layer > 0) fillCircle(dl, {hx, cy}, dp(20), s.primary.withAlpha(layer * 1.5f));

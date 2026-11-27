@@ -151,7 +151,7 @@ constexpr NativeFn nativeFns[] = {
      }},
     {"scheme",
      [](lua::State* state) -> int {
-         pushScheme(state, theme().scheme);
+         pushCurrentScheme(state);
          return 1;
      }},
     {"isDark",

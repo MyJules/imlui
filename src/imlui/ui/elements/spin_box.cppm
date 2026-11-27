@@ -9,6 +9,7 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.enum_names;
+import imlui.widgets.spin_box;
 
 export namespace imlui {
 
@@ -75,7 +76,8 @@ void SpinBox::declare(TypeBuilder<SpinBox>& type) {
         .property("to", &SpinBox::to, &SpinBox::setTo)
         .doc("The high end of the range (default `1e9`).")
         .property("stepSize", &SpinBox::stepSize, &SpinBox::setStepSize)
-        .doc("What the buttons add or subtract (default 1).")
+        .doc("What the buttons add or subtract (default 1). A negative step is taken as its magnitude; 0, NaN or "
+             "an infinity as 1.")
         .property("decimals", &SpinBox::decimals, &SpinBox::setDecimals)
         .doc("The decimals shown, clamped to 0..15 (default 0).")
         .property("label", &SpinBox::label, &SpinBox::setLabel)
@@ -106,7 +108,7 @@ void SpinBox::setFrom(double from) { m_from = from; }
 double SpinBox::to() const { return m_to; }
 void SpinBox::setTo(double to) { m_to = to; }
 double SpinBox::stepSize() const { return m_stepSize; }
-void SpinBox::setStepSize(double step) { m_stepSize = step; }
+void SpinBox::setStepSize(double step) { m_stepSize = md::spinStepSize(step); }
 int SpinBox::decimals() const { return m_decimals; }
 void SpinBox::setDecimals(int decimals) { m_decimals = decimals; }
 const std::string& SpinBox::label() const { return m_label; }

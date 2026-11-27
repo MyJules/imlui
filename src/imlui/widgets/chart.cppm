@@ -25,6 +25,28 @@ struct ChartOptions {
 
 /// Line / bar chart with grid, gradient area and hover readout.
 void chart(const char* id, const std::vector<float>& values, const ChartOptions& o);
+
+/// What a skin's chart draws differently: its colors, the bars' radius and the hover readout. drawChart() does the
+/// rest, the same for every skin.
+struct ChartPalette {
+    Color series;           ///< the line, its area and the bars
+    Color title;            ///< the title (titleSmall)
+    Color label;            ///< the axis labels (labelSmall)
+    Color baseLine;         ///< the grid line at the axis' minimum
+    Color gridLine;         ///< the other grid lines
+    Color hoverLine;        ///< the vertical line through the hovered point of a line chart
+    Color barHover;         ///< a hovered bar
+    float areaAlpha = 0.0f; ///< the area's opacity under the line (it fades to 0 at the bottom)
+    float barRadius = 0.0f; ///< the bars' top corner radius, pixels (at most half a bar)
+    TextStyle readoutStyle = TextStyle::LabelMedium;
+    Color readoutText;
+    /// Draws the hover readout's background in [a, b].
+    std::function<void(ImDrawList* dl, ImVec2 a, ImVec2 b)> readoutBackground;
+};
+/// chart() in `palette`: the layout, the axis (chartAxis()), the gaps for non-finite values and the hover readout of
+/// every skin's chart. A line with more points than pixel columns is drawn through each column's lowest and highest
+/// point, so its cost follows the chart's width, not the number of values.
+void drawChart(const char* id, const std::vector<float>& values, const ChartOptions& o, const ChartPalette& palette);
 /// The size of chart() with the same options (`o.width` resolved like itemWidth(): 0 is the natural 320dp).
 [[nodiscard]] ImVec2 chartSize(const ChartOptions& o);
 
@@ -88,6 +110,33 @@ ImVec2 chartSize(const ChartOptions& o) { return {itemWidth(o.width, dp(320)), o
 
 void chart(const char* id, const std::vector<float>& values, const ChartOptions& o) {
     const Scheme& s = scheme();
+    const Color c = o.color.value_or(s.primary);
+    ChartPalette palette;
+    palette.series = c;
+    palette.title = s.onSurface;
+    palette.label = s.onSurfaceVariant;
+    palette.baseLine = s.outlineVariant;
+    palette.gridLine = s.outlineVariant.withAlpha(0.5f);
+    palette.hoverLine = s.outline.withAlpha(0.6f);
+    palette.barHover = mix(c, s.onSurface, 0.15f);
+    palette.areaAlpha = 0.28f;
+    palette.barRadius = dp(6);
+    palette.readoutStyle = TextStyle::LabelMedium;
+    palette.readoutText = s.inverseOnSurface;
+    palette.readoutBackground = [](ImDrawList* dl, ImVec2 a, ImVec2 b) {
+        fillRoundRect(dl, a, b, dp(shape().extraSmall), scheme().inverseSurface);
+    };
+    drawChart(id, values, o, palette);
+}
+
+namespace {
+
+/// The points of the line being drawn, reused from chart to chart (the UI runs on one thread).
+std::vector<ImVec2> linePoints;
+
+} // namespace
+
+void drawChart(const char* id, const std::vector<float>& values, const ChartOptions& o, const ChartPalette& palette) {
     const ImVec2 size = chartSize(o);
     const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -96,7 +145,7 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // The rest only draws: out of view, skip formatting the axis labels and building the series.
     if (!rectVisible(dl, p, {p.x + w, p.y + h})) return;
-    const Color c = o.color.value_or(s.primary);
+    const Color c = palette.series;
 
     const ChartAxis axis = chartAxis(values, o);
     const float mn = axis.min, mx = axis.max;
@@ -104,16 +153,16 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
 
     const float gutter = dp(40), top = p.y + (o.title.empty() ? dp(8) : dp(32)), bottom = p.y + h - dp(8);
     const float x0 = p.x + gutter, x1 = p.x + w - dp(8);
-    if (!o.title.empty()) drawText(dl, TextStyle::TitleSmall, {p.x, p.y}, s.onSurface, o.title);
+    if (!o.title.empty()) drawText(dl, TextStyle::TitleSmall, {p.x, p.y}, palette.title, o.title);
     // grid + labels
     for (int i = 0; i <= divisions; ++i) {
         float t = static_cast<float>(i) / static_cast<float>(divisions);
         float y = bottom - (bottom - top) * t;
-        hLine(dl, x0, x1, y, s.outlineVariant.withAlpha(i == 0 ? 1.0f : 0.5f), dp(1));
+        hLine(dl, x0, x1, y, i == 0 ? palette.baseLine : palette.gridLine, dp(1));
         char buf[32];
         std::snprintf(buf, sizeof buf, "%g", std::round(static_cast<double>(mn + (mx - mn) * t) * 1000.0) / 1000.0);
         ImVec2 ts = measure(TextStyle::LabelSmall, buf);
-        drawText(dl, TextStyle::LabelSmall, {x0 - dp(8) - ts.x, y - ts.y * 0.5f}, s.onSurfaceVariant, buf);
+        drawText(dl, TextStyle::LabelSmall, {x0 - dp(8) - ts.x, y - ts.y * 0.5f}, palette.label, buf);
     }
     const int n = static_cast<int>(values.size());
     if (n == 0) return;
@@ -122,19 +171,32 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
         return n == 1 ? (x0 + x1) * 0.5f : x0 + (x1 - x0) * static_cast<float>(i) / static_cast<float>(n - 1);
     };
     auto py = [&](float v) { return bottom - (bottom - top) * std::clamp((v - mn) / (mx - mn), 0.0f, 1.0f); };
+    auto value = [&](int i) { return values[static_cast<std::size_t>(i)]; };
     // Non-finite values (NaN, inf) are gaps, as for the axis range: no bar, no point, no hover readout, and the
     // line breaks around them.
-    auto finite = [&](int i) { return std::isfinite(values[static_cast<std::size_t>(i)]); };
+    auto finite = [&](int i) { return std::isfinite(value(i)); };
 
+    // The hovered point: the one nearest the mouse (the earlier on a tie), found from the mouse's x rather than by
+    // measuring every point, then moved to the nearest finite one.
     int hoverIdx = -1;
     if (hov) {
-        float mxp = ImGui::GetMousePos().x;
-        float best = hugeExtent;
-        for (int i = 0; i < n; ++i)
-            if (finite(i) && std::fabs(px(i) - mxp) < best) {
-                best = std::fabs(px(i) - mxp);
-                hoverIdx = i;
+        const float mxp = ImGui::GetMousePos().x;
+        const float span = std::max(x1 - x0, 1e-6f);
+        const float at = o.bars ? (mxp - x0) / span * static_cast<float>(n) - 0.5f
+                                : (n == 1 ? 0.0f : (mxp - x0) / span * static_cast<float>(n - 1));
+        const int below = static_cast<int>(std::clamp(std::floor(at), 0.0f, static_cast<float>(n - 1)));
+        // `below` and the next point bracket the mouse; look outwards from them for the nearest finite point.
+        for (int lo = below, hi = below + 1; lo >= 0 || hi < n; --lo, ++hi) {
+            const bool loOk = lo >= 0 && finite(lo), hiOk = hi < n && finite(hi);
+            if (loOk && (!hiOk || std::fabs(px(lo) - mxp) <= std::fabs(px(hi) - mxp))) {
+                hoverIdx = lo;
+                break;
             }
+            if (hiOk) {
+                hoverIdx = hi;
+                break;
+            }
+        }
     }
 
     if (o.bars) {
@@ -142,24 +204,17 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
         for (int i = 0; i < n; ++i) {
             if (!finite(i)) continue;
             float x = px(i);
-            float y = py(values[static_cast<std::size_t>(i)]), y0 = py(std::max(mn, 0.0f));
-            Color bc = i == hoverIdx ? mix(c, s.onSurface, 0.15f) : c;
+            float y = py(value(i)), y0 = py(std::max(mn, 0.0f));
             fillRoundRect(dl, {x - bw * 0.5f, std::min(y, y0)}, {x + bw * 0.5f, std::max(y, y0)},
-                          std::min(bw * 0.5f, dp(6)), bc, ImDrawFlags_RoundCornersTop);
+                          std::min(bw * 0.5f, palette.barRadius), i == hoverIdx ? palette.barHover : c,
+                          ImDrawFlags_RoundCornersTop);
         }
     } else {
-        std::vector<ImVec2> pts(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i)
-            if (finite(i)) pts[static_cast<std::size_t>(i)] = {px(i), py(values[static_cast<std::size_t>(i)])};
-        if (o.fill && n >= 2) {
-            // Vertical gradient under the line, between neighbouring finite points.
-            const ImU32 cTop = col(c.withAlpha(0.28f)), cBot = col(c.withAlpha(0.0f));
-            for (int i = 0; i + 1 < n; ++i) {
-                if (!finite(i) || !finite(i + 1)) continue;
-                ImVec2 a = pts[static_cast<std::size_t>(i)], b = pts[static_cast<std::size_t>(i + 1)];
-                fillAreaBelow(dl, a, b, bottom, cTop, cBot);
-            }
-        }
+        const ImU32 cTop = col(c.withAlpha(palette.areaAlpha)), cBot = col(c.withAlpha(0.0f));
+        // More points than pixel columns: each column draws its lowest and its highest point (in their order), which
+        // looks the same as all of them.
+        const int columns = std::max(1, static_cast<int>(std::ceil(x1 - x0)));
+        const bool decimate = n > columns;
         // One polyline per run of finite points; a lone point between gaps is a dot.
         for (int i = 0; i < n;) {
             if (!finite(i)) {
@@ -169,29 +224,60 @@ void chart(const char* id, const std::vector<float>& values, const ChartOptions&
             int end = i;
             while (end + 1 < n && finite(end + 1))
                 ++end;
-            if (end > i)
-                dl->AddPolyline(&pts[static_cast<std::size_t>(i)], end - i + 1, col(c), dp(2));
-            else
-                fillCircle(dl, pts[static_cast<std::size_t>(i)], dp(1.5f), c);
+            if (end == i) {
+                fillCircle(dl, {px(i), py(value(i))}, dp(1.5f), c);
+                i = end + 1;
+                continue;
+            }
+            linePoints.clear();
+            if (!decimate) {
+                for (int k = i; k <= end; ++k)
+                    linePoints.push_back({px(k), py(value(k))});
+            } else {
+                int column = -1, lowAt = 0, highAt = 0;
+                const auto flush = [&] {
+                    if (column < 0) return;
+                    const int first = std::min(lowAt, highAt), second = std::max(lowAt, highAt);
+                    linePoints.push_back({px(first), py(value(first))});
+                    if (second != first) linePoints.push_back({px(second), py(value(second))});
+                };
+                for (int k = i; k <= end; ++k) {
+                    const int at = std::clamp(static_cast<int>(px(k) - x0), 0, columns - 1);
+                    if (at != column) {
+                        flush();
+                        column = at;
+                        lowAt = highAt = k;
+                    } else if (value(k) < value(lowAt)) {
+                        lowAt = k;
+                    } else if (value(k) > value(highAt)) {
+                        highAt = k;
+                    }
+                }
+                flush();
+            }
+            if (o.fill) // a vertical gradient under the line, between neighbouring points
+                for (std::size_t k = 0; k + 1 < linePoints.size(); ++k)
+                    fillAreaBelow(dl, linePoints[k], linePoints[k + 1], bottom, cTop, cBot);
+            dl->AddPolyline(linePoints.data(), static_cast<int>(linePoints.size()), col(c), dp(2));
             i = end + 1;
         }
     }
     if (hoverIdx >= 0) {
-        float x = px(hoverIdx), y = py(values[static_cast<std::size_t>(hoverIdx)]);
+        float x = px(hoverIdx), y = py(value(hoverIdx));
         if (!o.bars) {
-            vLine(dl, x, top, bottom, s.outline.withAlpha(0.6f), dp(1));
+            vLine(dl, x, top, bottom, palette.hoverLine, dp(1));
             fillCircle(dl, {x, y}, dp(5), c);
             strokeCircle(dl, {x, y}, dp(6), surfaceColor(), dp(2));
         }
         char buf[48];
-        std::snprintf(buf, sizeof buf, "%.3g", static_cast<double>(values[static_cast<std::size_t>(hoverIdx)]));
-        ImVec2 ts = measure(TextStyle::LabelMedium, buf);
+        std::snprintf(buf, sizeof buf, "%.3g", static_cast<double>(value(hoverIdx)));
+        const TextStyle style = palette.readoutStyle;
+        ImVec2 ts = measure(style, buf);
         float bw = ts.x + dp(16), bh = dp(24);
         // Inside the chart; a chart narrower than the readout starts it at its left edge.
         const float bx = std::max(p.x, std::min(x - bw * 0.5f, p.x + w - bw)), by = std::max(p.y, y - bh - dp(10));
-        fillRoundRect(dl, {bx, by}, {bx + bw, by + bh}, dp(shape().extraSmall), s.inverseSurface);
-        drawText(dl, TextStyle::LabelMedium, {bx + dp(8), textTop(TextStyle::LabelMedium, by + bh * 0.5f)},
-                 s.inverseOnSurface, buf);
+        if (palette.readoutBackground) palette.readoutBackground(dl, {bx, by}, {bx + bw, by + bh});
+        drawText(dl, style, {bx + dp(8), textTop(style, by + bh * 0.5f)}, palette.readoutText, buf);
     }
 }
 

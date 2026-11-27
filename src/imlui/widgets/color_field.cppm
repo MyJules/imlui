@@ -20,23 +20,99 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
 /// The size of colorField() with the same color, label and `width` (resolved like itemWidth()).
 [[nodiscard]] ImVec2 colorFieldSize(Color c, std::string_view label, float width = 0.0f);
 
+/// Applies the text of a color field's hex box to `*c`. While the user types (`final` false) only a complete
+/// "#RRGGBB" or "#RRGGBBAA" counts, so "#123" on the way to "#123456" isn't taken for #112233 (nor "#1234" for an
+/// RGBA color); when the edit ends (`final`: Enter, or the box lost focus) the short "#RGB" and "#RGBA" count too. An
+/// alpha ("#RGBA", "#RRGGBBAA") is kept only with `alpha`, else the color is opaque. Returns whether `text` was taken.
+bool applyHexInput(Color* c, std::string_view text, bool final, bool alpha);
+
+/// The hex box under the picker, drawn by the skin: textField()'s parameters but the ID ("##hex").
+using HexField = std::function<TextFieldResult(std::string& value, const TextFieldOptions& o)>;
+/// A color field's flyout content, shared by the skins: ImGui's color picker `width` wide and, under it, the hex box
+/// (`hexField`, editing by applyHexInput()). `hex` is toHex(*c) on the way in, and is kept so when the picker
+/// changes the color. Call it inside the open popup. Returns whether `*c` changed.
+bool colorPickerBody(Color* c, std::string& hex, bool alpha, float width, const HexField& hexField);
+
 } // namespace imlui::md
 
 module :private;
 
 namespace imlui::md {
 
-ImVec2 colorFieldSize(Color c, std::string_view label, float width) {
+namespace {
+
+/// colorFieldSize() for a color whose toHex() is `hex`.
+ImVec2 colorFieldSizeOf(std::string_view hex, std::string_view label, float width) {
     const float natural = dp(8) + dp(40) + dp(16) +
-                          std::max(measure(TextStyle::BodyLarge, toHex(c)).x, measure(TextStyle::BodySmall, label).x) +
+                          std::max(measure(TextStyle::BodyLarge, hex).x, measure(TextStyle::BodySmall, label).x) +
                           dp(16) + dp(24) + dp(16);
     return {itemWidth(width, natural), dp(56)};
 }
 
+/// The hex box being edited, and its text. The box's buffer is made from the color each frame, so a short form
+/// typed but not applied yet ("#123") is kept here until the edit ends. One box at a time has the keyboard.
+struct HexEdit {
+    ImGuiID id = 0;
+    std::string text;
+};
+HexEdit hexEdit;
+
+} // namespace
+
+ImVec2 colorFieldSize(Color c, std::string_view label, float width) { return colorFieldSizeOf(toHex(c), label, width); }
+
+bool applyHexInput(Color* c, std::string_view text, bool final, bool alpha) {
+    const std::size_t digits = text.size() - (text.starts_with('#') ? 1 : 0);
+    if (!final && digits != 6 && digits != 8) return false;
+    const auto parsed = parseHex(text);
+    if (!parsed) return false;
+    // #RGBA / #RRGGBBAA parse with an alpha, which only an alpha picker keeps.
+    *c = alpha ? *parsed : parsed->withAlpha(1.0f);
+    return true;
+}
+
+bool colorPickerBody(Color* c, std::string& hex, bool alpha, float width, const HexField& hexField) {
+    const Color before = *c;
+    // The popup takes its content's width: a fill in it doesn't read the popup's width.
+    layout::pushBox(layout::shrinkToFitBox(width, width));
+    float v[4] = {c->r, c->g, c->b, c->a};
+    ImGui::SetNextItemWidth(width);
+    ImGuiColorEditFlags fl = ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoSmallPreview |
+                             ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_PickerHueBar |
+                             ImGuiColorEditFlags_NoInputs;
+    if (alpha) fl |= ImGuiColorEditFlags_AlphaBar;
+    else fl |= ImGuiColorEditFlags_NoAlpha;
+    if (ImGui::ColorPicker4("##pick", v, fl)) {
+        *c = {v[0], v[1], v[2], alpha ? v[3] : 1.0f};
+        hex = toHex(*c);
+    }
+    ImGui::Dummy({0, dp(4)});
+    TextFieldOptions o;
+    o.label = "Hex";
+    o.outlined = true;
+    o.width = width;
+    o.leadingIcon = "tag";
+    const ImGuiID id = ImGui::GetID("##hex");
+    std::string buf = hex; // fits the small-string buffer
+    const TextFieldResult r = hexField(buf, o);
+    if (r.changed) {
+        hexEdit.id = id;
+        hexEdit.text = buf;
+        applyHexInput(c, buf, false, alpha);
+    }
+    if (r.accepted || r.committed) {
+        // The box's buffer holds what it was given this frame; the text typed is the last edit's.
+        applyHexInput(c, hexEdit.id == id ? std::string_view{hexEdit.text} : std::string_view{buf}, true, alpha);
+        hexEdit.id = 0;
+    }
+    layout::popBox();
+    return *c != before;
+}
+
 bool colorField(const char* id, Color* c, std::string_view label, bool alpha, float width) {
     const Scheme& s = scheme();
-    const std::string hex = toHex(*c);
-    const ImVec2 size = colorFieldSize(*c, label, width);
+    std::string hex = toHex(*c);
+    const ImVec2 size = colorFieldSizeOf(hex, label, width);
     const float w = size.x, h = size.y;
     ImGui::PushID(id);
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -78,34 +154,9 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
     ImGui::PopStyleColor();
     trackAnchoredPopup(anchored, popup);
     if (popup) {
-        // The popup takes its content's width (240dp): a fill in it doesn't read the popup's width.
-        layout::pushBox(layout::shrinkToFitBox(dp(240), dp(240)));
-        float v[4] = {c->r, c->g, c->b, c->a};
-        ImGui::SetNextItemWidth(dp(240));
-        ImGuiColorEditFlags fl = ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoSmallPreview |
-                                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_PickerHueBar |
-                                 ImGuiColorEditFlags_NoInputs;
-        if (alpha) fl |= ImGuiColorEditFlags_AlphaBar;
-        else fl |= ImGuiColorEditFlags_NoAlpha;
-        if (ImGui::ColorPicker4("##pick", v, fl)) {
-            *c = {v[0], v[1], v[2], alpha ? v[3] : 1.0f};
-            changed = true;
-        }
-        ImGui::Dummy({0, dp(4)});
-        std::string buf = toHex(*c);
-        TextFieldOptions o;
-        o.label = "Hex";
-        o.outlined = true;
-        o.width = dp(240);
-        o.leadingIcon = "tag";
-        auto r = textField("##hex", buf, o);
-        if (r.changed)
-            if (auto nc = parseHex(buf)) {
-                // #RGBA / #RRGGBBAA parse with an alpha, which only an alpha picker keeps.
-                *c = alpha ? *nc : nc->withAlpha(1.0f);
-                changed = true;
-            }
-        layout::popBox();
+        changed = colorPickerBody(c, hex, alpha, dp(240), [](std::string& value, const TextFieldOptions& o) {
+            return textField("##hex", value, o);
+        });
         ImGui::EndPopup();
     }
     ImGui::PopID();

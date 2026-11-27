@@ -32,9 +32,11 @@ import imlui.theme.typography;
 import imlui.ui.frame_request;
 import imlui.ui.layout_box;
 import imlui.widgets.button;
+import imlui.widgets.color_field;
 import imlui.widgets.common;
 import imlui.widgets.dropdown;
 import imlui.widgets.field;
+import imlui.widgets.spin_box;
 import imlui.widgets.text_field;
 
 export namespace imlui::fluent {
@@ -310,11 +312,14 @@ md::TextFieldResult textField(const Look& look, const char* id, std::string& val
         flags |= ImGuiInputTextFlags_EnterReturnsTrue;
         ImGui::SetNextItemWidth(inputW);
         // The header is above the box, so the placeholder shows whenever the text is empty (WinUI's).
-        const std::string hint{o.placeholder};
+        // A C string for ImGui, in a buffer reused across fields and frames (the UI runs on one thread).
+        static std::string hint;
+        hint.assign(o.placeholder);
         res.accepted = ImGui::InputTextWithHint("##input", hint.c_str(), value.data(), value.capacity() + 1, flags,
                                                 md::field::inputResizeCallback, &value);
         res.changed = ImGui::IsItemEdited();
     }
+    res.committed = ImGui::IsItemDeactivatedAfterEdit();
     const bool active = ImGui::IsItemActive();
     const bool dis = md::itemDisabled();
     const bool keyboardFocus = focusVisible() && !active;
@@ -410,7 +415,8 @@ bool spinBox(const Look& look, const char* id, double* v, double vmin, double vm
     const float inputX = a.x + paddingX(look);
     // At least a pixel, also in a box narrower than its insets (see textField).
     const float inputW = std::max(1.0f, buttonsX - margin - inputX);
-    bool changed = false;
+    const double old = *v;
+    int steps = 0;
     // The input's focus from the last frame: the box is drawn before the input, to stay under its text.
     ImGuiStorage* st = ImGui::GetStateStorage();
     const ImGuiID focusKey = ImGui::GetID("##focused");
@@ -424,7 +430,7 @@ bool spinBox(const Look& look, const char* id, double* v, double vmin, double vm
     ImGui::SetNextItemWidth(inputW);
     char fmt[16];
     std::snprintf(fmt, sizeof fmt, "%%.%df", std::max(0, decimals));
-    if (ImGui::InputScalar("##value", ImGuiDataType_Double, v, nullptr, nullptr, fmt)) changed = true;
+    ImGui::InputScalar("##value", ImGuiDataType_Double, v, nullptr, nullptr, fmt); // md::spinBoxApply() checks it
     const bool active = ImGui::IsItemActive();
     const bool dis = md::itemDisabled();
     const bool keyboardFocus = focusVisible() && !active;
@@ -439,21 +445,14 @@ bool spinBox(const Look& look, const char* id, double* v, double vmin, double vm
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, 0});
     ImGui::SetCursorScreenPos({buttonsX, a.y + (l.boxH - l.buttonH) * 0.5f});
     ImGui::BeginDisabled(*v >= vmax);
-    if (button(look, "##inc", md::ButtonVariant::Text, {l.buttonW, l.buttonH}, "keyboard_arrow_up")) {
-        *v += step;
-        changed = true;
-    }
+    if (button(look, "##inc", md::ButtonVariant::Text, {l.buttonW, l.buttonH}, "keyboard_arrow_up")) steps = 1;
     ImGui::EndDisabled();
     ImGui::SameLine(0, 0);
     ImGui::BeginDisabled(*v <= vmin);
-    if (button(look, "##dec", md::ButtonVariant::Text, {l.buttonW, l.buttonH}, "keyboard_arrow_down")) {
-        *v -= step;
-        changed = true;
-    }
+    if (button(look, "##dec", md::ButtonVariant::Text, {l.buttonW, l.buttonH}, "keyboard_arrow_down")) steps = -1;
     ImGui::EndDisabled();
     ImGui::PopStyleVar();
-    // from > to (or a NaN bound) is an empty range: like the Slider, leave the value alone instead of clamping.
-    if (changed && vmin <= vmax) *v = std::clamp(*v, vmin, vmax);
+    const bool changed = md::spinBoxApply(v, old, steps, step, vmin, vmax);
 
     ImGui::SetCursorScreenPos(p);
     ImGui::Dummy(l.size);
@@ -568,13 +567,14 @@ struct ColorFieldLayout {
     ImVec2 size;
 };
 
-ColorFieldLayout colorFieldLayout(const Look& look, Color c, std::string_view label, float width) {
+/// The layout of a color field whose color's toHex() is `hex`.
+ColorFieldLayout colorFieldLayout(const Look& look, std::string_view hex, std::string_view label, float width) {
     ColorFieldLayout l;
     l.headerH = headerHeight(look, label);
     l.boxH = controlHeight(look);
     l.swatch = std::max(1.0f, l.boxH - 2.0f * dp(swatchInset));
     const float px = paddingX(look), g = gap(look);
-    const float box = px + l.swatch + g + md::measure(bodyStyle, toHex(c)).x + g + dp(iconSize(look)) + px;
+    const float box = px + l.swatch + g + md::measure(bodyStyle, hex).x + g + dp(iconSize(look)) + px;
     const float header = label.empty() ? 0.0f : md::measure(bodyStyle, label).x;
     l.w = md::itemWidth(width, std::max(box, header));
     l.size = {l.w, l.headerH + l.boxH};
@@ -584,12 +584,12 @@ ColorFieldLayout colorFieldLayout(const Look& look, Color c, std::string_view la
 } // namespace
 
 ImVec2 colorFieldSize(const Look& look, Color c, std::string_view label, float width) {
-    return colorFieldLayout(look, c, label, width).size;
+    return colorFieldLayout(look, toHex(c), label, width).size;
 }
 
 bool colorField(const Look& look, const char* id, Color* c, std::string_view label, bool alpha, float width) {
-    const std::string hex = toHex(*c);
-    const ColorFieldLayout l = colorFieldLayout(look, *c, label, width);
+    std::string hex = toHex(*c);
+    const ColorFieldLayout l = colorFieldLayout(look, hex, label, width);
     ImGui::PushID(id);
     ImGui::BeginGroup();
     const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -621,34 +621,9 @@ bool colorField(const Look& look, const char* id, Color* c, std::string_view lab
     // The picker and the padding on each side: the width assumed before the first open.
     const float pad = dp(pickerPadding), pw = dp(pickerWidth);
     if (beginFlyout(look, "##picker", a, b, pw + 2.0f * pad, dp(flyoutGap), {pad, pad}, md::hugeExtent)) {
-        // The popup takes its content's width: a fill in it doesn't read the popup's width.
-        layout::pushBox(layout::shrinkToFitBox(pw, pw));
-        float v[4] = {c->r, c->g, c->b, c->a};
-        ImGui::SetNextItemWidth(pw);
-        ImGuiColorEditFlags fl = ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoSmallPreview |
-                                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_PickerHueBar |
-                                 ImGuiColorEditFlags_NoInputs;
-        if (alpha) fl |= ImGuiColorEditFlags_AlphaBar;
-        else fl |= ImGuiColorEditFlags_NoAlpha;
-        if (ImGui::ColorPicker4("##pick", v, fl)) {
-            *c = {v[0], v[1], v[2], alpha ? v[3] : 1.0f};
-            changed = true;
-        }
-        ImGui::Dummy({0, dp(4)});
-        std::string buf = toHex(*c);
-        md::TextFieldOptions o;
-        o.label = "Hex";
-        o.outlined = true;
-        o.width = pw;
-        o.leadingIcon = "tag";
-        const md::TextFieldResult r = textField(look, "##hex", buf, o);
-        if (r.changed)
-            if (auto nc = parseHex(buf)) {
-                // #RGBA / #RRGGBBAA parse with an alpha, which only an alpha picker keeps.
-                *c = alpha ? *nc : nc->withAlpha(1.0f);
-                changed = true;
-            }
-        layout::popBox();
+        changed = md::colorPickerBody(c, hex, alpha, pw, [&look](std::string& value, const md::TextFieldOptions& o) {
+            return textField(look, "##hex", value, o);
+        });
         ImGui::EndPopup();
     }
     ImGui::SetCursorScreenPos(p);

@@ -43,8 +43,8 @@ struct SnackbarLayout {
 [[nodiscard]] SnackbarLayout snackbarLayout(const Look& look, std::string_view message, std::string_view action,
                                             bool closeIcon, float viewportWidth);
 
-/// The action button's ImGui label (its ID inside the bar).
-[[nodiscard]] std::string snackbarActionLabel(std::string_view action);
+/// The action button's ImGui label (its ID inside the bar), in a buffer the next call reuses.
+[[nodiscard]] const char* snackbarActionLabel(std::string_view action);
 
 } // namespace imlui::fluent
 
@@ -78,7 +78,12 @@ void fade(ImDrawList* dl, int from, float alpha) {
 
 } // namespace
 
-std::string snackbarActionLabel(std::string_view action) { return std::string{action} + "###snack_action"; }
+const char* snackbarActionLabel(std::string_view action) {
+    // Reused (the UI runs on one thread): the label is built twice a frame while a snackbar shows.
+    static std::string label;
+    label.assign(action).append("###snack_action");
+    return label.c_str();
+}
 
 SnackbarLayout snackbarLayout(const Look& look, std::string_view message, std::string_view action, bool closeIcon,
                               float viewportWidth) {
@@ -87,7 +92,7 @@ SnackbarLayout snackbarLayout(const Look& look, std::string_view message, std::s
     const float start = dp(padStart) + iconPx + dp(iconGap);
     const float end = closeIcon ? dp(padEndClose) : dp(padEnd);
     if (!action.empty())
-        l.actionSize = buttonSize(look, snackbarActionLabel(action).c_str(), md::ButtonVariant::Outlined, {}, {});
+        l.actionSize = buttonSize(look, snackbarActionLabel(action), md::ButtonVariant::Outlined, {}, {});
     if (closeIcon) l.closeSize = iconButtonSize(look);
     float right = 0;
     if (!action.empty()) right += dp(actionGap) + l.actionSize.x;
@@ -124,8 +129,8 @@ bool snackbar(const Look& look, std::string_view message, std::string_view actio
     ImGui::SetNextWindowSize({l.width, l.height});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    const std::string name = md::scopedWindowName("", "snackbar");
-    ImGui::Begin(name.c_str(), nullptr,
+    const auto name = md::scopedWindowId("snackbar");
+    ImGui::Begin(name.data(), nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBackground);
     ImGui::PopStyleVar(2);
@@ -142,7 +147,7 @@ bool snackbar(const Look& look, std::string_view message, std::string_view actio
     bool clicked = false;
     if (!action.empty()) {
         ImGui::SetCursorPos(l.actionPos);
-        clicked = button(look, snackbarActionLabel(action).c_str(), md::ButtonVariant::Outlined, l.actionSize, {});
+        clicked = button(look, snackbarActionLabel(action), md::ButtonVariant::Outlined, l.actionSize, {});
     }
     if (closeIcon) {
         ImGui::SetCursorPos(l.closePos);

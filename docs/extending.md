@@ -2050,6 +2050,13 @@ theme { design = "square" }
 - **Use the drawing helpers.** `md::fillRoundRect`, `strokeRoundRect`, `drawTextV`, `drawIcon`, `md::scheme()`, the
   disabled colors and the rest of `imlui.widgets.common` decide no look, so they're shared by every skin (and cull
   off-screen drawing for you). Colors come from the scheme's roles, so `theme { colors = ... }` works under any skin.
+- **Reuse the behaviour, draw your own look.** Where a control has rules beyond its drawing, the `md::` module
+  exports them for other skins (the Fluent skin draws with them): `md::spinBoxApply`/`spinStepSize` (a spin box's
+  value), `md::sliderRange`/`sliderDragTo`/`sliderFraction`/`sliderStops`/`sliderStopAt` (a slider's drag, snap and
+  ticks), `md::colorPickerBody` (a color field's popup content, with your hex box), `md::beginModal`/
+  `closeModalOnRequest` (a dialog's open and close rules), `md::beginModalDrawerWindow`/`beginModalDrawerSheet` (a
+  modal drawer's slide, window and dismissal), and `md::drawChart` with a `ChartPalette` (a chart in your colors).
+  Your controls then behave like the built-in ones, edge cases included.
 - **Your own elements** can draw controls with `imlui::skin().button(...)` instead of `md::button(...)`, so they
   follow the design too.
 

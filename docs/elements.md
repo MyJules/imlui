@@ -993,9 +993,9 @@ A numeric field (56dp) with decrement and increment icon buttons.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `value` | number | `0` | **two-way.** Clamped to the range. |
+| `value` | number | `0` | **two-way.** Clamped to the range when the user changes it. Typed text that isn't a finite number (`nan`, `inf`) is dropped: the value stays. `onValueModified` fires only when the value actually changed. |
 | `from`, `to` | number | `-1e9`, `1e9` | Range. With `from > to` the range is empty and the buttons don't clamp. |
-| `stepSize` | number | `1` | Button step. |
+| `stepSize` | number | `1` | Button step. A negative step is taken as its magnitude (the up button still goes up); `0`, NaN or an infinity as `1`. |
 | `decimals` | integer | `0` | Shown decimals, clamped to 0..15. |
 | `label` | string | `""` | Floating label. |
 | `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
@@ -1062,6 +1062,9 @@ A swatch with the hex value. Clicking it opens a picker popup with a hue bar and
 | `color` | color | — | **two-way.** Any color spec; written back as `"#RRGGBB"` (`"#RRGGBBAA"` with alpha). Unset shows white. |
 | `label` | string | `""` | |
 | `alpha` | bool | `false` | Adds an alpha bar. Without it the color stays opaque, also when the hex field gets `#RGBA` or `#RRGGBBAA`. |
+
+The hex field applies a whole `#RRGGBB` or `#RRGGBBAA` as you type, and the short `#RGB` / `#RGBA` only when the edit
+ends (Enter, or the field loses focus), so typing `#123456` doesn't pass through `#112233` and `#11223344`.
 | `width` | size | `0` (natural) | *Raw.* |
 
 **Signals:** `onColorChanged(self, hex)`.
@@ -1106,7 +1109,7 @@ A line or bar chart with a grid, a gradient area and a hover readout.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `values` | list of numbers | `{}` | Data. Non-finite values (NaN, ±inf) are gaps: no point, bar or readout, the line breaks around them, and the automatic range ignores them. |
+| `values` | list of numbers | `{}` | Data. Non-finite values (NaN, ±inf) are gaps: no point, bar or readout, the line breaks around them, and the automatic range ignores them. A line with more values than the plot has pixel columns is drawn through each column's lowest and highest value, so a long series costs what its width does. |
 | `kind` | `"lines"` \| `"bars"` | `"lines"` | `"histogram"` is an alias of `"bars"`. An unknown name is reported. |
 | `fill` | bool | `true` | Gradient area under lines. |
 | `title` | string | — | Chart title. Unset: `label`. |

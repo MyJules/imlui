@@ -72,7 +72,9 @@ bool segmented(const Look& look, const char* id, const std::vector<std::string>&
     const float w = size.x, h = size.y;
     const float inset = dp(segmentedInsetDp);
     const int n = static_cast<int>(items.size());
-    const float segW = std::max(0.0f, w - 2.0f * inset) / static_cast<float>(n);
+    // At least a pixel: ImGui takes a 0 size as the available width, which would stack every segment's hit box over
+    // the whole row.
+    const float segW = std::max(1.0f, std::max(0.0f, w - 2.0f * inset) / static_cast<float>(n));
     const float segRadius = std::max(0.0f, controlRadius(look) - dp(1));
     const float stroke = strokeWidth(look);
     const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -86,7 +88,7 @@ bool segmented(const Look& look, const char* id, const std::vector<std::string>&
         const ImVec2 a{p.x + inset + segW * static_cast<float>(i), p.y + inset}, b{a.x + segW, p.y + h - inset};
         ImGui::SetCursorScreenPos(a);
         ImGui::PushID(i);
-        if (invisibleButton("##seg", {segW, b.y - a.y}) && *current != i) {
+        if (invisibleButton("##seg", {segW, std::max(1.0f, b.y - a.y)}) && *current != i) {
             *current = i;
             changed = true;
         }

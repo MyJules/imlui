@@ -40,7 +40,7 @@ const Color* findRole(const Scheme& s, std::string_view name);
 inline constexpr float achromaticChroma = 1e-4f;
 
 /// Generates a full Material 3 scheme from a seed color. A grey seed (chroma below achromaticChroma) gives a grey
-/// scheme: every role but the error ones is neutral.
+/// scheme: every role but the error ones is neutral. The last few results are cached (per thread).
 Scheme generateScheme(Color seed, bool dark);
 
 } // namespace imlui
@@ -88,14 +88,24 @@ constexpr std::array roleTable = {
     RoleEntry{"shadow", &Scheme::shadow},
 };
 
+/// roleTable by name, for findRole()'s binary search (it runs for every role name a color string resolves).
+constexpr auto rolesByName = [] {
+    auto sorted = roleTable;
+    std::ranges::sort(sorted, {}, &RoleEntry::name);
+    return sorted;
+}();
+
+/// generateScheme() without its caching.
+Scheme makeScheme(Color seed, bool dark);
+
 } // namespace
 
 std::span<const RoleEntry> roles() { return roleTable; }
 
 Color* findRole(Scheme& s, std::string_view name) {
-    for (const auto& r : roleTable)
-        if (r.name == name) return &(s.*r.member);
-    return nullptr;
+    const auto it = std::ranges::lower_bound(rolesByName, name, {}, &RoleEntry::name);
+    if (it == rolesByName.end() || it->name != name) return nullptr;
+    return &(s.*it->member);
 }
 
 const Color* findRole(const Scheme& s, std::string_view name) {
@@ -103,6 +113,27 @@ const Color* findRole(const Scheme& s, std::string_view name) {
 }
 
 Scheme generateScheme(Color seed, bool dark) {
+    // A Theme generates its default scheme when it is made (every theme table, setTheme(), the tests), and the
+    // tones' gamut search is the expensive part: the last few seeds are kept, per thread (a theme can be made off
+    // the main thread).
+    struct Cached {
+        Color seed;
+        bool dark;
+        Scheme scheme;
+    };
+    thread_local std::array<std::optional<Cached>, 4> cache;
+    thread_local std::size_t next = 0;
+    for (const auto& c : cache)
+        if (c && c->seed == seed && c->dark == dark) return c->scheme;
+    cache[next] = Cached{seed, dark, makeScheme(seed, dark)};
+    const Scheme& made = cache[next]->scheme;
+    next = (next + 1) % cache.size();
+    return made;
+}
+
+namespace {
+
+Scheme makeScheme(Color seed, bool dark) {
     Oklch o = toOklch(seed);
     // A grey has no hue: its chroma is rounding noise (about 1e-7; an 8-bit color one step off grey has 1e-3), and so
     // is the angle atan2 makes of it. A grey seed gives a grey scheme (only the error roles keep their color).
@@ -159,5 +190,7 @@ Scheme generateScheme(Color seed, bool dark) {
     s.shadow = {0, 0, 0, 1};
     return s;
 }
+
+} // namespace
 
 } // namespace imlui

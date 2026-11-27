@@ -231,6 +231,27 @@ TEST_F(FluentInputsTest, SpinBoxStepsAndClamps) {
     run(R"(assert(s.v == 3, tostring(s.v)))");
 }
 
+// stepSize is checked: a negative step is its magnitude (the up button still goes up), 0 or NaN steps by 1.
+TEST_F(FluentInputsTest, SpinBoxStepSizeIsChecked) {
+    run(R"(
+        s = state { v = 4 }
+        box = SpinBox { value = bind(s, "v"), from = 0, to = 10, stepSize = -2 }
+        root = Probe { box })");
+    frames(2);
+    const ImVec2 a = probe().min(), b = probe().max();
+    const float cy = (a.y + b.y) * 0.5f, bw = dp(fluent::innerButtonWidth), m = dp(fluent::innerButtonMargin);
+    const float inc = b.x - m - bw * 1.5f, dec = b.x - m - bw * 0.5f;
+    click(inc, cy);
+    run(R"(assert(s.v == 6, tostring(s.v)))");
+    run("box.stepSize = 0/0");
+    click(dec, cy);
+    run(R"(assert(s.v == 5, tostring(s.v)))");
+    run("box.stepSize = 0");
+    click(dec, cy);
+    run(R"(assert(s.v == 4, tostring(s.v)))");
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
 TEST_F(FluentInputsTest, SpinBoxTyping) {
     run(R"(
         s = state { v = 3 }

@@ -87,22 +87,9 @@ bool slider(const Look& look, const char* id, double* v, double vmin, double vma
 
     const float r = dp(sliderThumbDp) * 0.5f;
     const float x0 = p.x + r, x1 = p.x + w - r;
-    // inf - inf is NaN and inf - x is inf: a finite, positive range means finite bounds too.
-    const double range = vmax - vmin;
-    const bool ranged = std::isfinite(range) && range > 0;
-    if (!std::isfinite(step)) step = 0;
-    bool changed = false;
-    if (dragging && ranged) {
-        const float mt = std::clamp((ImGui::GetMousePos().x - x0) / std::max(1.0f, x1 - x0), 0.0f, 1.0f);
-        double nv = vmin + static_cast<double>(mt) * range;
-        if (step > 0) nv = md::snapToStep(nv, vmin, vmax, step);
-        nv = std::clamp(nv, vmin, vmax); // the last step's slack
-        if (nv != *v) {
-            *v = nv;
-            changed = true;
-        }
-    }
-    const float t = ranged ? static_cast<float>(std::clamp((*v - vmin) / range, 0.0, 1.0)) : 0.0f;
+    const md::SliderRange range = md::sliderRange(vmin, vmax, step);
+    const bool changed = dragging && md::sliderDragTo(v, range, ImGui::GetMousePos().x, x0, x1);
+    const float t = md::sliderFraction(*v, range);
     const float tv = md::animate(item.id + 2, t, 30.0f);
 
     const Colors& c = look.colors;
@@ -114,15 +101,11 @@ bool slider(const Look& look, const char* id, double* v, double vmin, double vma
     const Color track = disabled ? c.controlStrongStrokeDisabled : c.controlStrongStroke;
     md::fillRoundRect(dl, {x0, cy - th * 0.5f}, {x1, cy + th * 0.5f}, th * 0.5f, track);
     if (hx > x0) md::fillRoundRect(dl, {x0, cy - th * 0.5f}, {hx, cy + th * 0.5f}, th * 0.5f, value);
-    if (step > 0 && ranged && range / step <= 40) {
-        // Only whole steps inside the range (range 1, step 0.4: 0, 0.4, 0.8), as md's ticks.
-        const int stops = static_cast<int>(std::floor(range / step + 1e-6));
-        const float tw = std::max(1.0f, std::round(dp(1)));
-        for (int i = 0; i <= stops; ++i) {
-            const double at = std::min(1.0, static_cast<double>(i) * step / range);
-            const float sx = std::round(x0 + (x1 - x0) * static_cast<float>(at) - tw * 0.5f);
-            md::vLine(dl, sx, cy + r - dp(tickDp), cy + r, track, tw);
-        }
+    // Only whole steps inside the range (range 1, step 0.4: 0, 0.4, 0.8), as md's ticks.
+    const float tw = std::max(1.0f, std::round(dp(1)));
+    for (int i = 0, stops = md::sliderStops(range); i <= stops; ++i) {
+        const float sx = std::round(x0 + (x1 - x0) * md::sliderStopAt(range, i) - tw * 0.5f);
+        md::vLine(dl, sx, cy + r - dp(tickDp), cy + r, track, tw);
     }
 
     // The thumb: the solid fill with the elevation border, and the accent dot.

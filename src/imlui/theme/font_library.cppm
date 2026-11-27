@@ -180,24 +180,42 @@ ImFont* addFont(const ResourceData& bytes, ImFont* mergeInto) {
                                                       static_cast<int>(bytes.size()), 16.0f, &cfg);
 }
 
+/// A font set's fallbacks, read once for all of its faces (each face merges every fallback in).
+struct Fallbacks {
+    std::span<const std::string> names;
+    std::vector<ResourceData> bytes; ///< one per name; empty when it can't be read
+    std::vector<std::string> errors; ///< "fallback: <why>" for each that can't be read
+};
+
+Fallbacks readFallbacks(const FontSet& set) {
+    Fallbacks f;
+    f.names = set.fallback;
+    if (!library) return f; // fontFor() loads nothing then
+    for (const auto& name : set.fallback) {
+        std::string error;
+        auto bytes = readFont(name, error);
+        if (!bytes) f.errors.push_back("fallback: " + error);
+        f.bytes.push_back(bytes ? std::move(*bytes) : ResourceData{});
+    }
+    return f;
+}
+
 /// The atlas font for face `name` with `fallback` merged in, loading or reloading it as needed; nullptr when the
-/// face itself can't be loaded, with the reason in `error`. Fallbacks that can't be read are left out (see
-/// fallbackErrors()).
-ImFont* fontFor(std::string_view name, std::span<const std::string> fallback, std::string& error) {
+/// face itself can't be loaded, with the reason in `error`. Fallbacks that can't be read are left out (reported
+/// once, in Fallbacks::errors).
+ImFont* fontFor(std::string_view name, const Fallbacks& fallback, std::string& error) {
     if (!library) return nullptr;
     auto face = readFont(name, error);
     if (!face) return nullptr;
     Entry entry;
     entry.sources.push_back({face->data(), face->size()});
     entry.data.push_back(std::move(*face));
-    for (const auto& f : fallback) {
-        std::string ignored; // reported once by fallbackErrors(), not once per font
-        auto bytes = readFont(f, ignored).value_or(ResourceData{});
+    for (const ResourceData& bytes : fallback.bytes) {
         entry.sources.push_back({bytes.data(), bytes.size()});
-        entry.data.push_back(std::move(bytes));
+        entry.data.push_back(bytes);
     }
 
-    const std::string key = cacheKey(name, fallback);
+    const std::string key = cacheKey(name, fallback.names);
     entry.lastUse = setsUsed;
     auto it = cache.find(key);
     if (it != cache.end()) {
@@ -221,32 +239,24 @@ ImFont* fontFor(std::string_view name, std::span<const std::string> fallback, st
     return font;
 }
 
-/// Messages for the fallbacks of `set` that can't be read.
-std::vector<std::string> fallbackErrors(const FontSet& set) {
-    std::vector<std::string> errors;
-    std::string error;
-    for (const auto& f : set.fallback)
-        if (!readFont(f, error)) errors.push_back("fallback: " + error);
-    return errors;
-}
-
 /// Loads the face of `role` ("regular", "medium" or a named font) from `name`, adding a message to `errors` on
 /// failure.
-ImFont* loadFace(std::string_view role, std::string_view name, const FontSet& set, std::vector<std::string>& errors) {
+ImFont* loadFace(std::string_view role, std::string_view name, const Fallbacks& fallback,
+                 std::vector<std::string>& errors) {
     std::string error;
-    ImFont* font = fontFor(name, set.fallback, error);
+    ImFont* font = fontFor(name, fallback, error);
     if (!font) errors.push_back(std::string{role} + ": " + error);
     return font;
 }
 
 /// The type scale face `role` declared as `name` (empty: the built-in `builtin`), falling back to the built-in
 /// face. Failures of the built-in face are logged, not added to `errors`: they are the library's, not the script's.
-ImFont* typeScaleFace(std::string_view role, const std::string& name, std::string_view builtin, const FontSet& set,
-                      std::vector<std::string>& errors) {
+ImFont* typeScaleFace(std::string_view role, const std::string& name, std::string_view builtin,
+                      const Fallbacks& fallback, std::vector<std::string>& errors) {
     if (!name.empty())
-        if (ImFont* f = loadFace(role, name, set, errors)) return f;
+        if (ImFont* f = loadFace(role, name, fallback, errors)) return f;
     std::string error;
-    if (ImFont* f = fontFor(builtin, set.fallback, error)) return f;
+    if (ImFont* f = fontFor(builtin, fallback, error)) return f;
     log::warn("{}", error);
     return nullptr;
 }
@@ -272,20 +282,22 @@ void clearFontLibrary() {
 }
 
 std::vector<std::string> loadFontSet(const FontSet& set) {
-    std::vector<std::string> errors = fallbackErrors(set);
-    typeScaleFace("regular", set.regular, builtinRegularFont, set, errors);
-    typeScaleFace("medium", set.medium, builtinMediumFont, set, errors);
+    Fallbacks fallback = readFallbacks(set);
+    std::vector<std::string> errors = std::move(fallback.errors);
+    typeScaleFace("regular", set.regular, builtinRegularFont, fallback, errors);
+    typeScaleFace("medium", set.medium, builtinMediumFont, fallback, errors);
     for (const auto& [name, resource] : set.named)
-        loadFace(name, resource, set, errors);
+        loadFace(name, resource, fallback, errors);
     return errors;
 }
 
 void useFontSet(const FontSet& set) {
     if (!library) return;
     ++setsUsed; // every font `set` needs is marked with this call below (fontFor())
-    std::vector<std::string> errors = fallbackErrors(set);
-    currentRegular = typeScaleFace("regular", set.regular, builtinRegularFont, set, errors);
-    currentMedium = typeScaleFace("medium", set.medium, builtinMediumFont, set, errors);
+    Fallbacks fallback = readFallbacks(set);
+    std::vector<std::string> errors = std::move(fallback.errors);
+    currentRegular = typeScaleFace("regular", set.regular, builtinRegularFont, fallback, errors);
+    currentMedium = typeScaleFace("medium", set.medium, builtinMediumFont, fallback, errors);
     if (!currentRegular) {
         if (!defaultFont) defaultFont = ImGui::GetIO().Fonts->AddFontDefault();
         currentRegular = defaultFont;
@@ -293,7 +305,7 @@ void useFontSet(const FontSet& set) {
     if (!currentMedium) currentMedium = currentRegular;
     currentNamed.clear();
     for (const auto& [name, resource] : set.named)
-        currentNamed.emplace(name, loadFace(name, resource, set, errors));
+        currentNamed.emplace(name, loadFace(name, resource, fallback, errors));
     for (auto& e : errors)
         if (loggedErrors.insert(e).second) log::warn("theme.fonts.{}", e);
     ImGui::GetIO().FontDefault = currentRegular;
