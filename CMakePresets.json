@@ -62,6 +62,18 @@
     { "name": "clang-debug", "configurePreset": "clang-debug", "output": { "outputOnFailure": true } },
     { "name": "clang-ship", "configurePreset": "clang-ship", "output": { "outputOnFailure": true } },
     { "name": "clang-asan", "configurePreset": "clang-asan", "output": { "outputOnFailure": true } },
-    { "name": "clang-fuzz", "configurePreset": "clang-fuzz", "output": { "outputOnFailure": true } }
+    { "name": "clang-fuzz", "configurePreset": "clang-fuzz", "output": { "outputOnFailure": true } },
+    {
+      "name": "clang-debug-headless",
+      "inherits": "clang-debug",
+      "displayName": "clang-debug without a window or GPU: skips the GL smoke tests and the slow package tests (labels gl, package)",
+      "filter": { "exclude": { "label": "gl|package" } }
+    },
+    {
+      "name": "clang-asan-headless",
+      "inherits": "clang-asan",
+      "displayName": "clang-asan without a window or GPU: skips the GL smoke tests and the slow package tests (labels gl, package)",
+      "filter": { "exclude": { "label": "gl|package" } }
+    }
   ]
 }

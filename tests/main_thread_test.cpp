@@ -334,12 +334,12 @@ class Watched final : public Element {
 public:
     static void declare(TypeBuilder<Watched>& type) { type.nonVisual(); }
     Watched() : m_handle{handle()} {}
-    ~Watched() override { aliveInDestructor = m_handle.alive(); }
+    ~Watched() override { m_aliveInDestructor = m_handle.alive(); }
     void render(Frame&) override {}
-    void destroyed() override { aliveInDestroyed = m_handle.alive(); }
+    void destroyed() override { m_aliveInDestroyed = m_handle.alive(); }
 
-    static inline bool aliveInDestroyed = true;
-    static inline bool aliveInDestructor = true;
+    static inline bool m_aliveInDestroyed = true;
+    static inline bool m_aliveInDestructor = true;
 
 private:
     Handle m_handle;
@@ -354,8 +354,8 @@ TEST_F(MainThreadTest, ElementHandlesAreCancelledBeforeDestroyedAndTheDestructor
     ASSERT_EQ(h.run("w = Watched {}"), "");
     ASSERT_NE(h.instance<Watched>("w"), nullptr);
     ASSERT_EQ(h.run("w = nil; collectgarbage(); collectgarbage()"), "");
-    EXPECT_FALSE(Watched::aliveInDestroyed);
-    EXPECT_FALSE(Watched::aliveInDestructor);
+    EXPECT_FALSE(Watched::m_aliveInDestroyed);
+    EXPECT_FALSE(Watched::m_aliveInDestructor);
 
     // cancelHandles() on a live object: its handles, and those taken afterwards, are dead.
     Watched direct;

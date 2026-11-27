@@ -9,9 +9,10 @@
 #
 # Slow the first time (each consumer builds imlui, or rebuilds the installed modules' BMIs: minutes); their build
 # folders are kept, so later runs only rebuild what changed. `ctest -L package` runs only these, `ctest -LE package`
-# everything else. Off with -DIMLUI_PACKAGE_TESTS=OFF, and not added with a multi-config generator (they pass the
-# parent's CMAKE_BUILD_TYPE on). In a sanitizer build only package.subdirectory is added, with IMLUI_SANITIZERS passed
-# on: the consumer sets nothing else, so it checks that linking imlui::imlui instruments the app's targets to match.
+# everything else. The consumer runs are labelled `gl` too: the app opens a window, like the smoke tests. Off with
+# -DIMLUI_PACKAGE_TESTS=OFF, and not added with a multi-config generator (they pass the parent's CMAKE_BUILD_TYPE on).
+# In a sanitizer build only package.subdirectory is added, with IMLUI_SANITIZERS passed on: the consumer sets nothing
+# else, so it checks that linking imlui::imlui instruments the app's targets to match.
 option(IMLUI_PACKAGE_TESTS "Add the package tests (consumer builds: add_subdirectory, FetchContent, find_package)" ON)
 if(NOT IMLUI_PACKAGE_TESTS)
     return()
@@ -31,7 +32,7 @@ function(imlui_add_package_test mode)
                      -DBUILD_TYPE=${CMAKE_BUILD_TYPE} -DMSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY} ${ARGN}
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/run.cmake)
     # Each one builds with every core: one at a time.
-    set_tests_properties(package.${mode} PROPERTIES LABELS package TIMEOUT 1800 RUN_SERIAL ON)
+    set_tests_properties(package.${mode} PROPERTIES LABELS "package;gl" TIMEOUT 1800 RUN_SERIAL ON)
 endfunction()
 
 if(IMLUI_SANITIZERS)

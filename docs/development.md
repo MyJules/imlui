@@ -264,30 +264,51 @@ doesn't depend on `Engine`.
 ## clang-tidy and clice
 
 - `.clang-tidy` turns on only `readability-identifier-naming`, configured for the naming rules above, and filters
-  out vendored headers. Run it on every module (`src/**/*.cppm`, `tools/**/*.cppm`) and the test host
-  (`tests/smoke_host/main.cpp`) with the `tidy` target, which exists only when imlui is the top-level project:
+  out vendored headers. The only names it lets through are those fixed by others: `c_str()` and `is_transparent`
+  (the standard library's protocols) and `LLVMFuzzerTestOneInput` (libFuzzer's entry point). Run it with the `tidy`
+  target, which exists only when imlui is the top-level project:
 
   ```sh
   cmake --build build/clang-debug --target tidy
   ```
 
-  It builds `imlui`, `imlui_pack` and `imlui_smoke_host` first, then runs `clang-tidy -p build/clang-debug --warnings-as-errors=*` on
-  each file, one Ninja command per file (so in parallel), and fails on any finding. A file is checked again when it
-  or any module changed. `cmake/ImluiTidy.cmake` defines it; it's skipped when `clang-tidy` isn't found. A single
-  file: `clang-tidy -p build/clang-debug src/imlui/theme/scheme.cppm`.
-- **Module BMIs must be current.** clang-tidy parses the file itself but loads every imported module from the
-  BMIs that the build's compile commands reference (the `.modmap` files). Earlier, clang-tidy 22.1.7 crashed with
-  an access violation in `readability-identifier-naming` on many modules that import `imlui.widgets` or another
-  umbrella (`progress_bar.cppm`, `button.cppm`, `link.cppm`, ...), so the naming checks didn't cover them. With
-  freshly built BMIs it didn't reproduce: all 114 modules of the time passed, run one by one, all in one process and in
-  parallel, with the default options and with `--header-filter=.*`, `--system-headers`, `--fix`, against
-  `clang-debug` both at this commit and at the commit before the cleanup. It also doesn't reproduce with a stale
-  BMI (a changed imported module, not rebuilt). If it comes back, rebuild (`cmake --build build/clang-debug`) and run
-  the `tidy` target, which builds first. Running it while another build rewrites the BMIs is the most likely way to
-  hit it, so don't. The `clang-release` and `clang-asan` builds work too after a build; before one, their compile
+  It checks every module and implementation unit in `src/`, every module in `tools/`, and the tests: the test files,
+  `tests/support/`, the test host (`tests/smoke_host/main.cpp`), the fuzz targets and the benchmark
+  (`tests/**/*.cpp`, `*.cppm`; not `tests/package/consumer/`, which a package test builds as a project of its own).
+  The tests follow the same naming rules as the library (a test class's static counter is `m_constructions`). The
+  names GoogleTest's macros generate (`Suite_Name_Test`, `TestBody`, `test_info_`) are declared inside the macro
+  expansions, which the check doesn't report, so no filter is needed for them. It builds `imlui`, `imlui_pack`,
+  `imlui_tests`, `imlui_smoke_host`, the fuzz replays and `imlui_bench` first, then runs
+  `clang-tidy -p build/clang-debug --warnings-as-errors=*` on each file, one Ninja command per file (so in parallel),
+  and fails on any finding. A finding in a module shows up in every file that imports it. A file is checked again
+  when it or any module changed. `cmake/ImluiTidy.cmake` defines it; it's skipped when `clang-tidy` isn't found. A
+  single file: `clang-tidy -p build/clang-debug src/imlui/theme/scheme.cppm`.
+- **Known crashes.** clang-tidy 22.1.7 crashes (an access violation in `readability-identifier-naming`, "Processing
+  'readability-identifier-naming' against: TranslationUnitDecl") on 23 modules, with freshly built BMIs, one file at a
+  time and with any one naming option set: `lua/native`, `lua/node`, `lua/painter`, `lua/theme_table`,
+  `skin/fluent/common`, `divider`, `navigation_drawer`, `segmented`, `tabs`, `skin/registry`, `theme/font_library`,
+  `theme/typography`, `ui/enum_names`, `ui/props` and `widgets/anchored_popup`, `button`, `color_field`, `common`,
+  `dialog`, `menu`, `selection`, `slider`, `text`. They're listed in `IMLUI_TIDY_KNOWN_CRASHES`
+  (`cmake/ImluiTidy.cmake`) and run through `cmake/ImluiTidyKnownCrash.cmake`: a finding still fails, the crash is a
+  warning (`a known crash: not checked`) and passes, and a clean run says to take the file off the list. A new crash
+  on a file that isn't listed fails the target. Running clang-tidy while another build rewrites the BMIs can also
+  crash it, so don't. The `clang-release` and `clang-asan` builds work too after a build; before one, their compile
   commands lack the new modules and clang-tidy falls back to a guessed command (errors about `module;`).
 - **clice** (a C++ language server with modules support) is configured by `clice.toml` to use
   `build/clang-debug`'s compile commands. Its cache lives in `.clice/`, which is git-ignored.
+- **Lua definitions check.** The `lua_check` target runs lua-language-server's own diagnostics
+  (`lua-language-server --check`, Warning level and above) on the Lua definitions and fails on any problem:
+
+  ```sh
+  cmake --build build/clang-debug --target lua_check
+  ```
+
+  It checks the folder the test host writes (`imlui_smoke_host_lua_definitions`, `build/<preset>/tests/lua-definitions/`),
+  so the hand-written `src/resources/definitions/imlui.lua` is checked next to the generated `types.lua` it refers to
+  (the element classes, the enums): alone it would report those as undefined, and a field declared in both is a
+  `duplicate-doc-field`. `cmake/ImluiLuaCheck.cmake` defines it, only when imlui is the top-level project with its
+  tests; it's skipped when `lua-language-server` isn't found (on `PATH`, or `-DIMLUI_LUA_LANGUAGE_SERVER=<exe>`).
+  Its log goes to `build/<preset>/lua-check/`. Last run with lua-language-server 3.19.2.
 - Format with `clang-format -i <files>` (`.clang-format` at the repo root).
 
 ## Trying changes in an app
@@ -337,6 +358,17 @@ ctest --preset clang-ship
 cmake --preset clang-asan
 cmake --build --preset clang-asan
 ctest --preset clang-asan           # includes the smoke test: the test host runs under the sanitizers
+```
+
+**Tests that need a window.** The smoke tests (`smoke.imlui_smoke_host`, `smoke.modes`) and the package tests that
+run the consumer app open a window with an OpenGL context, so they're labelled `gl`. Without a desktop session or a
+GPU (a CI runner, a service account), skip them with `-LE gl`, or use the `-headless` test presets, which also skip
+the slow package tests (`-LE "gl|package"`). There's no CI yet; these are the presets it would run:
+
+```sh
+ctest --preset clang-debug -LE gl
+ctest --preset clang-debug-headless
+ctest --preset clang-asan-headless
 ```
 
 The presets but `clang-ship` are dev builds (`IMLUI_DEV_PATHS=ON`), so `imlui_add_resources` doesn't embed
@@ -445,7 +477,9 @@ On this target:
   `types.lua` and `src/resources/definitions/imlui.lua` compile as Lua, that the hand-written file defines every `ui`
   member the prelude has (and nothing else), `writeLuaDefinitions` (unchanged files aren't rewritten) and the
   `--lua-defs` / `IMLUI_LUA_DEFS` options of `defaultConfig`. The ctest `lua_definitions.imlui_smoke_host`
-  (`tests/lua_definitions_run.cmake`) runs the test host alone with both and checks the files.
+  (`tests/lua_definitions_run.cmake`) runs the test host alone with both and checks the files (it opens no window,
+  so it isn't labelled `gl`). The `lua_check` target checks the written files with lua-language-server (see
+  [clang-tidy and clice](#clang-tidy-and-clice)).
 - `host_settings_test.cpp` covers `HostSettings`, the reload transaction `Engine::reloadNow` runs every load
   through (the Engine itself needs a window and has no unit tests): a script's top-level `setZoomShortcuts(false)`
   holds after the load and a reload, and a load that fails puts back the title, zoom, window size, zoom shortcuts,

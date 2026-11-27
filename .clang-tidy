@@ -11,6 +11,11 @@ CheckOptions:
   - { key: readability-identifier-naming.EnumConstantCase,        value: CamelCase }
   - { key: readability-identifier-naming.FunctionCase,            value: camelBack }
   - { key: readability-identifier-naming.MethodCase,              value: camelBack }
+  # Names fixed by others: the standard library's `c_str()` (a C-string accessor like std::string's) and
+  # `is_transparent` (marks a hash or comparator for heterogeneous lookup), and libFuzzer's entry point.
+  - { key: readability-identifier-naming.MethodIgnoredRegexp,     value: '^c_str$' }
+  - { key: readability-identifier-naming.TypeAliasIgnoredRegexp,  value: '^is_transparent$' }
+  - { key: readability-identifier-naming.FunctionIgnoredRegexp,   value: '^LLVMFuzzerTestOneInput$' }
   - { key: readability-identifier-naming.VariableCase,            value: camelBack }
   - { key: readability-identifier-naming.ParameterCase,           value: camelBack }
   - { key: readability-identifier-naming.ConstexprVariableCase,   value: camelBack }

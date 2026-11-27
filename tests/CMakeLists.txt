@@ -58,11 +58,13 @@ imlui_add_resources(imlui_smoke_host data/smoke_app/resources.lua EMBED ON)
 # empty folder and started with IMLUI_DEV_PATHS=0 (no source tree) and IMLUI_EXIT_AFTER_FRAMES (quit after a few
 # frames, exit 1 on a script error), so it must run from its embedded Lua, fonts and app script alone (the library's
 # imlui:/ files from its source folders when the build doesn't embed them, IMLUI_EMBED_RESOURCES=OFF).
+# Label `gl`: they open a window with an OpenGL context, which a CI runner doesn't have (`ctest -LE gl` skips them,
+# like the `ci-*` test presets).
 function(imlui_add_smoke_test name target expect)
     add_test(NAME ${name}
              COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:${target}> -DWORK=${CMAKE_CURRENT_BINARY_DIR}/smoke/${name}
                      -DEXPECT=${expect} -P ${CMAKE_CURRENT_SOURCE_DIR}/smoke_run.cmake)
-    set_tests_properties(${name} PROPERTIES TIMEOUT 120 RUN_SERIAL ON)
+    set_tests_properties(${name} PROPERTIES LABELS gl TIMEOUT 120 RUN_SERIAL ON)
 endfunction()
 imlui_add_smoke_test(smoke.imlui_smoke_host imlui_smoke_host "embedded 'smoke_app (app:/)' main.lua")
 
@@ -70,7 +72,7 @@ imlui_add_smoke_test(smoke.imlui_smoke_host imlui_smoke_host "embedded 'smoke_ap
 # build's defaults: dev builds only), from the embedded copy alone (IMLUI_DEV_PATHS=0) and from an archive of the same
 # manifest next to the executable (IMLUI_SMOKE_NO_EMBEDDED_APP=1, a switch of the test host), which must all see the
 # same files and render the same layout. The archive goes to its own folder: a .pak in bin/ would be mounted by
-# every executable there.
+# every executable there. Label `gl`, like the smoke test.
 imlui_add_pak(imlui_smoke_app_pak data/smoke_app/resources.lua
               OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/smoke_app_pak/smoke_app.pak)
 add_dependencies(imlui_smoke_host imlui_smoke_app_pak)
@@ -79,7 +81,7 @@ add_test(NAME smoke.modes
                  -DPAK=${CMAKE_CURRENT_BINARY_DIR}/smoke_app_pak/smoke_app.pak
                  -DWORK=${CMAKE_CURRENT_BINARY_DIR}/smoke/smoke.modes -DDEV_PATHS=${IMLUI_DEV_PATHS}
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/smoke_modes.cmake)
-set_tests_properties(smoke.modes PROPERTIES TIMEOUT 300 RUN_SERIAL ON)
+set_tests_properties(smoke.modes PROPERTIES LABELS gl TIMEOUT 300 RUN_SERIAL ON)
 
 # The editor definitions of the test host (imlui_add_lua_definitions: `cmake --build <build> --target
 # imlui_smoke_host_lua_definitions` writes them to <build>/tests/lua-definitions/), and a test that runs the host alone
