@@ -128,7 +128,10 @@ void Window::render(Frame& frame) {
         m_nameTitle = m_title;
     }
     const std::string& title = m_name;
-    ImGui::SetNextWindowPos({frame.dp(m_x), frame.dp(m_y)}, ImGuiCond_FirstUseEver);
+    // x, y are relative to the app window: with multi-viewports ImGui places windows in screen coordinates, and the
+    // main viewport's position is where the app window is (0, 0 without them).
+    const ImVec2 origin = ImGui::GetMainViewport()->Pos;
+    ImGui::SetNextWindowPos({origin.x + frame.dp(m_x), origin.y + frame.dp(m_y)}, ImGuiCond_FirstUseEver);
     const bool autoResize = m_autoResize.value_or(m_width <= 0 && m_height <= 0);
     if (autoResize) {
         // `width` / `height` are the minimum size.
@@ -162,10 +165,11 @@ void Window::render(Frame& frame) {
             // The window takes its content's width: a fill is the minimum width (`width`, else defaultFillWidth),
             // not the window's current width, and content may grow up to the viewport's right edge, where text
             // wraps.
-            const ImGuiViewport* vp = ImGui::GetMainViewport();
+            // That edge is the app window's, or the monitor's once the window was dragged out of it.
+            const float right = md::windowWorkArea().second.x;
             const float pad = ImGui::GetStyle().WindowPadding.x, x = ImGui::GetCursorScreenPos().x;
             const float fill = m_width > 0 ? frame.dp(m_width) - 2.0f * pad : frame.dp(defaultFillWidth);
-            const float max = vp->WorkPos.x + vp->WorkSize.x - pad - x;
+            const float max = right - pad - x;
             const layout::BoxScope box{layout::shrinkToFitBox(fill, max)};
             frame.renderStack();
         } else {

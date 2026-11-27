@@ -142,11 +142,34 @@ void vLine(ImDrawList* dl, float x, float y0, float y1, Color c, float thickness
 /// with a vertical gradient: `top` at a and b, `bottomColor` at the bottom line.
 void fillAreaBelow(ImDrawList* dl, ImVec2 a, ImVec2 b, float bottom, ImU32 top, ImU32 bottomColor);
 
+/// The work area (min, max, in ImGui's coordinates) that what the current window places (its popups, its own growth)
+/// stays inside: the app window's work area while the window is in it, and the work area of the monitor it is on
+/// while it is an OS window of its own (dragged out, with multi-viewports on), whose own viewport is only as large
+/// as the window itself.
+std::pair<ImVec2, ImVec2> windowWorkArea();
+
 } // namespace imlui::md
 
 module :private;
 
 namespace imlui::md {
+
+std::pair<ImVec2, ImVec2> windowWorkArea() {
+    const ImGuiViewport* main = ImGui::GetMainViewport();
+    const ImGuiViewport* vp = ImGui::GetWindowViewport();
+    if (vp != main) {
+        // The monitor holding the window's center (ImGui keeps its own choice internal).
+        const ImVec2 c{vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f};
+        for (const ImGuiPlatformMonitor& m : ImGui::GetPlatformIO().Monitors) {
+            if (c.x >= m.MainPos.x && c.y >= m.MainPos.y && c.x < m.MainPos.x + m.MainSize.x &&
+                c.y < m.MainPos.y + m.MainSize.y)
+                return {m.WorkPos, {m.WorkPos.x + m.WorkSize.x, m.WorkPos.y + m.WorkSize.y}};
+        }
+    } else {
+        vp = main;
+    }
+    return {vp->WorkPos, {vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y}};
+}
 
 const Scheme& scheme() { return theme().scheme; }
 const Theme::Shape& shape() { return theme().shape; }
