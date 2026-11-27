@@ -47,8 +47,8 @@ constexpr ImGuiID heightSlot = 4;
 constexpr ImGuiID shownSlot = 5;
 
 ImVec2 placeInViewport(ImVec2 a, ImVec2 b, ImVec2 size, float gap) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const ImVec2 lo = vp->Pos, hi{vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y};
+    // The anchor's window decides: the app window, or the monitor of a Window dragged out of it.
+    const auto [lo, hi] = windowWorkArea();
 
     float x = a.x;
     if (x + size.x > hi.x) x = b.x - size.x;  // align right edges

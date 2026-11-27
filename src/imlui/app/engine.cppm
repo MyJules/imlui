@@ -741,6 +741,7 @@ void Engine::applyRootWindowProps(lua::State* state, int rootRef) {
     double width = 0;
     double height = 0;
     std::string title;
+    bool viewports = false;
     // Protected: the root table's own metatable (a script's __index) may raise.
     luaui::protectedCall(state, "the root window's properties", [&] {
         lua::rawgeti(state, lua::registryIndex, rootRef);
@@ -748,7 +749,11 @@ void Engine::applyRootWindowProps(lua::State* state, int rootRef) {
         width = n.number("width", 0);
         height = n.number("height", 0);
         title = n.string("title", "");
+        viewports = n.boolean("viewports", false);
     });
+    // Read here, before the first frame: ImGui wants multi-viewports on from its first NewFrame. Every load sets it,
+    // so a reloaded script without the prop turns them off.
+    m_window.setViewports(viewports);
     // Size is re-applied on hot reload only when the script changed it. A script's size may be anything (math.huge,
     // NaN, 1e12): checked before the cast to int, which is undefined behaviour out of int's range.
     const int w = windowExtent(width), h = windowExtent(height);

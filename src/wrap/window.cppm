@@ -108,6 +108,13 @@ public:
     /// the right or bottom edge (and right/down if it starts before the left or top edge).
     void keepInWorkArea();
 
+    /// Multi-viewports: ImGui windows dragged out of the app window become OS windows of their own (ImGui's
+    /// ImGuiConfigFlags_ViewportsEnable). Off by default. Applied at the next beginFrame(), except at the second
+    /// frame, which ImGui doesn't allow to turn it on (then at the third): set it before the first frame to have it
+    /// from the start.
+    void setViewports(bool on);
+    [[nodiscard]] bool viewports() const;
+
     /// Current monitor content scale (DPI factor) of the window.
     [[nodiscard]] float contentScale() const;
     /// The refresh rate in Hz of the monitor the window overlaps most (the primary one when it overlaps none); 0 when
@@ -124,8 +131,12 @@ private:
     /// After an event poll: resumes vsync (refreshDuringEvents) and forgets the frames it presented.
     void endPoll();
     void onContentScale(float scale);
+    /// The event is about the app's own window (not a secondary viewport's, and not about no window at all).
+    [[nodiscard]] bool isMainWindowEvent(const SDL_Event& event) const;
 
     std::function<void()> m_refresh;
+    bool m_viewports = false;
+    int m_secondaryWindows = 0; ///< OS windows of ImGui windows dragged out, as last logged
     std::function<void(float)> m_onContentScale;
     bool m_inPoll = false, m_inRefresh = false;
     bool m_vsync = true;
@@ -325,6 +336,10 @@ bool Window::watchEvent(void* userdata, SDL_Event* event) {
     // Any thread may push an event (postEmptyEvent): only the window's and the displays' own, which SDL sends on the
     // main thread, are looked at here.
     auto* self = static_cast<Window*>(userdata);
+    // A secondary viewport's window (an ImGui window dragged out): the backend moves and sizes it itself, and its
+    // size, repaint and monitor aren't the app window's.
+    if (event->type >= SDL_EVENT_WINDOW_FIRST && event->type <= SDL_EVENT_WINDOW_LAST && !self->isMainWindowEvent(*event))
+        return true;
     switch (event->type) {
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         // A resize step sends both: the new size, then an expose at that size, rendered only once.
@@ -358,8 +373,11 @@ void Window::handleEvent(const SDL_Event& event) {
     }
     ImGui_ImplSDL3_ProcessEvent(&event);
     switch (event.type) {
-    case SDL_EVENT_QUIT:
-    case SDL_EVENT_WINDOW_CLOSE_REQUESTED: m_shouldClose = true; break;
+    case SDL_EVENT_QUIT: m_shouldClose = true; break;
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        // A secondary viewport's close (Alt+F4 on a dragged-out window) is the backend's: ImGui closes that window.
+        if (isMainWindowEvent(event)) m_shouldClose = true;
+        break;
     case SDL_EVENT_SYSTEM_THEME_CHANGED:
         // SDL switched the title bar to the OS's light or dark mode: the app's colors again.
         if (const auto colors = m_titleBarColors) {
@@ -439,7 +457,24 @@ void Window::postEmptyEvent() {
 
 bool Window::minimized() const { return m_window && (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MINIMIZED) != 0; }
 
+bool Window::isMainWindowEvent(const SDL_Event& event) const {
+    return m_window && event.window.windowID == SDL_GetWindowID(m_window);
+}
+
+void Window::setViewports(bool on) { m_viewports = on; }
+bool Window::viewports() const { return m_viewports; }
+
 void Window::beginFrame() {
+    // ImGui asserts when viewports turn on at the second NewFrame (FrameCount 1): that one frame waits.
+    ImGuiIO& io = ImGui::GetIO();
+    const bool on = (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0;
+    if (m_viewports != on && !(m_viewports && ImGui::GetFrameCount() == 1)) {
+        if (m_viewports)
+            io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+        else
+            io.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable;
+        log::info("multi-viewports {}", m_viewports ? "on" : "off");
+    }
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
@@ -459,9 +494,23 @@ void Window::draw(float r, float g, float b) {
     // Also when the frame is drawn again before it's shown: the backend creates and updates the textures the frame
     // asked for (new glyphs, images) here.
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    // Multi-viewports: creates, moves, resizes and destroys the secondary windows for this frame. ImGui needs it after
+    // every frame (a frame drawn again included) while viewports are on; it returns at once while they're off.
+    ImGui::UpdatePlatformWindows();
 }
 
 void Window::present() {
+    // The secondary windows show the frame draw() ended last, each with its own context (swap interval 0: no extra
+    // vertical blank per window); then the app window's context is current again.
+    if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        ImGui::RenderPlatformWindowsDefault();
+        SDL_GL_MakeCurrent(m_window, m_context);
+    }
+    // A window dragged out or merged back: rare, and worth a line.
+    if (const int windows = ImGui::GetPlatformIO().Viewports.Size - 1; windows != m_secondaryWindows) {
+        log::info("{} window{} outside the app window", windows, windows == 1 ? "" : "s");
+        m_secondaryWindows = windows;
+    }
     SDL_GL_SwapWindow(m_window);
     if (m_inPoll) m_presentedInPoll = framebufferSize();
 }

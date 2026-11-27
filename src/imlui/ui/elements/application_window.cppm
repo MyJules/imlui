@@ -23,7 +23,8 @@ export namespace imlui {
 ///          color = unset (surface), padding = 24, scrollable = true,
 ///          imageCacheBudget = unset (bytes of decoded image pixels the image cache keeps, ImageCache::setBudget;
 ///          0: no limit; applied every frame while the prop exists, else the cache's 256 MiB default stands)
-/// Raw:     menuBar (a MenuBar), spacing, cull; width, height (the initial window size, read by the engine)
+/// Raw:     menuBar (a MenuBar), spacing, cull; width, height (the initial window size), viewports (multi-viewports:
+///          Windows dragged out become OS windows; all three read by the engine at load)
 ///
 /// Without a `title` prop, the last ui.setTitle() (or "imlui") sticks.
 class ApplicationWindow final : public Element, public StackAlign {
@@ -77,6 +78,10 @@ void ApplicationWindow::declare(TypeBuilder<ApplicationWindow>& type) {
              "the budget, the images drawn least recently are evicted and decoded again when next drawn.")
         .rawProperty("menuBar", "Element|false")
         .doc("A `MenuBar { ... }` at the top of the window.")
+        .rawProperty<bool>("viewports")
+        .doc("`true`: a `Window` dragged out of the app window becomes an OS window of its own (ImGui's "
+             "multi-viewports), and merges back when dropped inside it. Read by the engine when the script loads "
+             "(and on every reload), so a binding is read once.")
         .nonVisual();
     stackProps(type);
 }

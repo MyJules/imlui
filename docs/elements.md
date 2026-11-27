@@ -198,6 +198,7 @@ The root element. It fills the native window, with no decoration, and stacks its
 | `scrollable` | bool | `true` | `false` hides the scrollbar. |
 | `imageCacheBudget` | integer | — | Bytes of decoded image pixels (4 per pixel) the image cache keeps; `0`: no limit, a negative value reads as `0`. Applied every frame while the prop exists (so it can be a binding); without it the cache keeps its default, 256 MiB. Over the budget, the images drawn least recently are evicted after a frame (never one drawn in that frame or the one before) and decoded again when next drawn. |
 | `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem) at the top. |
+| `viewports` | bool | `false` | *Raw, read by the engine* when the script loads (and on every reload). `true`: a [`Window`](#window) dragged out of the app window becomes an OS window of its own (ImGui's multi-viewports) and merges back when dropped inside it; its menus and popups stay on its monitor. Windows, macOS and Linux on X11 only: elsewhere (Wayland, the web) it does nothing and windows stay inside the app window. |
 | `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |
 
 ### Window
@@ -210,9 +211,9 @@ when the title changes.
 |---|---|---|---|
 | `title` | string | `"Window"` | Title bar text. |
 | `open` | bool | `true` | **two-way.** `false` hides the window. When the prop is present the window has a close button, which writes `open = false`. |
-| `x`, `y` | number | `60`, `60` | Position, applied when the window first appears. |
+| `x`, `y` | number | `60`, `60` | Position from the app window's top-left corner, applied when the window first appears. Negative values or values past the app window's size place it outside, where it shows only with the root's `viewports = true`. |
 | `width`, `height` | number | `0` | Size, applied when the window first appears (if either is `> 0`). With `autoResize`, the minimum size. |
-| `autoResize` | bool | — | Fits the window to its content, every frame: it grows and shrinks back with it. Unset: `true` when neither `width` nor `height` is set. Inside, a fill (`width = -1`, a `TextField`, a `Divider`, ...) is `width` wide less the padding, or 240dp when `width` is unset, never the window's current width (which follows the content); text wraps where the window would reach the viewport's right edge. |
+| `autoResize` | bool | — | Fits the window to its content, every frame: it grows and shrinks back with it. Unset: `true` when neither `width` nor `height` is set. Inside, a fill (`width = -1`, a `TextField`, a `Divider`, ...) is `width` wide less the padding, or 240dp when `width` is unset, never the window's current width (which follows the content); text wraps where the window would reach the app window's right edge (a window dragged out of it: its monitor's). |
 | `titleBar`, `resizable`, `movable` | bool | `true` | Window chrome. |
 | `menuBar` | element | — | *Raw.* A [`MenuBar`](#menubar-menu-menuitem). |
 | `spacing`, `align` | | | See [stacking containers](#stacking-containers) (`spacing` is *raw*). |

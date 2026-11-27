@@ -362,7 +362,10 @@ constexpr NativeFn nativeFns[] = {
     {"injectMouse",
      [](lua::State* state) -> int {
          ImGuiIO& io = ImGui::GetIO();
-         io.AddMousePosEvent(toFloat(lua::tonumber(state, 1)), toFloat(lua::tonumber(state, 2)));
+         // Window pixels: ImGui's are screen coordinates with multi-viewports on, where the app window is at the
+         // main viewport's position (0, 0 without them).
+         const ImVec2 origin = ImGui::GetMainViewport()->Pos;
+         io.AddMousePosEvent(origin.x + toFloat(lua::tonumber(state, 1)), origin.y + toFloat(lua::tonumber(state, 2)));
          if (!lua::isnoneornil(state, 3)) io.AddMouseButtonEvent(0, lua::toboolean(state, 3));
          if (lua::isnumber(state, 4)) io.AddMouseWheelEvent(0.0f, toFloat(lua::tonumber(state, 4)));
          requestFramesFor(0.3); // like real input: let the UI react and settle
