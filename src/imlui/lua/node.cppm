@@ -28,6 +28,7 @@ inline constexpr const char* sharedMetaMarker = "__imlui_shared";
 
 /// The fields imlui reads from every element, every frame, as lua::Keys (read with no lookup of the name).
 namespace keys {
+inline const lua::Key type{"__type"};
 inline const lua::Key visible{"visible"};
 inline const lua::Key enabled{"enabled"};
 inline const lua::Key tooltip{"tooltip"};
