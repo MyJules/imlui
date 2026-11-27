@@ -9,6 +9,7 @@ import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 import imlui.ui.props;
 
 export namespace imlui {
@@ -41,8 +42,8 @@ public:
     void setLeadingIcon(std::string icon);
     [[nodiscard]] const std::string& supportingText() const;
     void setSupportingText(std::string text);
-    [[nodiscard]] const std::string& variant() const;
-    void setVariant(std::string variant);
+    [[nodiscard]] FieldVariant variant() const;
+    void setVariant(FieldVariant variant);
     [[nodiscard]] bool error() const;
     void setError(bool error);
 
@@ -53,7 +54,7 @@ private:
     std::string m_label;
     std::string m_leadingIcon;
     std::string m_supportingText;
-    std::string m_variant = "filled";
+    FieldVariant m_variant = FieldVariant::Filled;
     bool m_error = false;
 };
 
@@ -93,7 +94,7 @@ void ComboBox::render(Frame& frame) {
     o.label = m_label;
     o.leadingIcon = m_leadingIcon;
     o.supporting = m_supportingText;
-    o.outlined = m_variant == "outlined";
+    o.outlined = m_variant == FieldVariant::Outlined;
     o.error = m_error;
     o.width = frame.size("width");
     int cur = indexValue(m_currentIndex) - 1; // no overflow on INT_MIN
@@ -118,8 +119,8 @@ const std::string& ComboBox::leadingIcon() const { return m_leadingIcon; }
 void ComboBox::setLeadingIcon(std::string icon) { m_leadingIcon = std::move(icon); }
 const std::string& ComboBox::supportingText() const { return m_supportingText; }
 void ComboBox::setSupportingText(std::string text) { m_supportingText = std::move(text); }
-const std::string& ComboBox::variant() const { return m_variant; }
-void ComboBox::setVariant(std::string variant) { m_variant = std::move(variant); }
+FieldVariant ComboBox::variant() const { return m_variant; }
+void ComboBox::setVariant(FieldVariant variant) { m_variant = variant; }
 bool ComboBox::error() const { return m_error; }
 void ComboBox::setError(bool error) { m_error = error; }
 

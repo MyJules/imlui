@@ -149,16 +149,6 @@ TEST(ImageDecode, RejectsImagesTooLargeFromTheHeader) {
 
 // ------------------------------------------------------------------ sizes and fill modes
 
-TEST(ImageFill, ParsesFillModes) {
-    EXPECT_EQ(parseFillMode("stretch"), FillMode::Stretch);
-    EXPECT_EQ(parseFillMode("fit"), FillMode::Fit);
-    EXPECT_EQ(parseFillMode("preserveAspectFit"), FillMode::Fit);
-    EXPECT_EQ(parseFillMode("crop"), FillMode::Crop);
-    EXPECT_EQ(parseFillMode("preserveAspectCrop"), FillMode::Crop);
-    EXPECT_EQ(parseFillMode("tile"), FillMode::Tile);
-    EXPECT_FALSE(parseFillMode("cover"));
-}
-
 TEST(ImageFill, SizesFromNaturalSizeScaleAndAspect) {
     const ImVec2 natural{200, 100};
     expectNear(imageSize(natural, 1.0f, 0, 0), {200, 100});
@@ -435,7 +425,7 @@ TEST_F(ImageElement, DrawsAtItsNaturalSizeTimesTheScale) {
                                 onStatusChanged = function(self, st) s.status = st; s.calls = s.calls + 1 end } })");
     Image* img = image();
     ASSERT_NE(img, nullptr);
-    EXPECT_EQ(img->status(), "ready");
+    EXPECT_EQ(img->status(), Image::Status::Ready);
     EXPECT_EQ(img->resolvedSource(), "app:/rgba_4x2.png");
     expectNear(img->lastSize(), {4 * dpiScale(), 2 * dpiScale()});
     EXPECT_EQ(img->implicitWidth(), 4.0);
@@ -465,7 +455,7 @@ TEST_F(ImageElement, KeepsTheAspectRatioWhenOneSizeIsSet) {
 TEST_F(ImageElement, ReportsAMissingFileOnceAndDrawsAPlaceholder) {
     show(R"(root = Column { Image { id = "img", source = "nope.png" }, Image { id = "img2", source = "nope.png" } })");
     Image* img = image();
-    EXPECT_EQ(img->status(), "error");
+    EXPECT_EQ(img->status(), Image::Status::Error);
     EXPECT_EQ(img->implicitWidth(), 0.0);
     expectNear(img->lastSize(), {48 * dpiScale(), 48 * dpiScale()}, "the placeholder's size");
     EXPECT_EQ(countErrors("image 'app:/nope.png' not found"), 1u);
@@ -474,15 +464,53 @@ TEST_F(ImageElement, ReportsAMissingFileOnceAndDrawsAPlaceholder) {
     EXPECT_EQ(m_h.images().decodeCount(), 1u);
 }
 
+// fillMode takes the FillMode names and QML's two aliases; Lua reads back what it wrote.
+TEST_F(ImageElement, TakesTheFillModeNames) {
+    show(R"(root = Column { Image { id = "img", source = "rgba_4x2.png", fillMode = "preserveAspectFit" } })");
+    EXPECT_EQ(image()->fillMode(), FillMode::Fit);
+    const std::pair<std::string_view, FillMode> names[] = {{"stretch", FillMode::Stretch},
+                                                           {"fit", FillMode::Fit},
+                                                           {"crop", FillMode::Crop},
+                                                           {"tile", FillMode::Tile},
+                                                           {"preserveAspectCrop", FillMode::Crop}};
+    for (const auto& [name, mode] : names) {
+        ASSERT_EQ(m_h.run(std::format(R"(img.fillMode = "{0}"; assert(img.fillMode == "{0}"))", name)), "");
+        m_h.renderFrames("root", 1);
+        EXPECT_EQ(image()->fillMode(), mode) << name;
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// An unknown fillMode is reported with the names, and the image keeps its fill mode (here the default, stretch).
 TEST_F(ImageElement, ReportsAnUnknownFillModeAndStretches) {
     show(R"(root = Image { id = "img", source = "rgba_4x2.png", fillMode = "cover" })");
-    EXPECT_EQ(image()->status(), "ready");
-    EXPECT_TRUE(hasError("unknown fillMode 'cover'"));
+    EXPECT_EQ(image()->status(), Image::Status::Ready);
+    EXPECT_EQ(image()->fillMode(), FillMode::Stretch);
+    EXPECT_TRUE(hasError(
+        R"(Image.fillMode: FillMode ('stretch'|'fit'|'crop'|'tile'|'preserveAspectFit'|'preserveAspectCrop') expected, got string "cover")"));
+}
+
+// status and the onStatusChanged argument are the ImageStatus names, as strings.
+TEST_F(ImageElement, StatusReachesLuaAsAString) {
+    show(R"(
+        seen = {}
+        root = Column { Image { id = "img", source = "rgba_4x2.png",
+                                onStatusChanged = function(self, st) seen[#seen + 1] = st end } })");
+    ASSERT_EQ(m_h.run(R"(img.source = "nope.png")"), "");
+    m_h.renderFrames("root", 2);
+    ASSERT_EQ(m_h.run(R"(img.source = "")"), "");
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(image()->status(), Image::Status::None);
+    EXPECT_EQ(m_h.run(R"(
+        assert(img.status == "none", tostring(img.status))
+        local all = table.concat(seen, ",")
+        assert(all == "ready,error,none", all))"),
+              "");
 }
 
 TEST_F(ImageElement, WithoutSourceTakesNoSpace) {
     show(R"(root = Column { Image { id = "img" } })");
-    EXPECT_EQ(image()->status(), "none");
+    EXPECT_EQ(image()->status(), Image::Status::None);
     expectNear(image()->lastSize(), {0, 0});
     EXPECT_TRUE(luaui::errors().empty());
 }
@@ -515,5 +543,5 @@ TEST(ImageElementSources, ResolvesRelativeNamesAgainstTheCreatingScript) {
     Image* img = h.instance<Image>("img");
     ASSERT_NE(img, nullptr);
     EXPECT_EQ(img->resolvedSource(), "app:/pages/pic.png");
-    EXPECT_EQ(img->status(), "ready");
+    EXPECT_EQ(img->status(), Image::Status::Ready);
 }

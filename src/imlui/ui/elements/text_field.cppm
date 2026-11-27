@@ -9,20 +9,25 @@ import imlui.widgets.text_field;
 import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// A Material text field with a floating label (TextArea extends it, multi-line).
 ///
 /// Props:   text = "", label = "", placeholderText = "", leadingIcon = "", trailingIcon = "", supportingText = "",
-///          variant = "filled" ("outlined"), password = false, echoMode = "" ("password"), readOnly = false,
-///          error = false
+///          variant = "filled" ("outlined"), password = false, echoMode = "normal" ("password"; "" is normal),
+///          readOnly = false, error = false
 /// Raw:     width, height (TextArea only)
 /// Signals: onTextChanged(self, text), onAccepted(self, text), onTrailingClicked(self)
 /// Two-way: text
 class TextField : public Element {
 public:
+    /// How the text shows: as typed, or masked.
+    enum class EchoMode { Normal, Password };
+
     static void declare(TypeBuilder<TextField>& type);
 
     void render(Frame& frame) override;
@@ -42,13 +47,13 @@ public:
     void setTrailingIcon(std::string icon);
     [[nodiscard]] const std::string& supportingText() const;
     void setSupportingText(std::string text);
-    [[nodiscard]] const std::string& variant() const;
-    void setVariant(std::string variant);
+    [[nodiscard]] FieldVariant variant() const;
+    void setVariant(FieldVariant variant);
     [[nodiscard]] bool password() const;
     void setPassword(bool password);
-    /// "password" hides the text like `password = true`.
-    [[nodiscard]] const std::string& echoMode() const;
-    void setEchoMode(std::string mode);
+    /// Password hides the text like `password = true`.
+    [[nodiscard]] EchoMode echoMode() const;
+    void setEchoMode(EchoMode mode);
     [[nodiscard]] bool readOnly() const;
     void setReadOnly(bool readOnly);
     [[nodiscard]] bool error() const;
@@ -65,14 +70,25 @@ private:
     std::string m_leadingIcon;
     std::string m_trailingIcon;
     std::string m_supportingText;
-    std::string m_variant = "filled";
+    FieldVariant m_variant = FieldVariant::Filled;
     bool m_password = false;
-    std::string m_echoMode;
+    EchoMode m_echoMode = EchoMode::Normal;
     bool m_readOnly = false;
     bool m_error = false;
 };
 
 } // namespace imlui
+
+template <>
+struct imlui::EnumNames<imlui::TextField::EchoMode> {
+    static constexpr std::string_view name = "EchoMode";
+    static constexpr std::string_view doc = "How a TextField shows its text: as typed, or masked.";
+    static constexpr std::pair<imlui::TextField::EchoMode, std::string_view> values[] = {
+        {imlui::TextField::EchoMode::Normal, "normal"},
+        {imlui::TextField::EchoMode::Password, "password"},
+        {imlui::TextField::EchoMode::Normal, ""}, // the old default
+    };
+};
 
 module :private;
 
@@ -100,7 +116,7 @@ void TextField::declare(TypeBuilder<TextField>& type) {
         .property("password", &TextField::password, &TextField::setPassword)
         .doc("Masks the input and adds a visibility toggle as the trailing icon, unless `trailingIcon` is set.")
         .property("echoMode", &TextField::echoMode, &TextField::setEchoMode)
-        .doc("`\"password\"` does the same as `password = true`.")
+        .doc("`\"normal\"` (default; `\"\"` too) or `\"password\"`, which does the same as `password = true`.")
         .property("readOnly", &TextField::readOnly, &TextField::setReadOnly)
         .doc("The text can't be edited (it can still be selected).")
         .property("error", &TextField::error, &TextField::setError)
@@ -120,8 +136,8 @@ void TextField::render(Frame& frame) {
     o.leadingIcon = m_leadingIcon;
     o.trailingIcon = m_trailingIcon;
     o.supporting = m_supportingText;
-    o.outlined = m_variant == "outlined";
-    o.password = m_password || m_echoMode == "password";
+    o.outlined = m_variant == FieldVariant::Outlined;
+    o.password = m_password || m_echoMode == EchoMode::Password;
     o.multiline = m_multiline;
     o.readOnly = m_readOnly;
     o.error = m_error;
@@ -149,12 +165,12 @@ const std::string& TextField::trailingIcon() const { return m_trailingIcon; }
 void TextField::setTrailingIcon(std::string icon) { m_trailingIcon = std::move(icon); }
 const std::string& TextField::supportingText() const { return m_supportingText; }
 void TextField::setSupportingText(std::string text) { m_supportingText = std::move(text); }
-const std::string& TextField::variant() const { return m_variant; }
-void TextField::setVariant(std::string variant) { m_variant = std::move(variant); }
+FieldVariant TextField::variant() const { return m_variant; }
+void TextField::setVariant(FieldVariant variant) { m_variant = variant; }
 bool TextField::password() const { return m_password; }
 void TextField::setPassword(bool password) { m_password = password; }
-const std::string& TextField::echoMode() const { return m_echoMode; }
-void TextField::setEchoMode(std::string mode) { m_echoMode = std::move(mode); }
+TextField::EchoMode TextField::echoMode() const { return m_echoMode; }
+void TextField::setEchoMode(EchoMode mode) { m_echoMode = mode; }
 bool TextField::readOnly() const { return m_readOnly; }
 void TextField::setReadOnly(bool readOnly) { m_readOnly = readOnly; }
 bool TextField::error() const { return m_error; }
@@ -168,8 +184,8 @@ std::optional<ImVec2> TextField::intrinsicSize(const Frame& frame, float maxWidt
     o.label = m_label;
     o.trailingIcon = m_trailingIcon;
     o.supporting = m_supportingText;
-    o.outlined = m_variant == "outlined";
-    o.password = m_password || m_echoMode == "password";
+    o.outlined = m_variant == FieldVariant::Outlined;
+    o.password = m_password || m_echoMode == EchoMode::Password;
     o.multiline = m_multiline;
     o.width = frame.widthIn(maxWidth);
     o.height = height;

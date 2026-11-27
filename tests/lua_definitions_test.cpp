@@ -889,6 +889,18 @@ TEST(LuaDefinitions, BuiltInsAndPreludeAreValidLua) {
     // A signal argument of a class of its own: Canvas.onPaint's painter.
     EXPECT_NE(types.find("---@field onPaint? (fun(self: Canvas, p: CanvasPainter))\n"), std::string::npos);
     EXPECT_NE(types.find("---@class CanvasPainter\n"), std::string::npos);
+    EXPECT_NE(types.find(", style?: TextStyle, font?: string)) Text with"), std::string::npos);
+    // The files are read together: no alias is declared twice (TextStyle is generated, from Text.style). A class may
+    // be (LuaLS merges a class's declarations: imlui.lua adds the Lua-side props to RepeaterProps, ...).
+    std::map<std::string, int> declared;
+    for (const std::string& text : {prelude, types}) {
+        static const std::regex declaration{R"(---@alias ([A-Za-z_][A-Za-z0-9_]*))"};
+        for (auto it = std::sregex_iterator{text.begin(), text.end(), declaration}; it != std::sregex_iterator{}; ++it)
+            ++declared[(*it)[1].str()];
+    }
+    EXPECT_EQ(declared["TextStyle"], 1);
+    for (const auto& [name, count] : declared)
+        EXPECT_EQ(count, 1) << name;
 }
 
 // The hand-written prelude definitions keep up with the prelude: every member of `ui` (but the internal `__*` ones)

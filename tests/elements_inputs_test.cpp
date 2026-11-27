@@ -15,6 +15,7 @@ import imlui.ui.elements.text_field;
 import imlui.ui.elements.text_area;
 import imlui.ui.elements.combo_box;
 import imlui.ui.elements.color_picker;
+import imlui.ui.enum_names;
 import imlui.ui.frame_request;
 import imlui.test.headless_frame;
 import imlui.test.last_item_probe;
@@ -178,7 +179,7 @@ TEST_F(InputsTest, SpinBoxPropsAndDefaults) {
     EXPECT_DOUBLE_EQ(spin->stepSize(), 1.0);
     EXPECT_EQ(spin->decimals(), 0);
     EXPECT_EQ(spin->label(), "");
-    EXPECT_EQ(spin->variant(), "filled");
+    EXPECT_EQ(spin->variant(), FieldVariant::Filled);
     SpinBox* set = m_h.instance<SpinBox>("set");
     EXPECT_DOUBLE_EQ(set->value(), 3.0);
     EXPECT_DOUBLE_EQ(set->from(), 1.0);
@@ -186,7 +187,7 @@ TEST_F(InputsTest, SpinBoxPropsAndDefaults) {
     EXPECT_DOUBLE_EQ(set->stepSize(), 2.0);
     EXPECT_EQ(set->decimals(), 2); // truncated, like static_cast<int>
     EXPECT_EQ(set->label(), "Count");
-    EXPECT_EQ(set->variant(), "outlined");
+    EXPECT_EQ(set->variant(), FieldVariant::Outlined);
 }
 
 // decimals is clamped to 0..15: the widget formats with "%.<decimals>f".
@@ -240,9 +241,9 @@ TEST_F(InputsTest, TextFieldPropsAndDefaults) {
     frames();
     TextField* plain = m_h.instance<TextField>("plain");
     EXPECT_EQ(plain->text(), "");
-    EXPECT_EQ(plain->variant(), "filled");
+    EXPECT_EQ(plain->variant(), FieldVariant::Filled);
     EXPECT_FALSE(plain->password());
-    EXPECT_EQ(plain->echoMode(), "");
+    EXPECT_EQ(plain->echoMode(), TextField::EchoMode::Normal);
     EXPECT_FALSE(plain->readOnly());
     EXPECT_FALSE(plain->error());
     EXPECT_FALSE(plain->multiline());
@@ -253,11 +254,41 @@ TEST_F(InputsTest, TextFieldPropsAndDefaults) {
     EXPECT_EQ(set->leadingIcon(), "search");
     EXPECT_EQ(set->trailingIcon(), "clear");
     EXPECT_EQ(set->supportingText(), "S");
-    EXPECT_EQ(set->variant(), "outlined");
-    EXPECT_EQ(set->echoMode(), "password");
+    EXPECT_EQ(set->variant(), FieldVariant::Outlined);
+    EXPECT_EQ(set->echoMode(), TextField::EchoMode::Password);
     EXPECT_TRUE(set->readOnly());
     EXPECT_TRUE(set->error());
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// echoMode is "normal" or "password"; "" (the old default) reads as normal, and Lua reads back what it wrote.
+TEST_F(InputsTest, TextFieldEchoModeNames) {
+    run(R"(root = Probe { TextField { id = "f", echoMode = "password" } })");
+    frames();
+    EXPECT_EQ(m_h.instance<TextField>("f")->echoMode(), TextField::EchoMode::Password);
+    run(R"(f.echoMode = ""; assert(f.echoMode == "", tostring(f.echoMode)))");
+    frames();
+    EXPECT_EQ(m_h.instance<TextField>("f")->echoMode(), TextField::EchoMode::Normal);
+    run(R"(f.echoMode = "password")");
+    frames();
+    run(R"(f.echoMode = "normal")");
+    frames();
+    EXPECT_EQ(m_h.instance<TextField>("f")->echoMode(), TextField::EchoMode::Normal);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// A variant is one of the FieldVariant names: a typo is reported with the names, and the field keeps its variant.
+TEST_F(InputsTest, TextFieldReportsAnUnknownVariant) {
+    run(R"(root = Probe { TextField { id = "f", variant = "outlined" } })");
+    frames();
+    run(R"(f.variant = "outline")");
+    frames();
+    EXPECT_EQ(m_h.instance<TextField>("f")->variant(), FieldVariant::Outlined);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(
+                  R"(TextField.variant: FieldVariant ('filled'|'outlined') expected, got string "outline")"),
+              std::string::npos)
+        << luaui::errors()[0];
 }
 
 TEST_F(InputsTest, TextFieldTypingWritesBackAndEmitsChangedAndAccepted) {
@@ -334,7 +365,7 @@ TEST_F(InputsTest, ComboBoxPropsAndDefaults) {
     ComboBox* plain = m_h.instance<ComboBox>("plain");
     EXPECT_TRUE(plain->model().empty());
     EXPECT_EQ(plain->currentIndex(), 1);
-    EXPECT_EQ(plain->variant(), "filled");
+    EXPECT_EQ(plain->variant(), FieldVariant::Filled);
     EXPECT_FALSE(plain->error());
     ComboBox* set = m_h.instance<ComboBox>("set");
     EXPECT_EQ(set->model(), (std::vector<std::string>{"a", "2"}));
@@ -343,7 +374,7 @@ TEST_F(InputsTest, ComboBoxPropsAndDefaults) {
     EXPECT_EQ(set->label(), "L");
     EXPECT_EQ(set->leadingIcon(), "search");
     EXPECT_EQ(set->supportingText(), "S");
-    EXPECT_EQ(set->variant(), "outlined");
+    EXPECT_EQ(set->variant(), FieldVariant::Outlined);
     EXPECT_TRUE(set->error());
 }
 

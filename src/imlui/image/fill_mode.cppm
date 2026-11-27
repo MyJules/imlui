@@ -8,7 +8,8 @@ import imgui;
 
 export namespace imlui {
 
-/// How an image is scaled into its element's rect (QML's Image.fillMode).
+/// How an image is scaled into its element's rect (QML's Image.fillMode); its Lua names ("stretch", "fit", ...) are in
+/// imlui.ui.enum_names.
 enum class FillMode {
     Stretch, ///< scaled to the rect; the aspect ratio may change
     Fit,     ///< scaled uniformly to fit inside the rect, centered (letterboxed)
@@ -23,9 +24,6 @@ struct ImageQuad {
     ImVec2 uvMin{0.0f, 0.0f};
     ImVec2 uvMax{1.0f, 1.0f};
 };
-
-/// "stretch", "fit" (also "preserveAspectFit"), "crop" ("preserveAspectCrop") or "tile"; nullopt otherwise.
-[[nodiscard]] std::optional<FillMode> parseFillMode(std::string_view name);
 
 /// The size in pixels of an element showing an image of `natural` size (image pixels, drawn as dp) at `scale`
 /// pixels per dp, with a requested `width`/`height` in pixels (0: unset). Neither set: the natural size times the
@@ -50,14 +48,6 @@ constexpr int maxTiles = 4096;
 float snap(float v) { return std::floor(v + 0.5f); }
 
 } // namespace
-
-std::optional<FillMode> parseFillMode(std::string_view name) {
-    if (name == "stretch") return FillMode::Stretch;
-    if (name == "fit" || name == "preserveAspectFit") return FillMode::Fit;
-    if (name == "crop" || name == "preserveAspectCrop") return FillMode::Crop;
-    if (name == "tile") return FillMode::Tile;
-    return std::nullopt;
-}
 
 ImVec2 imageSize(ImVec2 natural, float scale, float width, float height) {
     const bool known = natural.x > 0.0f && natural.y > 0.0f;

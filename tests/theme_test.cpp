@@ -12,6 +12,8 @@ import imlui.theme.dpi;
 import imlui.theme.scheme;
 import imlui.theme.theme;
 import imlui.theme.typography;
+import imlui.types.lua_convert;
+import imlui.ui.enum_names;
 
 using namespace imlui;
 
@@ -170,6 +172,16 @@ TEST(Typography, TextStyleFromNameFindsEveryStyle) {
         auto found = textStyleFromName(info.name);
         ASSERT_TRUE(found.has_value()) << info.name;
         EXPECT_EQ(*found, s) << info.name;
+    }
+}
+
+// The Lua names of TextStyle (imlui.ui.enum_names) are the type scale's names, in its order.
+TEST(Typography, LuaNamesAreTheTypeScaleNames) {
+    for (int i = 0; i < static_cast<int>(TextStyle::Count); ++i) {
+        const auto s = static_cast<TextStyle>(i);
+        const auto& [value, name] = EnumNames<TextStyle>::values[static_cast<std::size_t>(i)];
+        EXPECT_EQ(value, s) << i;
+        EXPECT_EQ(name, textStyleInfo(s).name) << i;
     }
 }
 

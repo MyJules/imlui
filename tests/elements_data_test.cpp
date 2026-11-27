@@ -105,7 +105,7 @@ TEST_F(DataTest, PlotPropsAndDefaults) {
     frames();
     Plot* plain = m_h.instance<Plot>("plain");
     EXPECT_TRUE(plain->values().empty());
-    EXPECT_EQ(plain->kind(), "lines");
+    EXPECT_EQ(plain->kind(), Plot::Kind::Lines);
     EXPECT_TRUE(plain->fill());
     EXPECT_FALSE(plain->title().has_value());
     EXPECT_FALSE(plain->color().has_value());
@@ -113,7 +113,7 @@ TEST_F(DataTest, PlotPropsAndDefaults) {
     EXPECT_FALSE(plain->max().has_value());
     Plot* set = m_h.instance<Plot>("set");
     EXPECT_EQ(set->values(), (std::vector<float>{1.0f, 2.5f, 3.0f}));
-    EXPECT_EQ(set->kind(), "bars");
+    EXPECT_EQ(set->kind(), Plot::Kind::Bars);
     EXPECT_FALSE(set->fill());
     EXPECT_EQ(set->label(), "Label");
     ASSERT_TRUE(set->color().has_value());
@@ -125,6 +125,10 @@ TEST_F(DataTest, PlotPropsAndDefaults) {
     frames();
     EXPECT_EQ(set->title(), std::optional<std::string>{"Title"});
     EXPECT_EQ(set->values(), (std::vector<float>{4.0f}));
+    // "histogram" is another name of bars; Lua reads back what it wrote.
+    run(R"(set.kind = "histogram"; assert(set.kind == "histogram"))");
+    frames();
+    EXPECT_EQ(set->kind(), Plot::Kind::Bars);
     EXPECT_TRUE(luaui::errors().empty());
 }
 
@@ -243,7 +247,7 @@ TEST_F(DataTest, PlotOfLargeOrConstantValuesDraws) {
 // The hover readout keeps inside the chart; a chart narrower than the readout put it at the left edge (it called
 // std::clamp with the upper bound below the lower one).
 TEST_F(DataTest, PlotNarrowerThanItsHoverReadoutDraws) {
-    for (const char* kind : {"line", "bars"}) {
+    for (const char* kind : {"lines", "bars"}) {
         run(std::string{"root = Probe { Plot { width = 12, height = 80, kind = '"} + kind +
             "', values = { 123456789, -0.000123 } } }");
         frames();

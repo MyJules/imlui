@@ -754,7 +754,7 @@ Script errors are logged at error level automatically.
 | `setTitle(title)` | Sets the native window title, unless the `ApplicationWindow` has a `title` prop. See the note below. |
 | `setCulling(on)` | Turns [culling](architecture.md#culling) on or off for every container (on by default, and again after a reload). Off, every child renders every frame, also those scrolled out of view: for debugging and comparison. A single container takes `cull = false`. |
 | `culling() -> bool` | Whether culling is on. |
-| `textSize(text, style?, font?) -> w, h` | Size of `text` (a string or number; anything else raises an error) in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`), in a [named font](theming.md#fonts) when `font` is given. Uses the fonts in effect: right after `theme{}` the old ones until the next frame. |
+| `textSize(text, style?, font?) -> w, h` | Size of `text` (a string or number; anything else raises an error) in dp, for a [text style](theming.md#typography) (default `"bodyLarge"`; any other value raises an error naming the styles), in a [named font](theming.md#fonts) when `font` is given. Uses the fonts in effect: right after `theme{}` the old ones until the next frame. |
 
 > **Note.** The native title comes from, in order: the root `ApplicationWindow`'s `title` prop (re-read every
 > frame, so it can be a binding), the last `setTitle()` call, and then the default `"imlui"`. A script that calls
