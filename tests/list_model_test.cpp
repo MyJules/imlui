@@ -186,7 +186,7 @@ protected:
     }
     void makeHarness() {
         m_h.reset();
-        m_h.emplace(test::HeadlessFrame::Options{.height = 600.0f, .builtins = true});
+        m_h.emplace(test::HeadlessFrame::Options{.height = 600.0f, .builtins = true, .fullDebug = true});
         m_h->registerType<Box>("Box");
         m_h->registerType<Owner>("Owner");
         m_h->types().registerSingleton("backend", m_backend);

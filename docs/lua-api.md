@@ -286,6 +286,11 @@ files from disk or loads DLLs (`package.path` and `package.cpath` are `""`, `pac
 module that isn't found is an error that lists each resource name looked at. Errors and tracebacks name the file as a
 resource: `app:/StatCard.lua:3: ...`.
 
+Scripts have Lua's standard libraries, with `require` limited as above. The `debug` library is whole only in a dev
+build (`IMLUI_DEV_PATHS=ON`); a shipped build (`IMLUI_DEV_PATHS=OFF`) gives scripts `debug.traceback` alone (as
+`debug` and as `require "debug"`), so use `debug.traceback` for diagnostics and nothing else from `debug` in code that
+ships.
+
 ```lua
 -- StatCard.lua
 return component(function(props, ids)

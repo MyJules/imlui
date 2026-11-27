@@ -320,7 +320,7 @@ protected:
     /// A left click at (x, y): move, press, release, one frame each.
     void click(std::string_view root, float x, float y) { m_h.click(root, x, y); }
 
-    test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true}};
+    test::HeadlessFrame m_h{test::HeadlessFrame::Options{.builtins = true, .fullDebug = true}}; // debug.getmetatable
 };
 
 // ------------------------------------------------------------ Column

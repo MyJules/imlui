@@ -728,7 +728,7 @@ protected:
     void run(std::string_view code) { ASSERT_EQ(m_frame.run(code), ""); }
 
     test::TempDir m_dir;
-    test::HeadlessFrame m_frame;
+    test::HeadlessFrame m_frame{test::HeadlessFrame::Options{.fullDebug = true}}; // debug.getinfo
 };
 
 } // namespace

@@ -673,7 +673,12 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
    folder or a planted DLL; a plain Lua library an app wants goes into its resources like its own scripts.
 4. Runs a boot chunk: `require("imlui")` (`imlui:/imlui.lua`), `ui.__load(entry)` (`app:/main.lua`, run in its
    own environment over `ui.env`, see [Resources](#resources)), and returns the root, `ui.__tick` and
-   `ui.__overlays`.
+   `ui.__overlays`. The DSL keeps the whole `debug` library as a local of its own (it reads `debug.getinfo`, the
+   registry, and sets a script chunk's `_ENV` with `debug.setupvalue`); scripts get it too only in a dev build
+   (`IMLUI_DEV_PATHS=ON`). In a shipped build `imlui.native`'s `fullDebug` is false (`luaui::fullDebugLibrary()`,
+   from the compile definition `IMLUI_FULL_DEBUG_LIBRARY` on `imlui_core`) and the DSL replaces `debug` and
+   `package.loaded.debug` with a table holding `traceback` alone, so a script can't reach the registry, upvalues or
+   the metatables the DSL and C++ hide.
 5. On failure (syntax error, runtime error, or a non-table return), it closes the new state, points the
    singletons back at the old one, puts back the settings remembered in step 1 (what the failed script set while
    loading, `setTitle`, `setZoom`, `setWindowSize`, `setTheme` and the rest, is undone) and keeps the old UI. On success, it replaces the

@@ -87,6 +87,9 @@ if(WIN32)
     target_link_libraries(imlui_core PRIVATE dwmapi shell32)
 endif()
 target_compile_features(imlui_core PUBLIC cxx_std_20)
+# Scripts get the whole Lua `debug` library in dev builds only; a shipped build (IMLUI_DEV_PATHS=OFF) gives them
+# debug.traceback alone (imlui.lua.native's fullDebugLibrary()). Private: it's read in a module's private fragment.
+target_compile_definitions(imlui_core PRIVATE IMLUI_FULL_DEBUG_LIBRARY=$<BOOL:${IMLUI_DEV_PATHS}>)
 imlui_set_warnings(imlui_core)
 imlui_set_hardening(imlui_core) # -ftrapv in Debug, which imlui_lua already makes a usage requirement
 

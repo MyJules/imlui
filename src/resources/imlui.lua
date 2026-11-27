@@ -32,6 +32,17 @@
 
 local native = require("imlui.native")
 
+-- The whole debug library, for the DSL itself (debug.getinfo, getregistry, setupvalue). Scripts get it too only in a
+-- dev build (IMLUI_DEV_PATHS=ON); a shipped one leaves them debug.traceback alone (also as require("debug")), so a
+-- script can't reach the registry, upvalues or metatables the DSL and C++ keep from it. This local is out of their
+-- reach: only the debug library could read it. `fullDebug` is absent from a stand-in `imlui.native` (tests): full.
+local debug = debug
+if native.fullDebug == false then
+    local scriptDebug = { traceback = debug.traceback }
+    _G.debug = scriptDebug
+    package.loaded.debug = scriptDebug
+end
+
 -- C++ types registered with Engine::registerType<T>() (absent when the library runs without an engine).
 local typesOk, types = pcall(require, "imlui.types")
 if not typesOk then types = nil end

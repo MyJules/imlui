@@ -420,3 +420,40 @@ TEST_F(LuaLibraryTest, RadioGroupsGoWithTheirLastMember) {
         assert(again.__radioGroup == kept.__radioGroup)
     )");
 }
+
+// What `debug` scripts see is up to imlui.native's `fullDebug` (luaui::fullDebugLibrary(): IMLUI_DEV_PATHS): false
+// leaves them debug.traceback alone, also through require("debug"), true or absent (a stand-in native) the whole
+// library. Both modes in every build: the stub native sets the flag.
+TEST(LuaLibraryDebug, ScriptsGetTheWholeDebugLibraryOnlyWhenNativeSaysSo) {
+    for (const char* flag : {"false", "true", "nil"}) {
+        SCOPED_TRACE(flag);
+        lua::State* state = lua::newstate();
+        lua::openlibs(state);
+        const std::string boot = std::string{"package.path = '"} + IMLUI_RESOURCES_DIR + "/?.lua;' .. package.path\n" +
+                                 "package.preload['imlui.native'] = function() return { time = function() return 0 " +
+                                 "end, log = function() end, reportError = function(m) reported = m end, fullDebug = " + flag +
+                                 " } end\n" + R"(
+            local whole = debug
+            local ui = require("imlui")
+            local full = ui.native.fullDebug ~= false
+            assert(require("debug") == debug)
+            assert(type(debug.traceback) == "function")
+            if full then
+                assert(debug == whole and type(debug.getinfo) == "function")
+            else
+                assert(debug ~= whole and next(debug) == "traceback" and next(debug, "traceback") == nil)
+                assert(debug.getregistry == nil and debug.sethook == nil and debug.getupvalue == nil)
+            end
+            -- The DSL still has the whole library: a duplicate id report names the component by where it is defined.
+            local Twice = ui.component(function()
+                ui.registerId({ id = "same" })
+                ui.registerId({ id = "same" })
+                return {}
+            end)
+            Twice {}
+            assert(reported and reported:find("component (test:", 1, true), tostring(reported)))";
+        ASSERT_EQ(lua::loadbuffer(state, boot, "=test"), lua::ok) << lua::tostring(state, -1);
+        EXPECT_EQ(lua::pcall(state, 0, 0, 0), lua::ok) << lua::tostring(state, -1);
+        lua::close(state);
+    }
+}

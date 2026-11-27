@@ -67,6 +67,9 @@ public:
         /// Mounts the library's embedded files (imlui.embedded.imlui: imlui:/ and imlui:/fonts/) instead of
         /// src/resources/ and external/fonts from the source tree, like a release build running without it.
         bool embedded = false;
+        /// Gives the test scripts the whole Lua `debug` library also in a shipped build, where the DSL leaves scripts
+        /// only debug.traceback (luaui::fullDebugLibrary()): for tests that use it to reach what the DSL and C++ hide.
+        bool fullDebug = false;
     };
 
     HeadlessFrame();
@@ -228,16 +231,28 @@ void HeadlessFrame::start() {
     luaui::registerPainter(m_state);
     m_types.install(m_state);
     luaui::registerResources(m_state, m_resources, &m_loaded);
-    // Returns the code runner, the script environment and ui.__tick.
+    // Returns the code runner, the script environment and ui.__tick. With Options::fullDebug, the debug library the
+    // DSL may have taken from the scripts is put back.
     const std::string boot = R"(
+        local fullDebug = ...
+        local whole = debug
         local ui = require("imlui")
+        if fullDebug then
+            debug = whole
+            package.loaded.debug = whole
+        end
         local function run(code)
             local chunk, err = load(code, "=test", "t", ui.env)
             if not chunk then error(err, 0) end
             chunk()
         end
         return run, ui.env, ui.__tick)";
-    if (lua::loadbuffer(m_state, boot, "=headless_frame") != lua::ok || lua::pcall(m_state, 0, 3, 0) != lua::ok) {
+    bool loaded = lua::loadbuffer(m_state, boot, "=headless_frame") == lua::ok;
+    if (loaded) {
+        lua::pushboolean(m_state, m_options.fullDebug);
+        loaded = lua::pcall(m_state, 1, 3, 0) == lua::ok;
+    }
+    if (!loaded) {
         luaui::reportError("HeadlessFrame: loading imlui:/imlui.lua failed: " + lua::toStringAny(m_state, -1));
         lua::settop(m_state, 0);
         return;
