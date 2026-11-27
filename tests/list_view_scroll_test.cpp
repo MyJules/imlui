@@ -4,7 +4,9 @@
 // heights, every mode, out-of-range indices, a bad mode, before the first render, inside a ScrollView),
 // positionViewAtBeginning() / positionViewAtEnd() and `firstVisibleIndex`, and requests made while the list isn't
 // rendered, and the chunked rendering staying finite: while a nav move scores items (which widens the view), and with
-// a negative `spacing` that cancels `itemHeight`. Renders headless ImGui frames (tests/support/headless_frame.cppm).
+// a negative `spacing` that cancels `itemHeight`; the step tree (positions right as the model shrinks and grows) and
+// long runs of hidden items probed, not walked, on every frame. Renders headless ImGui frames
+// (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
 import std;
@@ -559,6 +561,73 @@ TEST_F(ListViewScrollTest, ASpacingThatCancelsTheItemHeightStepsAPixel) {
         EXPECT_NEAR(l.scroll().y, 4999.0f, 1.0f);
         check("list.firstVisibleIndex == 5000 and made[5000] ~= nil and made[7000] == nil");
     }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// ------------------------------------------------------------ the step tree
+
+// Where an item starts comes from the step tree (prefix sums of the heights, the unmeasured ones at the estimate), not
+// a walk from the first item: it stays right as the model shrinks (the heights past the end dropped), grows (new
+// items unmeasured) and changes back, with positions landing on their item each time.
+TEST_F(ListViewScrollTest, PositionsStayRightAsTheModelShrinksAndGrows) {
+    run(std::string{variableHeight} + R"(
+        made = {}
+        n = 3000
+        list = ListView { height = 200, spacing = 2, model = function() return n end,
+                          delegate = function(i) made[i] = Bar { h = vh(i) }; return made[i] end })");
+    settle("list");
+    const float top = bar(1)->y();
+    ListView& l = list();
+    struct Case {
+        std::int64_t count;
+        std::int64_t index;
+    };
+    for (const Case c : {Case{3000, 2500}, Case{1200, 1100}, Case{5000, 4800}, Case{5001, 1800}, Case{10, 1}}) {
+        SCOPED_TRACE(std::to_string(c.count) + " " + std::to_string(c.index));
+        run("n = " + std::to_string(c.count) + "; list:positionViewAtIndex(" + std::to_string(c.index) + ")");
+        EXPECT_LT(settle("list"), 25);
+        Bar* b = bar(c.index);
+        ASSERT_NE(b, nullptr);
+        EXPECT_NEAR(b->y(), top, 1.0f);
+        check("list.firstVisibleIndex == " + std::to_string(c.index));
+        EXPECT_LE(l.contentHeight(), static_cast<float>(c.count) * (44.0f * 3.0f + 2.0f));
+    }
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Items that take no space (hidden here; a delegate that returns nil alike) in a run longer than 256 aren't all visited
+// on every frame, which cost as much as the run is long: a probe of 32 of them is, at an offset that moves each frame.
+// One that is shown again appears once the probe has passed over it, at its place.
+TEST_F(ListViewScrollTest, ALongRunOfHiddenItemsIsProbedNotWalked) {
+    Watchdog watchdog{120.0};
+    run(R"(
+        made = {}
+        reads = 0
+        show = { [1] = true, [3000] = true }
+        list = ListView { height = 200, spacing = 0, model = 3000,
+                          delegate = function(i)
+                              made[i] = Bar { h = 20, visible = function() reads = reads + 1; return show[i] == true end }
+                              return made[i]
+                          end })");
+    settle("list");
+    m_h.renderFrames("list", 2);
+    ASSERT_NE(bar(3000), nullptr);
+    const float top = bar(1)->y();
+    EXPECT_FLOAT_EQ(bar(3000)->y(), top + 20.0f); // the 2998 between take no space
+    run("reads = 0");
+    m_h.renderFrame("list");
+    check("reads > 0 and reads < 100"); // the visible two, the items of the first chunk, the probe: not 3000
+
+    run("show[1500] = true");
+    int frames = 0;
+    for (; frames < 200 && (bar(1500) == nullptr || bar(1500)->renders() == 0); ++frames)
+        m_h.renderFrame("list");
+    EXPECT_LE(frames, 3000 / 32 + 2);
+    settle("list");
+    ASSERT_NE(bar(1500), nullptr);
+    EXPECT_FLOAT_EQ(bar(1500)->y(), top + 20.0f);
+    EXPECT_FLOAT_EQ(bar(3000)->y(), top + 40.0f);
+    EXPECT_FLOAT_EQ(list().contentHeight(), 60.0f);
     EXPECT_TRUE(luaui::errors().empty());
 }
 

@@ -4,9 +4,11 @@ export module imlui.ui.elements.image;
 import std;
 
 import imgui;
+import lua;
 import imlui.color;
 import imlui.widgets;
 import imlui.lua.errors;
+import imlui.lua.node;
 import imlui.resources.name;
 import imlui.image.fill_mode;
 import imlui.image.image_cache;
@@ -67,14 +69,21 @@ public:
 
 private:
     /// The source looked up: the image (null without a source or when it can't be drawn), why it can't be drawn
-    /// ("" when it can), and its natural size (image pixels; the placeholder's for a broken image).
+    /// (null when it can), and its natural size (image pixels; the placeholder's for a broken image). The strings
+    /// are the element's own (the cached resolution and messages), valid until the next lookup.
     struct Lookup {
         const ImageCache::Image* image = nullptr;
-        std::string error;
-        std::string resolved; ///< the full resource name
+        const std::string* error = nullptr;
+        const std::string* resolved = nullptr; ///< the full resource name
         ImVec2 natural{0.0f, 0.0f};
     };
-    [[nodiscard]] Lookup lookup(const Frame& frame) const;
+    /// Looks the source up: resolved (cached, see m_resolvedFrom), then in the image cache, every time (an image may
+    /// be evicted between frames, or still be decoding).
+    [[nodiscard]] Lookup lookup(const Frame& frame);
+    /// The source resolved against `__base`: the full name, nullopt for an invalid source.
+    [[nodiscard]] const std::optional<std::string>& resolvedName(const Frame& frame);
+    /// "Image: <error>" for a broken image, made again only when its error changed.
+    [[nodiscard]] const std::string& brokenMessage(const std::string& error);
 
     /// Sets the read-only properties and tells Lua about the ones that changed.
     void publish(Status status, double implicitWidth, double implicitHeight);
@@ -93,6 +102,16 @@ private:
     ImVec2 m_lastSize{0.0f, 0.0f};
     std::string m_resolved;
     std::set<std::string> m_reported;
+
+    /// The resolution of `source` against the creating script's folder (`__base`), kept while neither changes:
+    /// resolving allocates, and an Image looks its source up on every frame (twice when a layout asks its size).
+    bool m_resolvedValid = false;
+    std::string m_resolvedFrom;        ///< the source it was resolved from
+    std::string m_resolvedBase;        ///< the base it was resolved against
+    std::optional<std::string> m_name; ///< the full resource name; nullopt for an invalid source
+    std::string m_invalidMessage;      ///< the error for an invalid source
+    std::string m_brokenFrom;          ///< the image error m_brokenMessage was made from
+    std::string m_brokenMessage;
 };
 
 } // namespace imlui
@@ -117,6 +136,10 @@ namespace {
 
 /// The size of the placeholder drawn for a broken image without a set size, in dp.
 constexpr float placeholderSize = 48.0f;
+/// The base a source is resolved against when the element has no `__base` (made outside a script).
+constexpr std::string_view defaultBase = "app:/";
+
+const std::string noImageCache = "Image: no image cache (the host didn't set one)";
 
 } // namespace
 
@@ -150,23 +173,51 @@ void Image::declare(TypeBuilder<Image>& type) {
         .defaultProperty("source");
 }
 
-Image::Lookup Image::lookup(const Frame& frame) const {
+const std::optional<std::string>& Image::resolvedName(const Frame& frame) {
+    // `__base` compared in place: nothing is allocated while the source and the base stay the same. A base that
+    // isn't a string or nil (the default) is converted like Node::string() does, and not kept.
+    const luaui::Node& node = frame.node();
+    lua::State* state = node.state();
+    const lua::Type t = node.push("__base");
+    const bool keep = t == lua::Type::String || t == lua::Type::Nil;
+    const std::string_view base = t == lua::Type::String ? lua::tostring(state, -1) : defaultBase;
+    const bool same = keep && m_resolvedValid && m_resolvedFrom == m_source && m_resolvedBase == base;
+    if (!same && keep) m_resolvedBase.assign(base);
+    lua::pop(state);
+    if (same) return m_name;
+    if (!keep) m_resolvedBase = node.string("__base", defaultBase);
+    m_resolvedValid = keep;
+    m_resolvedFrom = m_source;
+    m_name = resolveName(m_resolvedBase, m_source);
+    if (!m_name) m_invalidMessage = "Image: invalid source '" + m_source + "'";
+    return m_name;
+}
+
+const std::string& Image::brokenMessage(const std::string& error) {
+    if (m_brokenMessage.empty() || m_brokenFrom != error) {
+        m_brokenFrom = error;
+        m_brokenMessage = "Image: " + error;
+    }
+    return m_brokenMessage;
+}
+
+Image::Lookup Image::lookup(const Frame& frame) {
     Lookup l;
     if (!m_source.empty()) {
-        const auto name = resolveName(frame.node().string("__base", "app:/"), m_source);
+        const std::optional<std::string>& name = resolvedName(frame);
         if (!name)
-            l.error = "Image: invalid source '" + m_source + "'";
+            l.error = &m_invalidMessage;
         else if (ImageCache* images = frame.images(); !images)
-            l.error = "Image: no image cache (the host didn't set one)";
+            l.error = &noImageCache;
         else {
-            l.resolved = *name;
+            l.resolved = &*name;
             l.image = &images->get(*name);
-            if (!l.image->ready()) l.error = "Image: " + l.image->error();
+            if (!l.image->ready()) l.error = &brokenMessage(l.image->error());
         }
     }
     if (l.image && l.image->ready())
         l.natural = {static_cast<float>(l.image->width()), static_cast<float>(l.image->height())};
-    else if (!l.error.empty())
+    else if (l.error)
         l.natural = {placeholderSize, placeholderSize};
     return l;
 }
@@ -182,13 +233,16 @@ void Image::render(Frame& frame) {
     // Resolve the source and look the image up.
     const Lookup found = lookup(frame);
     const ImageCache::Image* image = found.image;
-    const std::string& error = found.error;
-    m_resolved = found.resolved;
-    if (!error.empty()) reportOnce(error);
+    const bool broken = found.error != nullptr;
+    if (!found.resolved)
+        m_resolved.clear();
+    else if (m_resolved != *found.resolved)
+        m_resolved = *found.resolved;
+    if (broken) reportOnce(*found.error);
 
     const bool ready = image && image->ready();
     const ImVec2 natural = found.natural;
-    const Status status = ready ? Status::Ready : !error.empty() ? Status::Error : Status::None;
+    const Status status = ready ? Status::Ready : broken ? Status::Error : Status::None;
     publish(status, ready ? image->width() : 0, ready ? image->height() : 0);
 
     // Lay out: one item of the computed size.
@@ -202,7 +256,7 @@ void Image::render(Frame& frame) {
     ImDrawList* dl = frame.drawList();
     const float radius = frame.dp(m_radius);
     if (!ready) {
-        if (error.empty()) return;
+        if (!broken) return;
         const auto& s = frame.scheme();
         md::fillRoundRect(dl, pos, {pos.x + size.x, pos.y + size.y}, radius, s.surfaceContainerHighest);
         const float icon = std::min(24.0f, std::min(size.x, size.y) / frame.dp(1.0f) * 0.6f);
@@ -242,7 +296,10 @@ void Image::publish(Status status, double implicitWidth, double implicitHeight) 
 }
 
 void Image::reportOnce(const std::string& message) {
-    if (m_reported.insert(message).second) luaui::reportError(message);
+    // A lookup on the frames after the first: no copy of the message is made.
+    if (m_reported.contains(message)) return;
+    m_reported.insert(message);
+    luaui::reportError(message);
 }
 
 const std::string& Image::source() const { return m_source; }

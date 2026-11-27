@@ -189,6 +189,11 @@ the element is rendered or measured, and its intrinsic size is zero (it renders 
 settles instead of asking for frames while it waits for the size. Such a child submits no ImGui item, so the layouts
 that place children by their item rects (`Row`, `TopAppBar` actions, `NavigationRail` destinations, `ListView` items,
 stacks) give it no size and end the cursor move with an empty item, instead of reading the previous sibling's rect.
+A visual element that doesn't render for another reason (cut past `Renderer::maxDepth` or the stack reserve, where it
+has no intrinsic size either) still records a size, zero, in the layout cache (`imlui.ui.layout_cache`) under the ID its parent
+knows it by, so the layouts that place children by their expected sizes (`Row`, a stack's `align`, `TopAppBar`
+actions, `NavigationRail` destinations) settle after its first frame instead of rendering unseen, or asking for the
+frame that aligns them, on every frame.
 The property sync
 of a typed element runs as a protected call, so a Lua error inside it (a metamethod of the element table, ...) is
 reported, not raised.
@@ -266,6 +271,20 @@ extend to what `cull::outOfView` counts as in view (a view's height more while a
 asked for past the list's own limit are then a view's height of items each), and an
 item that `cull::held` (the active item, the nav focus, an open popup, a non-visual element) renders on the next
 frames at its place even out of range, up to 16 per list.
+
+Where an item starts, and which item is at the view's top, come from a **step tree** (`ListView::StepTree`, a Fenwick
+tree over the measured heights): each node holds its range's measured heights' sum, how many are measured and how
+many take space, so a range's steps are `heights + unmeasured x estimate + spaced x spacing`, and a new estimate or
+`spacing` needs no update. Finding the anchor, placing the margin above it, `positionViewAtIndex`, the pinned items
+and the correction that keeps the view still are O(log n), not a walk from the first item (a million-row list
+scrolled to its end); a model that grows appends to the tree, one that shrinks cuts it. With a negative `spacing` a
+step can be negative, and the anchor is found by the walk instead. Items are placed on whole pixels: ImGui truncates
+the cursor after each item, so a height measured at a fractional y depended on that fraction, which follows the
+estimate, and the two could keep each other changing. Items that take no space (a delegate that returned `nil`, a
+hidden or non-visual element) are stepped over a run at a time; a run of more than 256 of them in range isn't
+visited in full on every frame (its delegates asked for and checked), but a probe of 32 of them is, at an offset that
+moves on each frame, so one that takes space again shows within the run's length / 32 rendered frames. A shorter run
+is visited in full.
 
 **List models.** A C++ list model (`imlui.types.list_model`, see [List models](extending.md#list-models)) reaches Lua
 as one full userdata per model and state, found again through a weak-valued registry table keyed by the model's
@@ -353,7 +372,10 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   time (`layout::keepFrames` 600 frames and `layout::keepSeconds` 60s, looked for every `layout::ageSweepFrames` 64
   frames, as a walk over the whole cache costs ~1 µs per hundred entries: on-demand rendering renders few frames while
   idle, an animation many a second), and above `layout::maxEntries` (16384, about 2 MB) the least recently used go
-  first (elements that come and go every frame); entries used on this frame or the last are never dropped. Keys are
+  first (elements that come and go every frame), down to `layout::capTarget` (7/8 of it, so the walk that finds them
+  is due only after as many new entries); entries used on this frame or the last are never dropped, and when those
+  alone hold the cache above the cap, the next try waits `layout::capRetryFrames` (64) frames or until the cache
+  grew by an eighth of the cap, instead of walking it on every frame for nothing. Keys are
   the element's ImGui ID in the parent's ID scope, made from its identity (see [Element identity](#element-identity)),
   stable for as long as the element lives: `TabBar` pages are the same elements every time, and `Repeater`/`ListView`
   keep a delegate while the item at its index doesn't change (with a `key`, while an item with its key is in the model). A new element never finds a dead one's entry, even
@@ -1298,7 +1320,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
 | `imlui.ui.culling` | Culling (namespace `imlui::cull`): `enabled`/`setEnabled` (`ui.setCulling`), `outOfView` (the clip rect, `margin`, widened during nav moves), `watch`/`held`/`noteNonVisual` and `pin`/`pinned` (children that must render: the active item, nav focus, open popups, non-visual elements), `nextTableRow`/`reserveTableRow` (`Grid` rows). See [Culling](#culling) |
-| `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `settledSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `keepFrames`/`keepSeconds`/`maxEntries`, `cacheEntries`: the last measured sizes by ImGui ID (kept while hidden, bounded by age and an LRU cap), and another frame when a layout placed something by a stale size (convergence) |
+| `imlui.ui.layout_cache` | The layout cache (namespace `imlui::layout`): `lastSize`, `settledSize`, `assumeWidth`/`assumeHeight`, `recordSize`, `maxSettleFrames`, `keepFrames`/`keepSeconds`/`maxEntries`/`capTarget`/`capRetryFrames`/`capRetryGrowth`, `cacheEntries`: the last measured sizes by ImGui ID (kept while hidden, bounded by age and an LRU cap), and another frame when a layout placed something by a stale size (convergence) |
 | `imlui.ui.navigation_scope` | `NavigationScope`: the scoped navigation context (drawer, bar or rail style and destination width) that navigation containers open and `NavigationItem` reads |
 | `imlui.ui.size_class` | Material 3 window size classes: `SizeClass`, `sizeClassForWidth`, `sizeClassName`, `sizeClassFromName` |
 | `imlui.ui.renderer` | `Renderer`: `render` (the per-element wrapper, dispatching to `Renderer::Types`), `forEachChild`, `renderChildren`, `renderStack`, `stackSize`, `renderUnseen`, culling (`cullsChildren`, `skipOutOfView`, `Culling`: the children memo), `isVisual`, `fillsWidth`, `intrinsicSize`, `elementId`/`elementImGuiId`/`pushElementId` (element identity), `attachMenu`, window title, the `ImageCache` (`images`/`setImages`) |

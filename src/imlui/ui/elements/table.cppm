@@ -49,6 +49,7 @@ private:
     double m_rowHeight = 52.0;
     bool m_outlined = true;
     int m_currentRow = 0;
+    std::string m_message; ///< the buffer error messages are formatted into (see reportFormatted)
 };
 
 } // namespace imlui
@@ -60,6 +61,16 @@ namespace imlui {
 namespace {
 
 constexpr std::size_t maxColumns = 511; // BeginTable() asserts columns < IMGUI_TABLE_MAX_COLUMNS (512)
+
+/// Reports an error (luaui::reportError) that a render meets on every frame while it lasts: formatted into `buffer`,
+/// which keeps its capacity (no allocation once it has grown), and passed on, as a copy, only when it isn't
+/// recorded already (what reportError would find, and drop).
+template <class... Args>
+void reportFormatted(std::string& buffer, std::format_string<Args...> format, Args&&... args) {
+    buffer.clear();
+    std::format_to(std::back_inserter(buffer), format, std::forward<Args>(args)...);
+    if (std::ranges::find(luaui::errors(), buffer) == luaui::errors().end()) luaui::reportError(buffer);
+}
 
 } // namespace
 
@@ -87,7 +98,7 @@ void Table::declare(TypeBuilder<Table>& type) {
 void Table::render(Frame& frame) {
     if (m_columns.empty()) return;
     if (m_columns.size() > maxColumns)
-        luaui::reportError(std::format("Table: {} columns, at most {} are shown", m_columns.size(), maxColumns));
+        reportFormatted(m_message, "Table: {} columns, at most {} are shown", m_columns.size(), maxColumns);
     const int columnCount = static_cast<int>(std::min(m_columns.size(), maxColumns));
     const Skin::TableChrome chrome = skin().tableChrome();
     const float rowH = frame.dp(static_cast<float>(m_rowHeight)), headH = chrome.headerHeight;
@@ -138,7 +149,7 @@ void Table::renderRows(const Frame& frame, float rowH, int columnCount, Color se
         while (clipper.Step()) {
             for (lua::Integer i = clipper.DisplayStart + 1; i <= clipper.DisplayEnd; ++i) {
                 const bool isRow = lua::rawgeti(state, rows, i) == lua::Type::Table;
-                if (!isRow) luaui::reportError(std::format("Table: rows[{}] is not a list of cells", i));
+                if (!isRow) reportFormatted(m_message, "Table: rows[{}] is not a list of cells", i);
                 ImGui::TableNextRow(0, rowH);
                 for (int c = 0; c < columnCount; ++c) {
                     ImGui::TableNextColumn();

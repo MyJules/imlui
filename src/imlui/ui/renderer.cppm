@@ -424,18 +424,31 @@ void Renderer::reportTooDeep(int depth, bool stack) {
 }
 
 bool Renderer::renderElement(const Node& n, Types::Kind kind) {
+    // Every visual element is exactly one layout item (a group), so composite elements (label + field, ...) behave
+    // inside Rows.
+    const bool visual = kind == Types::Kind::Visual;
+    // A visual element that can't render (past maxDepth, or no instance) still records a size, zero, under the ID its
+    // parent knows it by (Frame::Child::id(): idKey(0) without an instance). Layouts that place children by their
+    // expected sizes (Row, a stack's `align`, the TopAppBar's actions, the NavigationRail) would otherwise wait for
+    // its first size forever: a Row with a fill would render unseen on every frame and ask for the next.
+    const auto recordNothing = [&](std::uint64_t key) {
+        if (visual) layout::recordSize(ImGui::GetID(idKey(key)), {0.0f, 0.0f});
+    };
     const Nesting level{*this};
-    if (!level) return false;
+    if (!level) {
+        recordNothing(elementId(n));
+        return false;
+    }
     const std::uint64_t key = elementId(n);
-    if (key == 0) return false; // no instance: its constructor threw, which was reported
+    if (key == 0) { // no instance: its constructor threw, which was reported
+        recordNothing(0);
+        return false;
+    }
     const ImGuiID id = ImGui::GetID(idKey(key));
     const MaterialStacksGuard stacks;
     ImGui::PushID(idKey(key));
     const bool disabled = n.has(luaui::keys::enabled) && !n.boolean(luaui::keys::enabled, true);
     if (disabled) ImGui::BeginDisabled();
-    // Every visual element is exactly one layout item (a group), so
-    // composite elements (label + field, ...) behave inside Rows.
-    const bool visual = kind == Types::Kind::Visual;
     const std::uint64_t provisional = m_provisional;
     if (visual)
         ImGui::BeginGroup();

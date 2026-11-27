@@ -54,10 +54,17 @@ inline constexpr int keepFrames = 600;
 inline constexpr double keepSeconds = 60.0;
 /// How often (in frames) the entries old in frames and in time are looked for: a walk over the whole cache, which a
 /// big page holds thousands of entries in, so not every frame. It delays a drop by up to as many frames. The cap
-/// (maxEntries) is checked every frame.
+/// (maxEntries) is checked every frame, and costs a walk only when it is passed (see capTarget, capRetryFrames).
 inline constexpr int ageSweepFrames = 64;
-/// Above this many entries, the least recently used ones are dropped (never those used on this frame or the last).
+/// Above this many entries, the least recently used ones are dropped (never those used on this frame or the last),
+/// down to capTarget: the walk over the cache that finds them is then due only after as many new entries.
 inline constexpr std::size_t maxEntries = 16384;
+inline constexpr std::size_t capTarget = maxEntries - maxEntries / 8;
+/// When a drop over the cap couldn't bring the cache under maxEntries (its entries are live: a page that shows more
+/// elements than that), the next try waits capRetryFrames frames, or until the cache grew by capRetryGrowth: until
+/// then nothing more could go, and every frame would walk the whole cache for nothing.
+inline constexpr int capRetryFrames = 64;
+inline constexpr std::size_t capRetryGrowth = maxEntries / 8;
 
 /// Number of entries (tests: the cache doesn't grow while elements come and go).
 [[nodiscard]] std::size_t cacheEntries();
@@ -90,6 +97,8 @@ struct Cache {
     ImGuiContext* context = nullptr;
     int sweptFrame = -1;
     int ageSweptFrame = -1;
+    int capBlockedFrame = -1;      ///< frame of the last drop over the cap that left the cache above it (-1: none)
+    std::size_t capBlockedSize = 0; ///< the cache's size after it
     std::unordered_map<ImGuiID, Entry> entries;
 };
 
@@ -105,14 +114,21 @@ void sweep(std::unordered_map<ImGuiID, Entry>& map, int frame, double now) {
         });
     }
     if (map.size() <= maxEntries) return;
-    std::vector<std::pair<int, ImGuiID>> old; // (last frame used, id) of the entries that may go
-    old.reserve(map.size());
+    if (cache.capBlockedFrame >= 0 && frame >= cache.capBlockedFrame && frame - cache.capBlockedFrame < capRetryFrames &&
+        map.size() < cache.capBlockedSize + capRetryGrowth)
+        return; // the last try found too few entries that may go (see capRetryFrames)
+    // (last frame used, id) of the entries that may go. Not reserved for the whole map: on a page whose entries are
+    // mostly live, few may go.
+    std::vector<std::pair<int, ImGuiID>> old;
     for (const auto& [id, e] : map)
         if (frame - e.touched >= liveFrames) old.emplace_back(e.touched, id);
-    const std::size_t drop = std::min(old.size(), map.size() - maxEntries);
+    const std::size_t drop = std::min(old.size(), map.size() - capTarget);
     std::ranges::nth_element(old, old.begin() + static_cast<std::ptrdiff_t>(drop));
     for (std::size_t i = 0; i < drop; ++i)
         map.erase(old[i].second);
+    const bool blocked = map.size() > maxEntries;
+    cache.capBlockedFrame = blocked ? frame : -1;
+    cache.capBlockedSize = blocked ? map.size() : 0;
 }
 
 /// The entries of the current ImGui context, swept once per frame.
@@ -123,6 +139,7 @@ std::unordered_map<ImGuiID, Entry>& entries() {
         cache.context = context;
         cache.sweptFrame = -1;
         cache.ageSweptFrame = -1;
+        cache.capBlockedFrame = -1;
     }
     const int frame = ImGui::GetFrameCount();
     if (cache.sweptFrame != frame) {

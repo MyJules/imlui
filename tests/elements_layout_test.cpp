@@ -739,6 +739,27 @@ TEST_F(LayoutTest, AChildThatFailsToRenderTakesNoWidthInARow) {
     }
 }
 
+// ... and it has a size, zero, from its first frame on (the renderer records one for an element that can't render):
+// the Row used to wait for its first size forever, rendering its children unseen on every frame (a fill, a justify)
+// or asking for the frame that aligns them (`align`), so on-demand rendering never stopped. Its siblings, without
+// intrinsic sizes, are seen once they are measured, and the frames stop.
+TEST_F(LayoutTest, ARowWithAChildThatFailsToRenderSettles) {
+    for (const char* row : {"Row { spacing = 10, a, Broken {}, Spacer { fill = true }, c }",
+                            "Row { spacing = 10, justify = 'end', width = 300, a, Broken {}, c }",
+                            "Row { spacing = 10, align = 'bottom', a, Broken {}, c }"}) {
+        SCOPED_TRACE(row);
+        run(std::string{"a = Probe { w = 50, h = 10 } c = Probe { w = 30, h = 20 } root = "} + row);
+        m_h.renderFrame("root");
+        EXPECT_LE(renderWhileRequested("root"), 3); // the frames that measure and place the probes, then none
+        EXPECT_GT(secondsUntilFrame(), 0.0);
+        m_h.renderFrame("root");
+        EXPECT_TRUE(probe("a").seen());
+        EXPECT_TRUE(probe("c").seen());
+        EXPECT_TRUE(hasError("broken on purpose"));
+        luaui::clearErrors();
+    }
+}
+
 // ------------------------------------------------------------ Grid
 
 TEST_F(LayoutTest, GridColumnsBindingSpacingAndBorder) {
@@ -2037,6 +2058,25 @@ TEST(RendererDepth, ACycleIsCutAndReported) {
         ASSERT_EQ(h.run(code), "") << code;
         h.renderFrames("root", 2);
         EXPECT_TRUE(reportedTooDeep()) << code;
+    }
+}
+
+// A visual element cut at the limit still records a size, zero: a Row whose children are past it (it is at the limit
+// itself, at one of these depths) aligns them by their expected sizes, which it used to wait for forever, asking for
+// a frame on every frame. The frames stop at every depth around the limit.
+TEST(RendererDepth, ARowWhoseChildrenArePastTheLimitSettles) {
+    for (int depth = Renderer::maxDepth - 4; depth <= Renderer::maxDepth + 1; ++depth) {
+        SCOPED_TRACE(depth);
+        test::HeadlessFrame h{test::HeadlessFrame::Options{.builtins = true}};
+        ASSERT_EQ(h.run("root = Row { Text { 'a' }, Text { 'b' } } for i = 1, " + std::to_string(depth) +
+                        " do root = Column { root } end"),
+                  "");
+        h.renderFrame("root");
+        int frames = 0;
+        for (; frames < 20 && secondsUntilFrame() == 0.0; ++frames)
+            h.renderFrame("root");
+        EXPECT_LE(frames, 3);
+        clearFrameRequests();
     }
 }
 
