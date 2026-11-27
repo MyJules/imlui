@@ -180,6 +180,7 @@ export using ::ImGuiWindowFlags_NoScrollbar;
 export using ::ImGuiWindowFlags_NoCollapse;
 export using ::ImGuiWindowFlags_AlwaysAutoResize;
 export using ::ImGuiWindowFlags_NoBackground;
+export using ::ImGuiWindowFlags_NoScrollWithMouse;
 export using ::ImGuiWindowFlags_NoSavedSettings;
 export using ::ImGuiWindowFlags_MenuBar;
 export using ::ImGuiWindowFlags_HorizontalScrollbar;
@@ -195,6 +196,7 @@ export using ::ImGuiChildFlags_Borders;
 export using ::ImGuiChildFlags_AlwaysUseWindowPadding;
 export using ::ImGuiChildFlags_AutoResizeX;
 export using ::ImGuiChildFlags_AutoResizeY;
+export using ::ImGuiChildFlags_NavFlattened;
 
 export using ::ImGuiInputTextFlags_;
 export using ::ImGuiInputTextFlags_None;
@@ -574,6 +576,10 @@ inline constexpr float fillWidth = -1.175494351e-38f;
 
 /// ImTextureID_Invalid: the TexID of a texture the backend hasn't created (or has destroyed).
 inline constexpr ImTextureID invalidTextureId = ImTextureID_Invalid;
+
+/// The current ID scope's seed: what ImGui::GetID() hashes with. ImGui::PushOverrideID(seed) inside another window (a
+/// child window a layout opens) makes IDs there the ones they would be outside it.
+inline ImGuiID currentIdSeed() { return ImGui::GetCurrentWindowRead()->IDStack.back(); }
 
 /// IM_ARRAYSIZE replacement.
 template <class T, unsigned N>

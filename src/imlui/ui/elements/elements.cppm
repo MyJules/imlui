@@ -10,6 +10,7 @@ export import imlui.ui.elements.checkbox;
 export import imlui.ui.elements.chip;
 export import imlui.ui.elements.circular_progress;
 export import imlui.ui.elements.color_picker;
+export import imlui.ui.elements.box;
 export import imlui.ui.elements.column;
 export import imlui.ui.elements.combo_box;
 export import imlui.ui.elements.dialog;
