@@ -49,6 +49,10 @@ inline constexpr float hugeExtent = 3.4e38f;
 /// element renders inside its node's scope) keeps two instances apart. It doesn't depend on `label`, so the window
 /// keeps its position, size and popup state across frames and title changes.
 [[nodiscard]] std::string scopedWindowName(std::string_view label, std::string_view id);
+/// scopedWindowName("", id) in a fixed buffer, for a window named every frame without a title: "###id<hash>" with no
+/// allocation (a std::string of it is past the small-string buffer). An `id` longer than 40 characters is cut in the
+/// name (the hash still covers all of it).
+[[nodiscard]] std::array<char, 64> scopedWindowId(std::string_view id);
 
 /// animate()'s settling distances. A fraction (an opacity, a 0..1 progress) needs a fine one to end without a visible
 /// step; a length doesn't: with the fraction's, a tab indicator sliding 300px kept requesting frames about 20 frames
@@ -154,6 +158,14 @@ std::string_view visibleLabel(const char* label) {
 
 std::string scopedWindowName(std::string_view label, std::string_view id) {
     return std::format("{}###{}{:08X}", label, id, ImGui::GetID(id.data(), id.data() + id.size()));
+}
+
+std::array<char, 64> scopedWindowId(std::string_view id) {
+    std::array<char, 64> name{};
+    const int shown = static_cast<int>(std::min<std::size_t>(id.size(), 40));
+    const ImGuiID hash = ImGui::GetID(id.data(), id.data() + id.size());
+    std::snprintf(name.data(), name.size(), "###%.*s%08X", shown, id.data(), hash);
+    return name;
 }
 
 bool popupOver(ImGuiPopupFlags flags) {
@@ -310,17 +322,34 @@ void pathPoint(ImDrawList* dl, ImVec2 p) {
     dl->_Path.push_back(p);
 }
 
-/// Quarter arc around `c` from angle `a0` (radians) clockwise; a single point when `r` is 0.
-void pathQuarter(ImDrawList* dl, ImVec2 c, float r, float a0) {
+/// Appends `n` + 1 points of an arc around `c` at radius `r`: angles a0 + i * step for i in 0..n, from the cosine
+/// and sine of `a0` and of `step` (one sincos per arc, not per point). Each point rotates the last by `step`, in double:
+/// the rounding a float rotation gathers over a few hundred points stays far below a pixel's 1/1000.
+template <class Add>
+void arcPoints(ImVec2 c, float r, double cos0, double sin0, double step, int n, Add add) {
+    const double cs = std::cos(step), sn = std::sin(step);
+    double x = cos0, y = sin0;
+    const auto cx = static_cast<double>(c.x), cy = static_cast<double>(c.y), rr = static_cast<double>(r);
+    for (int i = 0; i <= n; ++i) {
+        add(ImVec2{static_cast<float>(cx + x * rr), static_cast<float>(cy + y * rr)});
+        const double nx = x * cs - y * sn;
+        y = x * sn + y * cs;
+        x = nx;
+    }
+}
+
+/// Quarter arc around `c` starting at `quadrant` quarter turns (0: +x, 1: +y, 2: -x, 3: -y) clockwise; a single
+/// point when `r` is 0. A quarter turn's start has an exact cosine and sine.
+void pathQuarter(ImDrawList* dl, ImVec2 c, float r, int quadrant) {
     if (r <= 0.0f) {
         pathPoint(dl, c);
         return;
     }
+    constexpr double cosines[] = {1.0, 0.0, -1.0, 0.0};
+    const auto q = static_cast<std::size_t>(quadrant & 3);
     const int n = arcSegments(r, pi * 0.5f);
-    for (int i = 0; i <= n; ++i) {
-        const float a = a0 + pi * 0.5f * static_cast<float>(i) / static_cast<float>(n);
-        pathPoint(dl, {c.x + std::cos(a) * r, c.y + std::sin(a) * r});
-    }
+    arcPoints(c, r, cosines[q], cosines[(q + 3) & 3], std::numbers::pi * 0.5 / static_cast<double>(n), n,
+              [&](ImVec2 p) { pathPoint(dl, p); });
 }
 
 ImDrawFlags cornerFlags(ImDrawFlags corners) {
@@ -343,19 +372,18 @@ void pathRoundRect(ImDrawList* dl, ImVec2 a, ImVec2 b, float r, ImDrawFlags corn
     const auto at = [&](int corner) { return (corners & corner) != 0 ? r : 0.0f; };
     const float tl = at(ImDrawFlags_RoundCornersTopLeft), tr = at(ImDrawFlags_RoundCornersTopRight);
     const float br = at(ImDrawFlags_RoundCornersBottomRight), bl = at(ImDrawFlags_RoundCornersBottomLeft);
-    pathQuarter(dl, {a.x + tl, a.y + tl}, tl, pi);
-    pathQuarter(dl, {b.x - tr, a.y + tr}, tr, pi * 1.5f);
-    pathQuarter(dl, {b.x - br, b.y - br}, br, 0.0f);
-    pathQuarter(dl, {a.x + bl, b.y - bl}, bl, pi * 0.5f);
+    pathQuarter(dl, {a.x + tl, a.y + tl}, tl, 2);
+    pathQuarter(dl, {b.x - tr, a.y + tr}, tr, 3);
+    pathQuarter(dl, {b.x - br, b.y - br}, br, 0);
+    pathQuarter(dl, {a.x + bl, b.y - bl}, bl, 1);
     if (dl->_Path.Size > 1 && samePoint(dl->_Path.back(), dl->_Path[0])) dl->_Path.pop_back();
 }
 
 void pathCircle(ImDrawList* dl, ImVec2 c, float r) {
     const int n = std::max(16, arcSegments(r, 2.0f * pi));
-    for (int i = 0; i < n; ++i) {
-        const float a = 2.0f * pi * static_cast<float>(i) / static_cast<float>(n);
-        dl->_Path.push_back({c.x + std::cos(a) * r, c.y + std::sin(a) * r});
-    }
+    // n points: the one after the last would repeat the first.
+    arcPoints(c, r, 1.0, 0.0, 2.0 * std::numbers::pi / static_cast<double>(n), n - 1,
+              [&](ImVec2 p) { dl->_Path.push_back(p); });
 }
 
 } // namespace

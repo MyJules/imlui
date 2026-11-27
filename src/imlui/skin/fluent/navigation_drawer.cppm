@@ -61,8 +61,8 @@ bool beginModalDrawer(const Look& look, const char* id, bool* open, float width)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    const std::string name = md::scopedWindowName("", "modalDrawer");
-    ImGui::Begin(name.c_str(), nullptr,
+    const auto name = md::scopedWindowId("modalDrawer");
+    ImGui::Begin(name.data(), nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(3);

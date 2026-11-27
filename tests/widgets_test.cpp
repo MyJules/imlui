@@ -6,6 +6,8 @@ import std;
 
 import imgui;
 import imlui.color;
+import imlui.skin.fluent.common;
+import imlui.skin.fluent.segmented;
 import imlui.theme.dpi;
 import imlui.theme.scheme;
 import imlui.theme.typography;
@@ -431,6 +433,268 @@ TEST_F(WidgetsTest, NarrowFieldsKeepTheirInputInside) {
     EXPECT_LE(field, x0 + w);
     EXPECT_LE(multiline, x0 + w);
     EXPECT_LE(spin, x0 + w);
+}
+
+// ------------------------------------------------------------------ SpinBox
+
+// A step that isn't finite or positive: its magnitude, else 1. A NaN step made the value NaN, a zero one reported a
+// change that wasn't, a negative one turned the buttons around.
+TEST_F(WidgetsTest, SpinBoxStepIsFiniteAndPositive) {
+    const double nan = std::numeric_limits<double>::quiet_NaN(), inf = std::numeric_limits<double>::infinity();
+    EXPECT_EQ(md::spinStepSize(0.5), 0.5);
+    EXPECT_EQ(md::spinStepSize(-2.0), 2.0);
+    EXPECT_EQ(md::spinStepSize(0.0), 1.0);
+    EXPECT_EQ(md::spinStepSize(nan), 1.0);
+    EXPECT_EQ(md::spinStepSize(inf), 1.0);
+    EXPECT_EQ(md::spinStepSize(-inf), 1.0);
+}
+
+// The value rules both skins' spin boxes share: a non-finite value (typed "nan", "inf") goes back, a change is
+// reported only when the value differs, and a changed value is clamped (unless the range is empty).
+TEST_F(WidgetsTest, SpinBoxValueRules) {
+    const double nan = std::numeric_limits<double>::quiet_NaN(), inf = std::numeric_limits<double>::infinity();
+    double v = nan; // typed "nan"
+    EXPECT_FALSE(md::spinBoxApply(&v, 4.0, 0, 1.0, 0.0, 10.0));
+    EXPECT_EQ(v, 4.0);
+    v = inf;
+    EXPECT_FALSE(md::spinBoxApply(&v, 4.0, 0, 1.0, 0.0, 10.0));
+    EXPECT_EQ(v, 4.0);
+    v = 4.0; // a NaN step steps by 1
+    EXPECT_TRUE(md::spinBoxApply(&v, 4.0, 1, nan, 0.0, 10.0));
+    EXPECT_EQ(v, 5.0);
+    v = 4.0; // a negative step: the increment still increments
+    EXPECT_TRUE(md::spinBoxApply(&v, 4.0, 1, -2.0, 0.0, 10.0));
+    EXPECT_EQ(v, 6.0);
+    v = 4.0; // a zero step steps by 1, so a press changes the value
+    EXPECT_TRUE(md::spinBoxApply(&v, 4.0, -1, 0.0, 0.0, 10.0));
+    EXPECT_EQ(v, 3.0);
+    v = 9.5; // clamped to the range
+    EXPECT_TRUE(md::spinBoxApply(&v, 9.5, 1, 1.0, 0.0, 10.0));
+    EXPECT_EQ(v, 10.0);
+    v = 10.0; // clamped back to where it was: no change
+    EXPECT_FALSE(md::spinBoxApply(&v, 10.0, 1, 1.0, 0.0, 10.0));
+    v = 20.0; // an empty range leaves the value alone
+    EXPECT_TRUE(md::spinBoxApply(&v, 4.0, 0, 1.0, 10.0, 0.0));
+    EXPECT_EQ(v, 20.0);
+    v = nan; // a NaN value bound from the script: no change reported every frame
+    EXPECT_FALSE(md::spinBoxApply(&v, nan, 0, 1.0, 0.0, 10.0));
+    EXPECT_FALSE(md::spinBoxApply(&v, nan, 1, 1.0, 0.0, 10.0));
+    EXPECT_TRUE(std::isnan(v));
+}
+
+// Typing "nan" into a spin box leaves its value alone and reports no change.
+TEST_F(WidgetsTest, SpinBoxTypedNanIsIgnored) {
+    double v = 3.0;
+    bool changed = false;
+    ImVec2 at{};
+    const auto render = [&] {
+        frame([&] {
+            at = ImGui::GetCursorScreenPos();
+            changed = md::spinBox("##spin", &v, 0.0, 10.0, 1.0, 0, {}) || changed;
+        });
+    };
+    ImGuiIO& io = ImGui::GetIO();
+    // Clicks into the number (which selects it all), types `text` and presses Enter (InputScalar applies it then).
+    const auto type = [&](std::string_view text) {
+        render();
+        io.AddMousePosEvent(at.x + dp(30), at.y + dp(28));
+        render();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        render();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        render();
+        for (const char ch : text)
+            io.AddInputCharacter(static_cast<unsigned>(ch));
+        render();
+        io.AddKeyEvent(ImGuiKey_Enter, true);
+        render();
+        io.AddKeyEvent(ImGuiKey_Enter, false);
+        render();
+        render();
+    };
+    type("nan");
+    EXPECT_EQ(v, 3.0);
+    EXPECT_FALSE(changed);
+    type("inf");
+    EXPECT_EQ(v, 3.0);
+    EXPECT_FALSE(changed);
+    // A number typed the same way is taken.
+    type("7");
+    EXPECT_EQ(v, 7.0);
+    EXPECT_TRUE(changed);
+}
+
+// ------------------------------------------------------------------ ColorField
+
+// While typing, only a whole #RRGGBB or #RRGGBBAA is applied ("#123" on the way to "#123456" isn't #112233); the
+// short forms when the edit ends.
+TEST_F(WidgetsTest, HexInputAppliesCompleteColorsWhileTyping) {
+    Color c{0.0f, 0.0f, 0.0f, 1.0f};
+    for (const char* partial : {"#", "#1", "#12", "#123", "#1234", "#12345", "#1234567", "123", "#zzzzzz"})
+        EXPECT_FALSE(md::applyHexInput(&c, partial, false, true)) << partial;
+    EXPECT_EQ(c, (Color{0.0f, 0.0f, 0.0f, 1.0f}));
+    EXPECT_TRUE(md::applyHexInput(&c, "#336699", false, true));
+    EXPECT_EQ(toHex(c), "#336699");
+    EXPECT_TRUE(md::applyHexInput(&c, "33669980", false, true));
+    EXPECT_EQ(toHex(c), "#33669980");
+    EXPECT_TRUE(md::applyHexInput(&c, "#33669980", false, false)); // no alpha: opaque
+    EXPECT_EQ(toHex(c), "#336699");
+    // When the edit ends, the short forms too.
+    EXPECT_TRUE(md::applyHexInput(&c, "#123", true, true));
+    EXPECT_EQ(toHex(c), "#112233");
+    EXPECT_TRUE(md::applyHexInput(&c, "#1234", true, true));
+    EXPECT_EQ(toHex(c), "#11223344");
+    EXPECT_FALSE(md::applyHexInput(&c, "#12", true, true));
+    EXPECT_EQ(toHex(c), "#11223344");
+}
+
+// The picker body keeps a short form typed in the hex box until the edit ends, then applies it; the box's own buffer
+// (made from the color each frame) doesn't hold it by then.
+TEST_F(WidgetsTest, ColorPickerBodyCommitsShortHexWhenTheEditEnds) {
+    Color c{1.0f, 1.0f, 1.0f, 1.0f};
+    std::string typed;              // what the "user" typed in the hex box this frame (empty: nothing)
+    bool ends = false;              // the box loses focus this frame
+    bool changed = false;
+    const auto render = [&] {
+        frame([&] {
+            std::string hex = toHex(c);
+            changed = md::colorPickerBody(&c, hex, false, dp(240), [&](std::string& value, const md::TextFieldOptions&) {
+                md::TextFieldResult r;
+                if (!typed.empty()) {
+                    value = typed;
+                    r.changed = true;
+                }
+                r.committed = ends;
+                return r;
+            });
+        });
+    };
+    for (const char* step : {"#1", "#12", "#123"}) {
+        typed = step;
+        render();
+        EXPECT_FALSE(changed) << step;
+        EXPECT_EQ(toHex(c), "#FFFFFF") << step;
+    }
+    typed.clear();
+    ends = true;
+    render();
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(toHex(c), "#112233");
+    // A whole color applies while typing.
+    ends = false;
+    typed = "#336699";
+    render();
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(toHex(c), "#336699");
+}
+
+// ------------------------------------------------------------------ Chart and shapes
+
+// The hovered point is the finite one nearest the mouse (the earlier on a tie): found from the mouse's x, then moved
+// past the gaps. The hover line marks it.
+TEST_F(WidgetsTest, ChartHoverFindsTheNearestFinitePoint) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const std::vector<float> values{1.0f, nan, nan, nan, 3.0f, 2.0f, nan, 5.0f};
+    const Color hoverLine = md::scheme().outline.withAlpha(0.6f);
+    const int n = static_cast<int>(values.size());
+    for (float mouse = 0.0f; mouse < 420.0f; mouse += 7.0f) {
+        ImGui::GetIO().AddMousePosEvent(mouse, 60.0f);
+        float x0 = 0.0f, x1 = 0.0f;
+        std::vector<Vertex> drawn;
+        frame([&] {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            md::ChartOptions o;
+            o.width = 400.0f;
+            x0 = p.x + dp(40);
+            x1 = p.x + 400.0f - dp(8);
+            drawn = verticesOf([&] { md::chart("##chart", values, o); });
+        });
+        const auto px = [&](int i) { return x0 + (x1 - x0) * static_cast<float>(i) / static_cast<float>(n - 1); };
+        int expected = -1;
+        float best = md::hugeExtent;
+        for (int i = 0; i < n; ++i)
+            if (std::isfinite(values[static_cast<std::size_t>(i)]) && std::fabs(px(i) - mouse) < best) {
+                best = std::fabs(px(i) - mouse);
+                expected = i;
+            }
+        const ImU32 packed = md::col(hoverLine);
+        float lineX = -1.0f;
+        for (const Vertex& v : drawn)
+            if (v.col == packed) lineX = v.pos.x;
+        if (mouse < 8.0f || mouse >= 400.0f) continue; // outside the chart's item: nothing hovered
+        ASSERT_GE(lineX, 0.0f) << "mouse at " << mouse;
+        EXPECT_NEAR(lineX, std::floor(px(expected) + 0.5f), 1.01f) << "mouse at " << mouse;
+    }
+}
+
+// A line with far more points than pixel columns draws each column's lowest and highest point: about as many
+// vertices as for a few hundred points, all finite.
+TEST_F(WidgetsTest, ChartDecimatesLinesWiderThanItsPixels) {
+    std::vector<float> many(200000);
+    for (std::size_t i = 0; i < many.size(); ++i)
+        many[i] = std::sin(static_cast<float>(i) * 0.01f);
+    many[1234] = std::numeric_limits<float>::quiet_NaN(); // a gap
+    std::vector<Vertex> drawn, few;
+    frame([&] {
+        md::ChartOptions o;
+        o.width = 400.0f;
+        drawn = verticesOf([&] { md::chart("##many", many, o); });
+        few = verticesOf([&] { md::chart("##few", std::vector<float>(many.begin(), many.begin() + 700), o); });
+    });
+    ASSERT_FALSE(drawn.empty());
+    EXPECT_LT(drawn.size(), few.size() * 2);
+    for (const Vertex& v : drawn)
+        ASSERT_TRUE(std::isfinite(v.pos.x) && std::isfinite(v.pos.y));
+}
+
+// Circles and rounded corners are built by rotating one point (one sincos per arc): every vertex still lies on the
+// circle, within the anti-aliased fringe, all the way round.
+TEST_F(WidgetsTest, ArcsStayOnTheirCircle) {
+    for (const float r : {3.0f, 20.0f, 150.0f, 900.0f}) {
+        std::vector<Vertex> drawn;
+        const ImVec2 c{500.0f, 400.0f};
+        frame([&] {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->PushClipRect({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
+            drawn = verticesOf([&] { md::fillCircle(dl, c, r, {1.0f, 0.0f, 0.0f, 1.0f}); });
+            dl->PopClipRect();
+        });
+        ASSERT_FALSE(drawn.empty());
+        float minX = md::hugeExtent, maxX = -md::hugeExtent;
+        for (const Vertex& v : drawn) {
+            const float d = std::hypot(v.pos.x - c.x, v.pos.y - c.y);
+            ASSERT_NEAR(d, r, 1.0f) << "radius " << r;
+            minX = std::min(minX, v.pos.x);
+            maxX = std::max(maxX, v.pos.x);
+        }
+        EXPECT_NEAR(maxX - minX, 2.0f * r, 1.5f) << "radius " << r;
+    }
+}
+
+// ------------------------------------------------------------------ Fluent segmented
+
+// A Fluent segmented button narrower than its insets gives each segment at least a pixel: ImGui takes a 0-wide hit box
+// as the available width, so every segment's box lay across the row and a click beside the control picked one.
+TEST_F(WidgetsTest, NarrowFluentSegmentedKeepsItsHitBoxesInside) {
+    const fluent::Look look{fluent::themeTokens(), fluent::themeColors()};
+    const std::vector<std::string> items{"A", "B", "C"};
+    int current = 1;
+    ImVec2 at{};
+    const auto render = [&] {
+        frame([&] {
+            at = ImGui::GetCursorScreenPos();
+            fluent::segmented(look, "##seg", items, &current, 1.0f, {});
+        });
+    };
+    render();
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(at.x + 150.0f, at.y + dp(8));
+    render();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    render();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    render();
+    EXPECT_EQ(current, 1);
 }
 
 // ------------------------------------------------------------------ Navigation
