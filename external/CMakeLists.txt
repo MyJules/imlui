@@ -65,22 +65,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 add_library(ext::lua ALIAS imlui_ext_lua)
 
-# ---------------------------------------------------------------- GLFW 3.4 (`glfw`, see the top of this file)
-if(TARGET glfw)
-    _imlui_use_app_library(glfw glfw)
-else()
-    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-    add_subdirectory(glfw EXCLUDE_FROM_ALL)
-    # Its own install rules are off; ours install its headers under the private folder instead of include/.
-    set_target_properties(glfw PROPERTIES SYSTEM ON EXPORT_NAME ext_glfw)
-    set_property(TARGET glfw PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-                 $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/glfw/include> $<INSTALL_INTERFACE:${ext_include}/glfw>)
-    add_library(ext::glfw ALIAS glfw)
-endif()
-
 # ---------------------------------------------------------------- SDL 3.4.20 (`SDL3-static`, see the top of this file)
 # Windowing, input and events (src/wrap/window.cppm). Trimmed to what its CMake build needs: no test/, examples/,
 # docs/, build-scripts/ or IDE projects. Only the static library, and only the parts imlui uses: video (with OpenGL)
