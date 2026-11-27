@@ -37,7 +37,11 @@ public:
     [[nodiscard]] std::optional<ResourceData> read(std::string_view path) const override;
     [[nodiscard]] bool exists(std::string_view path) const override;
     [[nodiscard]] std::vector<std::string> list(std::string_view path) const override;
+    /// The table's range under `path`, found by bisection: no walk.
+    [[nodiscard]] std::vector<std::string> listFiles(std::string_view path) const override;
     [[nodiscard]] std::optional<ResourceTime> modified(std::string_view path) const override;
+    /// False: the files never change.
+    [[nodiscard]] bool mayChange() const override;
 
     /// The most bytes of decompressed files the mount keeps alive of its own (those read most recently): 16 MiB,
     /// enough for an app's scripts and a few fonts. A larger file is kept only by its handles.
@@ -64,7 +68,7 @@ private:
         bool failed = false;                               ///< corrupt: reads as missing from now on
         std::weak_ptr<const std::vector<std::byte>> bytes; ///< alive while `retained` or a handle holds it
         // Guarded by m_retainMutex (an eviction resets another file's `retained`, holding only that lock).
-        Buffer retained;           ///< the mount's own reference, while among the files read most recently
+        Buffer retained;            ///< the mount's own reference, while among the files read most recently
         std::uint64_t lastRead = 0; ///< m_reads at the last read; its key in m_recent while `retained`
     };
 
@@ -75,10 +79,10 @@ private:
     std::vector<Entry> m_entries;                   ///< sorted by path, unique
     std::unique_ptr<Decompressed[]> m_decompressed; ///< by entry index
     mutable std::atomic<std::size_t> m_decompressions = 0;
-    mutable std::mutex m_retainMutex; ///< guards the fields below and Decompressed::retained / lastRead
-    mutable std::uint64_t m_reads = 0;                         ///< the clock of Decompressed::lastRead
-    mutable std::size_t m_retained = 0;                        ///< the bytes of the Decompressed::retained buffers
-    mutable std::map<std::uint64_t, std::size_t> m_recent;     ///< retained entries by lastRead, oldest first
+    mutable std::mutex m_retainMutex;   ///< guards the fields below and Decompressed::retained / lastRead
+    mutable std::uint64_t m_reads = 0;  ///< the clock of Decompressed::lastRead
+    mutable std::size_t m_retained = 0; ///< the bytes of the Decompressed::retained buffers
+    mutable std::map<std::uint64_t, std::size_t> m_recent; ///< retained entries by lastRead, oldest first
 };
 
 } // namespace imlui
@@ -201,7 +205,21 @@ std::vector<std::string> PackedMount::list(std::string_view path) const {
     return out;
 }
 
+std::vector<std::string> PackedMount::listFiles(std::string_view path) const {
+    std::vector<std::string> out;
+    const std::string folder = path.empty() ? std::string{} : std::string{path} + "/";
+    // The files under the folder are the entries that start with `folder/`: one range of the sorted table, already in
+    // order once the common prefix is cut.
+    auto it =
+        std::ranges::lower_bound(m_entries, folder, {}, [](const Entry& e) -> std::string_view { return e.path; });
+    for (; it != m_entries.end() && it->path.starts_with(folder); ++it)
+        out.push_back(it->path.substr(folder.size()));
+    return out;
+}
+
 std::optional<ResourceTime> PackedMount::modified(std::string_view) const { return std::nullopt; }
+
+bool PackedMount::mayChange() const { return false; }
 
 const std::vector<PackedMount::Entry>& PackedMount::entries() const { return m_entries; }
 

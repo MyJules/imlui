@@ -17,7 +17,9 @@ struct EngineConfig {
     Resources resources;
     std::string entry = "app:/main.lua"; ///< the main UI script, a full resource name
     platform::Window::Config window;
-    bool hotReload = true; ///< reload when a Lua file in a mutable mount (a directory) changes
+    /// Reload when a Lua file in a mutable mount (a directory) changes: scanned on the background pool every 400 ms,
+    /// and not at all when no mount can change (Resources::mayChange: only embedded files and .pak archives).
+    bool hotReload = true;
     /// When > 0, quit after this many rendered frames and exit with 1 if a script error was reported (smoke
     /// tests). defaultConfig() reads it from the environment variable IMLUI_EXIT_AFTER_FRAMES.
     int exitAfterFrames = 0;

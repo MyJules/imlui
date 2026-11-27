@@ -45,11 +45,13 @@ flowchart TD
 2. Applies the root element's `title` and `width`/`height` (dp, multiplied by the content scale) to the native
    window, centers it and shows it.
 3. Each loop iteration:
-   - Every 400 ms, compares the modification times of the watched resources (hot reload). A change, or a `reload()` call, triggers
-     `reloadNow()`.
+   - Every 400 ms, scans the modification times of the watched resources on the background pool and compares them
+     with the previous scan when the result comes back (hot reload, see [Hot reload](#hot-reload)). A change, or a
+     `reload()` call, triggers `reloadNow()`.
    - Computes how long it may sleep: until the next **requested frame** (see below), the next C++ main timer or the
-     next file check, whichever comes first. With nothing pending, that's the 400 ms hot-reload interval (or forever without hot
-     reload). While minimized it sleeps at least 100 ms (but not past a C++ main timer).
+     next file check, whichever comes first. With nothing pending, that's the 400 ms hot-reload interval (or forever
+     without hot reload, while a scan runs, or when no mount's files can change). While minimized it sleeps at least
+     100 ms (but not past a C++ main timer).
    - `window.waitEvents(timeout)` (`glfwWaitEventsTimeout`). Input or window events start a **settle period** of
      0.3 s, during which every iteration renders, so transitions and hover layers finish.
    - Runs the functions other threads queued with `imlui::post()` / `Engine::post()` (`imlui.ui.main_thread`;
@@ -59,12 +61,14 @@ flowchart TD
      unhandled since the last one ([Async](lua-api.md#async)). Then the C++ main timers due run
      (`imlui.ui.main_timers`: `delay()`, `withTimeout`), also outside a frame.
    - `renderFrame()`, but only if a frame is due. Otherwise the loop goes back to sleep without rendering.
-4. When the loop ends (window closed, `quit()`): the wake handler is removed, the C++ main timers dropped (a dropped
-   `delay` is cancelled) and the queued posts dropped, the Lua
-   state closes (every element dies, so the work its `runAsync` started sees its stop token stop), the window and
-   the fonts go, then `shutdownBackground()` (`imlui.ui.background`): every pool task's token stops, queued tasks are
-   dropped, and the workers are joined if their tasks return within 1 s, else detached. What they posted meanwhile is
-   dropped.
+4. When the loop ends (window closed, `quit()`, or an exception that escapes it: a scope guard runs the same
+   `Engine::shutdown()`): the wake handler is removed, the C++ main timers dropped (a dropped `delay` is cancelled,
+   which may resume a coroutine) and the queued posts dropped, the Lua state closes (every element dies, so the work
+   its `runAsync` started sees its stop token stop), and then the timers, posts and frame requests that this added
+   are dropped as well, so the next `run()` doesn't start with them. Then the window and the fonts go (the window
+   before `~Engine` destroys the image cache, whose textures the backend's shutdown still walks), then
+   `shutdownBackground()` (`imlui.ui.background`): every pool task's token stops, queued tasks are dropped, and the
+   workers are joined if their tasks return within 1 s, else detached. What they posted meanwhile is dropped.
 
 ### On-demand rendering
 
@@ -146,8 +150,10 @@ theme. With `GLFW_SCALE_TO_MONITOR`, Windows resizes the native window itself wh
    title is only updated when it changes.
 
 **Live resize.** On Windows, the OS runs a modal loop while the user drags the window border, so
-`glfwWaitEventsTimeout()` doesn't return. The engine registers `renderFrame` as the window's **refresh callback**, and
-GLFW calls it from its refresh and framebuffer-size callbacks. The UI then lays itself out again during the drag.
+`glfwWaitEventsTimeout()` doesn't return. The engine registers a **refresh callback** that runs the posted functions
+and the due C++ main timers and then `renderFrame()`, and GLFW calls it from its refresh and framebuffer-size callbacks
+(only inside `waitEvents()`, so never during a frame). The UI then lays itself out again during the drag, and worker
+results and `delay()`s don't stall until it ends.
 
 **Error overlay.** All calls into Lua go through `luaui::safeCall`, which runs `pcall` with a traceback handler.
 Errors are logged with the source tag `lua`, deduplicated, and capped at the last 32. While any are recorded, a
@@ -645,7 +651,11 @@ Both are kept by the DSL (`src/resources/imlui.lua`); C++ calls element function
 
 The watcher polls `Resources::modified` for every `.lua` file in the mounted prefixes (`Resources::listRecursive`,
 which walks each mount once through `Mount::listFiles`) and for every resource the current Lua state read or loaded,
-plus the current theme's fonts. Each load records its reads in a set of its own (`registerResources`' `loaded`): on
+plus the current theme's fonts. The scan runs on the background pool, on copies (a `Resources` copy shares the
+mounts, which are safe from any thread, and a copy of the watched names), every 400 ms after the previous one came
+back; it leaves its result in an inbox and posts to wake the loop, which compares it at its next iteration. Only the
+first scan, before the loop starts, runs on the main thread. When no mount's files can change (`Mount::mayChange`:
+false for embedded data and `.pak` archives, true for a directory and by default), nothing is polled at all. Each load records its reads in a set of its own (`registerResources`' `loaded`): on
 success it replaces the watched names (the theme's fonts added back), so a file the new script no longer reads stops
 triggering reloads; after a failure its names are added to the running script's, so fixing what failed reloads.
 Two scans are compared by `resourcesChanged` (`imlui.app.file_snapshot`): a changed time, a removed `.lua` file or a
@@ -653,8 +663,9 @@ new one is a change, a name no longer watched isn't. A name first read since the
 by the running script) has no recorded time, so it counts as changed when its time is at or after that scan's start:
 an edit made between the read and the next scan isn't missed, at the cost of one extra reload when the edit came
 just before the read. Only directory mounts report times; files in immutable mounts
-(embedded data, `.pak` archives) never change while the app runs. With the same check, `ImageCache::refresh` drops
-the images whose file changed; they're decoded again at their next use, without a reload.
+(embedded data, `.pak` archives) never change while the app runs. The same scan times the cached images, and
+`ImageCache::refresh(times)` drops those whose file changed; they're decoded again at their next use, without a
+reload.
 
 ## Resources
 
@@ -682,9 +693,9 @@ read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged. A buffer lives as long as a `ResourceData` holds it; the cache itself keeps alive only the latest buffers of the files read most recently, up to `DirectoryMount::retainedBytes` (8 MiB) in all (a larger file isn't kept, a removed file's is dropped), and otherwise finds a buffer only while a handle still holds it, so a file read once and dropped (an image, once decoded) doesn't stay in memory. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer while that is still alive (otherwise it reads as missing until it can be read), and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show (whether a folder holds one is kept per folder while its time is unchanged, so listing a folder or asking whether one exists times the folders under it instead of walking them and matching every file against the patterns). It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing, and an entry whose name has no UTF-8 form (an unpaired surrogate on Windows) is left out while the rest of its folder is served. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged, and a name missing from a listing read within 2 s of that time lists the folder again, since an entry added in the same tick leaves the time unchanged; a folder that can't be timed or listed fails the check, so nothing in it is found). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach. |
-| `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
-| `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged. A buffer lives as long as a `ResourceData` holds it; the cache itself keeps alive only the latest buffers of the files read most recently, up to `DirectoryMount::retainedBytes` (8 MiB) in all (a larger file isn't kept, a removed file's is dropped), and otherwise finds a buffer only while a handle still holds it, so a file read once and dropped (an image, once decoded) doesn't stay in memory. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer while that is still alive (otherwise it reads as missing until it can be read), and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show (whether a folder holds one is kept per folder while its time is unchanged, so listing a folder or asking whether one exists times the folders under it instead of walking them and matching every file against the patterns). It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing, and an entry whose name has no UTF-8 form (an unpaired surrogate on Windows) is left out while the rest of its folder is served. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged, and a name missing from a listing read within 2 s of that time lists the folder again, since an entry added in the same tick leaves the time unchanged; a folder that can't be timed or listed fails the check, so nothing in it is found). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach; the selection's `files` and `unmatched` are kept sorted, so each file is checked against them by bisection. The folder listings are read and timed without the mount's lock, which is held only to look them up and store them, so the hot-reload scan on a worker doesn't hold up the main thread's reads. |
+| `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable (`mayChange()` is false); `listFiles` is a range of its sorted table. |
+| `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable, like `EmbeddedMount`; the archive names its own mount point. |
 
 `EmbeddedMount` and `PakMount` share `PackedMount`: a sorted table of files, each stored as is or as one zstd frame.
 A stored file is served straight from the embedded data or the archive buffer (zero-copy). A compressed one is
@@ -814,14 +825,22 @@ name (`app:/a/./b.png` is `app:/a/b.png`), decodes a name once with stb_image (P
 `ImTextureData` registered with `ImGui::RegisterUserTexture`: ImGui 1.92's texture list, so the OpenGL backend creates
 the GL texture before the first frame that draws it (status `WantCreate`) and no GL call is made outside the backend.
 The texture takes stb_image's pixel buffer as its own (set up as `ImTextureData::Create` would, without its unchecked
-`IM_ALLOC`, zero fill and copy) and frees it with `stbi_image_free` when it goes. A failure (missing file, not an image)
-is cached too and reported once.
+`IM_ALLOC`, zero fill and copy). Once the backend has uploaded it (status `OK`), `collect()` frees that CPU copy
+(`stbi_image_free`), so an image costs its pixels once, on the GPU: the backend reads `Pixels` only to create or update
+a texture, and nothing updates these (imlui's backend destroys its textures only when it shuts down; one that dropped
+them mid-run would have nothing to create them again from). A failure (missing file, not an image) is cached too and
+reported once.
 
-Decoding a large image takes hundreds of milliseconds, so `ImageCache::setAsync(true)` moves it to the background pool
-(`runInBackground`, `imlui.ui.background`): `get()` returns an image that is `loading()` (not ready, no error) at once,
-and a worker reads the file (from a copy of the `Resources`, which shares its mounts) and decodes it. The result goes to
-an inbox shared with the cache (so a decode that outlives the cache has somewhere to go), and the worker posts
-`requestFrame()` to the main thread (`imlui::post`, which wakes the loop). The next `get()` or `collect()` takes the
+Decoding a large image takes hundreds of milliseconds, so `ImageCache::setAsync(true)` moves it to the background pool's
+decode lane (`runInBackground(work, BackgroundLane::Decodes)`, `imlui.ui.background`: two workers of its own, the
+newest request first, so a page of photos doesn't hold up a `runAsync` queued after it, long tasks don't starve the
+images, and the images just scrolled into view decode before those scrolled past): `get()` returns an image that is
+`loading()` (not ready, no error) at once, and a worker reads the file (from a copy of the `Resources`, which shares its
+mounts) and decodes it. A decode whose image was dropped before it started (`refresh()`, `clear()`, the cache
+destroyed: a flag shared with the image) skips the read and the decode. The result goes to an inbox shared with the
+cache (so a decode that outlives the cache has somewhere to go), and the worker that finds the inbox empty posts
+`requestFrame()` to the main thread (`imlui::post`, which wakes the loop); the results after it ride along until the
+main thread takes them. The next `get()` or `collect()` takes the
 results on the main thread, makes and registers the textures there, and the requested frame draws them. A decode the
 pool drops unrun (a shutdown) hands in a cancelled result from its destructor, so nothing waits for ever; the image is
 then an error that the next `refresh()` drops. `refresh()` and `clear()` drop loading images too (each decode carries a
@@ -830,8 +849,8 @@ and takes them, for tests and tools without a frame loop. The default is synchro
 returns).
 
 `refresh()` drops changed images: a texture the backend has uploaded is marked `WantDestroyNextFrame`, the backend
-destroys it after the next frame and `collect()` (after each frame) deletes it; one that was never uploaded is deleted
-at once. At shutdown the backend destroys the remaining textures with the window, and the cache deletes the data after
+destroys it after the next frame and `collect()` (after each frame) deletes it, asking for frames while one waits; one
+that was never uploaded is deleted at once. At shutdown the backend destroys the remaining textures with the window, and the cache deletes the data after
 the ImGui context is gone. The decoded pixels are kept within a byte budget (`ImageCache::setBudget`, default
 `defaultBudget` = 256 MiB, `0` for no limit; the root `ApplicationWindow`'s `imageCacheBudget` prop sets it): `get()`
 stamps an image with the ImGui frame, and `collect()` evicts the images drawn least recently (through the same
@@ -841,9 +860,12 @@ from its header (`stbi_info_from_memory`) before decoding: a flat 16384 x 16384 
 1 GiB, and its texture would allocate as much again, where a failed allocation aborts. A progressive JPEG (its frame
 header, found by walking the marker segments before it, is SOF2) gets half that, `maxProgressiveJpegBytes`: stb_image
 keeps all its DCT coefficients until the last scan (2 bytes per sample), which about doubles the peak. A failure costs
-0 bytes; failures are kept up to `ImageCache::maxFailures` (256), beyond which `collect()` drops those asked for least
-recently (again sparing the current and the previous frame), so a script making up names of missing files can't grow
-the cache without bound. An evicted image is decoded again by its next `get()` (`decodeCount` counts it). So a
+0 bytes; failures are kept up to `ImageCache::maxFailures` (256; counted as images fail and go, so a frame doesn't walk
+the cache to count them), beyond which `collect()` drops those asked for least recently (again sparing the current and the previous frame), so a script making up names of missing files can't grow
+the cache without bound. An evicted image is decoded again by its next `get()` (`decodeCount` counts it). `get()` looks
+the name up as given first, and normalizes it only when that misses: an `Image` element asks with the canonical name
+every frame. The decode isn't scaled down to the size the element draws at: the cache holds one texture per name,
+shared by every element that shows it at whatever size, so a smaller decode would need the size in the key. So a
 reference from `get()` is valid until the end of the frame, or until `refresh()` or `clear()`. `smooth = false` uses
 the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
 
@@ -1382,8 +1404,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
 | `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, wake handler |
 | `imlui.ui.main_timers` | C++ main-thread timers: `addMainTimer(seconds, fn)` / `removeMainTimer(id)` on the app clock, no Lua state needed; the engine's loop runs the due ones (`runDueMainTimers`, after the posts, outside a frame) and sleeps at most until the next (`secondsUntilMainTimer`); `clearMainTimers` drops them at shutdown. What `delay()` uses |
-| `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
-| `imlui.ui.background` | The background pool: `runInBackground(work)` (any thread; `work(std::stop_token)` on up to `backgroundThreadLimit()` workers, `hardware_concurrency() - 1` clamped to [2, 8], started lazily; a throw reported on the main thread), `shutdownBackground(wait)` (tokens stopped, queue dropped, workers joined within `wait` or detached; a later task starts a new pool; `Engine::run()` calls it), `backgroundTaskCount` |
+| `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed; only a post into an empty queue calls the wake handler, outside the queue's lock), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs; waits for a thread still inside the old one). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
+| `imlui.ui.background` | The background pool: `runInBackground(work, lane)` (any thread; `work(std::stop_token)` on up to `backgroundThreadLimit()` workers, `hardware_concurrency() - 1` clamped to [2, 8], started lazily, first queued first run; `BackgroundLane::Decodes`, the image decodes' lane: up to `decodeThreadLimit` (2) workers of its own, newest first; a throw reported on the main thread), `shutdownBackground(wait)` (both lanes: tokens stopped, queues dropped, workers joined within `wait` or detached; a later task starts a new pool; `Engine::run()` calls it), `backgroundTaskCount` |
 | `imlui.ui.props` | Prop helpers: `sizeProp`, `labelId`, `Align` and `alignFactor` |
 | `imlui.ui.item_size` | `resolveSize(requested, avail, natural)`: the one size rule (fixed, fill, fill minus, natural) for every element and Material widget |
 | `imlui.ui.layout_box` | Layout boxes (namespace `imlui::layout`): `Box` (right edge, optional bottom, optional wrap edge, `shrinkToFit`), `BoxScope` and `pushBox`/`popBox` (push a box, mirrored to ImGui's item width and text wrap position per `Mirror`), `availableWidth`, `availableHeight`, `boxRight`, `textWrapPos`, `shrinkToFit`, `claimWidth`, `regionBox`, `boxTo`, `insetBox`, `shrinkToFitBox` (auto-sized windows): the space a container gives its children (see the layout notes in [Children and inline containers](#children-and-inline-containers)) |
@@ -1410,7 +1432,7 @@ See [Registering C++ types](extending.md).
 | `imlui.types.task` | `Task`: the handle `runAsync(work, done[, fail])` returns: `cancel()` (stops the work's token; `done`/`fail` never run), `running()`, `cancelled()`; thread-safe, the end decided once by an atomic |
 | `imlui.types.script_object` | `ScriptObject`: base of everything exposed to Lua; `objectId()` (unique, never reused); weak Lua link, `notify(property)`, `emit(signal, args...)`, `handle()` (`ScriptObject::Handle`: a thread-safe weak token whose `post(fn)` runs only while the object lives; `stopToken()` stops when it dies), `cancelHandles()`, `runAsync(work, done[, fail]) -> Task` (work on the background pool with a token stopped by the object's death, a pool shutdown or the task's cancel; `done`/`fail` on the main thread through the handle, unless cancelled), `runAsync(work) -> Future<R>` (also stopped by the future's cancel; the object's death cancels the future; work taking a `Progress` reports to it), `runAsyncThen(work, then) -> Future<R>` (the same, with `then(result)` on the main thread in between: the future gets what `then` returns, so big results stay in C++); signals call the slot, then the listeners (`noteConnection()` turns on the dispatch through `imlui.lua.listeners`); `scriptReloading()` (virtual: a singleton's reload hook, called by `TypeRegistry::install`) |
 | `imlui.types.list_model` | `ListModel`: rows in C++ read lazily by Lua (`count`, `pushItem`, optional `key`), row-level notifications that keep per-row ids and bump `revision()`, its Lua value (a userdata per model and state: `__index`, `__len`, weak item cache by row id, `pushShared` for an owned model) and the `LuaConvert`s of models (see [List models](#children-and-inline-containers)) |
-| `imlui.types.vector_model` | `VectorModel<T>`: a `ListModel` over `std::vector<T>` whose edits notify (`append`, `insert`, `erase`, `set`, `update`, `move`, `sort`, `replace` matched by key or index); optional keys; `setMaxRows(n)`, a cap that erases the oldest rows in the same edit; `appender()`, a thread-safe batch applied once per loop iteration like `Live<T>`, and `appender(onApplied)`, one with its own batch whose applies call `onApplied(appended, erased)` in the same step |
+| `imlui.types.vector_model` | `VectorModel<T>`: a `ListModel` over `std::vector<T>` whose edits notify (`append`, `insert`, `erase`, `set`, `update`, `move`, `sort`, `replace` matched by key or index); optional keys; `setMaxRows(n)`, a cap that erases the oldest rows in the same edit; `appender()`, a thread-safe batch applied once per loop iteration like `Live<T>` (rows waiting for it are trimmed to the cap as they come, so a fast worker doesn't pile up rows that never show), and `appender(onApplied)`, one with its own batch whose applies call `onApplied(appended, erased)` in the same step |
 | `imlui.types.live` | `Live<T>`: a property any thread `set()`s; one apply per loop iteration through the owner's handle (latest value, then `notify`); `writer()` for workers that may outlive the owner |
 | `imlui.types.frame` | `Frame`: render-time context: children (`renderChildren`, `renderStack`, `forEachChild` with `Frame::Child` handles: `render`, `render(right)` (inside a layout box), `renderUnseen`, `isVisual`, `fillsWidth`, `node`, `type`, `id`, `pushId`, `intrinsicSize`, `expectedSize`/`expectedWidth`/`expectedHeight`, `lastWidth`/`lastHeight`, `as<T>()`), `stackSize`, element-valued props (`withElementProp`, `renderElementProp`), `attachMenu`, `size` (with the type's fill policy), `available`, `resolvedWidth`/`resolvedHeight`, `widthIn`, `labelId`, `alignFactor`, `dp`, `drawList`, `requestFrame`, theme, `images()`, `setWindowTitle`, `node()` |
 | `imlui.types.element` | `Element`: `render(Frame&)`, `intrinsicSize(frame, maxWidth)`, `contentFillsWidth(frame)`, `componentComplete()`, `destroyed()`, `tick(now)` / `setTicking(on)`; the ticking list by id (`tickingElements()`, `findTicking(id)`) |
@@ -1426,7 +1448,7 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.resources.name` | `ResourceName`, `parseName`, `normalizeName`, `normalizePath`, `hasPrefix`, `resolveName(base, name)`, `folderOf` |
 | `imlui.resources.data` | `ResourceData`: the bytes `read` returns and the handle that keeps them alive (`bytes`, `data`, `size`, `text`, `owner`) |
-| `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `listFiles`, `modified`, `origin`); `ResourceTime` |
+| `imlui.resources.mount` | `Mount`: the interface of a file source (`read`, `exists`, `list`, `listFiles`, `modified`, `origin`, `mayChange`); `ResourceTime` |
 | `imlui.resources.directory_mount` | `DirectoryMount`: a folder on disk, with a per-file read cache (the latest buffer of each file still held, the most recently read kept alive up to `retainedBytes`), and an optional `ResourceSelection` |
 | `imlui.resources.glob` | `globMatch(pattern, path)` (dynamic programming, time proportional to pattern × path), `globRoot`, `globProblem`: manifest patterns. Its own library, `imlui_glob`, shared by the tools and the library |
 | `imlui.resources.selection` | `ResourceSelection`: a manifest group's `files`, `include`, `exclude` and `unmatched` paths; `contains(path)`, `mayContainUnder(folder)` |
@@ -1435,7 +1457,7 @@ See [Registering C++ types](extending.md).
 | `imlui.resources.pak_format` | The `.pak` layout: `writePak(mountPoint, files)`, `parsePak(bytes, error)`, `PakFile`, `PakIndex`, `PakIndexEntry`, `pakMaxFileSize`, `pakMaxTotalSize`, `pakMaxArchiveSize` |
 | `imlui.resources.package` | `ResourcePackage`: an embedded group's mount point, files, dev source folder and its `ResourceSelection`; `imlui::embedded::<name>::packages()` returns one per manifest group |
 | `imlui.resources.pak_mount` | `PakMount`: a `.pak` archive in memory; `open(file, error)`, `fromBytes(bytes, name, error)`, `mountPoint()` |
-| `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive` (a folder name with or without its trailing `/`, like `list`), `modified`, `origin`, `prefixes`, `describe` |
+| `imlui.resources` | `Resources`: mount points with stacked mounts; `read`, `readText`, `exists`, `list`, `listRecursive` (a folder name with or without its trailing `/`, like `list`), `modified`, `origin`, `mayChange` (whether any mount's files can change), `prefixes`, `describe` |
 
 ### Images (`src/imlui/image/`)
 
@@ -1443,7 +1465,7 @@ See [Registering C++ types](extending.md).
 |---|---|
 | `imlui.image.decode` | `decodeImage(bytes)`: PNG/JPEG to RGBA8, at most `maxImageBytes` (256 MiB) of pixels (`maxProgressiveJpegBytes`, 128 MiB, for a progressive JPEG) (`DecodedImage`, move-only: `width`, `height`, `rgba` (a view of the decoder's buffer, `pixels`, not a copy), `error`) |
 | `imlui.image.fill_mode` | `FillMode` (`Stretch`, `Fit`, `Crop`, `Tile`; its Lua names are in `imlui.ui.enum_names`), `imageSize(natural, scale, w, h)` (natural size x dp, aspect from one side), `placeImage` (the `ImageQuad`s: screen rects and texture coordinates per fill mode) |
-| `imlui.image.image_cache` | `ImageCache`: one decode per normalized resource name, kept as an ImGui user texture over the decoder's buffer (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`), within a byte budget (`budget`/`setBudget`, `bytes`, `defaultBudget`: the least recently drawn images are evicted after a frame) and at most `maxFailures` failures; optionally decoded on the background pool (`setAsync`, `Image::loading`, `pendingCount`, `waitForPending`) |
+| `imlui.image.image_cache` | `ImageCache`: one decode per normalized resource name, kept as an ImGui user texture over the decoder's buffer (`get`, `contains`, `names`, `refresh` for changed files, also with times read beforehand, `clear`, `collect`, which frees the CPU pixels once uploaded), within a byte budget (`budget`/`setBudget`, `bytes`, `defaultBudget`: the least recently drawn images are evicted after a frame) and at most `maxFailures` failures; optionally decoded on the background pool (`setAsync`, `Image::loading`, `pendingCount`, `waitForPending`) |
 
 ### App (`src/imlui/app/`)
 

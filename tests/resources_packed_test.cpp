@@ -156,6 +156,27 @@ TEST(EmbeddedMount, ReadsStoredAndCompressedFiles) {
     EXPECT_EQ(mount.origin(), "embedded 'test'");
 }
 
+// listFiles() is the sorted table's range under the folder (no walk of list()), and matches what that walk finds,
+// also where a name sorts between a folder and its files (`a-b` before `a/`).
+TEST(EmbeddedMount, ListsFilesFromItsTableAndNeverChanges) {
+    EmbeddedFixture fx{{{"a/x.lua", "1"},
+                        {"a-b.txt", "2"},
+                        {"a/deep/y.lua", "3"},
+                        {"ab/z.lua", "4"},
+                        {"top.lua", "5"},
+                        {"a/b-c/w.lua", "6"}}};
+    const PackedMount& mount = *fx.mount();
+    EXPECT_EQ(mount.listFiles(""),
+              (std::vector<std::string>{"a-b.txt", "a/b-c/w.lua", "a/deep/y.lua", "a/x.lua", "ab/z.lua", "top.lua"}));
+    EXPECT_EQ(mount.listFiles("a"), (std::vector<std::string>{"b-c/w.lua", "deep/y.lua", "x.lua"}));
+    EXPECT_EQ(mount.listFiles("a/deep"), std::vector<std::string>{"y.lua"});
+    EXPECT_TRUE(mount.listFiles("a/x.lua").empty()) << "a file isn't a folder";
+    EXPECT_TRUE(mount.listFiles("missing").empty());
+    for (const std::string_view folder : {"", "a", "a/deep", "ab", "missing"})
+        EXPECT_EQ(mount.listFiles(folder), mount.Mount::listFiles(folder)) << folder; // the default walk agrees
+    EXPECT_FALSE(mount.mayChange());
+}
+
 TEST(EmbeddedMount, DecompressesOnFirstReadAndCaches) {
     EmbeddedFixture fx{{{"a.lua", repetitive("aaaa", 100)}, {"b.lua", repetitive("bbbb", 100)}}};
     const auto& mount = *fx.mount();
@@ -634,6 +655,21 @@ TEST(PackedResources, EmbeddedThenPakThenDirectory) {
     EXPECT_TRUE(res.origin("app:/one.txt").starts_with("embedded 'test'"));
     EXPECT_TRUE(res.modified("app:/all.txt"));  // the directory serves it
     EXPECT_FALSE(res.modified("app:/two.txt")); // the archive is immutable
+}
+
+// Only a directory mount's files may change: the Engine doesn't poll for hot reload without one.
+TEST(PackedResources, OnlyDirectoriesMayChange) {
+    test::TempDir dir;
+    EmbeddedFixture embedded{{{"main.lua", "return 1"}}};
+    Resources res;
+    EXPECT_FALSE(res.mayChange());
+    res.mount("app:/", embedded.mount());
+    res.mount("imlui:/",
+              std::make_shared<test::MemoryMount>(
+                  std::initializer_list<std::pair<const std::string, std::string>>{{"imlui.lua", "return {}"}}));
+    EXPECT_FALSE(res.mayChange());
+    res.mount("app:/", std::make_shared<DirectoryMount>(dir.path()));
+    EXPECT_TRUE(res.mayChange());
 }
 
 // ------------------------------------------------------------------ the library's own embedded files
