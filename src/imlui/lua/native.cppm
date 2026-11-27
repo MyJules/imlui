@@ -333,12 +333,15 @@ constexpr NativeFn nativeFns[] = {
          lua::pushboolean(state, log::enabled(levelArg(state, 1)));
          return 1;
      }},
-    // setScopeHooks(scopes, callIn) — the DSL's element scopes, for C++ calls of element functions (element_scope).
+    // setScopeHooks(scopes, callIn, stack?) — the DSL's element scopes, for C++ calls of element functions
+    // (element_scope); `stack` holds the scope stack in use at [1].
     {"setScopeHooks",
      [](lua::State* state) -> int {
          if (!lua::istable(state, 1) || !lua::isfunction(state, 2))
              lua::error(state, "setScopeHooks expects a table and a function");
-         luaui::setScopeHooks(state, 1, 2);
+         const bool stack = lua::istable(state, 3);
+         if (!stack && !lua::isnoneornil(state, 3)) lua::error(state, "setScopeHooks: the scope stack must be a table");
+         luaui::setScopeHooks(state, 1, 2, stack ? 3 : 0);
          return 0;
      }},
     // reportError(message) — shows a script error in the error overlay (and logs it once).

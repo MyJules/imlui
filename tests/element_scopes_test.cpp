@@ -460,6 +460,40 @@ TEST_F(ElementScopesTest, AHandlerThatRaisesLeavesTheScopeStackIntact) {
         assert(ui.ids.afterHandler == after, "the scope of the failed handler stayed active"))");
 }
 
+// A handler that C++ calls runs with its element's scope pushed on the DSL's scope stack (luaui::ElementScope): an
+// async function it starts keeps the scope while it waits (its own stack is swapped in meanwhile), the handler still
+// has it after the async call returns, and the stack is back at app level once the handler is done.
+TEST_F(ElementScopesTest, AnAsyncFunctionAHandlerStartsKeepsTheHandlersScope) {
+    run(R"(
+        gate = future()
+        keep = {}
+        Starter = component(function(props, ids)
+            starterIds = ids
+            return Button { "Start", onClicked = function()
+                async(function()
+                    keep.before = Text { id = "beforeAwait" }
+                    await(gate)
+                    keep.after = Text { id = "afterAwait" }
+                end)()
+                keep.handler = Text { id = "inHandler" }
+            end }
+        end)
+        root = Starter {})");
+    m_h.renderFrame("root");
+    m_h.click("root", 20, 20);
+    run(R"(
+        assert(keep.before ~= nil and starterIds.beforeAwait == keep.before, "the task didn't start in the scope")
+        assert(keep.handler ~= nil and starterIds.inHandler == keep.handler, "the handler lost its scope")
+        app = Text { id = "appLevel" }
+        assert(ui.ids.appLevel == app and starterIds.appLevel == nil, "the handler's scope stayed pushed")
+        gate:resolve()
+        assert(keep.after ~= nil and starterIds.afterAwait == keep.after and ui.ids.afterAwait == nil,
+               "the task resumed outside its scope")
+        again = Text { id = "appAgain" }
+        assert(ui.ids.appAgain == again))");
+    EXPECT_TRUE(luaui::errors().empty()) << luaui::errors().front();
+}
+
 // What was set up at app level runs at app level, also when a component's handler triggers it: a watcher, a future's
 // next handler and an async function resumed by a future the handler resolves.
 TEST_F(ElementScopesTest, AppLevelCallbacksTriggeredFromAComponentRunAtAppLevel) {
