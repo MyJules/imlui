@@ -73,7 +73,7 @@ void Column::render(Frame& frame) {
     const float pad = std::max(0.0f, frame.dp(m_padding));
     const bool sized = frame.size("width") != 0;
     if (!sized && pad <= 0) {
-        frame.renderStack(); // the parent's box
+        frame.renderStack(m_spacing); // the parent's box
         return;
     }
     // The width is the column's own, padding included: resolved from its left edge, before the padding indents.
@@ -103,7 +103,7 @@ void Column::render(Frame& frame) {
             right = p.x + content;
         }
         const layout::BoxScope box{inner};
-        right = std::max(right, frame.renderer().renderStack(frame.node()));
+        right = std::max(right, frame.renderer().renderStack(frame.node(), m_spacing));
     }
     if (pad > 0) {
         ImGui::Unindent(pad);
@@ -123,7 +123,7 @@ std::optional<ImVec2> Column::intrinsicSize(const Frame& frame, float maxWidth) 
     const float width = frame.size("width");
     float reserved = 0.0f, inner = std::max(0.0f, maxWidth - 2.0f * pad);
     if (width != 0) inner = reserved = std::max(0.0f, resolveSize(width, maxWidth, 0.0f) - 2.0f * pad);
-    const std::optional<ImVec2> stack = frame.stackSize(inner);
+    const std::optional<ImVec2> stack = frame.stackSize(inner, m_spacing);
     if (!stack) return std::nullopt;
     // Without padding, width or children, its group holds no item: ImGui measures it by whatever came before.
     if (pad <= 0 && width == 0 && stack->x == 0.0f && stack->y == 0.0f) return std::nullopt;

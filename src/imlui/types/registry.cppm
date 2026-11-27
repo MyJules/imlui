@@ -136,6 +136,7 @@ public:
     [[nodiscard]] std::optional<ImVec2> intrinsicSize(Renderer& renderer, const luaui::Node& node,
                                                       float maxWidth) override;
     [[nodiscard]] std::uint64_t elementId(const luaui::Node& node) override;
+    [[nodiscard]] Identity identity(const luaui::Node& node) override;
 
     /// The instance of the element table `node`, created now if the table has none yet. Then syncs
     /// the declared properties into it (and calls componentComplete() after the first sync). nullptr if
@@ -1263,6 +1264,14 @@ std::uint64_t TypeRegistry::elementId(const Node& node) {
     lua::checkstack(node.state(), 4);
     const Box* b = instanceBox(*this, node);
     return b ? b->element->objectId() : 0;
+}
+
+// elementId() and kind() with one lookup of the instance: Frame::Child asks for both on every pass over the children.
+Renderer::Types::Identity TypeRegistry::identity(const Node& node) {
+    lua::checkstack(node.state(), 4);
+    const Box* b = instanceBox(*this, node);
+    if (!b || !b->type) return {0, kind(node)};
+    return {b->element->objectId(), b->type->visual() ? Kind::Visual : Kind::NonVisual};
 }
 
 Element* TypeRegistry::sync(const Node& node) const {

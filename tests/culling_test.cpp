@@ -2,7 +2,8 @@
 // Culled children don't run their bindings; positions and the content height are the same with culling on and off;
 // scrolling brings culled children back in place on the first frame; a Timer, a Dialog, a focused TextField and
 // nested ScrollViews keep working; scrolling a settled list asks for no frames; `cull = false` and ui.setCulling turn
-// it off. Renders headless ImGui frames (tests/support/headless_frame.cppm).
+// it off; a zoom measures the culled children again; old pins are dropped. Renders headless ImGui frames
+// (tests/support/headless_frame.cppm).
 #include <gtest/gtest.h>
 
 import std;
@@ -14,6 +15,8 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.test.headless_frame;
+import imlui.theme.dpi;
+import imlui.ui.culling;
 import imlui.ui.frame_request;
 import imlui.ui.renderer;
 
@@ -21,17 +24,21 @@ using namespace imlui;
 
 namespace {
 
-/// A w x h box that records where it rendered and how often.
+/// A w x h box that records where it rendered and how often. `scaled`: h is dp, so its height follows the zoom.
 class Box final : public Element {
 public:
     static void declare(TypeBuilder<Box>& type) {
-        type.property("w", &Box::w, &Box::setW).property("h", &Box::h, &Box::setH);
+        type.property("w", &Box::w, &Box::setW)
+            .property("h", &Box::h, &Box::setH)
+            .property("scaled", &Box::scaled, &Box::setScaled);
     }
-    void render(Frame&) override {
+    void render(Frame& frame) override {
         m_pos = ImGui::GetCursorScreenPos();
         ++m_renders;
-        ImGui::Dummy({m_w, m_h});
+        ImGui::Dummy({m_w, m_scaled ? frame.dp(m_h) : m_h});
     }
+    [[nodiscard]] bool scaled() const { return m_scaled; }
+    void setScaled(bool scaled) { m_scaled = scaled; }
     [[nodiscard]] float w() const { return m_w; }
     void setW(float w) { m_w = w; }
     [[nodiscard]] float h() const { return m_h; }
@@ -42,6 +49,7 @@ public:
 private:
     float m_w = 10.0f;
     float m_h = 10.0f;
+    bool m_scaled = false;
     ImVec2 m_pos{-1.0f, -1.0f};
     int m_renders = 0;
 };
@@ -108,6 +116,7 @@ struct Snapshot {
 class CullingTest : public ::testing::Test {
 protected:
     void SetUp() override { start(); }
+    void TearDown() override { setZoom(1.0f); }
     void start() {
         m_h.emplace(test::HeadlessFrame::Options{.builtins = true});
         m_h->registerType<Box>("Box");
@@ -404,4 +413,59 @@ TEST_F(CullingTest, CullFalseAndSetCullingRenderEveryChild) {
     m_h->renderFrames("root", 2);
     EXPECT_EQ(box("b50").renders(), b + 2);
     EXPECT_TRUE(luaui::errors().empty());
+}
+
+// The sizes culled children are laid out by are pixels: on a frame the DPI scale changed (a zoom, a monitor with
+// another scale), nothing is culled, as on a resize, so the children above the view don't keep their old sizes (which
+// had settled) and move what is in view. Positions and the content height are the same as with culling off.
+TEST_F(CullingTest, AZoomMeasuresCulledChildrenAgain) {
+    constexpr int n = 120;
+    const std::string tree = std::string{"N = "} + std::to_string(n) + R"(
+        scroll = state { y = -1 }
+        root = ScrollView { id = "sv", height = 300, spacing = 0,
+            Scroller { id = "scroller", y = function() return scroll.y end },
+            Repeater { model = N, delegate = function(i)
+                return named("b" .. i, Box { h = 10 + i % 3 * 5, scaled = true }) end } })";
+    const auto sequence = [&](bool culling) {
+        start();
+        run(tree);
+        if (!culling) run("ui.setCulling(false)");
+        m_h->renderFrame("root");
+        (void)snapshot(n, -1.0f, 4);
+        (void)snapshot(n, 800.0f, 4); // the boxes above the view are culled, at their settled sizes
+        setZoom(2.0f);
+        Snapshot shot = snapshot(n, -1.0f, 4);
+        setZoom(1.0f);
+        return shot;
+    };
+    const Snapshot on = sequence(true);
+    const Snapshot off = sequence(false);
+    EXPECT_FLOAT_EQ(on.maxScroll, off.maxScroll);
+    int seen = 0;
+    for (std::size_t i = 0; i < on.positions.size(); ++i) {
+        if (on.positions[i].y < 0.0f || off.positions[i].y < 0.0f) continue;
+        ++seen;
+        EXPECT_FLOAT_EQ(on.positions[i].y, off.positions[i].y) << "b" << i + 1;
+    }
+    EXPECT_GT(seen, 5);
+    EXPECT_TRUE(luaui::errors().empty());
+}
+
+// Pins are remembered for the frame they are made on and the next; the older ones are dropped in sweeps that come
+// when the pins have doubled since the last one, so many pins on every frame cost no walk over all of them each.
+TEST_F(CullingTest, OldPinsAreDropped) {
+    run("root = Column {}");
+    m_h->renderFrame("root");
+    constexpr ImGuiID perFrame = 3000;
+    ImGuiID next = 1;
+    for (int frame = 0; frame < 12; ++frame) {
+        for (ImGuiID i = 0; i < perFrame; ++i)
+            cull::pin(next++);
+        EXPECT_TRUE(cull::pinned(next - 1));
+        // At most the pins of this frame and the last, and as many again since the last sweep.
+        EXPECT_LE(cull::pinCount(), 4 * perFrame) << frame;
+        m_h->renderFrame("root");
+    }
+    EXPECT_TRUE(cull::pinned(next - 1));                 // pinned on the last frame
+    EXPECT_FALSE(cull::pinned(next - 2 * perFrame - 1)); // two frames ago
 }

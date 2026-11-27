@@ -141,6 +141,10 @@ constexpr std::string_view defaultBase = "app:/";
 
 const std::string noImageCache = "Image: no image cache (the host didn't set one)";
 
+/// The quads an Image draws (placeImage), kept from frame to frame so drawing allocates nothing. Main thread only, like
+/// all rendering; drawing them calls no Lua and renders no other element, so one buffer serves every Image.
+std::vector<ImageQuad> drawQuads;
+
 } // namespace
 
 void Image::declare(TypeBuilder<Image>& type) {
@@ -274,7 +278,8 @@ void Image::render(Frame& frame) {
     color.a *= static_cast<float>(std::clamp(m_opacity, 0.0, 1.0)) * ImGui::GetStyle().Alpha; // Alpha: disabled
     const ImU32 col = color.u32();
     const ImTextureRef texture = image->texture();
-    const auto quads = placeImage(pos, size, natural, frame.dp(1.0f), m_fillMode);
+    std::vector<ImageQuad>& quads = drawQuads;
+    placeImage(pos, size, natural, frame.dp(1.0f), m_fillMode, quads);
 
     // Nearest-neighbor sampling through the backend's standard draw callbacks (absent without a backend).
     const ImGuiPlatformIO& io = ImGui::GetPlatformIO();

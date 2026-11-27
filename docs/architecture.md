@@ -251,9 +251,9 @@ so the handler already sees the new state.
 - the result of `self.__children(self)` if that function exists. The prelude sets it for `Repeater`, `ListView`,
   `If`, `Loader` and `Responsive`. It runs (as a read, `safeRead`: the model function, the delegates it builds) once
   a frame per element while `luaui::changes()` stands still: the renderer keeps the list it returned (a weak-keyed
-  table in the registry, stamped with the frame and the count), so a layout's passes over its children (a `Row`'s
-  three, the fill and size questions of its parent) share one call. Lua that may change tables (a handler) running
-  in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them; a
+  table in the registry, stamped with the frame and the count, its entry refilled in place rather than made anew),
+  so a layout's passes over its children (a `Row`'s three, the fill and size questions of its parent) share one
+  call. Lua that may change tables (a handler) running in between makes the next pass call it again. A numeric model `n` is the items `1..n` without a table of them; a
   `Repeater` whose count didn't change (and that has no `key`) returns the list it built last time without a loop.
 
 Children whose table has `__inline = true` (`Repeater`, `If`, `Loader`, `Responsive`) are **spliced into the parent**: their
@@ -409,7 +409,11 @@ much width it gets, before the child draws. imlui's layout is built on that: **c
   are memoized the same way (`TypeRegistry`, per element: `fillsWidth` once a frame, `intrinsicSize` once a frame per
   `maxWidth`), so composing sizes through nested containers (a stack's `align` asks a `Row`, which asks a `Column`,
   which asks its children, and then each of them renders) neither syncs nor measures an element twice; a sync of the
-  element, or Lua that may change tables, drops them. The skip
+  element, or Lua that may change tables, drops them. The props every pass reads of every child before any sync,
+  `visible`, `width`, `fillWidth` and `height` (`imlui::shown`, `sizeProp` in `imlui.ui.props`), are memoized the same
+  way when they are bindings: per element table and binding, for the frame while `luaui::changes()` stands still
+  (a plain value is read directly, which costs less than the lookup). Each pass also takes a child's identity and
+  kind with one lookup of its instance (`Renderer::Types::identity`), and its render reuses them. The skip
   doesn't trust the count alone: each sync keeps a fingerprint of the element table's declared fields (their raw
   values: numbers and booleans by value, strings by Lua's identity of them (`lua::strid`: object, length and hash),
   tables and functions by identity), and a skip compares it, so a
@@ -492,9 +496,12 @@ live for the `maxEntries` cap, which a list with more children than that grows p
 it keeps its size and asks for no settle frames. The entries of what is *inside* a culled child (a `Row`'s controls)
 aren't used while it is culled, so they age out like a hidden page's (after `keepFrames` and `keepSeconds`, or under
 the cap); a child that comes back then places its content by intrinsic sizes, or renders it unseen for a frame. Its
-size is the one it had at the width it last rendered in: on a frame the stack's (or grid's) width differs from the
-last frame's (kept in the memo; a resize), nothing is culled, and a child whose size changes with the width renders
-until it settles again. Turn it off with `ui.setCulling(false)` (every container; on again in a new Lua state) or
+size is the one it had at the width and the DPI scale it last rendered at: on a frame the stack's (or grid's) width or
+`dpiScale()` differs from the last frame's (both kept in the memo; a resize, a zoom, another monitor's scale),
+nothing is culled, and a child whose size changes with the width renders until it settles again. A size recorded at
+another scale isn't settled (`layout::settledSize` compares the scale it was recorded at), so after a zoom the
+children below the view converge to their new sizes like a page's on its first frames, instead of keeping the old
+ones until they scroll into view. Turn it off with `ui.setCulling(false)` (every container; on again in a new Lua state) or
 `cull = false` on one container (its own children), for debugging and comparison.
 
 Not culled:
@@ -1552,7 +1559,8 @@ project already has `glfw`, `spdlog::spdlog` or `GTest::gtest_main` as imlui is 
   and routes Lua's `strcmp` to an inline comparison, and `luai_userstateopen` clears the extra space of a new state.
   The fields imlui reads for every element every frame (`visible`, `enabled`, `tooltip`, `width`, `fillWidth`,
   `__children`, `__native`, each property's name: `TypeInfo::Property::key`, ...) are `lua::Key`s
-  (`luaui::keys`); `luaui::Node` takes a Key wherever it takes a name for the hot reads.
+  (`luaui::keys`); `luaui::Node` takes a Key wherever it takes a name for the hot reads. `tooltip`'s text is read
+  only while its element is hovered.
 - **GLFW 3.4** is built via `add_subdirectory` (its CMake does the per-platform work).
 - **spdlog 1.15.3** is built from its sources as its own CMake would build the static library: `SPDLOG_COMPILED_LIB`
   with the bundled fmt.

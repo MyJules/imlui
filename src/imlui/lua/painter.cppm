@@ -40,9 +40,39 @@ namespace {
 ImDrawList* target = nullptr;
 ImVec2 paintOrigin{};
 
+/// A color spec's text as a key that unordered_map looks up by string_view (no std::string made for a lookup).
+struct SpecHash {
+    using is_transparent = void;
+    std::size_t operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
+};
+
+/// Role specs ("primary", "onSurface/0.6") resolved under the theme of `generation` (themeGeneration()): a painter
+/// call looks its color up by the spec's text instead of searching the scheme's roles on every primitive. Emptied
+/// when the theme changes, and when it holds maxCachedSpecs (specs a script makes on the fly, "primary/" .. alpha).
+/// Hex specs ("#rrggbb") aren't kept: they parse as fast as a lookup.
+struct SpecCache {
+    std::uint64_t generation = 0;
+    std::unordered_map<std::string, std::optional<Color>, SpecHash, std::equal_to<>> colors;
+};
+SpecCache specCache; // main thread only, like all painting
+constexpr std::size_t maxCachedSpecs = 256;
+
+std::optional<Color> specColor(std::string_view spec) {
+    if (spec.empty() || spec.front() == '#') return resolveColor(spec);
+    if (specCache.generation != themeGeneration()) {
+        specCache.colors.clear();
+        specCache.generation = themeGeneration();
+    }
+    if (const auto it = specCache.colors.find(spec); it != specCache.colors.end()) return it->second;
+    if (specCache.colors.size() >= maxCachedSpecs) specCache.colors.clear();
+    const std::optional<Color> c = resolveColor(spec);
+    specCache.colors.emplace(spec, c);
+    return c;
+}
+
 Color colorArg(lua::State* state, int idx, Color def) {
     if (lua::type(state, idx) == lua::Type::String)
-        if (auto c = resolveColor(lua::tostring(state, idx))) return *c;
+        if (auto c = specColor(lua::tostring(state, idx))) return *c;
     if (lua::istable(state, idx))
         if (auto c = Node::colorFromTable(state, idx)) return *c;
     return def;

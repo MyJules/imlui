@@ -169,7 +169,7 @@ void ScrollView::render(Frame& frame) {
     ImGui::EndChild();
 }
 
-void ScrollView::renderContent(Frame& frame) { frame.renderStack(); }
+void ScrollView::renderContent(Frame& frame) { frame.renderStack(m_spacing); }
 bool ScrollView::restoringScroll() const { return m_restoreFrames > 0; }
 
 float ScrollView::padding() const { return m_padding; }

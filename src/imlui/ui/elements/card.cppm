@@ -89,7 +89,7 @@ void Card::render(Frame& frame) {
     if (skin().beginCard("##card", m_variant, frame.size("width"), m_padding, frame.resolvedHeight(0.0f), m_color,
                          m_rounding.value_or(-1.0f))) {
         const layout::BoxScope box{layout::regionBox(), layout::Mirror::None};
-        frame.renderStack();
+        frame.renderStack(m_spacing);
     }
     skin().endCard();
 }
@@ -100,7 +100,7 @@ std::optional<ImVec2> Card::intrinsicSize(const Frame& frame, float maxWidth) {
     const float width = frame.widthIn(maxWidth, frame.dp(320));
     if (height > 0) return skin().cardSize(width, m_padding, height, 0.0f);
     // The stack renders in the card's content region: its width less the padding on both sides.
-    const std::optional<ImVec2> stack = frame.stackSize(std::max(0.0f, width - 2.0f * frame.dp(m_padding)));
+    const std::optional<ImVec2> stack = frame.stackSize(std::max(0.0f, width - 2.0f * frame.dp(m_padding)), m_spacing);
     if (!stack) return std::nullopt;
     return skin().cardSize(width, m_padding, 0.0f, stack->y);
 }

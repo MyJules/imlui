@@ -52,10 +52,22 @@ public:
     [[nodiscard]] Justify justify() const;
     void setJustify(Justify justify);
 
+    /// A visual child as the row's plan sees it before rendering (render(), intrinsicSize()).
+    struct Slot {
+        bool fills; ///< takes a share of the free width
+        bool known; ///< its size is known (intrinsic; for the render also last frame's)
+        float w;    ///< its expected width (a fill: the width it takes in its share, at least the share)
+        float h;    ///< its expected height
+    };
+
 private:
     std::optional<double> m_spacing;
     Align m_align = Align::Center;
     Justify m_justify = Justify::Start;
+    /// The plan's buffers, kept from frame to frame so that a render allocates nothing. Taken while in use (moved
+    /// out and back): a row met again inside itself (a cycle, cut at Renderer::maxDepth) finds them empty.
+    std::vector<Slot> m_slots;
+    std::vector<float> m_after;
 };
 
 } // namespace imlui
@@ -102,17 +114,12 @@ void Row::declare(TypeBuilder<Row>& type) {
 
 namespace {
 
-/// A visual child as the row sees it before rendering.
-struct Slot {
-    bool fills; ///< takes a share of the free width
-    bool known; ///< its size is known (intrinsic; for the render also last frame's)
-    float w;    ///< its expected width (a fill: the width it takes in its share, at least the share)
-    float h;    ///< its expected height
-};
+using Slot = Row::Slot;
 
 /// Where the row puts its children: what render() and intrinsicSize() share.
 struct Plan {
     std::vector<Slot> slots;
+    bool known = true; ///< false: a child has no intrinsic size (Sizes::Intrinsic)
     float spacing = 0.0f;
     float share = 0.0f;    ///< each fill's width
     float offset = 0.0f;   ///< `justify` center / end: where the first child starts
@@ -130,10 +137,13 @@ enum class Sizes {
     Expected,
 };
 
-/// Where `row` puts its children in a row `rowW` wide, with their heights when `heights`. nullopt only for
-/// Sizes::Intrinsic, when a child has no intrinsic size. The fills are asked last, with their share.
-std::optional<Plan> plan(const Row& row, const Frame& frame, float rowW, bool heights, Sizes sizes) {
+/// Where `row` puts its children in a row `rowW` wide, with their heights when `heights`, in `slots` (emptied first:
+/// a buffer whose capacity is reused). Not known only for Sizes::Intrinsic, when a child has no intrinsic size. The
+/// fills are asked last, with their share.
+Plan plan(const Row& row, const Frame& frame, float rowW, bool heights, Sizes sizes, std::vector<Slot> slots) {
     Plan plan;
+    plan.slots = std::move(slots);
+    plan.slots.clear();
     plan.spacing = row.spacing() ? frame.dp(static_cast<float>(*row.spacing())) : ImGui::GetStyle().ItemSpacing.x;
     const bool expected = sizes == Sizes::Expected;
     // A child's size with `maxWidth` available; in Sizes::Expected the reads tell the layout cache.
@@ -161,7 +171,10 @@ std::optional<Plan> plan(const Row& row, const Frame& frame, float rowW, bool he
         }
         plan.slots.push_back(slot);
     });
-    if (unknown) return std::nullopt;
+    if (unknown) {
+        plan.known = false;
+        return plan;
+    }
     const int count = static_cast<int>(plan.slots.size());
     const float gaps = count > 1 ? plan.spacing * static_cast<float>(count - 1) : 0.0f;
     const float free = std::max(0.0f, rowW - fixedW - gaps);
@@ -185,7 +198,10 @@ std::optional<Plan> plan(const Row& row, const Frame& frame, float rowW, bool he
             slot.w = std::max(plan.share, slot.w);
             unknown = !expected && !slot.known;
         });
-        if (unknown) return std::nullopt;
+        if (unknown) {
+            plan.known = false;
+            return plan;
+        }
     }
     for (const Slot& slot : plan.slots)
         if (slot.known) plan.rowH = std::max(plan.rowH, slot.h);
@@ -202,7 +218,7 @@ void Row::render(Frame& frame) {
     // Pass 1: which children fill, how wide the others are, and (to align them) how tall the tallest is: their
     // intrinsic sizes, else last frame's (Frame::Child::expectedWidth / expectedHeight).
     const bool alignsHeights = m_align != Align::Top;
-    const Plan plan = *imlui::plan(*this, frame, rowW, alignsHeights, Sizes::Expected);
+    Plan plan = imlui::plan(*this, frame, rowW, alignsHeights, Sizes::Expected, std::move(m_slots));
     const std::vector<Slot>& slots = plan.slots;
     const int count = static_cast<int>(slots.size());
     bool unknownWidth = false, unknownHeight = false; // a child's first frame
@@ -211,7 +227,8 @@ void Row::render(Frame& frame) {
         unknownHeight = unknownHeight || (alignsHeights && !s.known); // it renders at the top
     }
     // What the children after each one need: their widths (the shares of fills) and the gaps before them.
-    std::vector<float> after(slots.size(), 0.0f);
+    std::vector<float> after = std::move(m_after);
+    after.assign(slots.size(), 0.0f);
     for (int i = count - 2; i >= 0; --i) {
         const auto next = static_cast<std::size_t>(i + 1);
         after[static_cast<std::size_t>(i)] =
@@ -262,16 +279,23 @@ void Row::render(Frame& frame) {
     // Make the row's extent explicit (fills may end the row).
     ImGui::SetCursorScreenPos(start);
     ImGui::Dummy({std::max(1.0f, x - start.x), std::max(1.0f, maxH)});
+    m_slots = std::move(plan.slots);
+    m_after = std::move(after);
 }
 
 std::optional<ImVec2> Row::intrinsicSize(const Frame& frame, float maxWidth) {
-    const std::optional<Plan> p = plan(*this, frame, frame.widthIn(maxWidth, maxWidth), true, Sizes::Intrinsic);
-    if (!p) return std::nullopt;
-    // render()'s pass 2 with the planned sizes: the children side by side from the offset, as tall as the tallest.
-    float x = p->offset;
-    for (std::size_t i = 0; i < p->slots.size(); ++i)
-        x += (i > 0 ? p->spacing + p->extraGap : 0.0f) + p->slots[i].w;
-    return ImVec2{std::max(1.0f, x), std::max(1.0f, p->rowH)};
+    Plan p = plan(*this, frame, frame.widthIn(maxWidth, maxWidth), true, Sizes::Intrinsic, std::move(m_slots));
+    std::optional<ImVec2> size;
+    if (p.known) {
+        // render()'s pass 2 with the planned sizes: the children side by side from the offset, as tall as the
+        // tallest.
+        float x = p.offset;
+        for (std::size_t i = 0; i < p.slots.size(); ++i)
+            x += (i > 0 ? p.spacing + p.extraGap : 0.0f) + p.slots[i].w;
+        size = ImVec2{std::max(1.0f, x), std::max(1.0f, p.rowH)};
+    }
+    m_slots = std::move(p.slots);
+    return size;
 }
 
 bool Row::contentFillsWidth(const Frame& frame) {

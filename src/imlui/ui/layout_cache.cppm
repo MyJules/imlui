@@ -25,13 +25,15 @@ import std;
 
 import imgui;
 import imlui.log;
+import imlui.theme.dpi;
 import imlui.ui.frame_request;
 
 export namespace imlui::layout {
 
 /// The size last recorded for `id` (on this frame, the last, or whenever it was last rendered), if it is still kept.
 [[nodiscard]] std::optional<ImVec2> lastSize(ImGuiID id);
-/// lastSize(), but only when it is settled: the last two sizes recorded for `id` were the same (within half a pixel).
+/// lastSize(), but only when it is settled: the last two sizes recorded for `id` were the same (within half a pixel),
+/// and recorded at the current DPI scale (dpiScale(): sizes are pixels, which a zoom changes).
 /// Culling (imlui.ui.culling) lays out a child out of view by it, so a size still converging (a first frame, a Card
 /// whose window fits its content a frame later) is rendered until it stops changing instead of being kept stale.
 [[nodiscard]] std::optional<ImVec2> settledSize(ImGuiID id);
@@ -91,6 +93,7 @@ struct Entry {
     int streak = 0;         ///< mismatches on consecutive frames
     bool logged = false;
     bool settled = false; ///< the last record repeated the size before it
+    float scale = 0.0f;   ///< dpiScale() at the last record
 };
 
 struct Cache {
@@ -181,7 +184,7 @@ std::optional<ImVec2> settledSize(ImGuiID id) {
     const auto it = map.find(id);
     if (it == map.end()) return std::nullopt;
     markUsed(it->second);
-    if (!it->second.settled) return std::nullopt;
+    if (!it->second.settled || it->second.scale != dpiScale()) return std::nullopt;
     return it->second.size;
 }
 
@@ -201,6 +204,7 @@ void recordSize(ImGuiID id, ImVec2 size, bool provisional) {
     e.settled = !provisional && e.size && std::fabs(e.size->x - size.x) <= tolerance &&
                 std::fabs(e.size->y - size.y) <= tolerance;
     e.size = size;
+    e.scale = dpiScale();
     if (!mismatch) return;
     if (e.mismatchFrame == frame) return; // already counted (and requested) this frame
     e.streak = e.mismatchFrame == frame - 1 ? e.streak + 1 : 1;
