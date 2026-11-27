@@ -115,6 +115,25 @@ struct Content {
 /// Draws `c` from x, centered vertically on `cy`, in `color`.
 void drawContent(ImDrawList* dl, const Content& c, float x, float cy, Color color, TextStyle style = bodyStyle);
 
+// ---- (A) buttons, toggles and ranges
+/// Whether `look.colors` are a dark scheme's: lighter text than background.
+[[nodiscard]] bool darkColors(const Look& look);
+/// Fluent's ControlSolidFillColorDefault, the opaque fill of a slider's thumb: the background 18% toward the (white)
+/// text in a dark scheme (about #454545 on #202020), `controlInputActive` (white) in a light one.
+[[nodiscard]] Color solidControlFill(const Look& look);
+/// The fill of an accent toggle (a checked checkbox, radio or switch, a slider's value) in `state`, whatever
+/// `tokens.buttonFill`: accent, accentHover, accentPressed, accentDisabled.
+[[nodiscard]] Color accentToggleFill(const Look& look, State state);
+/// The glyph on an accent toggle (a check, a radio's dot, a switch's knob): onAccent, onAccentDisabled when disabled.
+[[nodiscard]] Color accentToggleGlyph(const Look& look, State state);
+/// The fill of an unchecked checkbox, radio or switch: controlAlt, controlAltHover, controlAltPressed, transparent
+/// when disabled.
+[[nodiscard]] Color altFill(const Look& look, State state);
+/// The outline of an unchecked checkbox, radio or switch: controlStrongStroke, controlStrongStrokeDisabled when
+/// disabled.
+[[nodiscard]] Color strongStroke(const Look& look, State state);
+// ---- end (A)
+
 } // namespace imlui::fluent
 
 module :private;
@@ -287,5 +306,47 @@ void drawContent(ImDrawList* dl, const Content& c, float x, float cy, Color colo
     }
     if (!c.text.empty()) md::drawText(dl, style, {x, md::textTop(style, cy)}, color, c.text);
 }
+
+// ---- (A) buttons, toggles and ranges
+bool darkColors(const Look& look) {
+    const auto luma = [](Color c) { return 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b; };
+    return luma(look.colors.text) > luma(look.colors.background);
+}
+
+Color solidControlFill(const Look& look) {
+    const Colors& c = look.colors;
+    return darkColors(look) ? mix(c.background, c.text.withAlpha(1.0f), 0.18f) : c.controlInputActive;
+}
+
+Color accentToggleFill(const Look& look, State state) {
+    const Colors& c = look.colors;
+    switch (state) {
+    case State::Rest: return c.accent;
+    case State::Hover: return c.accentHover;
+    case State::Pressed: return c.accentPressed;
+    case State::Disabled: return c.accentDisabled;
+    }
+    return c.accent;
+}
+
+Color accentToggleGlyph(const Look& look, State state) {
+    return state == State::Disabled ? look.colors.onAccentDisabled : look.colors.onAccent;
+}
+
+Color altFill(const Look& look, State state) {
+    const Colors& c = look.colors;
+    switch (state) {
+    case State::Rest: return c.controlAlt;
+    case State::Hover: return c.controlAltHover;
+    case State::Pressed: return c.controlAltPressed;
+    case State::Disabled: return clear;
+    }
+    return c.controlAlt;
+}
+
+Color strongStroke(const Look& look, State state) {
+    return state == State::Disabled ? look.colors.controlStrongStrokeDisabled : look.colors.controlStrongStroke;
+}
+// ---- end (A)
 
 } // namespace imlui::fluent

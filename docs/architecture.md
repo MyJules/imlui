@@ -1014,7 +1014,7 @@ the file, so groups merge cleanly:
 
 | Group | Skin functions |
 |---|---|
-| (A) buttons, toggles and ranges | `button`/`buttonSize` (done), `iconButton`/`iconButtonSize`, `checkbox`/`checkboxSize`, `radio`/`radioSize`, `switchToggle`/`switchSize`, `chip`/`chipSize`, `segmented`/`segmentedSize`, `slider`/`sliderSize`, `progress`/`progressSize`, `circularProgress`/`circularProgressSize` |
+| (A) buttons, toggles and ranges | `button`/`buttonSize`, `iconButton`/`iconButtonSize`, `checkbox`/`checkboxSize`, `radio`/`radioSize`, `switchToggle`/`switchSize`, `chip`/`chipSize`, `segmented`/`segmentedSize`, `slider`/`sliderSize`, `progress`/`progressSize`, `circularProgress`/`circularProgressSize` (all done: the modules `button`, `icon_button`, `toggles` (checkbox, radio, switch), `chip`, `segmented`, `slider`, `progress`) |
 | (B) inputs | `textField`/`textFieldSize`, `spinBox`/`spinBoxSize`, `dropdown`/`dropdownSize`, `colorField`/`colorFieldSize` |
 | (C) lists, menus, navigation, containers, messages, chrome | `listItem`/`listItemSize`, `expander`/`expanderSize`, `menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu`, `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `beginModalDrawer`/`endModalDrawer`, `beginCard`/`endCard`/`cardSize`, `beginDialog`/`endDialog`, `snackbar`, `tooltip`, `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize`; the chrome hooks `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` (in `imlui.skin.fluent.chrome`, which already has `applicationBackground`, `windowChrome`, `scrollViewRounding`) |
 
@@ -1074,7 +1074,10 @@ the file, so groups merge cleanly:
 (`Accent`, `Standard`, `Subtle`), `ControlColors` (`fill`, `stroke`, `bottomStroke`, `text`), `controlColors(look,
 fill, state)` (accent follows `buttonFill`); `drawControl(dl, a, b, radius, colors, stroke)`, `drawUnderline(dl, a,
 b, radius, color, width)`, `drawFocusRect(dl, a, b, radius, look)`; `Content` and `content(look, text, icon, style,
-iconDp)`, `drawContent(dl, content, x, cy, color, style)`.
+iconDp)`, `drawContent(dl, content, x, cy, color, style)`. Group A's block: `darkColors(look)` (lighter text than background),
+`solidControlFill(look)` (Fluent's opaque ControlSolidFillColorDefault: a slider's thumb), `accentToggleFill(look,
+state)` and `accentToggleGlyph(look, state)` (a checked checkbox, radio or switch, a slider's value, whatever
+`buttonFill`), `altFill(look, state)` and `strongStroke(look, state)` (an unchecked checkbox, radio or switch).
 
 ## Repository layout
 

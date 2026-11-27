@@ -97,6 +97,15 @@ Fluent-drawn so far; the other controls are being added, and until then they dra
 | What | Fluent look |
 |---|---|
 | `Button` | 32dp high (`controlHeight`), `paddingX` on each side, 4dp corners (`controlRadius`). `filled` and `tonal` are Fluent's **accent** button (an accent outline with `tokens = { buttonFill = "outline" }`), `outlined` and `elevated` the **standard** button (a subtle neutral fill, a 1dp stroke with a darker bottom edge), `text` the **subtle** button (transparent at rest), `fab` an accent button 16dp taller with the overlay radius (square without a label). Hover and press change the fill (no state layer); disabled uses Fluent's disabled fills. Keyboard focus (Tab, arrows; Space or Enter clicks) shows Fluent's focus rectangle: a `focusStrokeWidth` outer stroke `focusOffset` outside the button and a thin inner one. A mouse click shows none. |
+| `IconButton` | A `controlHeight` square (32dp; Material's is a 48dp touch target) with the control radius and an `iconSize` icon. `standard` is a **subtle** button (a checked toggle keeps the subtle fill with an accent icon), `filled` an **accent** one (an unchecked toggle: standard, like an unchecked ToggleButton), `tonal` and `outlined` **standard** ones (a checked toggle: accent). `color` tints the icon unless disabled. |
+| `Checkbox` | WinUI's CheckBox: a 20dp box with the control radius, unchecked an alt fill (`controlAlt*`) with a 1dp `controlStrongStroke` outline, checked an accent fill (hover, pressed, disabled fills) with a check on accent; the check fades in. The label follows after `gap`, in body text. `controlHeight` high (at least the box); the whole item is the hit area and the focus rectangle's frame. |
+| `RadioButton`, `RadioGroup` | WinUI's RadioButton: a 20dp circle, unchecked like the checkbox, checked an accent circle with a dot on accent of 12dp (14dp on hover, 10dp pressed; it grows in). Sizes as the checkbox. |
+| `Switch` | WinUI's ToggleSwitch: a 40 x 20dp pill, off an alt fill with a `controlStrongStroke` outline and a `textSecondary` knob, on an accent fill with a knob on accent. The knob (12dp, 14dp on hover, stretched to 17dp while pressed) slides between the ends. `icons` is ignored (Fluent's knob has no icon). The label after `gap`; `controlHeight` high. |
+| `Chip` | No chip in WinUI: drawn as its closest control, a **ToggleButton** (Fluent 2's interaction tag looks the same). `filter`, `suggestion` and `input`: unselected a standard button, selected an accent one (following `buttonFill`); `assist`: always standard. A selected filter chip shows no check (the fill shows the selection); a leading `icon` stays. `controlHeight` high, `paddingX` + icon + `gap` + label + `paddingX` wide. |
+| `SegmentedButton` | The Community Toolkit's Segmented (WinUI's SelectorBar look): a standard control's frame (an alt fill, a 1dp stroke, the control radius) holding equal segments 2dp inside it; the segments are subtle, the selected one a raised standard control with a 16 x 3dp accent pill at its bottom (the selection fades between segments). No check on the selected segment; `icons` show on every segment. `controlHeight` high; each segment `paddingX` + room for an icon + `gap` + the widest label + `paddingX`; `width` sizes the whole. |
+| `Slider` | WinUI's Slider: a 4dp track (`controlStrongStroke`) with the value part in accent, a 20dp thumb (the opaque solid control fill, a 1dp stroke) carrying an accent dot of 12dp (14dp on hover, 10dp while dragging), 1dp tick marks under the track (at most 40 steps), and the value in a flyout-colored tooltip above the thumb while dragging. `controlHeight` high (at least the thumb), 200dp natural width (unset: fills). Keyboard focus shows the focus rectangle; a keyboard activation leaves the value alone (only the mouse drags). |
+| `ProgressBar` | WinUI's ProgressBar: a 3dp accent bar with round ends over a 1dp `controlStrongStroke` track, 3dp high, 240dp natural width; indeterminate, two accent bars sweep across. |
+| `CircularProgress`, `BusyIndicator` | WinUI's ProgressRing: an accent arc `thickness` dp wide from the top, clockwise, with no track (the ring's background is transparent); 32dp across unless `size` sets it. Indeterminate, a spinning arc that grows and shrinks. |
 | `ApplicationWindow` | Fluent's solid background (unless `imgui = { WindowBg = ... }` sets it). |
 | `Window` | A layer over the background, a 1dp divider-colored border, title bars of the background color. |
 | `ScrollView` | The overlay radius (8dp) when it has no `rounding`. |
@@ -166,6 +175,14 @@ module `imlui.theme.fluent_colors`). Fluent's neutral brushes are white or black
 | `smoke` | black 30% | black 30% | the dim behind a modal |
 | `divider` | white 8% | black 8% | dividers, table rules |
 | `focusOuter` / `focusInner` | `text` / black 70% | `text` / white 70% | the keyboard focus rectangle |
+
+Some brushes the controls need are derived from these, by `imlui.skin.fluent.common`: Fluent's opaque
+**ControlSolidFillColorDefault** (`solidControlFill`, a slider's thumb) is the background 18% toward the text in a
+dark scheme (about `#454545`) and `controlInputActive` (white) in a light one; a toggle's accent fill
+(`accentToggleFill`) is `accent` / `accentHover` / `accentPressed` / `accentDisabled` whatever `buttonFill` says, with
+`onAccent` (disabled: `onAccentDisabled`) for its check, dot or knob; an unchecked toggle's fill (`altFill`) is
+`controlAlt` / `controlAltHover` / `controlAltPressed` (disabled: transparent) inside a `controlStrongStroke` outline
+(`strongStroke`; disabled: `controlStrongStrokeDisabled`).
 
 ## Scheme generation
 
