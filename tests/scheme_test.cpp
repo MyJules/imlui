@@ -205,6 +205,36 @@ TEST(FindRole, UnknownNameIsNull) {
     EXPECT_EQ(findRole(s, "Primary"), nullptr); // case-sensitive
 }
 
+// findRole() searches the names sorted: a prefix, a longer name or a name between two roles isn't one.
+TEST(FindRole, OnlyWholeNamesMatch) {
+    Scheme s{};
+    for (const char* name : {"a", "zzz", "primaryContaine", "primaryContainers", "surfaceContainerHighestX", "on",
+                             "onSurfaceVariant2", "outlineVariant "})
+        EXPECT_EQ(findRole(s, name), nullptr) << name;
+    EXPECT_EQ(findRole(s, "scrim"), &s.scrim);
+    EXPECT_EQ(findRole(s, "errorContainer"), &s.errorContainer);
+}
+
+// generateScheme() keeps its last few results (fewer than `seeds`): whatever the order seeds come in, each scheme is the one a seed
+// gives the first time.
+TEST(GenerateScheme, CachedResultsMatchFreshOnes) {
+    std::vector<Scheme> first;
+    for (const char* hex : seeds)
+        for (const bool dark : {false, true})
+            first.push_back(generateScheme(*parseHex(hex), dark));
+    for (int round = 0; round < 3; ++round) {
+        std::size_t i = 0;
+        for (const char* hex : seeds)
+            for (const bool dark : {false, true}) {
+                const Scheme again = generateScheme(*parseHex(hex), dark);
+                for (const auto& role : roles())
+                    EXPECT_EQ(again.*role.member, first[i].*role.member) << hex << " " << dark << " " << role.name;
+                ++i;
+            }
+    }
+    EXPECT_NE(generateScheme(*parseHex("#6750A4"), true).primary, generateScheme(*parseHex("#6750A4"), false).primary);
+}
+
 TEST(FindRole, WritesThroughToScheme) {
     Scheme s{};
     *findRole(s, "tertiaryContainer") = {0.25f, 0.5f, 0.75f, 1.0f};

@@ -33,6 +33,10 @@ void readFonts(lua::State* state, int idx, FontSet& fonts, std::string_view scri
 
 /// Pushes { primary = "#RRGGBB", ... } for `s`.
 void pushScheme(lua::State* state, const Scheme& s);
+/// pushScheme() of the current theme's scheme (`ui.scheme()`). The table is built once per theme
+/// (themeGeneration()) and kept in the registry; each call pushes a copy of it, so a script that changes the table
+/// it got changes nothing the next call returns.
+void pushCurrentScheme(lua::State* state);
 
 } // namespace imlui::luaui
 
@@ -311,9 +315,50 @@ void readFonts(lua::State* state, int idx, FontSet& fonts, std::string_view scri
 void pushScheme(lua::State* state, const Scheme& s) {
     lua::createtable(state, 0, static_cast<int>(roles().size()));
     for (const auto& r : roles()) {
+        lua::pushstring(state, r.name);
         lua::pushstring(state, toHex(s.*r.member));
-        lua::setfield(state, -2, std::string{r.name}.c_str());
+        lua::rawset(state, -3);
     }
+}
+
+namespace {
+
+/// Its address keys pushCurrentScheme()'s cache in the registry: { [1] = theme generation, [2] = scheme table }.
+const char schemeCacheKey = 0;
+
+} // namespace
+
+void pushCurrentScheme(lua::State* state) {
+    const auto generation = static_cast<lua::Integer>(themeGeneration());
+    lua::rawgetp(state, lua::registryIndex, &schemeCacheKey);
+    bool current = false;
+    if (lua::istable(state, -1)) {
+        current = lua::rawgeti(state, -1, 1) == lua::Type::Number && lua::tointeger(state, -1) == generation;
+        lua::pop(state);
+    }
+    if (!current) {
+        lua::pop(state);
+        lua::createtable(state, 2, 0);
+        lua::pushinteger(state, generation);
+        lua::rawseti(state, -2, 1);
+        pushScheme(state, theme().scheme);
+        lua::rawseti(state, -2, 2);
+        lua::pushvalue(state, -1);
+        lua::rawsetp(state, lua::registryIndex, &schemeCacheKey);
+    }
+    lua::rawgeti(state, -1, 2);
+    const int cached = lua::absindex(state, -1);
+    // The copy: its strings are the cached table's, interned already, so it allocates the table only.
+    lua::createtable(state, 0, static_cast<int>(roles().size()));
+    const int copy = lua::absindex(state, -1);
+    lua::pushnil(state);
+    while (lua::next(state, cached) != 0) {
+        lua::pushvalue(state, -2);
+        lua::insert(state, -2);
+        lua::rawset(state, copy);
+    }
+    lua::remove(state, cached);     // the cache entry and the cached table go; the copy stays on top
+    lua::remove(state, cached - 1);
 }
 
 } // namespace imlui::luaui

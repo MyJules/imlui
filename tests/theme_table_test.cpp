@@ -290,6 +290,51 @@ TEST_F(ThemeTableTest, PushSchemeWritesEveryRoleAsHex) {
     }
 }
 
+// ui.scheme()'s table is built once per theme and copied for each call: a script changing the table it got changes
+// nothing the next call returns, and a new theme gives its own colors.
+TEST_F(ThemeTableTest, CurrentSchemeIsACopyOfACachedTable) {
+    const auto primary = [&] {
+        luaui::pushCurrentScheme(m_state);
+        EXPECT_EQ(lua::gettop(m_state), 1);
+        EXPECT_EQ(lua::getfield(m_state, -1, "primary"), lua::Type::String);
+        std::string hex{lua::tostring(m_state, -1)};
+        lua::pop(m_state, 2);
+        return hex;
+    };
+    const std::string before = primary();
+    EXPECT_EQ(before, toHex(theme().scheme.primary));
+    luaui::pushCurrentScheme(m_state);
+    lua::pushstring(m_state, "#000000");
+    lua::setfield(m_state, -2, "primary");
+    lua::pushnil(m_state);
+    lua::setfield(m_state, -2, "secondary");
+    lua::pop(m_state);
+    EXPECT_EQ(primary(), before);
+    luaui::pushCurrentScheme(m_state);
+    EXPECT_EQ(lua::getfield(m_state, -1, "secondary"), lua::Type::String);
+    lua::pop(m_state, 2);
+    // Every role, as pushScheme() writes them.
+    luaui::pushCurrentScheme(m_state);
+    for (const auto& role : roles()) {
+        lua::pushstring(m_state, role.name);
+        ASSERT_EQ(lua::rawget(m_state, -2), lua::Type::String) << role.name;
+        EXPECT_EQ(lua::tostring(m_state, -1), toHex(theme().scheme.*role.member)) << role.name;
+        lua::pop(m_state);
+    }
+    lua::pop(m_state);
+
+    const Theme previous = theme();
+    Theme other;
+    other.seed = *parseHex("#B3261E");
+    other.scheme = generateScheme(other.seed, other.dark);
+    setTheme(other);
+    ASSERT_TRUE(applyPendingTheme());
+    EXPECT_EQ(primary(), toHex(other.scheme.primary));
+    EXPECT_NE(primary(), before);
+    setTheme(previous);
+    applyPendingTheme();
+}
+
 TEST_F(ThemeTableTest, PushedSchemeParsesBackAsColors) {
     // A scheme pushed to Lua can be fed back as `colors` overrides.
     Scheme s = generateScheme(*parseHex("#FF6D00"), true);

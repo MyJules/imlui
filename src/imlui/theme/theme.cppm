@@ -408,7 +408,7 @@ SkinTokens fluentTokensFor(const Theme& t) { return applyTokenOverrides(fluentTo
 std::uint64_t themeGeneration() { return generation; }
 
 void setTheme(Theme t) {
-    const Theme defaults;
+    static const Theme defaults; // made once: a Theme generates its scheme
     const auto bounded = [](float& v, float lo, float hi, float fallback) {
         v = std::isfinite(v) ? std::clamp(v, lo, hi) : fallback;
     };
