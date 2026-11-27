@@ -1146,9 +1146,37 @@ has to tell the skin. `theme_table` checks a Lua `design` against `hasSkin()` an
 `look()`, a `fluent::Look` of its `tokens()` (`fluentTokensFor(theme())`) and `colors()`
 (`fluent::colorsFor(scheme, dark)`), both cached per `themeGeneration()`. Its overrides are one-line forwards to free
 functions, one module per control family under `src/imlui/skin/fluent/` (`fluent::button(look, ...)`), which draw
-with the shared primitives of `imlui.skin.fluent.common`. A control it doesn't override draws Material. Fluent
-controls are keyboard-navigable (`fluent::invisibleButton`: `ImGuiButtonFlags_EnableNav`) and draw their own focus
-rectangle for keyboard focus only (ImGui's nav cursor is hidden for them).
+with the shared primitives of `imlui.skin.fluent.common`. A control it doesn't override draws Material. Under design
+`"fluent"` the theme draws text with Segoe UI Variable and Segoe UI Semibold and the icons with Segoe Fluent Icons,
+from the OS's font folder where they are installed (see [System fonts](#system-fonts)).
+
+**Keyboard navigation.** Every skin's clickable controls are `md::navButton`s (an `InvisibleButton` with
+`ImGuiButtonFlags_EnableNav`, ImGui's nav cursor hidden for it; `fluent::invisibleButton` is the same): Tab and the
+arrow keys reach them, Space or Enter activates them, and each draws its own focus indicator while `focusVisible()`
+(keyboard focus with the nav cursor showing, not after a click): Material's `md::focusRing` (a 3dp `secondary` ring
+2dp outside the control, M3's focus indicator), Fluent's `drawFocusRect`. Inputs that are ImGui items of their own
+(`InputText`, menu `Selectable`s) keep ImGui's nav cursor in the theme's `NavCursor` color. A slider owns the keys
+that step it while it has the nav focus (`md::sliderKeys`, shared by both skins' sliders: `SetKeyOwner` on
+Left/Right, Home/End and PageUp/PageDown, so ImGui's nav, which asks for keys without an owner, doesn't move away on
+them; Up/Down and Tab still move the focus on). A keyboard activation of a slider leaves its value alone: only a
+press with the mouse held drags.
+
+#### System fonts
+
+Fonts that come with the OS can't be vendored, so they are read from where the OS keeps them:
+`imlui.platform.system_fonts` (`src/wrap/`) asks Windows for the font folder (`SHGetKnownFolderPath(FOLDERID_Fonts)`;
+none elsewhere), and `imlui.theme.system_fonts` serves its files under the resource names `system:/fonts/<file>`
+through a `DirectoryMount` of its own. That mount isn't in the app's `Resources`: scripts don't list the system's
+fonts, and hot reload doesn't watch them. The font library reads a `system:/` name from there (so a theme may name
+one in `fonts`), and `systemFont(file)` tells whether the system has a file. `designFonts(theme)` (`imlui.theme`) is
+the font set `applyPendingTheme()` uses: the theme's `fonts`, and under design `"fluent"` `system:/fonts/SegUIVar.ttf`
+(Regular) and `system:/fonts/seguisb.ttf` (Medium) for the faces the theme leaves unset, where they exist. The icons
+(`useFluentIcons`, set by the theme with the design) load Segoe Fluent Icons (`SegoeIcons.ttf`, or Windows 10's Segoe
+MDL2 Assets) on first use and draw a Material name with it when a table maps the name to a Segoe code point the font
+has (`iconGlyph(name)`); every other name, and every name without the font, stays Material Icons. Off the system's
+fonts (another OS, a missing file) Fluent draws with Roboto and Material Icons. The test harness turns system fonts
+off (`setSystemFontsEnabled(false)`, `HeadlessFrame::Options::systemFonts`), so text measures the same on every
+machine.
 
 **Sizes after a switch.** A design change is a theme change, so what follows a theme change follows the design:
 static properties are synced again (`themeGeneration()` in the property sync), intrinsic sizes are asked per frame
@@ -1333,6 +1361,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink, and the replaced one is kept for writers still using it, so writing takes no lock), `setLevel`, `enabled(level)` (spdlog's `should_log`: the `info`/`debug`/... templates check it before formatting, and Lua's `log.*` through `native.logEnabled`) |
 | `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
+| `imlui.platform.system_fonts` | `systemFontFolder()`: the OS's font folder (`SHGetKnownFolderPath(FOLDERID_Fonts)` on Windows; nullopt elsewhere). See [System fonts](#system-fonts) |
 | `imlui.platform.process` | `executablePath()` (from the OS: `GetModuleFileNameW`, `/proc/self/exe`), `processArguments(argc, argv)` (`ProcessArguments`: the arguments as paths, from the UTF-16 command line on Windows when `argv` is the process's own, and whether it is) |
 | `imlui.platform.stack` | `stackRemaining()`: the bytes of the calling thread's stack left below the caller (`GetCurrentThreadStackLimits` on Windows, less what the thread can't grow into: the guard page, the bottom page and the overflow handler's `SetThreadStackGuarantee`, at least 64 KiB; `pthread_getattr_np` on Linux; nullopt elsewhere), which the renderer checks per level (`Renderer::stackReserve`) |
 | `zstd` | The zstd decompressor: `zstd::contentSize(frame)`, `zstd::decompress(frame, out)`. The tools wrap the compressor themselves (`zstd.compress`, in `tools/lib/`). |
@@ -1355,8 +1384,9 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts and those neither it nor the set before needs; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount`, `fontCheckCount` |
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
-| `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
-| `imlui.theme.theme` | `Theme` (+ `design`, `tokens`, `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `fluentTokensFor`, `resolveColor`, `imguiColorIndex`, `isStyleField`; the ImGui style mapping per preset and design (`applyMaterial`, `applyFluent`) |
+| `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)`; Fluent's Segoe Fluent Icons: `useFluentIcons(on)`, `fluentIconFont`, `fluentIconCode(name)` (the Material name -> Segoe code point table), `iconGlyph(name)` (+ `IconGlyph`: the font and text an icon draws with) |
+| `imlui.theme.system_fonts` | The OS's fonts as `system:/fonts/<file>`: `systemFont(file)`, `readSystemFont(name)`, `isSystemFont(name)`, `setSystemFontsEnabled(on)` (off in tests). See [System fonts](#system-fonts) |
+| `imlui.theme.theme` | `Theme` (+ `design`, `tokens`, `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(designFonts(theme))` and `useFluentIcons`), `designFonts` (+ `fluentRegularFont`, `fluentMediumFont`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `fluentTokensFor`, `resolveColor`, `imguiColorIndex`, `isStyleField`; the ImGui style mapping per preset and design (`applyMaterial`, `applyFluent`) |
 | `imlui.theme.skin_tokens` | `SkinTokens` (a flat design's metrics), `ButtonFill`, `fluentTokens()`, `materialTokens()`, the token table (`TokenInfo`, `TokenKind`, `tokenInfos`, `findToken`), `TokenValue`, `TokenOverride`, `tokenProblem`, `applyTokenOverrides`, `buttonFillName`/`buttonFillFromName` |
 | `imlui.theme.fluent_colors` | Namespace `imlui::fluent`: `Colors` (Fluent 2's brushes), `colorsFor(scheme, dark)`, `designName` (`"fluent"`) |
 | `imlui.theme.font_scope` | `FontScope`: RAII push/pop of a text style's font |

@@ -303,16 +303,25 @@ float textTop(TextStyle style, float cy) {
 }
 
 void drawIcon(ImDrawList* dl, std::string_view name, ImVec2 c, float size, Color color) {
-    ImFont* f = iconFont();
-    if (!f || name.empty()) return;
+    if (!iconFont() || name.empty()) return;
     const float px = std::min(dp(size), maxIconPixels);
     if (!(px >= 1.0f)) return; // also NaN
     // The glyph lies within its size around `c`; out of view, skip the name lookup and the measuring.
     if (!rectVisible(dl, {c.x - px, c.y - px}, {c.x + px, c.y + px})) return;
-    std::string t = iconText(name);
-    if (t.empty()) return;
-    ImVec2 sz = f->CalcTextSizeA(px, hugeExtent, 0.0f, t.c_str());
-    dl->AddText(f, px, {std::floor(c.x - sz.x * 0.5f), std::floor(c.y - sz.y * 0.5f)}, col(color), t.c_str());
+    const IconGlyph g = iconGlyph(name);
+    if (!g.font || g.text.empty()) return;
+    ImVec2 sz = g.font->CalcTextSizeA(px, hugeExtent, 0.0f, g.text.c_str());
+    ImVec2 at{std::floor(c.x - sz.x * 0.5f), std::floor(c.y - sz.y * 0.5f)};
+    if (g.fluent) {
+        // Segoe's glyphs sit on its own line box: center the ink instead, on whole pixels.
+        ImFontBaked* baked = g.font->GetFontBaked(px);
+        if (const ImFontGlyph* glyph = baked ? baked->FindGlyphNoFallback(static_cast<ImWchar>(g.code)) : nullptr) {
+            const float scale = baked->Size > 0.0f ? px / baked->Size : 1.0f;
+            at = {std::round(c.x - (glyph->X0 + glyph->X1) * 0.5f * scale),
+                  std::round(c.y - (glyph->Y0 + glyph->Y1) * 0.5f * scale)};
+        }
+    }
+    dl->AddText(g.font, px, at, col(color), g.text.c_str());
 }
 
 void drawShadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float level) {

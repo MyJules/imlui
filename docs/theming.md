@@ -94,8 +94,15 @@ that frame. `themeState` works too (`themeState { design = "material" }`).
 
 `design = "fluent"` draws with the [tokens](#tokens) (Fluent's defaults, plus the theme's `tokens`) and with the
 [Fluent colors](#fluent-colors), derived from the same scheme roles Material uses: `primary` is the accent, so
-`seed` and `colors = { ... }` restyle it too. Fonts stay the theme's (Roboto by default; Segoe UI Variable can't be
-bundled), at Fluent's body size (`bodyMedium`, 14dp) for control labels.
+`seed` and `colors = { ... }` restyle it too. Control labels are in Fluent's body size (`bodyMedium`, 14dp).
+
+**Fonts and icons.** On Windows, the Fluent design draws text with **Segoe UI Variable** (Regular) and **Segoe UI
+Semibold** (the Medium weight: titles, labels) and icons with **Segoe Fluent Icons** (Windows 10's Segoe MDL2 Assets
+where it is missing), read from the system's font folder: they come with Windows and can't be bundled. A face the
+theme sets in `fonts` wins over Segoe. An icon name with a Segoe counterpart (`home`, `settings`, `search`, `add`,
+`close`, `check`, `expand_more`, `delete`, `edit`, about 70 of the common ones) draws Segoe's glyph; every other name
+stays Material Icons. Where the Segoe files are missing (another OS, an older Windows), Fluent draws with the theme's
+fonts (Roboto by default) and Material Icons. Material always uses the theme's fonts and Material Icons.
 
 Every control is Fluent-drawn:
 
@@ -367,6 +374,10 @@ theme {
   face then stays Roboto, a named font draws in its style's face, and a missing fallback is left out. Fonts are
   checked before they reach ImGui (a truncated or garbled file would otherwise abort the program inside its font
   parser); see `imlui.theme.font_check` in [Architecture](architecture.md#resources).
+- **System fonts.** A font installed with the OS is named `system:/fonts/<file>` (`"system:/fonts/segoeui.ttf"`,
+  `"system:/fonts/consola.ttf"`): a file in the OS's font folder (on Windows the one the shell reports,
+  `C:\Windows\Fonts`), spelled as on disk. There is none on other systems, where such a name is reported as not
+  found. The Fluent design uses this for Segoe UI Variable (see [The Fluent design](#the-fluent-design)).
 - **Unknown names.** An element whose `font` names no declared font draws in its style's face; the name is logged
   once.
 - **Reuse and hot reload.** Each fallback file is read once per set applied, for all its faces. Each face (with its
@@ -383,7 +394,8 @@ theme {
 Icons come from **Material Icons Round** (`external/fonts/MaterialIconsRound-Regular.otf`). Names are the ones
 listed in `MaterialIconsRound-Regular.codepoints`, about 2,200 of them, for example `"add"`, `"home"`,
 `"delete_outline"` or `"favorite_border"`. You can browse them at <https://fonts.google.com/icons> (Round style).
-An unknown name draws nothing.
+An unknown name draws nothing. Under the Fluent design on Windows, the names with a Segoe Fluent Icons counterpart
+draw that glyph instead (see [The Fluent design](#the-fluent-design)).
 
 Icon props: `icon` on `Button`, `IconButton`, `Chip`, `ListItem`, `NavigationItem`, `MenuItem`, `Tab`, `Dialog`;
 `name` on `Icon`; `leadingIcon`/`trailingIcon` on `TextField`/`TextArea` (`leadingIcon` also on `ComboBox`);

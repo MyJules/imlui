@@ -13,6 +13,7 @@ import imlui.log;
 import imlui.resources;
 import imlui.resources.name;
 import imlui.theme.font_check;
+import imlui.theme.system_fonts;
 
 export namespace imlui {
 
@@ -153,7 +154,8 @@ std::optional<ResourceData> readFont(std::string_view name, std::string& error) 
         error = "invalid font resource name '" + std::string{name} + "' (expected e.g. 'app:/fonts/Inter.ttf')";
         return std::nullopt;
     }
-    auto bytes = library->read(*canonical);
+    // `system:/fonts/...`: a font installed with the OS (imlui.theme.system_fonts), not an app resource.
+    auto bytes = isSystemFont(*canonical) ? readSystemFont(*canonical) : library->read(*canonical);
     if (!bytes || bytes->empty()) {
         error = "font '" + *canonical + "' not found";
         return std::nullopt;

@@ -82,9 +82,10 @@ target_sources(imlui_core PRIVATE imlui/app/config.cpp)
 target_link_libraries(imlui_core PUBLIC imlui_lua imlui_glob
                                  PRIVATE ext::lua ext::imgui ext::spdlog ext::stb_image ext::zstd)
 # imlui.platform.window colors the title bar through DWM (DwmSetWindowAttribute); imlui.platform.process reads the
-# command line as UTF-16 (CommandLineToArgvW, shell32).
+# command line as UTF-16 (CommandLineToArgvW, shell32); imlui.platform.system_fonts asks for the font folder
+# (SHGetKnownFolderPath, shell32; CoTaskMemFree, ole32).
 if(WIN32)
-    target_link_libraries(imlui_core PRIVATE dwmapi shell32)
+    target_link_libraries(imlui_core PRIVATE dwmapi shell32 ole32)
 endif()
 target_compile_features(imlui_core PUBLIC cxx_std_20)
 imlui_set_warnings(imlui_core)
