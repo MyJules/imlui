@@ -42,6 +42,7 @@ import imlui.theme.font_library;
 import imlui.image.image_cache;
 import imlui.embedded.imlui;
 import imlui.theme.icons;
+import imlui.theme.system_fonts;
 import imlui.theme.typography;
 import imlui.ui.clock;
 import imlui.ui.frame_request;
@@ -70,6 +71,9 @@ public:
         /// Gives the test scripts the whole Lua `debug` library also in a shipped build, where the DSL leaves scripts
         /// only debug.traceback (luaui::fullDebugLibrary()): for tests that use it to reach what the DSL and C++ hide.
         bool fullDebug = false;
+        /// Lets design "fluent" use the system's Segoe fonts where they are installed (setSystemFontsEnabled()). Off by
+        /// default, so text measures the same on every machine (Roboto and Material Icons).
+        bool systemFonts = false;
     };
 
     HeadlessFrame();
@@ -175,6 +179,7 @@ HeadlessFrame::HeadlessFrame(Options options) : m_options{options} {
         m_resources.mount("imlui:/", std::make_shared<DirectoryMount>(IMLUI_RESOURCES_DIR));
         m_resources.mount("imlui:/fonts/", std::make_shared<DirectoryMount>(IMLUI_FONT_DIR));
     }
+    setSystemFontsEnabled(m_options.systemFonts);
     luaui::clearErrors();
     setClockSource([this] { return m_time; });
     clearFrameRequests();

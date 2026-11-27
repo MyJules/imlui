@@ -115,11 +115,12 @@ bool checkbox(const char* label, bool* v) {
     const float box = dp(18), h = controlRowHeight();
     const std::string_view text = visibleLabel(label);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, checkboxSize(label));
+    bool clicked = navButton(label, checkboxSize(label));
     if (clicked) *v = !*v;
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c = pixelCenter(p, h);
@@ -135,6 +136,7 @@ bool checkbox(const char* label, bool* v) {
     }
     if (t < 0.99f) strokeRoundRect(dl, a, b, dp(2), outline.withAlpha(outline.a * (1 - t)), dp(2));
     if (!text.empty()) drawTextV(dl, TextStyle::BodyLarge, p.x + h + dp(4), c.y, dis ? disabledContent() : s.onSurface, text);
+    if (focused) focusRing(dl, a, b, dp(2));
     return clicked;
 }
 
@@ -143,10 +145,11 @@ bool radio(const char* label, bool selected) {
     const float h = controlRowHeight();
     const std::string_view text = visibleLabel(label);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, radioSize(label));
+    bool clicked = navButton(label, radioSize(label));
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c = pixelCenter(p, h);
@@ -158,6 +161,7 @@ bool radio(const char* label, bool selected) {
     float t = animate(id + 1, selected ? 1.0f : 0.0f, 18.0f);
     if (t > 0.01f) fillCircle(dl, c, dp(5) * t, ring);
     if (!text.empty()) drawTextV(dl, TextStyle::BodyLarge, p.x + h + dp(4), c.y, dis ? disabledContent() : s.onSurface, text);
+    if (focused) focusRing(dl, {c.x - dp(10), c.y - dp(10)}, {c.x + dp(10), c.y + dp(10)}, dp(10));
     return clicked;
 }
 
@@ -166,11 +170,12 @@ bool switchToggle(const char* label, bool* v, bool withIcons) {
     const float tw = dp(52), th = dp(32), h = controlRowHeight();
     const std::string_view text = visibleLabel(label);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, switchSize(label));
+    bool clicked = navButton(label, switchSize(label));
     if (clicked) *v = !*v;
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // Track on whole pixels, so the thumb (centered on its end caps) lines up with the snapped track.
@@ -202,6 +207,7 @@ bool switchToggle(const char* label, bool* v, bool withIcons) {
     if (!text.empty())
         drawTextV(dl, TextStyle::BodyLarge, p.x + tw + dp(12), a.y + th * 0.5f, dis ? disabledContent() : s.onSurface,
                   text);
+    if (focused) focusRing(dl, a, b, th * 0.5f);
     return clicked;
 }
 
@@ -213,10 +219,11 @@ bool chip(const char* label, bool selected, ChipVariant v, std::string_view lead
     const bool lead = l.lead;
     const float h = l.h, iconW = l.iconW, padL = l.padL, w = l.w;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(label, {w, h});
+    bool clicked = navButton(label, {w, h});
     const bool dis = itemDisabled();
     ImGuiID id = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 q{p.x + w, p.y + h};
@@ -235,6 +242,7 @@ bool chip(const char* label, bool selected, ChipVariant v, std::string_view lead
         x += iconW;
     }
     drawText(dl, TextStyle::LabelLarge, {x, textTop(TextStyle::LabelLarge, p.y + h * 0.5f)}, fg, text);
+    if (focused) focusRing(dl, p, q, rnd);
     return clicked;
 }
 
@@ -255,11 +263,12 @@ bool segmented(const char* id, const std::vector<std::string>& items, int* curre
         ImVec2 a{p.x + segW * static_cast<float>(i), p.y}, b{a.x + segW, p.y + h};
         ImGui::SetCursorScreenPos(a);
         ImGui::PushID(i);
-        if (ImGui::InvisibleButton("##seg", {segW, h}) && *current != i) { *current = i; changed = true; }
+        if (navButton("##seg", {segW, h}) && *current != i) { *current = i; changed = true; }
         const bool dis = itemDisabled();
         anyDisabled = anyDisabled || dis;
         bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
         ImGuiID sid = ImGui::GetItemID();
+        const bool focused = focusVisible();
         ImGui::PopID();
         ImDrawFlags corners = n == 1 ? ImDrawFlags_RoundCornersAll
                             : i == 0 ? ImDrawFlags_RoundCornersLeft
@@ -283,6 +292,7 @@ bool segmented(const char* id, const std::vector<std::string>& items, int* curre
         drawText(dl, TextStyle::LabelLarge, {x + iconW, textTop(TextStyle::LabelLarge, p.y + h * 0.5f)}, fg,
                  items[idx]);
         if (i > 0) vLine(dl, a.x, a.y, b.y, anyDisabled ? disabledContainer() : s.outline, dp(1));
+        if (focused) focusRing(dl, a, b, h * 0.5f, corners);
     }
     strokeRoundRect(dl, p, {p.x + w, p.y + h}, h * 0.5f, anyDisabled ? disabledContainer() : s.outline, dp(1));
     ImGui::PopID();

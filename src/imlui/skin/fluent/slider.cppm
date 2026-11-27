@@ -8,7 +8,8 @@
 // md::itemWidth. The track runs between the thumb's radii, as md's does.
 //
 // The thumb follows the mouse only when the press came from the mouse: the slider takes keyboard focus (and shows the
-// focus rectangle) like every Fluent control, and a keyboard activation leaves the value alone.
+// focus rectangle) like every Fluent control, and a keyboard activation leaves the value alone. While focused, the
+// keys step it (md::sliderKeys: Left/Right, PageUp/PageDown, Home/End), as WinUI's Slider.
 export module imlui.skin.fluent.slider;
 
 import std;
@@ -88,7 +89,8 @@ bool slider(const Look& look, const char* id, double* v, double vmin, double vma
     const float r = dp(sliderThumbDp) * 0.5f;
     const float x0 = p.x + r, x1 = p.x + w - r;
     const md::SliderRange range = md::sliderRange(vmin, vmax, step);
-    const bool changed = dragging && md::sliderDragTo(v, range, ImGui::GetMousePos().x, x0, x1);
+    const bool keyed = md::sliderKeys(v, range);
+    const bool changed = (dragging && md::sliderDragTo(v, range, ImGui::GetMousePos().x, x0, x1)) || keyed;
     const float t = md::sliderFraction(*v, range);
     const float tv = md::animate(item.id + 2, t, 30.0f);
 

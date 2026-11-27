@@ -139,12 +139,14 @@ public:
     void endAnchoredMenu() const override;
     bool tabs(const char* id, const std::vector<md::TabInfo>& items, int* current, bool secondary,
               float width) const override;
+    [[nodiscard]] ImVec2 tabsSize(const std::vector<md::TabInfo>& items, bool secondary, float width) const override;
     bool navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                         std::string_view badge, float width) const override;
     [[nodiscard]] ImVec2 navigationItemSize(float width) const override;
     bool navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                            std::string_view badge, float width) const override;
     [[nodiscard]] ImVec2 navigationBarItemSize(float width) const override;
+    [[nodiscard]] ImVec2 navigationBarSize(float width) const override;
     bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                             std::string_view badge, float width) const override;
     [[nodiscard]] ImVec2 navigationRailItemSize(float width) const override;
@@ -168,6 +170,7 @@ public:
     void tableCell(std::string_view text, float rowH, std::optional<Color> color) const override;
     void chart(const char* id, const std::vector<float>& values, const md::ChartOptions& o) const override;
     [[nodiscard]] ImVec2 chartSize(const md::ChartOptions& o) const override;
+    void brokenImage(ImVec2 a, ImVec2 b, float radius) const override;
     [[nodiscard]] TopAppBarChrome topAppBarChrome(md::TopAppBarVariant variant) const override;
     [[nodiscard]] TableChrome tableChrome() const override;
     [[nodiscard]] Color separatorTextColor() const override;
@@ -291,6 +294,9 @@ bool FluentSkin::tabs(const char* id, const std::vector<md::TabInfo>& items, int
                       float width) const {
     return fluent::tabs(look(), id, items, current, secondary, width);
 }
+ImVec2 FluentSkin::tabsSize(const std::vector<md::TabInfo>& items, bool secondary, float width) const {
+    return fluent::tabsSize(look(), items, secondary, width);
+}
 bool FluentSkin::navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                                 std::string_view badge, float width) const {
     return fluent::navigationItem(look(), id, iconName, label, selected, badge, width);
@@ -301,6 +307,7 @@ bool FluentSkin::navigationBarItem(const char* id, std::string_view iconName, st
     return fluent::navigationBarItem(look(), id, iconName, label, selected, badge, width);
 }
 ImVec2 FluentSkin::navigationBarItemSize(float width) const { return fluent::navigationBarItemSize(look(), width); }
+ImVec2 FluentSkin::navigationBarSize(float width) const { return fluent::navigationBarSize(look(), width); }
 bool FluentSkin::navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                                     std::string_view badge, float width) const {
     return fluent::navigationRailItem(look(), id, iconName, label, selected, badge, width);
@@ -344,6 +351,7 @@ void FluentSkin::chart(const char* id, const std::vector<float>& values, const m
     fluent::chart(look(), id, values, o);
 }
 ImVec2 FluentSkin::chartSize(const md::ChartOptions& o) const { return fluent::chartSize(look(), o); }
+void FluentSkin::brokenImage(ImVec2 a, ImVec2 b, float radius) const { fluent::brokenImage(look(), a, b, radius); }
 Skin::TopAppBarChrome FluentSkin::topAppBarChrome(md::TopAppBarVariant variant) const {
     return fluent::topAppBarChrome(look(), variant);
 }

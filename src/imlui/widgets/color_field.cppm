@@ -118,10 +118,11 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
     const float w = size.x, h = size.y;
     ImGui::PushID(id);
     ImVec2 p = ImGui::GetCursorScreenPos();
-    const bool clicked = ImGui::InvisibleButton("##swatch", {w, h});
+    const bool clicked = navButton("##swatch", {w, h});
     const bool dis = itemDisabled();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
     const ImGuiID iid = ImGui::GetItemID();
+    const bool focused = focusVisible();
     if (clicked) ImGui::OpenPopup("##picker");
     const bool open = ImGui::IsPopupOpen("##picker");
 
@@ -143,6 +144,7 @@ bool colorField(const char* id, Color* c, std::string_view label, bool alpha, fl
     }
     drawIcon(dl, "palette", {p.x + w - dp(16) - dp(12), p.y + h * 0.5f}, 24.0f,
              dis ? disabledContent() : s.onSurfaceVariant);
+    if (focused) focusRing(dl, p, {p.x + w, p.y + h}, rnd);
 
     bool changed = false;
     // Picker (240dp) + 16dp padding on each side: the width assumed before the first open.

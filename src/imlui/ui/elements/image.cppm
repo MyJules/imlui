@@ -10,6 +10,7 @@ import imlui.widgets;
 import imlui.lua.errors;
 import imlui.lua.node;
 import imlui.resources.name;
+import imlui.skin;
 import imlui.image.fill_mode;
 import imlui.image.image_cache;
 import imlui.types.element;
@@ -267,10 +268,7 @@ void Image::render(Frame& frame) {
     const float radius = frame.dp(m_radius);
     if (!ready) {
         if (!broken) return;
-        const auto& s = frame.scheme();
-        md::fillRoundRect(dl, pos, {pos.x + size.x, pos.y + size.y}, radius, s.surfaceContainerHighest);
-        const float icon = std::min(24.0f, std::min(size.x, size.y) / frame.dp(1.0f) * 0.6f);
-        md::drawIcon(dl, "broken_image", {pos.x + size.x * 0.5f, pos.y + size.y * 0.5f}, icon, s.onSurfaceVariant);
+        skin().brokenImage(pos, {pos.x + size.x, pos.y + size.y}, radius);
         return;
     }
 

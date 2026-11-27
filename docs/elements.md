@@ -502,7 +502,9 @@ Material tabs. A `TabBar` collects its visible children as tab headers and rende
 content, stacked with that child's `spacing` / `align`. Its children are normally `Tab`s; another element used
 as a tab gives its header through *raw* `title` (default `"Tab"`) and `icon` props. Non-visual children (`Timer`,
 `Dialog`, `Window`, `ModalNavigationDrawer`, ...) are not tabs and don't count for `currentIndex`: they render
-whichever tab is selected, so a `Dialog` declared in a `TabBar` opens from any tab.
+whichever tab is selected, so a `Dialog` declared in a `TabBar` opens from any tab. Its size is known before it
+renders (a `Row` places it right on its first frame): the skin's header (`Skin::tabsSize`), an 8dp gap and the
+selected tab's content.
 
 | `TabBar` prop | Type | Default | Notes |
 |---|---|---|---|
@@ -628,7 +630,8 @@ scope comes back afterwards. A rail's `header` and a `ModalNavigationDrawer`'s s
 
 ### NavigationBar
 
-The Material 3 bottom navigation bar, for compact windows: 80dp tall, as wide as the available width. Its visible
+The Material 3 bottom navigation bar, for compact windows: 80dp tall (the skin's height, `Skin::navigationBarSize`;
+taller only for a taller destination), as wide as the available width. Its visible
 children are `NavigationItem`s (directly or from a `Repeater`) and share the width equally.
 
 | Prop | Type | Default | Notes |
@@ -795,7 +798,8 @@ and drawn as a texture. It's drawn at its natural size times the DPI scale (one 
 Images are PNG or JPEG, at most 16384 pixels on a side and 256 MiB of pixels (4 bytes each, 8192 x 8192:
 `maxImageBytes`); a larger one is undecodable, found from its header before anything is decoded. A missing or
 undecodable file is reported once in the error overlay (`Image: image 'app:/logo.png' not found`) and drawn as a
-placeholder: a `surfaceContainerHighest` box with a broken-image icon, 48dp unless sized.
+placeholder, 48dp unless sized, by the skin (`Skin::brokenImage`): under Material a `surfaceContainerHighest` box
+with a broken-image icon, under Fluent the standard control fill.
 
 **Signals:** `onStatusChanged(self, status)`, `onImplicitWidthChanged(self, w)`, `onImplicitHeightChanged(self, h)`
 
@@ -836,6 +840,12 @@ Empty space.
 ---
 
 ## Buttons and selection controls
+
+Every clickable control (these, and `ListItem`, `Section`, `NavigationItem`, `TabBar` tabs, `SegmentedButton`
+segments, `ComboBox`, `ColorPicker`, a snackbar's action) takes part in keyboard navigation under every design: Tab
+and the arrow keys move the focus to it, Space or Enter activates it (the same signal as a click), and while the
+focus came from the keyboard it shows its design's focus indicator (Material's `secondary` ring, Fluent's focus
+rectangle).
 
 ### Button
 
@@ -983,7 +993,10 @@ A one-line (56dp) or two-line (72dp) list item.
 
 ### Slider
 
-A 44dp-tall Material slider. A value label appears above the handle while you drag.
+A 44dp-tall Material slider. A value label appears above the handle while you drag. With the keyboard focus (Tab,
+or a click), Left/Right move it by `stepSize` (a hundredth of the range when continuous), PageDown/PageUp by a tenth
+of the range in whole steps, Home/End to `from`/`to`; each key press emits `onMoved` like a drag. Up/Down and Tab move
+the focus on; Space or Enter don't change the value.
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|

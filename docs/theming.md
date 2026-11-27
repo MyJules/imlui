@@ -94,8 +94,15 @@ that frame. `themeState` works too (`themeState { design = "material" }`).
 
 `design = "fluent"` draws with the [tokens](#tokens) (Fluent's defaults, plus the theme's `tokens`) and with the
 [Fluent colors](#fluent-colors), derived from the same scheme roles Material uses: `primary` is the accent, so
-`seed` and `colors = { ... }` restyle it too. Fonts stay the theme's (Roboto by default; Segoe UI Variable can't be
-bundled), at Fluent's body size (`bodyMedium`, 14dp) for control labels.
+`seed` and `colors = { ... }` restyle it too. Control labels are in Fluent's body size (`bodyMedium`, 14dp).
+
+**Fonts and icons.** On Windows, the Fluent design draws text with **Segoe UI Variable** (Regular) and **Segoe UI
+Semibold** (the Medium weight: titles, labels) and icons with **Segoe Fluent Icons** (Windows 10's Segoe MDL2 Assets
+where it is missing), read from the system's font folder: they come with Windows and can't be bundled. A face the
+theme sets in `fonts` wins over Segoe. An icon name with a Segoe counterpart (`home`, `settings`, `search`, `add`,
+`close`, `check`, `expand_more`, `delete`, `edit`, about 70 of the common ones) draws Segoe's glyph; every other name
+stays Material Icons. Where the Segoe files are missing (another OS, an older Windows), Fluent draws with the theme's
+fonts (Roboto by default) and Material Icons. Material always uses the theme's fonts and Material Icons.
 
 Every control is Fluent-drawn:
 
@@ -108,7 +115,7 @@ Every control is Fluent-drawn:
 | `Switch` | WinUI's ToggleSwitch: a 40 x 20dp pill, off an alt fill with a `controlStrongStroke` outline and a `textSecondary` knob, on an accent fill with a knob on accent. The knob (12dp, 14dp on hover, stretched to 17dp while pressed) slides between the ends. `icons` is ignored (Fluent's knob has no icon). The label after `gap`; `controlHeight` high. |
 | `Chip` | No chip in WinUI: drawn as its closest control, a **ToggleButton** (Fluent 2's interaction tag looks the same). `filter`, `suggestion` and `input`: unselected a standard button, selected an accent one (following `buttonFill`); `assist`: always standard. A selected filter chip shows no check (the fill shows the selection); a leading `icon` stays. `controlHeight` high, `paddingX` + icon + `gap` + label + `paddingX` wide. |
 | `SegmentedButton` | The Community Toolkit's Segmented (WinUI's SelectorBar look): a standard control's frame (an alt fill, a 1dp stroke, the control radius) holding equal segments 2dp inside it; the segments are subtle, the selected one a raised standard control with a 16 x 3dp accent pill at its bottom (the selection fades between segments). No check on the selected segment; `icons` show on every segment. `controlHeight` high; each segment `paddingX` + room for an icon + `gap` + the widest label + `paddingX`; `width` sizes the whole. |
-| `Slider` | WinUI's Slider: a 4dp track (`controlStrongStroke`) with the value part in accent, a 20dp thumb (the opaque solid control fill, a 1dp stroke) carrying an accent dot of 12dp (14dp on hover, 10dp while dragging), 1dp tick marks under the track (at most 40 steps), and the value in a flyout-colored tooltip above the thumb while dragging. `controlHeight` high (at least the thumb), 200dp natural width (unset: fills). Keyboard focus shows the focus rectangle; a keyboard activation leaves the value alone (only the mouse drags). |
+| `Slider` | WinUI's Slider: a 4dp track (`controlStrongStroke`) with the value part in accent, a 20dp thumb (the opaque solid control fill, a 1dp stroke) carrying an accent dot of 12dp (14dp on hover, 10dp while dragging), 1dp tick marks under the track (at most 40 steps), and the value in a flyout-colored tooltip above the thumb while dragging. `controlHeight` high (at least the thumb), 200dp natural width (unset: fills). Keyboard focus shows the focus rectangle; while focused, Left/Right step the value (by `stepSize`, or a hundredth of the range when continuous), PageDown/PageUp by a tenth of the range, Home/End go to `from`/`to` (WinUI's keys; Up/Down and Tab move the focus on); a keyboard activation leaves the value alone (only the mouse drags). |
 | `ProgressBar` | WinUI's ProgressBar: a 3dp accent bar with round ends over a 1dp `controlStrongStroke` track, 3dp high, 240dp natural width; indeterminate, two accent bars sweep across. |
 | `CircularProgress`, `BusyIndicator` | WinUI's ProgressRing: an accent arc `thickness` dp wide from the top, clockwise, with no track (the ring's background is transparent); 32dp across unless `size` sets it. Indeterminate, a spinning arc that grows and shrinks. |
 | `TextField`, `TextArea` | Fluent's text box. The `label` is a header above the box (body text, `gap` below it), the box `controlHeight` high (a `TextArea`'s `height`, 120dp by default, is the header and the box together), `supportingText` a description 4dp below it in the secondary text color (`error`: the scheme's `error` role). The box: the control fill (hover: the hover fill; while editing: `controlInputActive`), a `strokeWidth` border whose bottom edge is `controlStrongStroke`, `controlRadius` corners; while editing an accent underline `inputUnderlineWidth` thick at the bottom (`tokens = { inputUnderline = false }`: an accent border instead, and a `controlBottomStroke` bottom edge); `error` makes the bottom edge (and the underline) the error color. Text in body text, `paddingX` in, the placeholder in the secondary text color (shown whenever the text is empty, as the label is outside). `leadingIcon` at `iconSize` inside the left padding; `trailingIcon` (or a password's reveal toggle) a subtle inner button 30dp wide, 4dp inside the box's right edge, not a tab stop. Natural width 280dp, as Material's. `variant` doesn't change the look. Arrow-key focus without editing shows the focus rectangle; editing shows the underline. |
@@ -132,7 +139,8 @@ Every control is Fluent-drawn:
 | `Menu`, `MenuItem`, a `menu` prop | WinUI's MenuFlyout: the `flyout` color, a `flyoutStroke` border (`strokeWidth`), `overlayRadius` corners, 2dp above and below the rows, a shadow under a dropdown (a `menu` prop's). Rows `compactHeight` + 8dp high (32dp, the 8dp scaled by `density`), at least 160dp wide, with the subtle fills on a highlight inside the row (4dp, 2dp); `paddingX`, the icon slot (`iconSize` + `gap`), the body label, the shortcut in the caption style and `textSecondary`, right-aligned. A dropdown shows 8 rows before it scrolls. Opening, choosing, a checkable item keeping the menu open: as under Material. |
 | `TabBar` | `controlHeight` + 8dp high (40dp) for both variants; the tabs share the width (natural: each as wide as the widest tab's icon and label plus `paddingX` on both sides). `primary` is WinUI's **SelectorBar**: subtle tabs (hover and press fills inside the tab), the icon beside the label (never above it), `textSecondary` on unselected tabs, and the selection indicator (a 16dp x 3dp `accent` pill) under the selected one, sliding to the new tab. `secondary` is WinUI's **TabView**: the selected tab is a `layer` tab with `overlayRadius` top corners standing on a `divider` line along the bar's bottom that stops under it; the others are subtle. |
 | `NavigationItem` | WinUI's NavigationViewItem: a subtle item with the selection indicator at its left edge (the `ListItem`'s fills). As a drawer item (outside a bar or rail, or in a `ModalNavigationDrawer`): `controlHeight` + 8dp high (40dp), 280dp natural width, the icon (`iconSize` + 4dp, 20dp) and the body label; `badge` is an InfoBadge at the right (an `accent` pill with `onAccent` text, a dot for `"."`). In a `NavigationRail`: `controlHeight` + 24dp high (56dp), the icon over a caption label. In a `NavigationBar`: 80dp high (the bar's; no `density`), the icon over a caption label, selected in `accentText` with the indicator under the label. A bar or rail `badge` is an InfoBadge on the icon. |
-| `NavigationBar`, `NavigationRail` | The bar on `layer`, the rail on `background` (NavigationView's pane over Mica), unless they have a `color`. |
+| `NavigationBar`, `NavigationRail` | The bar on `layer`, the rail on `background` (NavigationView's pane over Mica), unless they have a `color`. The bar is as high as its destinations (80dp). |
+| `Image` (broken) | A missing or undecodable image's placeholder: the standard control fill with its stroke and a broken-image icon in the secondary text color. |
 | `ModalNavigationDrawer` | WinUI's NavigationView pane in overlay mode: `smoke` over the window, the pane in `flyout` with a `flyoutStroke` right edge, `overlayRadius` right corners and a shadow, sliding in from the left; its content 4dp from the pane's edges (scaled by `density`). Escape and a click on the smoke close it, as under Material. |
 | ImGui's own style | With the `"material"` preset: `FrameRounding`, `TabRounding` and `GrabRounding` = `controlRadius`; `WindowRounding`, `ChildRounding` and `PopupRounding` = `overlayRadius`; the border sizes = `strokeWidth`; `FramePadding` from `paddingX` and `controlHeight` (an ImGui frame is as high as a Fluent control); `ItemInnerSpacing.x` = `gap`; the colors from the Fluent colors (`WindowBg` = background, `PopupBg` = flyout, `FrameBg` = control fill, `Header*` = subtle fills, `Separator` and table borders = divider, `TextLink` = accent text, `NavCursor` = focus stroke, ...). So raw ImGui (scrollbars, popups, `InputText`, `TreeNode`, menu bars, `ImGuiDemo`) matches. `style` and `imgui` overrides still apply after it; the `imgui-*` presets are untouched. |
 
@@ -370,6 +378,10 @@ theme {
   face then stays Roboto, a named font draws in its style's face, and a missing fallback is left out. Fonts are
   checked before they reach ImGui (a truncated or garbled file would otherwise abort the program inside its font
   parser); see `imlui.theme.font_check` in [Architecture](architecture.md#resources).
+- **System fonts.** A font installed with the OS is named `system:/fonts/<file>` (`"system:/fonts/segoeui.ttf"`,
+  `"system:/fonts/consola.ttf"`): a file in the OS's font folder (on Windows the one the shell reports,
+  `C:\Windows\Fonts`), spelled as on disk. There is none on other systems, where such a name is reported as not
+  found. The Fluent design uses this for Segoe UI Variable (see [The Fluent design](#the-fluent-design)).
 - **Unknown names.** An element whose `font` names no declared font draws in its style's face; the name is logged
   once.
 - **Reuse and hot reload.** Each fallback file is read once per set applied, for all its faces. Each face (with its
@@ -386,7 +398,8 @@ theme {
 Icons come from **Material Icons Round** (`external/fonts/MaterialIconsRound-Regular.otf`). Names are the ones
 listed in `MaterialIconsRound-Regular.codepoints`, about 2,200 of them, for example `"add"`, `"home"`,
 `"delete_outline"` or `"favorite_border"`. You can browse them at <https://fonts.google.com/icons> (Round style).
-An unknown name draws nothing.
+An unknown name draws nothing. Under the Fluent design on Windows, the names with a Segoe Fluent Icons counterpart
+draw that glyph instead (see [The Fluent design](#the-fluent-design)).
 
 Icon props: `icon` on `Button`, `IconButton`, `Chip`, `ListItem`, `NavigationItem`, `MenuItem`, `Tab`, `Dialog`;
 `name` on `Icon`; `leadingIcon`/`trailingIcon` on `TextField`/`TextArea` (`leadingIcon` also on `ComboBox`);
@@ -406,5 +419,9 @@ and shows a focus rectangle for keyboard focus (see [The Fluent design](#the-flu
   to 0.38 for raw ImGui widgets.
 - **Surfaces.** Cards, dialogs, colored `ScrollView`s and windows push their background as the "current surface".
   Widgets that need a cutout (for example, the `TopAppBar` default background) read it.
+- **Keyboard focus.** Every control is reachable with Tab and the arrow keys, and Space or Enter activates it (a
+  focused `Slider` steps with Left/Right, PageUp/PageDown and Home/End). The focused control shows Material's focus
+  indicator, a 3dp ring in `secondary` 2dp outside it, while the focus came from the keyboard (not after a click);
+  text fields and menu items show ImGui's nav rectangle in the same color.
 - **Focus and selection.** Text fields switch to `primary` (or `error`) for the indicator, label and caret.
   Selected list, navigation and segmented items use `secondaryContainer` / `onSecondaryContainer`.

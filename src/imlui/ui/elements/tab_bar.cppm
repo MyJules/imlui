@@ -16,7 +16,8 @@ import imlui.ui.elements.tab;
 export namespace imlui {
 
 /// Material tabs: the visible visual children are the tabs, and only the selected one's content renders.
-/// Non-visual children (Timer, Dialog, ...) are not tabs: they render whichever tab is shown.
+/// Non-visual children (Timer, Dialog, ...) are not tabs: they render whichever tab is shown. The header's size is the
+/// skin's (Skin::tabsSize).
 ///
 /// Props:   currentIndex = 1 (1-based), variant = "primary" ("secondary")
 /// Raw:     width; the `title` and `icon` of a child that isn't a Tab
@@ -27,6 +28,9 @@ public:
     static void declare(TypeBuilder<TabBar>& type);
 
     void render(Frame& frame) override;
+    /// The header (Skin::tabsSize, `width` or a fill of `maxWidth`), the 8dp gap and the current tab's content stacked
+    /// below it. None while a visual child of that tab has no intrinsic size.
+    [[nodiscard]] std::optional<ImVec2> intrinsicSize(const Frame& frame, float maxWidth) override;
 
     /// 1-based index of the shown tab among the visible ones.
     [[nodiscard]] int currentIndex() const;
@@ -35,6 +39,9 @@ public:
     void setVariant(md::TabsVariant variant);
 
 private:
+    /// Fills `tabs` with the headers of the visual children; returns the index of the current one among them.
+    int collectTabs(const Frame& frame, std::vector<md::TabInfo>& tabs) const;
+
     int m_currentIndex = 1;
     md::TabsVariant m_variant = md::TabsVariant::Primary;
     /// The headers, kept from frame to frame: their strings are assigned in place, so a render allocates nothing
@@ -63,10 +70,9 @@ void TabBar::declare(TypeBuilder<TabBar>& type) {
         .doc("Called when the user picks a tab, with its 1-based index.");
 }
 
-void TabBar::render(Frame& frame) {
-    // Collect the tab headers: the visual children. Non-visual ones (Timer, Dialog, ...) are no tabs; they render
-    // in place below, whichever tab is shown.
-    std::vector<md::TabInfo> tabs = std::move(m_tabs);
+int TabBar::collectTabs(const Frame& frame, std::vector<md::TabInfo>& tabs) const {
+    // The tab headers: the visual children. Non-visual ones (Timer, Dialog, ...) are no tabs; they render in place
+    // below, whichever tab is shown.
     std::size_t count = 0;
     frame.forEachChild([&](Frame::Child& c) {
         if (!c.isVisual()) return;
@@ -82,7 +88,12 @@ void TabBar::render(Frame& frame) {
     });
     tabs.resize(count);
     const int last = std::max(0, static_cast<int>(tabs.size()) - 1);
-    int cur = std::clamp(indexValue(m_currentIndex) - 1, 0, last); // indexValue: no overflow on INT_MIN
+    return std::clamp(indexValue(m_currentIndex) - 1, 0, last); // indexValue: no overflow on INT_MIN
+}
+
+void TabBar::render(Frame& frame) {
+    std::vector<md::TabInfo> tabs = std::move(m_tabs);
+    int cur = collectTabs(frame, tabs);
     if (skin().tabs("##tabs", tabs, &cur, m_variant == md::TabsVariant::Secondary, frame.size("width"))) {
         m_currentIndex = cur + 1;
         notify("currentIndex");
@@ -101,6 +112,26 @@ void TabBar::render(Frame& frame) {
         ImGui::PopID();
     });
     m_tabs = std::move(tabs);
+}
+
+std::optional<ImVec2> TabBar::intrinsicSize(const Frame& frame, float maxWidth) {
+    std::vector<md::TabInfo> tabs = std::move(m_tabs);
+    const int cur = collectTabs(frame, tabs);
+    const ImVec2 header = skin().tabsSize(tabs, m_variant == md::TabsVariant::Secondary, frame.widthIn(maxWidth));
+    m_tabs = std::move(tabs);
+    std::optional<ImVec2> content = ImVec2{0.0f, 0.0f};
+    int i = 0;
+    frame.forEachChild([&](Frame::Child& c) {
+        if (c.isVisual() && i++ == cur) content = frame.stackSize(c.node(), maxWidth);
+    });
+    if (!content) return std::nullopt;
+    // As render() lays it out: the header, the 8dp dummy and the content, each on its own line (ImGui truncates the
+    // cursor to a whole pixel after each, the item spacing below).
+    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+    const float gapTop = std::trunc(header.y + spacing);
+    if (content->x == 0.0f && content->y == 0.0f) return ImVec2{header.x, gapTop + frame.dp(8)};
+    const float top = std::trunc(gapTop + frame.dp(8) + spacing);
+    return ImVec2{std::max(header.x, content->x), top + content->y};
 }
 
 int TabBar::currentIndex() const { return m_currentIndex; }

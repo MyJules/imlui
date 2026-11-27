@@ -76,7 +76,11 @@ the built-ins in `src/imlui/ui/elements/` are the examples (see
 (`export module imlui.widgets.<name>;`) and add it to the `imlui.widgets` umbrella. Draw it with ImGui primitives
 using `imlui.widgets.common`:
 
-- `InvisibleButton` for interaction.
+- `navButton(id, size)` for interaction: an `InvisibleButton` that keyboard navigation reaches (Tab, arrows; Space or
+  Enter activate it) without ImGui's nav rectangle. Right after it, `const bool focused = focusVisible();`, and
+  `if (focused) focusRing(dl, a, b, radius);` last, around what the state layer covers (Material's focus indicator,
+  shown for keyboard focus only). A plain `ImGui::InvisibleButton` only for what isn't a tab stop (a scrim, a text
+  field's trailing icon).
 - `scheme()` and `shape()` for colors and radii.
 - `stateLayer(id, hovered, active)` for the hover and press overlay.
 - `itemDisabled()` with `disabledContent()`/`disabledContainer()` for the disabled state.
@@ -283,17 +287,41 @@ doesn't depend on `Engine`.
   and fails on any finding. A finding in a module shows up in every file that imports it. A file is checked again
   when it or any module changed. `cmake/ImluiTidy.cmake` defines it; it's skipped when `clang-tidy` isn't found. A
   single file: `clang-tidy -p build/clang-debug src/imlui/theme/scheme.cppm`.
-- **Known crashes.** clang-tidy 22.1.7 crashes (an access violation in `readability-identifier-naming`, "Processing
-  'readability-identifier-naming' against: TranslationUnitDecl") on 23 modules, with freshly built BMIs, one file at a
-  time and with any one naming option set: `lua/native`, `lua/node`, `lua/painter`, `lua/theme_table`,
-  `skin/fluent/common`, `divider`, `navigation_drawer`, `segmented`, `tabs`, `skin/registry`, `theme/font_library`,
-  `theme/typography`, `ui/enum_names`, `ui/props` and `widgets/anchored_popup`, `button`, `color_field`, `common`,
-  `dialog`, `menu`, `selection`, `slider`, `text`. They're listed in `IMLUI_TIDY_KNOWN_CRASHES`
-  (`cmake/ImluiTidy.cmake`) and run through `cmake/ImluiTidyKnownCrash.cmake`: a finding still fails, the crash is a
-  warning (`a known crash: not checked`) and passes, and a clean run says to take the file off the list. A new crash
-  on a file that isn't listed fails the target. Running clang-tidy while another build rewrites the BMIs can also
-  crash it, so don't. The `clang-release` and `clang-asan` builds work too after a build; before one, their compile
-  commands lack the new modules and clang-tidy falls back to a guessed command (errors about `module;`).
+- **Known crash: clang-tidy 22.1.7 segfaults on some modules** (an access violation in
+  `readability-identifier-naming`, the stack dump ending in `ASTMatcher: Processing 'readability-identifier-naming'
+  against: TranslationUnitDecl`). It is a clang-tidy bug with no workaround in our code; what is known:
+  - **Deterministic for a given set of BMIs, but which files crash depends on the build.** With fresh BMIs from one
+    `clang-debug` build, 41 of 205 files crashed every time, alone or in parallel (most of `skin/fluent/*`,
+    `skin/registry`, `skin/material/material_skin`, `widgets/{card,chart,dialog,dropdown,menu,navigation_drawer,
+    progress,slider,snackbar,spin_box,tabs,text,widgets}`, `theme/{icons,font_scope,font_face_scope}`, `ui/props`,
+    `types/lua_convert`, `lua/theme_table`, `resources/embedded_mount`); another agent's build of a nearby commit had a
+    different list of 23. Rebuilding a module's BMI unchanged keeps the result; changing what a BMI holds moves it.
+    So a list of known crashes goes stale with any change.
+  - **It's the check's own AST walk over imported declarations.** The check matches the `TranslationUnitDecl` and
+    walks the whole AST with its own visitor, imported modules' declarations included (modules put them all in the
+    TU's lexical context). Other checks (`readability-else-after-return`, `misc-unused-using-decls`,
+    `bugprone-unused-raii`) and `clang-query` matching `namedDecl()`, `typeLoc()`, `declRefExpr()`, `memberExpr()`,
+    `nestedNameSpecifierLoc()` and `stmt()` over the same TU (hundreds of thousands of matches) don't crash.
+    Neither the options (it crashes with none set, with `GetConfigPerFile: false`, with `--config-file`), nor the
+    header filter (`--header-filter='^$'`), nor `-fmodules-reduced-bmi` change it.
+  - **The trigger is a combination of imports, not one construct.** A file that is only `export module x; import
+    imlui.theme.font_library;` crashes. Cut down by recompiling BMIs: `font_library` importing `imlui.log`,
+    `imlui.resources` and `imlui.theme.font_check` crashes while any two of them don't; `font_check` with nothing but
+    `#include <math.h>` in its global module fragment is enough on its side, and `imlui.log` needs its full
+    implementation (spdlog in its global module fragment and the private part using it), not just its interface. So
+    it is about the textually included C/C++ standard declarations (UCRT `math.h`, spdlog's std headers) of several
+    modules' global module fragments meeting `import std` in one TU. The same declarations inlined into the file
+    instead of imported don't crash, and a file's own content can hide it: the real `fluent/slider.cppm` passes
+    while a stub with its imports alone crashes.
+  - **What the `tidy` target does about it.** Every file runs through `cmake/ImluiTidyFile.cmake`: a finding (or
+    any other failure) fails the target, and a crash (an access violation or a segmentation fault) prints a warning,
+    `clang-tidy crashed on <file>: not checked`, and passes. There is no list of files that crash, since it would go
+    stale with any change. Rebuild first (`cmake --build build/clang-debug`, which the `tidy` target does), and don't
+    run it while another build rewrites the BMIs. The `clang-release` and `clang-asan` builds work too after a
+    build; before one, their compile commands lack the new modules and clang-tidy falls back to a guessed command
+    (errors about `module;`). Report upstream with a reduced repro when time allows: two or three modules with
+    `#include <math.h>` / spdlog in their global module fragments, one that imports them, and a TU that imports that
+    one along with `import std`.
 - **clice** (a C++ language server with modules support) is configured by `clice.toml` to use
   `build/clang-debug`'s compile commands. Its cache lives in `.clice/`, which is git-ignored.
 - **Lua definitions check.** The `lua_check` target runs lua-language-server's own diagnostics

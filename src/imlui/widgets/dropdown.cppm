@@ -57,9 +57,10 @@ bool dropdown(const char* id, const std::vector<std::string>& items, int* curren
     f.inputX = f.p.x + (lead ? dp(52) : dp(16));
     f.inputW = w - (f.inputX - f.p.x) - dp(52);
 
-    const bool clicked = ImGui::InvisibleButton("##field", {w, h});
+    const bool clicked = navButton("##field", {w, h});
     const bool dis = itemDisabled();
     const bool hov = ImGui::IsItemHovered();
+    const bool focused = focusVisible();
     if (clicked) ImGui::OpenPopup("##menu");
     const bool open = ImGui::IsPopupOpen("##menu");
     field::drawFieldBackground(f, open, hov, dis);
@@ -74,6 +75,7 @@ bool dropdown(const char* id, const std::vector<std::string>& items, int* curren
         drawTextV(dl, TextStyle::BodyLarge, f.inputX, y, dis ? disabledContent() : s.onSurface, items[static_cast<std::size_t>(*current)]);
         dl->PopClipRect();
     }
+    if (focused) focusRing(ImGui::GetWindowDrawList(), f.p, {f.p.x + w, f.p.y + h}, dp(shape().extraSmall));
     bool changed = false;
     if (beginAnchoredMenu("##menu", f.p, {f.p.x + w, f.p.y + h}, w)) {
         for (int i = 0; i < static_cast<int>(items.size()); ++i) {

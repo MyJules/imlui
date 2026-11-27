@@ -52,6 +52,12 @@ bool sliderDragTo(double* v, const SliderRange& r, float mouseX, float x0, float
 [[nodiscard]] int sliderStops(const SliderRange& r);
 /// Where tick `i` lies on the track, 0..1.
 [[nodiscard]] float sliderStopAt(const SliderRange& r, int i);
+/// The keyboard of the last item, a slider, while it has the nav focus (after Tab, the arrows, or a click) and isn't
+/// disabled: Left/Right step `*v` down/up by the step (a hundredth of the range when continuous), PageDown/PageUp by
+/// a tenth of the range (whole steps, at least one), Home/End go to the ends. The slider owns those keys meanwhile, so
+/// they don't move the nav focus; Up/Down and Tab still do. A key press shows the focus indicator. Writes `*v` (snapped
+/// and clamped like sliderDragTo()) and returns true only when it changed; nothing happens without a range.
+bool sliderKeys(double* v, const SliderRange& r);
 
 } // namespace imlui::md
 
@@ -122,6 +128,41 @@ float sliderStopAt(const SliderRange& r, int i) {
     return static_cast<float>(std::min(1.0, static_cast<double>(i) * r.step / r.range));
 }
 
+bool sliderKeys(double* v, const SliderRange& r) {
+    if (!r.ranged || itemDisabled() || !ImGui::IsItemFocused()) return false;
+    const ImGuiID id = ImGui::GetItemID();
+    constexpr std::array keys{ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_Home,
+                              ImGuiKey_End,       ImGuiKey_PageUp,     ImGuiKey_PageDown};
+    // Owned from this frame on, so the nav (in the next NewFrame) leaves them to the slider.
+    for (const ImGuiKey key : keys)
+        ImGui::SetKeyOwner(key, id);
+    const auto pressed = [id](ImGuiKey key) { return ImGui::IsKeyPressed(key, ImGuiInputFlags_Repeat, id); };
+    const double small = r.step > 0 ? r.step : r.range / 100.0;
+    const double large = r.step > 0 ? r.step * std::max(1.0, std::round(r.range / r.step / 10.0)) : r.range / 10.0;
+    const double from = std::clamp(*v, r.vmin, r.vmax);
+    double nv = from;
+    if (pressed(ImGuiKey_LeftArrow))
+        nv = from - small;
+    else if (pressed(ImGuiKey_RightArrow))
+        nv = from + small;
+    else if (pressed(ImGuiKey_PageDown))
+        nv = from - large;
+    else if (pressed(ImGuiKey_PageUp))
+        nv = from + large;
+    else if (pressed(ImGuiKey_Home))
+        nv = r.vmin;
+    else if (pressed(ImGuiKey_End))
+        nv = r.vmax;
+    else
+        return false;
+    ImGui::SetNavCursorVisible(true);
+    if (r.step > 0) nv = snapToStep(nv, r.vmin, r.vmax, r.step);
+    nv = std::clamp(nv, r.vmin, r.vmax);
+    if (nv == *v) return false;
+    *v = nv;
+    return true;
+}
+
 ImVec2 sliderSize(float width) { return {itemWidth(width, dp(200)), dp(44)}; }
 
 bool slider(const char* id, double* v, double vmin, double vmax, double step, float width, const char* valueFormat) {
@@ -129,15 +170,19 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
     const ImVec2 size = sliderSize(width);
     const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton(id, size);
+    navButton(id, size);
     const bool dis = itemDisabled();
     ImGuiID iid = ImGui::GetItemID();
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
+    const bool focused = focusVisible();
+    // Held with the mouse it drags; a keyboard activation (Space, Enter) leaves the value alone, the keys step it.
+    const bool dragging = act && ImGui::IsMouseDown(ImGuiMouseButton_Left);
 
     const float r = dp(10);
     const float x0 = p.x + r, x1 = p.x + w - r;
     const SliderRange range = sliderRange(vmin, vmax, step);
-    const bool changed = act && sliderDragTo(v, range, ImGui::GetMousePos().x, x0, x1);
+    const bool keyed = sliderKeys(v, range);
+    const bool changed = (dragging && sliderDragTo(v, range, ImGui::GetMousePos().x, x0, x1)) || keyed;
     const float t = sliderFraction(*v, range);
     float tv = animate(iid + 2, t, 30.0f);
 
@@ -155,9 +200,10 @@ bool slider(const char* id, double* v, double vmin, double vmax, double step, fl
     }
     float layer = dis ? 0.0f : stateLayer(iid, hov, act);
     if (layer > 0) fillCircle(dl, {hx, cy}, dp(20), s.primary.withAlpha(layer * 1.5f));
-    fillCircle(dl, {hx, cy}, r * (act ? 1.1f : 1.0f), active);
+    fillCircle(dl, {hx, cy}, r * (dragging ? 1.1f : 1.0f), active);
+    if (focused) focusRing(dl, {hx - r, cy - r}, {hx + r, cy + r}, r);
 
-    if (act && valueFormat && *valueFormat) {
+    if (dragging && valueFormat && *valueFormat) {
         char buf[64] = {};
         const char* format = checkedSliderFormat(valueFormat);
         // The format is the Slider's `format` prop, chosen by the script, so it can't be a literal.

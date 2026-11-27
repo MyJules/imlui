@@ -38,52 +38,20 @@ if(TARGET imlui_tests)
     endforeach()
 endif()
 
-# Files clang-tidy 22.1.7 crashes on (an access violation in readability-identifier-naming, "Processing
-# 'readability-identifier-naming' against: TranslationUnitDecl", with freshly built BMIs and one file at a time; see
-# docs/development.md, "clang-tidy"). Each is still checked, through ImluiTidyKnownCrash.cmake: a finding fails the
-# target as anywhere else, and only that crash is tolerated, with a warning. A listed file that no longer crashes is
-# reported, so the list shrinks when the crash is fixed. Remove a file from it as soon as it passes.
-set(IMLUI_TIDY_KNOWN_CRASHES
-    src/imlui/lua/native.cppm
-    src/imlui/lua/node.cppm
-    src/imlui/lua/painter.cppm
-    src/imlui/lua/theme_table.cppm
-    src/imlui/skin/fluent/common.cppm
-    src/imlui/skin/fluent/divider.cppm
-    src/imlui/skin/fluent/navigation_drawer.cppm
-    src/imlui/skin/fluent/segmented.cppm
-    src/imlui/skin/fluent/tabs.cppm
-    src/imlui/skin/registry.cppm
-    src/imlui/theme/font_library.cppm
-    src/imlui/theme/typography.cppm
-    src/imlui/ui/enum_names.cppm
-    src/imlui/ui/props.cppm
-    src/imlui/widgets/anchored_popup.cppm
-    src/imlui/widgets/button.cppm
-    src/imlui/widgets/color_field.cppm
-    src/imlui/widgets/common.cppm
-    src/imlui/widgets/dialog.cppm
-    src/imlui/widgets/menu.cppm
-    src/imlui/widgets/selection.cppm
-    src/imlui/widgets/slider.cppm
-    src/imlui/widgets/text.cppm
-)
-
+# Each file runs through ImluiTidyFile.cmake, which tolerates clang-tidy 22.1.7's crash in
+# readability-identifier-naming (an access violation on some modules, which ones depending on the BMIs; see
+# docs/development.md, "clang-tidy") with a warning, and fails on any finding or other error.
 set(IMLUI_TIDY_STAMPS)
 foreach(file IN LISTS IMLUI_TIDY_FILES)
     file(RELATIVE_PATH rel ${PROJECT_SOURCE_DIR} ${file})
     set(stamp ${PROJECT_BINARY_DIR}/tidy/${rel}.stamp)
-    if(rel IN_LIST IMLUI_TIDY_KNOWN_CRASHES)
-        set(command ${CMAKE_COMMAND} -DTIDY=${IMLUI_CLANG_TIDY} -DBUILD=${PROJECT_BINARY_DIR} -DFILE=${file}
-                    -P ${CMAKE_CURRENT_LIST_DIR}/ImluiTidyKnownCrash.cmake)
-    else()
-        set(command ${IMLUI_CLANG_TIDY} -p ${PROJECT_BINARY_DIR} --quiet --warnings-as-errors=* ${file})
-    endif()
+    set(command ${CMAKE_COMMAND} -DTIDY=${IMLUI_CLANG_TIDY} -DBUILD=${PROJECT_BINARY_DIR} -DFILE=${file}
+                -P ${CMAKE_CURRENT_LIST_DIR}/ImluiTidyFile.cmake)
     add_custom_command(
         OUTPUT ${stamp}
         COMMAND ${command}
         COMMAND ${CMAKE_COMMAND} -E touch ${stamp}
-        DEPENDS ${file} ${PROJECT_SOURCE_DIR}/.clang-tidy ${IMLUI_TIDY_DEPENDS}
+        DEPENDS ${file} ${PROJECT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_LIST_DIR}/ImluiTidyFile.cmake ${IMLUI_TIDY_DEPENDS}
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         COMMENT "clang-tidy ${rel}"
         VERBATIM

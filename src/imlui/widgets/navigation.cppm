@@ -25,6 +25,8 @@ bool navigationBarItem(const char* id, std::string_view iconName, std::string_vi
                        std::string_view badge, float width);
 /// The size of navigationBarItem() `width` wide.
 [[nodiscard]] ImVec2 navigationBarItemSize(float width);
+/// A navigation bar `width` wide (pixels, already resolved): 80dp high, its destinations' height.
+[[nodiscard]] ImVec2 navigationBarSize(float width);
 
 /// Navigation rail destination, `width` x 56dp: a 24dp icon in a 56x32dp pill indicator with the label below.
 /// Returns true when clicked.
@@ -47,10 +49,11 @@ bool navigationItem(const char* id, std::string_view iconName, std::string_view 
     const ImVec2 size = navigationItemSize(width);
     const float w = size.x, h = size.y;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    bool clicked = ImGui::InvisibleButton(id, size);
+    bool clicked = navButton(id, size);
     const bool dis = itemDisabled();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
     const ImGuiID iid = ImGui::GetItemID();
+    const bool focused = focusVisible();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float rnd = h * 0.5f;
     float t = animate(iid + 3, selected ? 1.0f : 0.0f, 18.0f);
@@ -77,6 +80,7 @@ bool navigationItem(const char* id, std::string_view iconName, std::string_view 
         float bw = measure(TextStyle::LabelLarge, badge).x;
         drawTextV(dl, TextStyle::LabelLarge, p.x + w - dp(24) - bw, cy, fg, badge);
     }
+    if (focused) focusRing(dl, p, {p.x + w, p.y + h}, rnd);
     return clicked;
 }
 
@@ -114,10 +118,11 @@ bool destination(const char* id, std::string_view iconName, std::string_view lab
     const ImVec2 size = destinationSize(width, l);
     const float w = size.x, h = size.y;
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const bool clicked = ImGui::InvisibleButton(id, size);
+    const bool clicked = navButton(id, size);
     const bool dis = itemDisabled();
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
     const ImGuiID iid = ImGui::GetItemID();
+    const bool focused = focusVisible();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const float cx = p.x + w * 0.5f, iw = dp(l.indicatorWidth), ih = dp(32);
@@ -148,6 +153,8 @@ bool destination(const char* id, std::string_view iconName, std::string_view lab
                   labelColor, label);
         dl->PopClipRect();
     }
+    // M3 rings the indicator, where the state layer is.
+    if (focused) focusRing(dl, ia, ib, ih * 0.5f);
     return clicked;
 }
 
@@ -159,6 +166,7 @@ bool navigationBarItem(const char* id, std::string_view iconName, std::string_vi
 }
 
 ImVec2 navigationBarItemSize(float width) { return destinationSize(width, barDestination); }
+ImVec2 navigationBarSize(float width) { return {std::max(0.0f, width), dp(barDestination.height)}; }
 
 bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                         std::string_view badge, float width) {

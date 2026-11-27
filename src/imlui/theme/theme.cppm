@@ -13,8 +13,10 @@ import imlui.color;
 import imlui.theme.dpi;
 import imlui.theme.fluent_colors;
 import imlui.theme.font_library;
+import imlui.theme.icons;
 import imlui.theme.scheme;
 import imlui.theme.skin_tokens;
+import imlui.theme.system_fonts;
 
 export namespace imlui {
 
@@ -76,6 +78,15 @@ inline constexpr float maxStyleValue = 10000.0f;
 
 /// The tokens design "fluent" draws with under `t`: fluentTokens() with `t.tokens` applied.
 [[nodiscard]] SkinTokens fluentTokensFor(const Theme& t);
+
+/// The system fonts design "fluent" draws with on Windows: Segoe UI Variable (its default instance, Regular) and Segoe
+/// UI Semibold, Fluent's body and strong text. They can't be bundled, so they come from the OS's font folder.
+inline constexpr std::string_view fluentRegularFont = "SegUIVar.ttf";
+inline constexpr std::string_view fluentMediumFont = "seguisb.ttf";
+/// The fonts `t` draws with (applyPendingTheme() uses them): its `fonts`, and under design "fluent" the Segoe faces for
+/// the type-scale faces it leaves unset, where the system has them (systemFont(); the Regular one for Medium too
+/// when only it is there). Elsewhere, and outside Windows, `t.fonts` as they are (Roboto for the unset faces).
+[[nodiscard]] FontSet designFonts(const Theme& t);
 
 /// Schedules `t` to become the theme at the start of the next frame
 /// (safe to call from inside a frame, e.g. from a Lua click handler). Values out of range are brought into it:
@@ -450,13 +461,26 @@ std::string styleValueProblem(std::string_view name, ImVec2 value) {
     return {};
 }
 
+FontSet designFonts(const Theme& t) {
+    FontSet set = t.fonts;
+    if (t.design != fluent::designName) return set;
+    const std::optional<std::string> regular = systemFont(fluentRegularFont);
+    if (set.regular.empty() && regular) set.regular = *regular;
+    if (set.medium.empty()) {
+        const std::optional<std::string> medium = systemFont(fluentMediumFont);
+        if (medium || regular) set.medium = medium ? *medium : *regular;
+    }
+    return set;
+}
+
 bool applyPendingTheme() {
     if (!pendingTheme) return false;
     currentTheme = std::move(*pendingTheme);
     pendingTheme.reset();
     ++generation;
     applyNow(currentTheme);
-    useFontSet(currentTheme.fonts);
+    useFontSet(designFonts(currentTheme));
+    useFluentIcons(currentTheme.design == fluent::designName);
     return true;
 }
 

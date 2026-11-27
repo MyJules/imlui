@@ -72,6 +72,17 @@ inline constexpr int animateKeepFrames = 600;
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
 float stateLayer(ImGuiID id, bool hovered, bool active);
 
+/// ImGui::InvisibleButton that takes part in keyboard navigation (Tab and the arrows reach it, Space or Enter
+/// activates it), without ImGui's own nav rectangle: the control draws its focus indicator itself when focusVisible()
+/// (Material: focusRing()). Every skin's clickable controls are made of these.
+bool navButton(const char* id, ImVec2 size);
+/// Whether the last item has the keyboard nav focus and ImGui shows the nav cursor (after a key press, not after a
+/// click), and isn't disabled: a focus indicator shows for keyboard focus only.
+[[nodiscard]] bool focusVisible();
+/// Material 3's focus indicator around the control [a, b] whose corner radius is `radius` (pixels): a 3dp ring in
+/// `secondary`, 2dp outside the control. `corners`: the rounded ones (a segment of a segmented button).
+void focusRing(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, ImDrawFlags corners = ImDrawFlags_RoundCornersAll);
+
 /// Whether a popup is open over the current window now, or was at the end of the last frame (notePopupOver()).
 /// ImGui's keyboard nav closes the top popup on Escape in NewFrame, before the window under it sees the key: a
 /// window that closes on Escape (a Dialog, a drawer) checks this, so one press closes one popup. `flags` are
@@ -230,6 +241,25 @@ float stateLayer(ImGuiID id, bool hovered, bool active) {
     return animate(id + 0x5157, active ? 0.10f : (hovered ? 0.08f : 0.0f), 22.0f);
 }
 
+bool navButton(const char* id, ImVec2 size) {
+    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4{0, 0, 0, 0});
+    const bool clicked = ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
+    ImGui::PopStyleColor();
+    return clicked;
+}
+
+bool focusVisible() {
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    return g.NavCursorVisible && g.NavId != 0 && g.NavId == ImGui::GetItemID() && !itemDisabled();
+}
+
+void focusRing(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, ImDrawFlags corners) {
+    const float thickness = std::max(1.0f, std::round(dp(3))), off = std::round(dp(2));
+    const float out = off + thickness;
+    strokeRoundRect(dl, {a.x - out, a.y - out}, {b.x + out, b.y + out}, radius + out, scheme().secondary, thickness,
+                    corners);
+}
+
 float itemWidth(float requested, float natural) {
     return resolveSize(requested, layout::availableWidth(), natural);
 }
@@ -273,16 +303,25 @@ float textTop(TextStyle style, float cy) {
 }
 
 void drawIcon(ImDrawList* dl, std::string_view name, ImVec2 c, float size, Color color) {
-    ImFont* f = iconFont();
-    if (!f || name.empty()) return;
+    if (!iconFont() || name.empty()) return;
     const float px = std::min(dp(size), maxIconPixels);
     if (!(px >= 1.0f)) return; // also NaN
     // The glyph lies within its size around `c`; out of view, skip the name lookup and the measuring.
     if (!rectVisible(dl, {c.x - px, c.y - px}, {c.x + px, c.y + px})) return;
-    std::string t = iconText(name);
-    if (t.empty()) return;
-    ImVec2 sz = f->CalcTextSizeA(px, hugeExtent, 0.0f, t.c_str());
-    dl->AddText(f, px, {std::floor(c.x - sz.x * 0.5f), std::floor(c.y - sz.y * 0.5f)}, col(color), t.c_str());
+    const IconGlyph g = iconGlyph(name);
+    if (!g.font || g.text.empty()) return;
+    ImVec2 sz = g.font->CalcTextSizeA(px, hugeExtent, 0.0f, g.text.c_str());
+    ImVec2 at{std::floor(c.x - sz.x * 0.5f), std::floor(c.y - sz.y * 0.5f)};
+    if (g.fluent) {
+        // Segoe's glyphs sit on its own line box: center the ink instead, on whole pixels.
+        ImFontBaked* baked = g.font->GetFontBaked(px);
+        if (const ImFontGlyph* glyph = baked ? baked->FindGlyphNoFallback(static_cast<ImWchar>(g.code)) : nullptr) {
+            const float scale = baked->Size > 0.0f ? px / baked->Size : 1.0f;
+            at = {std::round(c.x - (glyph->X0 + glyph->X1) * 0.5f * scale),
+                  std::round(c.y - (glyph->Y0 + glyph->Y1) * 0.5f * scale)};
+        }
+    }
+    dl->AddText(g.font, px, at, col(color), g.text.c_str());
 }
 
 void drawShadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float level) {

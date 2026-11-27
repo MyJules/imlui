@@ -12,6 +12,7 @@ import imlui.skin.fluent.common;
 import imlui.theme.dpi;
 import imlui.theme.fluent_colors;
 import imlui.theme.theme;
+import imlui.widgets.common;
 import imlui.widgets.surface;
 import imlui.widgets.top_app_bar;
 
@@ -42,6 +43,9 @@ export namespace imlui::fluent {
 [[nodiscard]] Color separatorTextColor(const Look& look);
 /// WinUI's HyperlinkButton text: the accent text color.
 [[nodiscard]] std::optional<Color> linkColor(const Look& look);
+/// A broken Image's placeholder: the standard control fill with its stroke, a broken-image icon (at most iconSize) in
+/// the secondary text color.
+void brokenImage(const Look& look, ImVec2 a, ImVec2 b, float radius);
 
 } // namespace imlui::fluent
 
@@ -93,5 +97,13 @@ Skin::TableChrome tableChrome(const Look& look) {
 
 Color separatorTextColor(const Look& look) { return look.colors.textSecondary; }
 std::optional<Color> linkColor(const Look& look) { return look.colors.accentText; }
+
+void brokenImage(const Look& look, ImVec2 a, ImVec2 b, float radius) {
+    const Colors& c = look.colors;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    drawControl(dl, a, b, radius, {c.control, c.controlStroke, c.controlStroke, c.textSecondary}, strokeWidth(look));
+    const float icon = std::min(iconSize(look) + 4.0f, std::min(b.x - a.x, b.y - a.y) / dp(1.0f) * 0.6f);
+    md::drawIcon(dl, "broken_image", {(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f}, icon, c.textSecondary);
+}
 
 } // namespace imlui::fluent

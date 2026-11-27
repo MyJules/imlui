@@ -120,12 +120,15 @@ public:
     // Navigation
     virtual bool tabs(const char* id, const std::vector<md::TabInfo>& items, int* current, bool secondary,
                       float width) const;
+    [[nodiscard]] virtual ImVec2 tabsSize(const std::vector<md::TabInfo>& items, bool secondary, float width) const;
     virtual bool navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                                 std::string_view badge, float width) const;
     [[nodiscard]] virtual ImVec2 navigationItemSize(float width) const;
     virtual bool navigationBarItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                                    std::string_view badge, float width) const;
     [[nodiscard]] virtual ImVec2 navigationBarItemSize(float width) const;
+    /// The NavigationBar's container `width` (pixels, resolved) wide; its destinations are placed in it.
+    [[nodiscard]] virtual ImVec2 navigationBarSize(float width) const;
     virtual bool navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                                     std::string_view badge, float width) const;
     [[nodiscard]] virtual ImVec2 navigationRailItemSize(float width) const;
@@ -150,6 +153,9 @@ public:
     virtual void tableCell(std::string_view text, float rowH, std::optional<Color> color) const;
     virtual void chart(const char* id, const std::vector<float>& values, const md::ChartOptions& o) const;
     [[nodiscard]] virtual ImVec2 chartSize(const md::ChartOptions& o) const;
+    /// The placeholder of an Image whose file is missing or can't be decoded, filling [a, b] (pixels) with corner
+    /// radius `radius` (pixels): a container with a broken-image icon of at most 24dp. The size is the element's.
+    virtual void brokenImage(ImVec2 a, ImVec2 b, float radius) const;
     // Tokens and element chrome
 
     /// The skin's metrics. A token-driven skin draws with these (FluentSkin: fluentTokens() with the theme's `tokens`
@@ -304,6 +310,9 @@ bool Skin::tabs(const char* id, const std::vector<md::TabInfo>& items, int* curr
                 float width) const {
     return md::tabs(id, items, current, secondary, width);
 }
+ImVec2 Skin::tabsSize(const std::vector<md::TabInfo>& items, bool secondary, float width) const {
+    return md::tabsSize(items, secondary, width);
+}
 bool Skin::navigationItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                           std::string_view badge, float width) const {
     return md::navigationItem(id, iconName, label, selected, badge, width);
@@ -314,6 +323,7 @@ bool Skin::navigationBarItem(const char* id, std::string_view iconName, std::str
     return md::navigationBarItem(id, iconName, label, selected, badge, width);
 }
 ImVec2 Skin::navigationBarItemSize(float width) const { return md::navigationBarItemSize(width); }
+ImVec2 Skin::navigationBarSize(float width) const { return md::navigationBarSize(width); }
 bool Skin::navigationRailItem(const char* id, std::string_view iconName, std::string_view label, bool selected,
                               std::string_view badge, float width) const {
     return md::navigationRailItem(id, iconName, label, selected, badge, width);
@@ -351,6 +361,13 @@ void Skin::chart(const char* id, const std::vector<float>& values, const md::Cha
     md::chart(id, values, o);
 }
 ImVec2 Skin::chartSize(const md::ChartOptions& o) const { return md::chartSize(o); }
+void Skin::brokenImage(ImVec2 a, ImVec2 b, float radius) const {
+    const Scheme& s = md::scheme();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    md::fillRoundRect(dl, a, b, radius, s.surfaceContainerHighest);
+    const float icon = std::min(24.0f, std::min(b.x - a.x, b.y - a.y) / dp(1.0f) * 0.6f);
+    md::drawIcon(dl, "broken_image", {(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f}, icon, s.onSurfaceVariant);
+}
 
 const SkinTokens& Skin::tokens() const {
     static const SkinTokens material = materialTokens();
