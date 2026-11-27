@@ -72,6 +72,7 @@ export using ::ImGuiDataType;
 export using ::ImGuiKey;
 export using ::ImGuiTableBgTarget;
 export using ::ImGuiItemFlags;
+export using ::ImGuiButtonFlags;
 
 // ------------------------------------------------------------------- enums
 export using ::ImGuiCol_;
@@ -251,6 +252,9 @@ export using ::ImGuiFocusedFlags_RootAndChildWindows;
 export using ::ImGuiItemFlags_;
 export using ::ImGuiItemFlags_Disabled;
 export using ::ImGuiItemFlags_NoTabStop;
+
+export using ::ImGuiButtonFlags_;
+export using ::ImGuiButtonFlags_EnableNav; // keyboard navigation for an InvisibleButton (Fluent controls)
 
 export using ::ImGuiKey_Escape;
 export using ::ImGuiKey_Enter;

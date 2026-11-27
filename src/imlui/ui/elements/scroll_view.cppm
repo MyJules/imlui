@@ -11,6 +11,7 @@ import std;
 
 import imgui;
 import imlui.color;
+import imlui.skin;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -111,13 +112,13 @@ void ScrollView::declare(TypeBuilder<ScrollView>& type) {
 void ScrollView::render(Frame& frame) {
     ImGuiChildFlags cf = m_border ? ImGuiChildFlags_Borders : ImGuiChildFlags_None;
     const float pad = m_padding;
-    const float rounding = m_rounding.value_or(frame.theme().shape.medium);
+    const float rounding = m_rounding ? frame.dp(*m_rounding) : skin().scrollViewRounding();
     if (pad > 0) {
         cf |= ImGuiChildFlags_AlwaysUseWindowPadding;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {frame.dp(pad), frame.dp(pad)});
     }
     if (m_color) ImGui::PushStyleColor(ImGuiCol_ChildBg, m_color->vec4());
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, frame.dp(rounding));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, rounding);
 
     // Scroll tracking. Only the first render in a frame counts: the same element shown twice in one frame
     // has two windows, and restoring between them would never settle.

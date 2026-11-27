@@ -1953,9 +1953,10 @@ property (like the built-in `Timer`) when scripts need to stop it. `timer.cppm` 
 ## Skins
 
 What the controls look like is a **skin**: an `imlui::Skin` (module `imlui.skin`, part of `import imlui;`) draws and
-measures every control the elements show. The base class *is* the Material skin (`"material"`): each of its virtual
-functions calls the `md::` widget the elements used to call. A skin of your own subclasses it and overrides only the
-controls it draws differently; everything else stays Material. Register it by name, and a script selects it with
+measures every control the elements show, and gives the chrome some elements draw themselves. The base class *is* the
+Material skin (`"material"`): each of its virtual functions calls the `md::` widget the elements used to call. A skin
+of your own subclasses it (or `FluentSkin`, the built-in `"fluent"`) and overrides only the controls it draws
+differently; everything else stays what the base class draws. Register it by name, and a script selects it with
 the theme ([Designs](theming.md#designs)):
 
 ```cpp
@@ -2031,7 +2032,63 @@ theme { design = "square" }
 
 What goes through the skin and what stays a direct `md::` call is listed in
 [Architecture](architecture.md#skins). The Material widgets still call each other inside (a snackbar's action is
-`md::button`, a spin box's steppers are `md::iconButton`), so overriding `button` doesn't restyle those yet.
+`md::button`, a spin box's steppers are `md::iconButton`), so overriding `button` doesn't restyle those: a skin
+overrides such a composite (`snackbar`, `spinBox`, `dropdown`, `colorField`) whole.
+
+### Tokens: `tokens()`
+
+`Skin::tokens()` returns the skin's metrics, a `SkinTokens` (module `imlui.theme.skin_tokens`): control and compact
+heights, the control and overlay radii, the stroke, focus and underline widths, `buttonFill`, `paddingX`, `gap`,
+`iconSize`, `density` ([Tokens](theming.md#tokens)). The Material skin returns `materialTokens()`, informational.
+`FluentSkin` returns `fluentTokensFor(theme())`: `fluentTokens()` with the theme's `tokens` overrides applied
+(`applyTokenOverrides`), made again whenever the theme changes, and its controls draw from it. A token-driven skin of
+your own can do the same with its own defaults:
+
+```cpp
+class RoundSkin : public imlui::FluentSkin {
+public:
+    std::string_view name() const override { return "round"; }
+    const imlui::SkinTokens& tokens() const override {
+        // Pill controls; the theme's overrides still apply on top. Made again when the theme changes.
+        if (m_generation != imlui::themeGeneration()) {
+            m_generation = imlui::themeGeneration();
+            imlui::SkinTokens base = imlui::fluentTokens();
+            base.controlRadius = 16.0f;
+            m_tokens = imlui::applyTokenOverrides(base, imlui::theme().tokens);
+        }
+        return m_tokens;
+    }
+
+private:
+    mutable imlui::SkinTokens m_tokens;
+    mutable std::uint64_t m_generation = ~std::uint64_t{0};
+};
+```
+
+Every Fluent control reads `look()` (`{tokens(), colors()}`), so overriding `tokens()` or `colors()` restyles all
+of them. Under design `"fluent"` the ImGui style follows `fluentTokensFor(theme())`; a skin registered under another
+name gets the Material mapping of the ImGui style (the theme layer can't ask a skin; set `style` overrides for it).
+
+### Element chrome
+
+Some elements draw their own background or rules around the controls. They ask the skin for it, so a skin restyles
+them too; the Material defaults are what those elements always drew:
+
+| Hook | Element | Material |
+|---|---|---|
+| `applicationBackground()` | `ApplicationWindow` without `color` | `nullopt`: the ImGui style's `WindowBg` |
+| `windowChrome()` (`Skin::WindowChrome`: `background`, `titleBar`, `titleBarActive`, `border`, `borderSize`) | `Window` | `surfaceContainerLow`, `surfaceContainer`, `surfaceContainerHigh`, `outlineVariant`, 1dp |
+| `scrollViewRounding()` | `ScrollView` without `rounding` | `shape.medium` |
+| `navigationBarColor()` | `NavigationBar` without `color` | `surfaceContainer` |
+| `navigationRailColor()` | `NavigationRail` without `color` | `surface` |
+| `topAppBarChrome(variant)` (`Skin::TopAppBarChrome`: `rowHeight`, `height`, `background`, `title`) | `TopAppBar` | 64dp row; 64, 112 or 152dp; the current surface; `onSurface` |
+| `tableChrome()` (`Skin::TableChrome`: `border`, `header`, `selectedText`, `cellPaddingX`, `headerHeight`) | `Table` | `outlineVariant`, `secondaryContainer`, `onSecondaryContainer`, 16dp, 56dp |
+| `separatorTextColor()` | `Separator` with text | `onSurfaceVariant` |
+| `linkColor()` | `Link` | `nullopt`: the ImGui style's `TextLink` |
+
+Sizes are pixels (dp-scaled), like the size functions'. An element's own `color` prop still wins. Elements drawn
+by ImGui itself (`TreeNode`, `MenuBar`, `ImGuiDemo`, scrollbars) take the ImGui style, which the theme maps per
+design.
 
 ## The built-ins as examples
 

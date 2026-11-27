@@ -4,6 +4,8 @@ export module imlui.ui.elements.link;
 import std;
 
 import imgui;
+import imlui.color;
+import imlui.skin;
 import imlui.theme.typography;
 import imlui.theme.font_scope;
 import imlui.types.element;
@@ -52,7 +54,10 @@ void Link::declare(TypeBuilder<Link>& type) {
 
 void Link::render(Frame&) {
     const FontScope font{TextStyle::BodyLarge};
+    const std::optional<Color> color = skin().linkColor();
+    if (color) ImGui::PushStyleColor(ImGuiCol_TextLink, color->vec4());
     ImGui::TextLinkOpenURL(m_text.c_str(), m_url.value_or(m_text).c_str());
+    if (color) ImGui::PopStyleColor();
 }
 
 const std::string& Link::text() const { return m_text; }

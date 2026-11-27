@@ -10,7 +10,7 @@ flowchart TD
     R -->|"every element, by __type"| TY["C++ type system<br/>imlui.types.*: TypeRegistry, Element, Frame, TypeBuilder, LuaConvert"]
     TY --> EL["Built-in elements<br/>imlui.ui.elements.*: one Element class each"]
     C["App C++ types and singletons<br/>registerType / registerSingleton"] --> TY
-    EL --> SK["Skin<br/>imlui.skin: the active look (theme design)"]
+    EL --> SK["Skin<br/>imlui.skin: the active look (theme design): Material, Fluent"]
     SK --> W["Material widgets<br/>imlui.widgets.* (namespace imlui::md)"]
     TY --> N["Lua bridge<br/>imlui.lua.node / value / errors / painter / native"]
     C --> W
@@ -31,7 +31,7 @@ flowchart TD
 | **Renderer** | Walks the tree on every rendered frame (immediate mode). For each element it applies the common props (`visible`, `enabled`, `tooltip`, the ID scope and the layout group) and hands the element to the type registry by its `__type` (through `Renderer::Types`, which `TypeRegistry` implements). An unregistered name reports "unknown element type" and takes no layout space, like a non-visual element. |
 | **C++ type system** | `imlui.types.*`. C++ classes registered with `registerType<T>()` (elements, one instance per element table) and `registerSingleton()` (Lua globals), with properties, signals and methods declared through `TypeBuilder<T>`. To render an element, the registry syncs the declared properties from the element table into its instance and calls `Element::render(Frame&)`. Ticking elements (`Element::setTicking`) also get `tick(now)` at the start of every frame, rendered or not. See [Registering C++ types](extending.md). |
 | **Built-in elements** | One `Element` class per module in `imlui.ui.elements.*` (`Button`, `Column`, `TabBar`, ...), registered by `registerBuiltinTypes()` exactly like an app's types. They draw and measure their controls through the active skin (`skin().button(...)`), write two-way props back (`notify`) and emit signals. See [Elements](elements.md). |
-| **Skin** | `imlui.skin`. The look of the controls: a `Skin` draws and measures each one; the theme's `design` picks it by name. The base class is Material and calls the Material widgets; another skin overrides some controls. See [Skins](#skins). |
+| **Skin** | `imlui.skin`. The look of the controls: a `Skin` draws and measures each one, and gives the chrome some elements draw themselves; the theme's `design` picks it by name. The base class is Material and calls the Material widgets; another skin (the built-in `FluentSkin`) overrides some controls. See [Skins](#skins). |
 | **Material widgets** | Material 3 controls drawn with ImGui primitives (`InvisibleButton` plus the draw list), using the current `imlui::theme()`. |
 | **Resources** | `imlui.resources`. Every file the engine and the scripts load (Lua, fonts, data) is a resource named `prefix:/path` and served by stacked mounts. See [Resources](#resources). |
 | **ImGui / platform** | Dear ImGui with the GLFW and OpenGL 3 backends, behind the `imgui` and `imlui.platform.window` wrapper modules. |
@@ -956,6 +956,8 @@ Material. Apps add skins with `registerSkin(name, factory)` ([Skins](extending.m
 | Navigation | `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `beginModalDrawer`/`endModalDrawer` |
 | Containers, messages | `beginCard`/`endCard`/`cardSize`, `beginDialog`/`endDialog`, `snackbar`, `tooltip` (the renderer's `tooltip` prop) |
 | Others | `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize` |
+| Tokens | `tokens()`: the skin's metrics (`SkinTokens`) |
+| Element chrome | `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` ([Element chrome](extending.md#element-chrome)) |
 
 The engine's error overlay draws its buttons through the skin too. **What stays a direct `md::` call** decides no
 look: the drawing helpers (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `strokeCircle`, `hLine`, `vLine`,
@@ -965,7 +967,15 @@ look: the drawing helpers (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `st
 (`pushSurface`/`popSurface`/`surfaceColor`) carries the color an element chose, and `cardDepth`/`surfaceDepth` with
 their restores undo what a render pass an error cut short left open. The vocabulary types (`md::ButtonVariant`,
 `md::TextFieldOptions`, ...) are the skin functions' parameter types. Inside, the Material widgets keep calling each
-other (`md::snackbar` draws its action with `md::button`).
+other (`md::snackbar` draws its action with `md::button`); another skin overrides such a composite whole
+(`snackbar`, `spinBox`, `dropdown`, `colorField`) rather than threading the skin through `md::`.
+
+**Modules.** `imlui.skin.base` holds the class, `imlui.skin.registry` the active skin and the registry (it knows
+`"material"` and `"fluent"`), `imlui.skin.fluent.*` the Fluent skin; `imlui.skin` exports them all. The registry
+imports `FluentSkin` to register it, and `FluentSkin` derives from `Skin`, hence the split. The tokens
+(`imlui.theme.skin_tokens`) and the Fluent colors (`imlui.theme.fluent_colors`) live in the theme layer: the theme
+maps them onto `ImGuiStyle` under design `"fluent"` (`applyFluent` in `imlui.theme.theme`), and `imlui.theme` can't
+import a skin. `Theme` keeps the token overrides (`Theme::tokens`) like the `style` ones.
 
 **The active skin.** The theme holds only the design's name (`Theme::design`, `theme { design = ... }`):
 `imlui.theme` can't import `imlui.skin`, since the widgets import the theme and the skin imports the widgets. So
@@ -977,11 +987,94 @@ switches at a frame's start and never in the middle of one; and nothing that app
 has to tell the skin. `theme_table` checks a Lua `design` against `hasSkin()` and reports an unknown one, keeping
 `"material"`. Main thread only, like the theme.
 
+**The Fluent skin.** `FluentSkin` (`imlui.skin.fluent.fluent_skin`, registered as `"fluent"`) draws from
+`look()`, a `fluent::Look` of its `tokens()` (`fluentTokensFor(theme())`) and `colors()`
+(`fluent::colorsFor(scheme, dark)`), both cached per `themeGeneration()`. Its overrides are one-line forwards to free
+functions, one module per control family under `src/imlui/skin/fluent/` (`fluent::button(look, ...)`), which draw
+with the shared primitives of `imlui.skin.fluent.common`. A control it doesn't override draws Material. Fluent
+controls are keyboard-navigable (`fluent::invisibleButton`: `ImGuiButtonFlags_EnableNav`) and draw their own focus
+rectangle for keyboard focus only (ImGui's nav cursor is hidden for them).
+
 **Sizes after a switch.** A design change is a theme change, so what follows a theme change follows the design:
 static properties are synced again (`themeGeneration()` in the property sync), intrinsic sizes are asked per frame
 (`TypeRegistry`'s memo lasts a frame) and now come from the new skin, and sizes a layout took from the layout cache
 are corrected by convergence (the recorded size differs from the assumed one: another frame). A `Row` that places
 its children by their intrinsic sizes lays out at the new sizes on the first frame after the switch.
+
+### Adding a Fluent control
+
+How a Fluent control is added to `FluentSkin`, written so that several are added at once without conflicts. The
+Button is the reference: read `src/imlui/skin/fluent/button.cppm` and its tests in `tests/fluent_skin_test.cpp` first.
+
+**The groups.** `FluentSkin`'s declaration (`src/imlui/skin/fluent/fluent_skin.cppm`) has three sections, each in
+three places: its imports (`// ---- (A) ...: imports` to `// ---- end (A) imports`), its override declarations
+(`// ======== (A) ... ========` to `// ======== end (A) ========` in the class) and its forwards (the same markers
+after `module :private;`). A group adds its lines **just above its own `end` markers** and touches no other line of
+the file, so groups merge cleanly:
+
+| Group | Skin functions |
+|---|---|
+| (A) buttons, toggles and ranges | `button`/`buttonSize` (done), `iconButton`/`iconButtonSize`, `checkbox`/`checkboxSize`, `radio`/`radioSize`, `switchToggle`/`switchSize`, `chip`/`chipSize`, `segmented`/`segmentedSize`, `slider`/`sliderSize`, `progress`/`progressSize`, `circularProgress`/`circularProgressSize` |
+| (B) inputs | `textField`/`textFieldSize`, `spinBox`/`spinBoxSize`, `dropdown`/`dropdownSize`, `colorField`/`colorFieldSize` |
+| (C) lists, menus, navigation, containers, messages, chrome | `listItem`/`listItemSize`, `expander`/`expanderSize`, `menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu`, `tabs`, `navigationItem`, `navigationBarItem`, `navigationRailItem` (each with its size), `beginModalDrawer`/`endModalDrawer`, `beginCard`/`endCard`/`cardSize`, `beginDialog`/`endDialog`, `snackbar`, `tooltip`, `divider`/`dividerSize`, `tableHeaderCell`, `tableCell`, `chart`/`chartSize`; the chrome hooks `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` (in `imlui.skin.fluent.chrome`, which already has `applicationBackground`, `windowChrome`, `scrollViewRounding`) |
+
+**Steps for one control family** (say the checkbox and radio, in group A):
+
+1. **A module of free functions**, `src/imlui/skin/fluent/<family>.cppm` (module `imlui.skin.fluent.<family>`,
+   namespace `imlui::fluent`; the CMake globs pick it up). It exports the draw and size functions with the `md::`
+   widget's parameters after a leading `const Look& look` (`bool checkbox(const Look& look, const char* label,
+   bool* v)`, `ImVec2 checkboxSize(const Look& look, const char* label)`), plus any option structs of its own. It
+   imports `imlui.skin.fluent.common`, the `md::` module of its vocabulary types (`imlui.widgets.selection`), and
+   `imlui.widgets.common` / `imlui.theme.dpi` for the helpers. It never imports `imlui.skin` or another family's
+   module (shared code goes to `common`, see below).
+2. **One layout function** in the private part, used by both the draw and the size function, so layouts measure
+   exactly what is drawn (the Button's `buttonLayout`). Sizes come from the tokens through `controlHeight(look)`,
+   `compactHeight`, `paddingX`, `gap`, `controlRadius`, `overlayRadius`, `strokeWidth`, `iconSize`; widths resolve
+   with `md::itemWidth(requested, natural)` (0 natural, -1 fill, > 0 fixed). No hard-coded dp where a token exists;
+   a Fluent constant without a token (a checkbox's 20dp box) is a named `constexpr` in the module.
+3. **The draw function**: `fluent::invisibleButton(id, size)` (keyboard-navigable, no ImGui nav rectangle) or the
+   ImGui item the control needs, then `const ItemState item = itemState();` and `stateOf(item)`; colors from
+   `controlColors(look, Fill::..., state)` or directly from `look.colors` (the [Fluent colors](theming.md#fluent-colors)
+   table says which brush is for what); the background with `drawControl`, an input's underline with
+   `drawUnderline` (when `look.tokens.inputUnderline`), icon + label with `content`/`drawContent` in `bodyStyle`,
+   and `if (item.focused) drawFocusRect(dl, a, b, radius, look);` last. Draw with the `md::` helpers
+   (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `strokeCircle`, `strokeArc`, `hLine`, `vLine`, `drawText`,
+   `textTop`, `drawIcon`, `measure`, `animate` for a moving part such as a switch knob), never ImDrawList's own
+   shapes. Return what the `md::` widget returns (clicked, changed). Keep per-control state in ImGui (keyed by the
+   item ID), not in statics.
+4. **Composites** (`spinBox`, `dropdown`, `colorField`, `snackbar`, menus with their items, a dialog's buttons) are
+   drawn whole by the Fluent function: call the other Fluent functions (`fluent::button(look, ...)`), not `md::`
+   and not `skin()`. A family that needs another group's control before it lands draws a private stand-in and says
+   so in a comment.
+5. **Declare and forward** in `fluent_skin.cppm`, inside the group's markers: the import above `// ---- end (X)
+   imports`; the overrides above `// ======== end (X) ========` in the class (`bool checkbox(const char* label,
+   bool* v) const override;` with `[[nodiscard]]` on the size function, exactly the base signature); the forwards
+   above the second `end (X)` marker, one line each:
+   `bool FluentSkin::checkbox(const char* label, bool* v) const { return fluent::checkbox(look(), label, v); }`.
+   Override every draw function together with its size function (and begin with end).
+6. **Shared primitives.** Something two families need goes to `imlui.skin.fluent.common`: append it at the end of
+   the exported part and of the implementation (merges stay simple when each group appends a separate block), with a
+   `///` comment. Don't change an existing primitive's behavior; add a new one.
+7. **Tests**: `tests/fluent_<family>_test.cpp` (globbed), modeled on `tests/fluent_skin_test.cpp` (a `HeadlessFrame`
+   with built-ins, `theme { design = "fluent" }` applied between frames, `Spot`s around the element to measure the
+   laid-out size). At least: the natural size follows the tokens (the default `controlHeight` or the family's
+   constant, and a `tokens = { ... }` override changes it, `density` included); a fixed `width`/`height` and `-1`
+   fill resolve; the interaction works (`click`, the value or signal changes; disabled doesn't react); the Material
+   variants map as documented; no Lua errors (`luaui::errors()` empty). The full suite must still pass unchanged
+   under Material.
+8. **Docs**, same change: the control's row in "Fluent-drawn so far" in [The Fluent design](theming.md#the-fluent-design)
+   (the variant mapping, sizes, states); a new Fluent color or primitive in the tables of
+   [Fluent colors](theming.md#fluent-colors) and of this section.
+
+**The primitives** (`imlui.skin.fluent.common`, namespace `imlui::fluent`): `Look` (`tokens`, `colors`);
+`themeTokens()`, `themeColors()` (the cached defaults); the metrics `controlHeight`, `compactHeight`, `paddingX`,
+`gap` (with density), `controlRadius`, `overlayRadius`, `strokeWidth` (whole pixels), `iconSize` (dp, for
+`md::drawIcon`); `bodyStyle`; `State` (`Rest`, `Hover`, `Pressed`, `Disabled`), `ItemState` (`id`, `hovered`,
+`pressed`, `disabled`, `focused`), `itemState()`, `stateOf()`, `focusVisible()`, `invisibleButton()`; `Fill`
+(`Accent`, `Standard`, `Subtle`), `ControlColors` (`fill`, `stroke`, `bottomStroke`, `text`), `controlColors(look,
+fill, state)` (accent follows `buttonFill`); `drawControl(dl, a, b, radius, colors, stroke)`, `drawUnderline(dl, a,
+b, radius, color, width)`, `drawFocusRect(dl, a, b, radius, look)`; `Content` and `content(look, text, icon, style,
+iconDp)`, `drawContent(dl, content, x, cy, color, style)`.
 
 ## Repository layout
 
@@ -1088,7 +1181,9 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |
-| `imlui.theme.theme` | `Theme` (+ `design`, `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `resolveColor`, `imguiColorIndex`, `isStyleField` |
+| `imlui.theme.theme` | `Theme` (+ `design`, `tokens`, `Shape`, `StyleOverride`, `fonts`), `theme()`, `setTheme`, `applyPendingTheme` (also `useFontSet(fonts)`), `reapplyTheme`, `themeGeneration` (moves when the theme changes), `fluentTokensFor`, `resolveColor`, `imguiColorIndex`, `isStyleField`; the ImGui style mapping per preset and design (`applyMaterial`, `applyFluent`) |
+| `imlui.theme.skin_tokens` | `SkinTokens` (a flat design's metrics), `ButtonFill`, `fluentTokens()`, `materialTokens()`, the token table (`TokenInfo`, `TokenKind`, `tokenInfos`, `findToken`), `TokenValue`, `TokenOverride`, `tokenProblem`, `applyTokenOverrides`, `buttonFillName`/`buttonFillFromName` |
+| `imlui.theme.fluent_colors` | Namespace `imlui::fluent`: `Colors` (Fluent 2's brushes), `colorsFor(scheme, dark)`, `designName` (`"fluent"`) |
 | `imlui.theme.font_scope` | `FontScope`: RAII push/pop of a text style's font |
 
 ### Lua bridge (`src/imlui/lua/`, namespace `imlui::luaui`)
@@ -1137,7 +1232,13 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.skin` | `Skin` (one virtual draw and size function per control; the base class is Material, calling the `md::` widgets), `skin()` (the active skin: the one registered under `theme().design`, resolved again after a theme change), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames`. See [Skins](#skins) |
+| `imlui.skin.base` | `Skin`: one virtual draw and size function per control, `tokens()`, the element chrome hooks (`WindowChrome`, `TopAppBarChrome`, `TableChrome`); the base class is Material, calling the `md::` widgets. See [Skins](#skins) |
+| `imlui.skin.registry` | `skin()` (the active skin: the one registered under `theme().design`, resolved again after a theme change), `registerSkin(name, factory)` (`SkinFactory`), `hasSkin`, `skinNames`; `"material"` and `"fluent"` built in |
+| `imlui.skin` | Umbrella: `export import` of `base`, `registry` and `fluent.fluent_skin` |
+| `imlui.skin.fluent.fluent_skin` | `FluentSkin` (`"fluent"`): `tokens()`, `colors()`, `look()`, and the overrides, one-line forwards in groups (A), (B), (C) (see [Adding a Fluent control](#adding-a-fluent-control)) |
+| `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout |
+| `imlui.skin.fluent.button` | `fluent::button`, `buttonSize`, `variantFill` |
+| `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding` |
 
 ### UI (`src/imlui/ui/`)
 

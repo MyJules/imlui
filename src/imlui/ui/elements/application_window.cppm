@@ -6,6 +6,7 @@ import std;
 import imgui;
 import imlui.color;
 import imlui.image.image_cache;
+import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
@@ -94,9 +95,10 @@ void ApplicationWindow::render(Frame& frame) {
     const float pad = frame.dp(m_padding);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {pad, pad});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    if (m_color) ImGui::PushStyleColor(ImGuiCol_WindowBg, m_color->vec4());
+    const std::optional<Color> background = m_color ? m_color : skin().applicationBackground();
+    if (background) ImGui::PushStyleColor(ImGuiCol_WindowBg, background->vec4());
     ImGui::Begin("##ApplicationWindow", nullptr, flags);
-    if (m_color) ImGui::PopStyleColor();
+    if (background) ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
     if (menu) frame.renderElementProp("menuBar");
     {
