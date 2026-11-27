@@ -849,6 +849,68 @@ TEST_F(LuaResourcesTest, ModulesInImluiPrefixLoadInTheGlobalEnvironment) {
     )");
 }
 
+// A folder named like a module's file (`x.lua/`) isn't the module: require goes on to `x/init.lua`, next to the script
+// and in imlui:/ alike.
+TEST_F(LuaResourcesTest, AFolderNamedLikeAModuleFileIsSkipped) {
+    m_dir.write("dirmod.lua/readme.txt", "not a module");
+    m_dir.write("dirmod/init.lua", "return { name = 'app init' }");
+    m_frame.resources().mount("imlui:/", memory({{"libmod.lua/readme.txt", "not a module"},
+                                                 {"libmod/init.lua", "return { name = 'imlui init' }"}}));
+    run(R"(
+        ui.__load("app:/main.lua")
+        assert(require("dirmod").name == "app init")
+        assert(require("libmod").name == "imlui init")
+    )");
+    EXPECT_TRUE(m_frame.loadedResources().contains("app:/dirmod/init.lua"));
+    EXPECT_TRUE(m_frame.loadedResources().contains("imlui:/libmod/init.lua"));
+}
+
+// loadModule finds and loads a module with one read: the chunk and its name, nil and the names it tried, or false and
+// the load error.
+TEST_F(LuaResourcesTest, LoadModuleFindsAndLoads) {
+    run(R"(
+        local r = require("imlui.resource")
+        local chunk, name = r.loadModule("pkg", "app:/")
+        assert(type(chunk) == "function" and name == "app:/pkg/init.lua", tostring(name))
+        assert(chunk().name == "pkg")
+        local none, tried = r.loadModule("Nope", "app:/")
+        assert(none == nil and tried:find("no resource 'app:/Nope.lua'", 1, true), tostring(tried))
+        assert(tried:find("no resource 'app:/Nope/init.lua'", 1, true), tried)
+        local bad, err = r.loadModule("Broken", "app:/")
+        assert(bad == false and err:find("app:/Broken.lua:1:", 1, true), tostring(err))
+    )");
+}
+
+// Free names in a resource script: `ui` and the functions bound to the script (Image, theme, ...) are cached, but a
+// global a script assigns takes precedence as soon as it exists, and again not once it's gone; ids, ui members and
+// globals are looked up each time.
+TEST_F(LuaResourcesTest, FreeNamesFollowGlobalsAssignedLater) {
+    m_dir.write("names.lua", R"(
+        return { image = function() return Image end, ui = function() return ui end,
+                 late = function() return lateGlobal end, id = function() return laterId end })");
+    m_dir.write("shadow.lua", "Image = 'shadowed'; lateGlobal = 1; return true");
+    run(R"(
+        ui.__load("app:/main.lua")
+        local env, plainUi = ui.env, ui
+        local names = require("names")
+        local bound = names.image()
+        assert(type(bound) == "function" and bound ~= ui.Image)
+        assert(names.image() == bound and names.ui().Image == bound and names.ui().state == ui.state)
+        assert(names.late() == nil and names.id() == nil)
+        require("shadow")
+        assert(names.image() == "shadowed", tostring(names.image()))
+        assert(names.late() == 1)
+        env.Image = nil
+        assert(names.image() == bound)
+        local t = Text { id = "laterId" }
+        assert(names.id() == t)
+        env.ui = "mine"
+        assert(names.ui() == "mine")
+        env.ui = nil
+        assert(names.ui().Image == bound and plainUi.ids.laterId == t)
+    )");
+}
+
 namespace {
 
 /// A mount whose every call throws, as one that runs out of memory would.

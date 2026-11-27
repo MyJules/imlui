@@ -91,6 +91,94 @@ end
 -- Calls fn(...) at app level and returns its results: a module's top level runs there, whoever requires it first.
 local function atAppLevel(fn, ...) return inScope(false, fn, ...) end
 
+-- Callbacks that something long-lived holds (a signal listener, a watcher, a frame callback, a timer) are kept in
+-- records. A record is { fn } for a callback set up at app level. One set up in a component instance or delegate
+-- scope belongs to the scope: its record is weak-valued, { [2] = scope }, and its function (which runs in the scope,
+-- so holds it) is ownedFns[scope][record], an ephemeron: once nothing else holds the scope (its elements are gone),
+-- the callback goes with it, and it doesn't pin the elements it refers to. A delegate that a Repeater or ListView
+-- rebuilds (or trims) so leaves no callback behind. Removing a callback empties its record, so a call that took the
+-- record already skips it.
+local ownedFns = setmetatable({}, { __mode = "k" })
+local WEAK_VALUES = { __mode = "v" }
+
+-- The function of a record; nil once it was removed or its scope was collected.
+local function listenerOf(rec)
+    local fn = rec[1]
+    if fn ~= nil then return fn end
+    local scope = rec[2]
+    local fns = scope ~= nil and ownedFns[scope] or nil
+    return fns and fns[rec]
+end
+
+-- A record for callback `fn`, set up now: in the current scope, it runs there and belongs to it. At app level it is
+-- `fn` itself, or with `appLevel`, `fn` run at app level (whatever scope is active when it is called).
+local function newRecord(fn, appLevel)
+    local scope = scopes[#scopes] or nil
+    if scope == nil then
+        if appLevel then return { function(...) return atAppLevel(fn, ...) end } end
+        return { fn }
+    end
+    local rec = setmetatable({ [2] = scope }, WEAK_VALUES)
+    local fns = ownedFns[scope]
+    if fns == nil then
+        fns = {}
+        ownedFns[scope] = fns
+    end
+    fns[rec] = function(...) return inScope(scope, fn, ...) end
+    return rec
+end
+
+-- Empties `rec`: its callback was removed. (The scope's table would otherwise keep it until the scope goes.)
+local function dropRecord(rec)
+    rec[1] = nil
+    local owner = rec[2]
+    if owner ~= nil then
+        rec[2] = nil
+        local fns = ownedFns[owner]
+        if fns ~= nil then fns[rec] = nil end
+    end
+end
+
+-- Removes the empty records (of collected scopes) from `list`, keeping the order of the others. Returns the length.
+local function pruneRecords(list)
+    local n, j = #list, 0
+    for i = 1, n do
+        local rec = list[i]
+        if listenerOf(rec) ~= nil then
+            j = j + 1
+            list[j] = rec
+        end
+    end
+    for i = j + 1, n do list[i] = nil end
+    return j
+end
+
+-- Appends `rec` to `list`. Each time the list has doubled since it was last pruned, the empty records go first: a
+-- list whose callbacks never run (a watched key nobody writes) doesn't grow with the scopes that came and went.
+local function addRecord(list, rec)
+    local n = #list
+    if n >= (list.pruneAt or 8) then
+        n = pruneRecords(list)
+        list.pruneAt = math.max(8, 2 * n)
+    end
+    list[n + 1] = rec
+end
+
+-- Copies the functions of the records in `list` into `into` (from index 1), in order: the callbacks there are now.
+-- Prunes `list` when a record is empty. Returns how many there are.
+local function liveFns(list, into)
+    local n, m = #list, 0
+    for i = 1, n do
+        local fn = listenerOf(list[i])
+        if fn ~= nil then
+            m = m + 1
+            into[m] = fn
+        end
+    end
+    if m < n then pruneRecords(list) end
+    return m
+end
+
 -- A new scope for one instance of `kind` built by `fn`; `what()` names it in duplicate-id reports.
 local function newScope(kind, fn)
     return {
@@ -330,8 +418,9 @@ for _, name in ipairs(BUILTIN) do ui[name] = ui.element(name) end
 
 --- RadioButtons sharing a `group` value act as one group: the C++ handler
 --- unchecks the other members (through their bindings) when one is clicked.
---- ui.__radioGroups[group] is a weak-keyed set of the group's elements.
-ui.__radioGroups = {}
+--- ui.__radioGroups[group] is a weak-keyed set of the group's elements. Each member holds its set (props.__radioGroup)
+--- and the table is weak-valued, so a group goes once its last member is collected.
+ui.__radioGroups = setmetatable({}, { __mode = "v" })
 local radioButton = ui.RadioButton
 function ui.RadioButton(props)
     props = radioButton(props)
@@ -352,19 +441,17 @@ end
 -- State & bindings
 -------------------------------------------------------------------------------
 
-local watchers = setmetatable({}, { __mode = "k" }) -- proxy -> { key -> {fn...} }
+local watchers = setmetatable({}, { __mode = "k" }) -- proxy -> { key -> {record...} } (see newRecord)
 local stores = setmetatable({}, { __mode = "k" })   -- proxy -> raw data
 
--- Calls each function of `list` with (v, old, k), iterating a snapshot: a watcher may remove itself (or others) or
--- add one while it runs, and the call goes to the watchers there were when the write happened. The copy is a fresh
--- table, not a reused one: a watcher that writes another state (or this one) runs this again before it returns.
--- Most writes have no watcher for the key, or none for "*", so nothing is copied for those.
+-- Calls each watcher of `list` with (v, old, k), iterating a snapshot of their functions: a watcher may remove itself
+-- (or others) or add one while it runs, and the call goes to the watchers there were when the write happened. The
+-- copy is a fresh table, not a reused one: a watcher that writes another state (or this one) runs this again before
+-- it returns. Most writes have no watcher for the key, or none for "*", so nothing is copied for those.
 local function notify(list, v, old, k)
-    if list == nil then return end
-    local n = #list
-    if n == 0 then return end
-    local copy = table.move(list, 1, n, 1, {})
-    for i = 1, n do copy[i](v, old, k) end
+    if list == nil or list[1] == nil then return end
+    local copy = {}
+    for i = 1, liveFns(list, copy) do copy[i](v, old, k) end
 end
 
 --- Observable state table. Reads/writes look like a plain table; writes
@@ -402,15 +489,22 @@ end
 
 --- Calls fn(new, old, key) whenever state[key] changes ("*" = any key).
 --- Returns a function that removes the watcher: local stop = ui.watch(...); stop()
---- A watcher added inside a component instance or delegate runs in its id scope.
+--- A watcher added inside a component instance or delegate runs in its id scope and is dropped with it (when its
+--- elements are collected).
 function ui.watch(state, key, fn)
     local w = watchers[state]
     assert(w, "ui.watch: not a ui.state table")
-    fn = inCurrentScope(fn)
-    w[key] = w[key] or {}
-    table.insert(w[key], fn)
     local list = w[key]
-    return function() removeFrom(list, fn) end
+    if list == nil then
+        list = {}
+        w[key] = list
+    end
+    local rec = newRecord(fn, true)
+    addRecord(list, rec)
+    return function()
+        dropRecord(rec)
+        removeFrom(list, rec)
+    end
 end
 
 --- Raw (non-proxy) contents of a state table, e.g. for serialization.
@@ -445,23 +539,10 @@ end
 -------------------------------------------------------------------------------
 
 -- connections[target] = { [signal] = { record... } }, in connect order. Weak keys: a connection never keeps its
--- target (an element table, a singleton global) alive, also when its function refers to the target. A record is
--- { fn } for a connection made at app level. One made in a component instance or delegate scope belongs to the scope:
--- its record is weak-valued, { [2] = scope }, and its function (which runs in the scope, so holds it) is
--- ownedFns[scope][record], an ephemeron: once nothing else holds the scope (its elements are gone), the connection
--- goes with it. Disconnecting empties the record, so a dispatch that took it already skips it.
+-- target (an element table, a singleton global) alive, also when its function refers to the target. Each connection
+-- is a record (see newRecord): one made in a component instance or delegate scope goes with the scope.
+-- Disconnecting empties the record, so a dispatch that took it already skips it.
 local connections = setmetatable({}, { __mode = "k" })
-local ownedFns = setmetatable({}, { __mode = "k" })
-local WEAK_VALUES = { __mode = "v" }
-
--- The function of a connection record; nil once it was disconnected or its scope was collected.
-local function listenerOf(rec)
-    local fn = rec[1]
-    if fn ~= nil then return fn end
-    local scope = rec[2]
-    local fns = scope ~= nil and ownedFns[scope] or nil
-    return fns and fns[rec]
-end
 
 --- Calls fn with the arguments of `signal` whenever `target` emits it: a C++ element (typed or built-in) as
 --- fn(self, ...), a singleton as fn(...), like its `on*` handler. The signal is one the type declares or a property's
@@ -475,19 +556,7 @@ function ui.connect(target, signal, fn)
     if types == nil then error("connect: no C++ types (the library runs without an engine)", 2) end
     local ok, why = types.listen(target, signal)
     if not ok then error("connect: " .. why, 2) end
-    local scope = scopes[#scopes] or nil
-    local rec
-    if scope == nil then
-        rec = { fn }
-    else
-        rec = setmetatable({ [2] = scope }, WEAK_VALUES)
-        local fns = ownedFns[scope]
-        if fns == nil then
-            fns = {}
-            ownedFns[scope] = fns
-        end
-        fns[rec] = function(...) return inScope(scope, fn, ...) end
-    end
+    local rec = newRecord(fn, false)
     local signals = connections[target]
     if signals == nil then
         signals = {}
@@ -498,18 +567,9 @@ function ui.connect(target, signal, fn)
         list = {}
         signals[signal] = list
     end
-    for i = #list, 1, -1 do -- the records of collected scopes
-        if listenerOf(list[i]) == nil then table.remove(list, i) end
-    end
-    list[#list + 1] = rec
+    addRecord(list, rec)
     return function()
-        rec[1] = nil
-        local owner = rec[2]
-        if owner ~= nil then
-            rec[2] = nil
-            local fns = ownedFns[owner]
-            if fns ~= nil then fns[rec] = nil end
-        end
+        dropRecord(rec)
         removeFrom(list, rec)
     end
 end
@@ -606,13 +666,18 @@ local function keyFunction(self, model, fns, memo)
     return nil
 end
 
+-- The key a container caches the delegate of an item without a key under: a nil or NaN key can't index a table.
+local NO_KEY = {}
+
 -- The key of `item` at index `i` (the container's `key` function, in the scope the container was built in). A nil
--- or NaN key can't index a table: the item itself is the key then.
+-- or NaN key can't index a table: the item itself is the key then, or NO_KEY when the item can't either (NaN, or nil
+-- in a model with holes).
 local function keyOf(self, keyFn, item, i)
     local scope = scopeOf[self]
     local k
     if scope ~= nil then k = inScope(scope, keyFn, item, i) else k = keyFn(item, i) end
-    if k == nil or k ~= k then return item end
+    if k == nil or k ~= k then k = item end
+    if k == nil or k ~= k then return NO_KEY end
     return k
 end
 
@@ -754,21 +819,18 @@ end
 --   cache         [index] = entry, without a `key` function
 --   keyed         [key] = entry, with one; more entries with the same key are chained through `nextSame`
 --   built, shown  how many entries there are; how many indices the current pass showed
+--   seen, seenN   with a key and a Lua model: the items whose keys the last pass counted (seen[i]) and how many (nil:
+--                 none to compare with); seenKeyFn is the key function they were counted with, seenNumeric whether
+--                 the model was a number
+--   atIndex       with a list model: [index] = the keyed entry shown at the index (see listRange)
+--   counts, out   scratch tables of listCount and listRange
 -- An entry is { item, key, node, pass } (see buildDelegate). An entry the model no longer has is dropped as soon as
 -- that is known cheaply: an index past the end or whose item changed, and with a key, a key gone from a model of at
--- most LIST_KEEP items. Beyond that the cache keeps at most max(LIST_KEEP, 4 x shown) entries, dropping the ones
--- shown longest ago. With a list model, an entry is also dropped when its item isn't the row's any more (the row
--- changed), and a pass at an unchanged revision drops nothing.
+-- most LIST_KEEP items (counted again only when an item changed: a key is a function of its item and index). Beyond
+-- that the cache keeps at most max(LIST_KEEP, 4 x shown) entries, dropping the ones shown longest ago. With a list
+-- model, an entry is also dropped when its item isn't the row's any more (the row changed), and a pass at an
+-- unchanged revision drops nothing.
 local LIST_KEEP = 256
-
--- The key a ListView caches an item's delegate under: keyOf, with one stand-in for an item that can't index a table
--- (nil, NaN).
-local NO_KEY = {}
-local function viewKey(self, keyFn, item, i)
-    local k = keyOf(self, keyFn, item, i)
-    if k == nil or k ~= k then return NO_KEY end
-    return k
-end
 
 -- One entry of a ListView's cache is gone (the caller unlinked it).
 local function dropEntry(st)
@@ -777,15 +839,15 @@ local function dropEntry(st)
     dropped()
 end
 
--- Drops the keyed entries that `keep(entry)` rejects, keeping the order of each key's chain.
-local function filterKeyed(st, keep)
+-- Drops the keyed entries that `keep(entry, arg)` rejects, keeping the order of each key's chain.
+local function filterKeyed(st, keep, arg)
     for k, head in pairs(st.keyed) do
         local newHead, tail = nil, nil
         local c = head
         while c ~= nil do
             local nextC = c.nextSame
             c.nextSame = nil
-            if keep(c) then
+            if keep(c, arg) then
                 if tail then tail.nextSame = c else newHead = c end
                 tail = c
             else
@@ -811,7 +873,41 @@ local function trimView(st, keep)
     for i, c in pairs(st.cache) do
         if c.pass <= cut then st.cache[i] = nil; dropEntry(st) end
     end
-    filterKeyed(st, function(c) return c.pass > cut end)
+    filterKeyed(st, function(c, last) return c.pass > last end, cut)
+end
+
+-- filterKeyed's `keep` for a count of the model's keys (counts[key] = how many items have it): keeps that many entries
+-- of each key.
+local function keepCounted(c, counts)
+    local left = counts[c.key]
+    if not left or left == 0 then return false end
+    counts[c.key] = left - 1
+    return true
+end
+local function keepNone() return false end
+
+-- Whether the model has the items the last count saw (st.seen), counted with the same key function: then every item
+-- has the key it had, and counting would drop nothing. Records the items for the next call otherwise. A numeric
+-- model's items are its indices.
+local function sameItems(st, model, n, keyFn)
+    local same = st.seenN == n and st.seenKeyFn == keyFn and st.seenNumeric == (model == nil)
+    if model ~= nil then
+        local seen = st.seen
+        if seen == nil then
+            seen = {}
+            st.seen = seen
+        end
+        for i = 1, n do
+            local item = model[i]
+            if seen[i] ~= item then -- a NaN item never matches: counted every call (right, if slow)
+                same = false
+                seen[i] = item
+            end
+        end
+        for i = n + 1, st.seenN or 0 do seen[i] = nil end
+    end
+    st.seenN, st.seenKeyFn, st.seenNumeric = n, keyFn, model == nil
+    return same
 end
 
 -- __count(self): resolves the model for this render's __range calls, drops the entries it no longer has, and returns
@@ -837,32 +933,35 @@ local function listCount(self)
     local keyFn, modelKeys = keyFunction(self, model, fns, st)
     local rev = fns and fns.revision(model)
     local stable = fns ~= nil and st.model == model and st.revision == rev and st.n == n and st.rawKey == rawKey
+    local counted = false
     if stable then
         -- A list model that didn't change since the last pass: every entry still is what it was, and at its index.
     elseif keyFn ~= nil then
         for i in pairs(st.cache) do st.cache[i] = nil; dropEntry(st) end -- `key` was set since
+        -- A small model: count its keys, and drop the entries past each key's count. A Lua model with the items it
+        -- had at the last count needs no count (a plain table model's keys would be asked for every frame). A list
+        -- model changed (it isn't stable), and its own keys need no item: its rows aren't converted for this.
         if n <= LIST_KEEP and st.built > 0 then
-            -- A small model: count its keys, and drop the entries past each key's count. (A model's own keys need no
-            -- item: its rows aren't converted for this.)
-            local counts = {}
-            for i = 1, n do
-                local k = modelKeys and fns.key(model, i) or nil
-                if k == nil then
-                    local item
-                    if model then item = model[i] else item = i end
-                    k = viewKey(self, keyFn, item, i)
+            counted = fns == nil
+            if not counted or not sameItems(st, model, n, keyFn) then
+                local counts = st.counts or {}
+                st.counts = nil -- taken while in use: a key function that renders this list again gets its own
+                for i = 1, n do
+                    local k = modelKeys and fns.key(model, i) or nil
+                    if k == nil then
+                        local item
+                        if model then item = model[i] else item = i end
+                        k = keyOf(self, keyFn, item, i)
+                    end
+                    counts[k] = (counts[k] or 0) + 1
                 end
-                counts[k] = (counts[k] or 0) + 1
+                filterKeyed(st, keepCounted, counts)
+                for k in pairs(counts) do counts[k] = nil end
+                st.counts = counts
             end
-            filterKeyed(st, function(c)
-                local left = counts[c.key]
-                if not left or left == 0 then return false end
-                counts[c.key] = left - 1
-                return true
-            end)
         end
     else
-        if next(st.keyed) ~= nil then filterKeyed(st, function() return false end) end -- `key` was removed
+        if next(st.keyed) ~= nil then filterKeyed(st, keepNone) end -- `key` was removed
         if model ~= nil then
             for i, c in pairs(st.cache) do
                 if i > n or c.item ~= model[i] then st.cache[i] = nil; dropEntry(st) end
@@ -875,20 +974,28 @@ local function listCount(self)
     end
     local limit = math.max(LIST_KEEP, 4 * st.shown)
     if st.built > limit then trimView(st, limit * 3 // 4) end
+    -- The items seen are what the next sameItems compares with only when this pass counted them: a pass without a
+    -- count (a bigger model, no entries, another kind of model) may build entries for other keys.
+    if not counted then st.seenN = nil end
     st.model, st.n, st.fns, st.keyFn, st.revision, st.rawKey = model, n, fns, keyFn, rev, rawKey
     st.stable = stable
-    if not stable then st.atIndex = nil end
+    local atIndex = st.atIndex
+    if not stable and atIndex ~= nil then
+        for i in pairs(atIndex) do atIndex[i] = nil end
+    end
     st.pass = st.pass + 1
     st.shown = 0
     return n
 end
 
 -- __range(self, first, last): the delegates for model indices first..last (1-based), built when they aren't cached;
--- false for a delegate that returned nil. Called after __count, in the same render.
+-- false for a delegate that returned nil. Called after __count, in the same render. The list is the view's, reused by
+-- its next __range call (the C++ element reads it before that).
 local function listRange(self, first, last)
     local st = rawget(self, "__view")
-    local out = {}
-    if not st then return out end
+    if not st then return {} end
+    local out = st.out or {}
+    st.out = nil -- taken while in use: a delegate whose builder runs __range of this list again gets its own
     local model, pass, keyFn = st.model, st.pass, st.keyFn
     if last > st.n then last = st.n end
     -- A list model may have changed since __count (a delegate that edits it): its rows past the end are gone, and an
@@ -903,8 +1010,9 @@ local function listRange(self, first, last)
         if last > now then last = now end
         stable = st.stable and st.fns.revision(model) == st.revision
     end
+    -- (Only a list model's pass can be stable: atIndex is kept for those only.)
     local atIndex = st.atIndex
-    if atIndex == nil and keyFn ~= nil then
+    if atIndex == nil and keyFn ~= nil and fresh then
         atIndex = {}
         st.atIndex = atIndex
     end
@@ -920,7 +1028,7 @@ local function listRange(self, first, last)
             local item
             if model then item = model[i] else item = i end
             -- The first entry with the item's key that this pass hasn't shown yet (repeated keys get one each).
-            local k = viewKey(self, keyFn, item, i)
+            local k = keyOf(self, keyFn, item, i)
             local tail
             c = st.keyed[k]
             while c ~= nil and c.pass == pass do tail = c; c = c.nextSame end
@@ -938,7 +1046,7 @@ local function listRange(self, first, last)
             else
                 c.item = item
             end
-            atIndex[i] = c
+            if atIndex ~= nil then atIndex[i] = c end
         else
             local item
             if model then item = model[i] else item = i end
@@ -957,7 +1065,10 @@ local function listRange(self, first, last)
         c.pass = pass
         out[i - first + 1] = c.node
     end
-    if last >= first then st.shown = st.shown + (last - first + 1) end
+    local count = last >= first and last - first + 1 or 0
+    for j = #out, count + 1, -1 do out[j] = nil end -- what the last call returned past this one's
+    st.shown = st.shown + count
+    st.out = out
     return out
 end
 
@@ -1135,13 +1246,13 @@ ui.color = {
 
 local timers, nextTimer = {}, 0
 
--- A timer set inside a component instance or delegate runs in its id scope. Frames are on demand: it asks for the
--- frame it's due in (ui.__tick asks for the following ones), also when it was set while the app sleeps (a posted
--- function) or during a frame, whose own request for the next due time was already made.
+-- A timer set inside a component instance or delegate runs in its id scope, and stops when the scope is collected
+-- (its function is a record of the scope, see newRecord). Frames are on demand: it asks for the frame it's due in
+-- (ui.__tick asks for the following ones), also when it was set while the app sleeps (a posted function) or during a
+-- frame, whose own request for the next due time was already made.
 local function addTimer(fn, ms, rep)
-    fn = inCurrentScope(fn)
     nextTimer = nextTimer + 1
-    timers[nextTimer] = { fn = fn, interval = ms / 1000, due = native.time() + ms / 1000, rep = rep }
+    timers[nextTimer] = { rec = newRecord(fn, true), interval = ms / 1000, due = native.time() + ms / 1000, rep = rep }
     native.requestFrame(ms / 1000)
     return nextTimer
 end
@@ -1165,18 +1276,27 @@ function ui.setInterval(fn, ms)
 end
 --- Stops a timer. An id that isn't one (nil, from a timer that was never set) is ignored.
 function ui.clearTimer(id)
-    if id ~= nil and id == id then timers[id] = nil end -- nil or NaN can't index a table
+    if id == nil or id ~= id then return end -- nil or NaN can't index a table
+    local t = timers[id]
+    if t ~= nil then
+        timers[id] = nil
+        dropRecord(t.rec)
+    end
 end
 
-local frameCallbacks = {}
+local frameCallbacks = {} -- records (see newRecord)
 --- Calls fn(time) at the start of every rendered frame. Frames are rendered on
 --- demand: call ui.requestFrame() from fn to keep them coming while animating.
 --- Returns a function that removes the callback.
---- Inside a component instance or delegate, fn runs in its id scope (like the timers and watchers).
+--- Inside a component instance or delegate, fn runs in its id scope (like the timers and watchers) and is dropped
+--- with it (when its elements are collected).
 function ui.onFrame(fn)
-    fn = inCurrentScope(fn)
-    table.insert(frameCallbacks, fn)
-    return function() removeFrom(frameCallbacks, fn) end
+    local rec = newRecord(fn, true)
+    addRecord(frameCallbacks, rec)
+    return function()
+        dropRecord(rec)
+        removeFrom(frameCallbacks, rec)
+    end
 end
 
 --- Asks for a frame to be rendered (after `ms` milliseconds if given). The engine
@@ -1755,7 +1875,9 @@ function ui.__tick(now)
     dueScratch = nil
     local ndue = 0
     for id, t in pairs(timers) do
-        if now >= t.due then
+        if listenerOf(t.rec) == nil then
+            timers[id] = nil -- set in a scope that was collected since (clearing a field during pairs is allowed)
+        elseif now >= t.due then
             ndue = ndue + 1
             due[ndue] = id
         end
@@ -1767,15 +1889,19 @@ function ui.__tick(now)
         local id = due[i]
         due[i] = nil -- emptied as it goes: the list is empty again however the loop ends
         local t = timers[id]
-        if t then
+        local fn = t and listenerOf(t.rec)
+        if fn == nil then
+            if t then timers[id] = nil end
+        else
             if t.rep then
                 -- The next period starts where this one ended, not at the frame time (frames come late: the period
                 -- would drift). A frame later than a whole period skips the missed ones: one call per frame.
                 t.due = t.due + (math.floor((now - t.due) / t.interval) + 1) * t.interval
             else
                 timers[id] = nil
+                dropRecord(t.rec)
             end
-            protectedCall(t.fn)
+            protectedCall(fn)
         end
     end
     dueScratch = due
@@ -1789,13 +1915,12 @@ function ui.__tick(now)
         protectedCall(types.tick, now)
     end
     -- Iterate a snapshot: a callback may remove itself (or others), or add one, while running; the frame calls the
-    -- ones there were when it started. table.move, not table.unpack: no limit on how many there are.
-    local nframe = #frameCallbacks
-    if nframe > 0 then
+    -- ones there were when it started (their functions: one removed meanwhile still runs this frame). No limit on how
+    -- many there are (a loop, not table.unpack).
+    if frameCallbacks[1] ~= nil then
         local snapshot = frameScratch or {}
         frameScratch = nil
-        table.move(frameCallbacks, 1, nframe, 1, snapshot)
-        for i = 1, nframe do
+        for i = 1, liveFns(frameCallbacks, snapshot) do
             local fn = snapshot[i]
             snapshot[i] = nil
             protectedCall(fn, now)
@@ -1893,22 +2018,38 @@ ui.setWindowSize = native.setWindowSize     -- setWindowSize(w, h) in dp (times 
 -- collected, would stay a constructor (`Details.text` then fails), and ui.checkId would report the id as colliding
 -- with "ui member 'ui.Details'". Cached here, the id wins as soon as it exists.
 local implicitCtors = {}
-ui.env = setmetatable({ ui = ui }, {
+
+-- The implicit constructor for free name `k`, past the ids: one for any Capitalized name, else nil.
+local function implicitCtor(k)
+    local v = implicitCtors[k]
+    if v ~= nil then return v end
+    if type(k) == "string" and k:match("^%u") then
+        v = ui.element(k)
+        implicitCtors[k] = v
+        return v
+    end
+    return nil
+end
+
+-- The caches of the chunk environments (see chunkEnv), weak: a global a script assigns (a new key of ui.env) is
+-- removed from them, so it takes precedence there as it does in ui.env.
+local envCaches = setmetatable({}, { __mode = "k" })
+
+-- Its own fields are the globals UI scripts assigned (`ui` is served by __index, so assigning it is a new key too).
+ui.env = setmetatable({}, {
     __index = function(_, k)
+        if k == "ui" then return ui end
         local v = ui[k]
         if v ~= nil then return v end
         v = _G[k]
         if v ~= nil then return v end
         v = ui.ids[k]
         if v ~= nil then return v end
-        v = implicitCtors[k]
-        if v ~= nil then return v end
-        if type(k) == "string" and k:match("^%u") then
-            local ctor = ui.element(k)
-            implicitCtors[k] = ctor
-            return ctor
-        end
-        return nil
+        return implicitCtor(k)
+    end,
+    __newindex = function(env, k, v)
+        rawset(env, k, v)
+        for cache in pairs(envCaches) do rawset(cache, k, nil) end
     end,
 })
 
@@ -2001,52 +2142,69 @@ end
 
 -- What a script loaded as a resource sees as `ui`: the ui table, with the functions that resolve relative names
 -- (ui.resource.*, Image, theme, themeState) bound to `script`, so they work wherever its code runs, tail calls
--- included. Everything else reads and writes the ui table itself.
+-- included. Everything else reads and writes the ui table itself. Reads are a chain of tables (the empty proxy, then
+-- `own`, then ui): no function runs for them. Returns the proxy and `own` (read it raw: its __index is ui).
 local function scriptUi(script)
-    local own = {
+    local own = setmetatable({
         resource = resourceApi(function() return script end),
         Image = function(props) return imageIn(props, script) end,
         theme = function(t) return applyTheme(t, script) end,
         themeState = function(init) return themeStateFor(init, script) end,
-    }
-    return setmetatable({}, {
-        __index = function(_, k)
-            local v = own[k]
-            if v ~= nil then return v end
-            return ui[k]
-        end,
-        __newindex = ui,
-    }), own
+    }, { __index = ui })
+    return setmetatable({}, { __index = own, __newindex = ui }), own
 end
 
 -- The environment of a UI script loaded as resource `script` (the entry script, components): ui.env, except that
 -- `ui` and the free names of the bound functions (Image, theme, ...) come from scriptUi(script). Globals it assigns
 -- go to ui.env, so they're shared between scripts as before.
+--
+-- Free names are looked up every frame (bindings), so the lookup is short: the environment stays empty (every
+-- assignment reaches ui.env) and reads go to a cache table, then to one function that does the whole lookup in
+-- order: a global a script assigned (raw in ui.env), `ui` and the bound functions (scriptUi), ui, the Lua globals,
+-- the app-level ids, an implicit constructor. The cache holds only what can't change behind it: `ui` and the bound
+-- functions, which only a global of the same name could shadow, and assigning one removes them from every cache
+-- (ui.env's __newindex). Everything else is looked up again each time, so ids, ui members and globals that change
+-- are seen as before.
 local function chunkEnv(script)
     local scoped, own = scriptUi(script)
-    return setmetatable({}, {
-        __index = function(_, k)
-            local v = rawget(ui.env, k) -- a global a script assigned wins, as in ui.env
-            if k == "ui" and v == ui then return scoped end
+    local env = ui.env
+    local cache = setmetatable({}, {
+        __index = function(cache, k)
+            local v = rawget(env, k) -- a global a script assigned wins, as in ui.env
+            if v ~= nil then
+                if k == "ui" and v == ui then return scoped end
+                return v
+            end
+            if k == "ui" then v = scoped else v = rawget(own, k) end
+            if v ~= nil then
+                rawset(cache, k, v)
+                return v
+            end
+            v = ui[k]
             if v ~= nil then return v end
-            v = own[k]
+            v = _G[k]
             if v ~= nil then return v end
-            return ui.env[k]
+            v = ui.ids[k]
+            if v ~= nil then return v end
+            return implicitCtor(k)
         end,
-        __newindex = ui.env,
     })
+    envCaches[cache] = true
+    return setmetatable({}, { __index = cache, __newindex = env })
 end
 
 -- `require "MyComponent"` inside a UI script loads MyComponent.lua from the entry script's folder (a resource
 -- folder such as `app:/`) in its own environment (chunkEnv), like QML files as components. Modules not found there
 -- are looked up in `imlui:/` by the engine's searcher, and nowhere else: registerResources removed Lua's file and C
--- searchers (no package.path, no DLLs).
+-- searchers (no package.path, no DLLs). loadModule finds and loads it with one read (a folder named
+-- `MyComponent.lua` doesn't count: `MyComponent/init.lua` is next); the environment, which depends on the name it
+-- found, is set after.
 table.insert(package.searchers, 2, function(name)
     if not ui.__dir or resource == nil then return nil end
-    local full, tried = resource.find(name, ui.__dir)
-    if not full then return tried end
-    local chunk, err = resource.load(full, chunkEnv(full))
-    if not chunk then error(err, 0) end
+    local chunk, full = resource.loadModule(name, ui.__dir)
+    if chunk == nil then return full end -- the names it tried
+    if chunk == false then error(full, 0) end -- the load error
+    debug.setupvalue(chunk, 1, chunkEnv(full)) -- a main chunk's only upvalue is _ENV
     -- A module's top level is app level, even when a component instance requires it first.
     return function(...) return atAppLevel(chunk, ...) end, full
 end)

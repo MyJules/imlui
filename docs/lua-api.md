@@ -227,6 +227,13 @@ Calls `fn(new, old, key)` whenever `state[key]` changes. Use `"*"` for any key. 
 `state()`. Returns a function that removes the watcher; calling it again does nothing. A watcher may remove itself
 while it runs.
 
+A watcher added inside a [component](#componentfn---constructor) instance or a `Repeater`/`ListView` delegate (while
+it is built, or by its elements' handlers) runs in its id scope and **belongs to it**, like a
+[connection](#connecttarget-signal-fn---disconnect): once the instance's elements are collected, the watcher goes too
+(and it doesn't keep them alive). So a delegate that watches a state can be rebuilt any number of times (scrolling,
+a changed model) without leaving watchers behind. Collection isn't immediate; call `stop` to end it at a known time.
+One added at app level stays until stopped.
+
 ```lua
 watch(s, "count", function(new, old) log.info("count %d -> %d", old, new) end)
 local stop = watch(look, "*", applyTheme)
@@ -264,7 +271,8 @@ next element registers where it would have anyway.
 
 ### `require "Name"`
 
-Inside a UI script, `require "Name"` first looks for `Name.lua` (then `Name/init.lua`) **in the entry script's folder**
+Inside a UI script, `require "Name"` first looks for the file `Name.lua` (then `Name/init.lua`; a folder named
+`Name.lua` doesn't count) **in the entry script's folder**
 (`app:/` for `app:/main.lua`) and runs it in the UI environment, the way QML files work as components. `a.b` is
 `a/b.lua`. Module names are global (one `package.loaded` entry per name), so `require "pages.home"` means
 `app:/pages/home.lua` from every script; relative resource names *inside* `pages/home.lua` (`ui.resource`, `Image`,
@@ -350,7 +358,8 @@ delegates' [`parent`](#selfparent) is the element the `Repeater` is in.
 
 **Keys.** A `model` function that builds new item tables on every call (`map`, a query result) would rebuild every
 delegate on every call, and the delegates would lose their state (focus, a text being edited, a scroll position). Give
-the items a `key` (any value but `nil` or NaN; those fall back to the item itself): a delegate is then kept while an
+the items a `key` (any value but `nil` or NaN; those fall back to the item itself, and items that are NaN themselves
+share one stand-in key): a delegate is then kept while an
 item with its key is in the model, also when it moves to another index (a sort, an insertion above it), and dropped
 when its key goes away. Items with the same key get one delegate each, in order. A kept delegate **keeps the `item`
 and `index` it was built with**: the delegate function isn't called again, so make the key change with whatever the
@@ -570,6 +579,10 @@ so it doesn't drift; a frame more than a period late runs it once and skips the 
 frame run in the order they came due (then the order they were set). Callbacks may add or clear timers. A callback
 that raises an error is reported (with a traceback) in the error overlay; the other timers and callbacks of that
 frame still run.
+
+Timers and `onFrame` callbacks set up inside a component instance or delegate run in its id scope and belong to it,
+like [watchers](#watchstate-key-fn---stop): once its elements are collected, they stop (an interval no longer fires,
+a frame callback no longer runs). Set up at app level, they run until cleared or stopped.
 
 | Function | Description |
 |---|---|
