@@ -618,6 +618,34 @@ TEST_F(ImageElement, DrawsAtItsNaturalSizeTimesTheScale) {
     EXPECT_EQ(m_h.images().decodeCount(), 1u);
 }
 
+// With background decoding (the Engine's setting), the image is "loading" until its decode lands: no error, no
+// placeholder, no size; then "ready" at its natural size, with one onStatusChanged.
+TEST_F(ImageElement, IsLoadingWhileItDecodesInTheBackground) {
+    m_h.images().setAsync(true);
+    clearPosted();
+    ASSERT_EQ(m_h.run(R"(
+        s = state { seen = {} }
+        root = Column { Image { id = "img", source = "rgba_4x2.png",
+                                onStatusChanged = function(self, st) s.seen[#s.seen + 1] = st end } })"),
+              "");
+    m_h.renderFrames("root", 1);
+    Image* img = image();
+    ASSERT_NE(img, nullptr);
+    EXPECT_EQ(img->status(), Image::Status::Loading);
+    EXPECT_EQ(img->implicitWidth(), 0.0);
+    expectNear(img->lastSize(), {0.0f, 0.0f}, "no placeholder while loading");
+    EXPECT_TRUE(luaui::errors().empty()) << "loading is not an error";
+
+    ASSERT_TRUE(m_h.images().waitForPending());
+    runPosted();
+    m_h.renderFrames("root", 2);
+    EXPECT_EQ(img->status(), Image::Status::Ready);
+    expectNear(img->lastSize(), {4 * dpiScale(), 2 * dpiScale()});
+    EXPECT_EQ(m_h.run(R"(assert(#s.seen == 1 and s.seen[1] == "ready", table.concat(s.seen, ",")))"), "");
+    EXPECT_TRUE(luaui::errors().empty());
+    clearPosted();
+}
+
 TEST_F(ImageElement, KeepsTheAspectRatioWhenOneSizeIsSet) {
     show(R"(root = Column {
         Image { id = "wide", source = "rgba_4x2.png", width = 40 },

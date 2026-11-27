@@ -210,6 +210,7 @@ void closeState(lua::State* state) {
 Engine::Engine(EngineConfig config) : m_config{std::move(config)} {
     registerBuiltinTypes(m_types);
     m_renderer.setImages(&m_images);
+    m_images.setAsync(true); // decodes on the background pool: a large image no longer stalls a frame
     m_hooks.quit = [this] { requestQuit(); };
     m_hooks.reload = [this] { requestReload(); };
     m_settings.install(m_hooks); // title, zoom, zoom shortcuts, window size

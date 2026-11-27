@@ -223,13 +223,18 @@ private:
         {
             std::scoped_lock lock{m_inbox->mutex};
             m_inbox->results.push_back({m_name, m_ticket, found, cancelled, std::move(decoded)});
-            --m_inbox->inFlight;
             m_inbox->ready.store(true, std::memory_order_release);
         }
-        m_inbox->finished.notify_all();
         // Wakes the loop (post() does) and asks for the frame that shows the image; requestFrame() is main-thread
-        // only, so it runs there. Nothing of the cache is captured: it may be gone by then.
+        // only, so it runs there. Nothing of the cache is captured: it may be gone by then. After the result is in
+        // the inbox (the frame it asks for finds it), before the decode counts as finished: waitForPending() returns
+        // only once the post is made.
         post([] { requestFrame(); });
+        {
+            std::scoped_lock lock{m_inbox->mutex};
+            --m_inbox->inFlight;
+        }
+        m_inbox->finished.notify_all();
     }
 
     std::shared_ptr<Inbox> m_inbox;

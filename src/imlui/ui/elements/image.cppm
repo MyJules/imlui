@@ -212,7 +212,9 @@ Image::Lookup Image::lookup(const Frame& frame) {
         else {
             l.resolved = &*name;
             l.image = &images->get(*name);
-            if (!l.image->ready()) l.error = &brokenMessage(l.image->error());
+            // Still decoding in the background (ImageCache::setAsync): no error, no size yet; the finished decode
+            // requests the frame that shows it.
+            if (!l.image->ready() && !l.image->loading()) l.error = &brokenMessage(l.image->error());
         }
     }
     if (l.image && l.image->ready())
@@ -242,7 +244,11 @@ void Image::render(Frame& frame) {
 
     const bool ready = image && image->ready();
     const ImVec2 natural = found.natural;
-    const Status status = ready ? Status::Ready : broken ? Status::Error : Status::None;
+    const bool loading = image && image->loading();
+    const Status status = ready     ? Status::Ready
+                          : broken  ? Status::Error
+                          : loading ? Status::Loading
+                                    : Status::None;
     publish(status, ready ? image->width() : 0, ready ? image->height() : 0);
 
     // Lay out: one item of the computed size.
