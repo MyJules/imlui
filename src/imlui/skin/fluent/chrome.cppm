@@ -1,6 +1,6 @@
 // Fluent element chrome: the looks elements draw themselves around the controls (Skin's chrome hooks), Fluent's.
-// So far the backgrounds at an app's root: the ApplicationWindow, a Window, a ScrollView's corners. The bars, the
-// table, the separator and the link keep Material's hooks (group C of the Fluent controls adds them here).
+// The backgrounds at an app's root (the ApplicationWindow, a Window, a ScrollView's corners), the NavigationBar and
+// NavigationRail containers, the TopAppBar, the Table, the Separator's label and the Link.
 export module imlui.skin.fluent.chrome;
 
 import std;
@@ -9,8 +9,10 @@ import imgui;
 import imlui.color;
 import imlui.skin.base;
 import imlui.skin.fluent.common;
+import imlui.theme.dpi;
 import imlui.theme.fluent_colors;
 import imlui.theme.theme;
+import imlui.widgets.surface;
 
 export namespace imlui::fluent {
 
@@ -26,6 +28,19 @@ export namespace imlui::fluent {
 [[nodiscard]] Color navigationBarColor(const Look& look);
 /// The NavigationRail's container: the background (NavigationView's pane is transparent over Mica).
 [[nodiscard]] Color navigationRailColor(const Look& look);
+
+// -- (C2) bars, tables, separators, links
+
+/// WinUI's title/command bar: a 48dp top row ("small", "center"); "medium" and "large" put the title below it in a
+/// bar of 104dp and 128dp. The current surface's color, the title in the primary text color.
+[[nodiscard]] Skin::TopAppBarChrome topAppBarChrome(const Look& look, std::string_view variant);
+/// Divider-colored rules, the selected row in the subtle hover fill with primary text, `paddingX` cell padding, a
+/// header as high as a control.
+[[nodiscard]] Skin::TableChrome tableChrome(const Look& look);
+/// The secondary text color.
+[[nodiscard]] Color separatorTextColor(const Look& look);
+/// WinUI's HyperlinkButton text: the accent text color.
+[[nodiscard]] std::optional<Color> linkColor(const Look& look);
 
 } // namespace imlui::fluent
 
@@ -53,5 +68,29 @@ float scrollViewRounding(const Look& look) { return overlayRadius(look); }
 // -- (C1) navigation containers
 Color navigationBarColor(const Look& look) { return look.colors.layer; }
 Color navigationRailColor(const Look& look) { return look.colors.background; }
+
+// -- (C2) bars, tables, separators, links
+
+Skin::TopAppBarChrome topAppBarChrome(const Look& look, std::string_view variant) {
+    const float row = dp(48);
+    return {.rowHeight = row,
+            .height = variant == "medium"  ? dp(104)
+                      : variant == "large" ? dp(128)
+                                           : row,
+            .background = md::surfaceColor(),
+            .title = look.colors.text};
+}
+
+Skin::TableChrome tableChrome(const Look& look) {
+    const Colors& c = look.colors;
+    return {.border = c.divider,
+            .header = c.subtleHover,
+            .selectedText = c.text,
+            .cellPaddingX = paddingX(look),
+            .headerHeight = controlHeight(look)};
+}
+
+Color separatorTextColor(const Look& look) { return look.colors.textSecondary; }
+std::optional<Color> linkColor(const Look& look) { return look.colors.accentText; }
 
 } // namespace imlui::fluent

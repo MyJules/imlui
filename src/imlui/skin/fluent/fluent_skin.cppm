@@ -47,6 +47,14 @@ import imlui.skin.fluent.menu;
 import imlui.skin.fluent.navigation;
 import imlui.skin.fluent.navigation_drawer;
 import imlui.skin.fluent.tabs;
+// -- (C2) containers, messages, tables, charts, chrome
+import imlui.skin.fluent.card;
+import imlui.skin.fluent.chart;
+import imlui.skin.fluent.dialog;
+import imlui.skin.fluent.divider;
+import imlui.skin.fluent.snackbar;
+import imlui.skin.fluent.table;
+import imlui.skin.fluent.tooltip;
 // ---- end (C) imports
 
 export namespace imlui {
@@ -143,6 +151,26 @@ public:
     void endModalDrawer() const override;
     [[nodiscard]] Color navigationBarColor() const override;
     [[nodiscard]] Color navigationRailColor() const override;
+    // -- (C2) containers, messages, tables, charts, chrome
+    bool beginCard(const char* id, md::CardVariant variant, float width, float padding, float height,
+                   std::optional<Color> color, float rounding) const override;
+    void endCard() const override;
+    [[nodiscard]] ImVec2 cardSize(float width, float padding, float height, float contentHeight) const override;
+    bool beginDialog(const char* title, bool* open, float width, std::string_view heroIcon) const override;
+    void endDialog() const override;
+    bool snackbar(std::string_view message, std::string_view action, float t, bool closeIcon,
+                  bool* closed) const override;
+    void tooltip(std::string_view s) const override;
+    void divider(float insetStart, float insetEnd, float width) const override;
+    [[nodiscard]] ImVec2 dividerSize(float width) const override;
+    void tableHeaderCell(std::string_view text, float rowH) const override;
+    void tableCell(std::string_view text, float rowH, std::optional<Color> color) const override;
+    void chart(const char* id, const std::vector<float>& values, const md::ChartOptions& o) const override;
+    [[nodiscard]] ImVec2 chartSize(const md::ChartOptions& o) const override;
+    [[nodiscard]] TopAppBarChrome topAppBarChrome(std::string_view variant) const override;
+    [[nodiscard]] TableChrome tableChrome() const override;
+    [[nodiscard]] Color separatorTextColor() const override;
+    [[nodiscard]] std::optional<Color> linkColor() const override;
     // ======== end (C) ========
 };
 
@@ -283,6 +311,44 @@ bool FluentSkin::beginModalDrawer(const char* id, bool* open, float width) const
 void FluentSkin::endModalDrawer() const { fluent::endModalDrawer(); }
 Color FluentSkin::navigationBarColor() const { return fluent::navigationBarColor(look()); }
 Color FluentSkin::navigationRailColor() const { return fluent::navigationRailColor(look()); }
+// -- (C2) containers, messages, tables, charts, chrome
+bool FluentSkin::beginCard(const char* id, md::CardVariant variant, float width, float padding, float height,
+                           std::optional<Color> color, float rounding) const {
+    return fluent::beginCard(look(), id, variant, width, padding, height, color, rounding);
+}
+void FluentSkin::endCard() const { fluent::endCard(look()); }
+ImVec2 FluentSkin::cardSize(float width, float padding, float height, float contentHeight) const {
+    return fluent::cardSize(look(), width, padding, height, contentHeight);
+}
+bool FluentSkin::beginDialog(const char* title, bool* open, float width, std::string_view heroIcon) const {
+    return fluent::beginDialog(look(), title, open, width, heroIcon);
+}
+void FluentSkin::endDialog() const { fluent::endDialog(look()); }
+bool FluentSkin::snackbar(std::string_view message, std::string_view action, float t, bool closeIcon,
+                          bool* closed) const {
+    return fluent::snackbar(look(), message, action, t, closeIcon, closed);
+}
+void FluentSkin::tooltip(std::string_view s) const { fluent::tooltip(look(), s); }
+void FluentSkin::divider(float insetStart, float insetEnd, float width) const {
+    fluent::divider(look(), insetStart, insetEnd, width);
+}
+ImVec2 FluentSkin::dividerSize(float width) const { return fluent::dividerSize(look(), width); }
+void FluentSkin::tableHeaderCell(std::string_view text, float rowH) const {
+    fluent::tableHeaderCell(look(), text, rowH);
+}
+void FluentSkin::tableCell(std::string_view text, float rowH, std::optional<Color> color) const {
+    fluent::tableCell(look(), text, rowH, color);
+}
+void FluentSkin::chart(const char* id, const std::vector<float>& values, const md::ChartOptions& o) const {
+    fluent::chart(look(), id, values, o);
+}
+ImVec2 FluentSkin::chartSize(const md::ChartOptions& o) const { return fluent::chartSize(look(), o); }
+Skin::TopAppBarChrome FluentSkin::topAppBarChrome(std::string_view variant) const {
+    return fluent::topAppBarChrome(look(), variant);
+}
+Skin::TableChrome FluentSkin::tableChrome() const { return fluent::tableChrome(look()); }
+Color FluentSkin::separatorTextColor() const { return fluent::separatorTextColor(look()); }
+std::optional<Color> FluentSkin::linkColor() const { return fluent::linkColor(look()); }
 // ======== end (C) ========
 
 } // namespace imlui

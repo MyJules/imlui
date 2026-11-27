@@ -1083,6 +1083,9 @@ items, tabs): `plateInsetX`, `plateInsetY` (the highlight's inset in its row, dp
 subtle item: the subtle fills one step on), `rowColors(look, state, selected)` (unselected to selected by an animated
 0..1), `drawIndicator(dl, center, length, vertical, disabled, look)` (the accent pill).
 
+Added with the containers (group C2): `drawFlyout(dl, a, b, radius, look)`, a floating surface's background (the
+opaque `flyout` fill, a `flyoutStroke` border of the stroke width): the snackbar's InfoBar, a chart's readout.
+
 ## Repository layout
 
 imlui is a library repository; apps live in their own repositories and add it with `add_subdirectory` (a git
@@ -1231,7 +1234,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.widgets.card` | `beginCard`/`endCard` (+ `CardVariant`) |
 | `imlui.widgets.dialog` | `beginDialog`/`endDialog` |
 | `imlui.widgets.snackbar` | `snackbar` |
-| `imlui.widgets.chart` | `chart` (+ `ChartOptions`) |
+| `imlui.widgets.chart` | `chart` (+ `ChartOptions`), `chartSize`, `chartAxis` (+ `ChartAxis`: the y axis, shared with the Fluent chart) |
 | `imlui.widgets.table` | `tableHeaderCell`, `tableCell` |
 | `imlui.widgets` | Umbrella: `export import` of all widget modules |
 
@@ -1245,13 +1248,20 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.skin.fluent.fluent_skin` | `FluentSkin` (`"fluent"`): `tokens()`, `colors()`, `look()`, and the overrides, one-line forwards in groups (A), (B), (C) (see [Adding a Fluent control](#adding-a-fluent-control)) |
 | `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout, the row selection (`selectedColors`, `rowColors`, `drawIndicator`) |
 | `imlui.skin.fluent.button` | `fluent::button`, `buttonSize`, `variantFill` |
-| `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor` |
+| `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` |
 | `imlui.skin.fluent.inputs` | Fluent's inputs (group B): `fluent::textField`, `spinBox`, `dropdown`, `colorField` and their sizes; `headerHeight`, `descriptionHeight`, `flyoutRowHeight` and the Fluent constants without a token (`innerButtonWidth`, `innerButtonMargin`, `descriptionGap`, `flyoutGap`, `flyoutPaddingY`, `rowInsetX`/`Y`, `swatchInset`, `pickerPadding`, `pickerWidth`). Privately, a list flyout (`beginFlyout`, `flyoutRow`) for the combo box until group (C)'s Fluent menus land |
 | `imlui.skin.fluent.list` | `fluent::listItem`/`listItemSize` (WinUI's list row), `expander`/`expanderSize` (the Expander header) |
 | `imlui.skin.fluent.menu` | `fluent::menuItem`, `beginMenu`/`endMenu`, `beginAnchoredMenu`/`endAnchoredMenu` (WinUI's MenuFlyout), `menuRowHeight` |
 | `imlui.skin.fluent.tabs` | `fluent::tabs`, `tabsSize`: primary as a SelectorBar, secondary as a TabView |
 | `imlui.skin.fluent.navigation` | `fluent::navigationItem`, `navigationRailItem`, `navigationBarItem` and their sizes (WinUI's NavigationViewItem) |
 | `imlui.skin.fluent.navigation_drawer` | `fluent::beginModalDrawer`/`endModalDrawer` (NavigationView's overlay pane) |
+| `imlui.skin.fluent.card` | `fluent::beginCard`, `endCard`, `cardSize`, `cardColors` (+ `CardColors`): md's card child window and card stack, Fluent's colors and stroke |
+| `imlui.skin.fluent.dialog` | `fluent::beginDialog`, `endDialog` (WinUI's ContentDialog) |
+| `imlui.skin.fluent.snackbar` | `fluent::snackbar`, `snackbarLayout` (+ `SnackbarLayout`), `snackbarActionLabel` (WinUI's InfoBar) |
+| `imlui.skin.fluent.tooltip` | `fluent::tooltip` (WinUI's ToolTip) |
+| `imlui.skin.fluent.divider` | `fluent::divider`, `dividerSize` |
+| `imlui.skin.fluent.table` | `fluent::tableHeaderCell`, `tableCell` |
+| `imlui.skin.fluent.chart` | `fluent::chart`, `chartSize` |
 
 ### UI (`src/imlui/ui/`)
 

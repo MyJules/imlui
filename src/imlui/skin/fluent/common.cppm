@@ -156,6 +156,12 @@ inline constexpr float indicatorPressedLength = 10.0f;
 /// `disabled`).
 void drawIndicator(ImDrawList* dl, ImVec2 c, float length, bool vertical, bool disabled, const Look& look);
 
+// -- (C2) flyouts
+
+/// Draws a flyout's background in [a, b] (a floating surface: a snackbar's InfoBar, a chart's readout): the opaque
+/// `flyout` fill and a `flyoutStroke` border of the stroke width. `radius` in pixels.
+void drawFlyout(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, const Look& look);
+
 } // namespace imlui::fluent
 
 module :private;
@@ -399,6 +405,13 @@ void drawIndicator(ImDrawList* dl, ImVec2 c, float length, bool vertical, bool d
     const ImVec2 half = vertical ? ImVec2{th * 0.5f, length * 0.5f} : ImVec2{length * 0.5f, th * 0.5f};
     md::fillRoundRect(dl, {c.x - half.x, c.y - half.y}, {c.x + half.x, c.y + half.y}, th * 0.5f,
                       disabled ? look.colors.accentDisabled : look.colors.accent);
+}
+
+// -- (C2) flyouts
+
+void drawFlyout(ImDrawList* dl, ImVec2 a, ImVec2 b, float radius, const Look& look) {
+    drawControl(dl, a, b, radius, {look.colors.flyout, look.colors.flyoutStroke, look.colors.flyoutStroke, {}},
+                strokeWidth(look));
 }
 
 } // namespace imlui::fluent
