@@ -79,7 +79,8 @@ flowchart TD
 it renders. Requests that come in while the loop sleeps wake it through `glfwPostEmptyEvent()`. With vsync on,
 presenting a frame waits for the display, which paces an animation that asks for a frame every frame; with
 `vsync = false` (`platform::Window::Config`) the engine sets a minimum frame interval instead
-(`setMinFrameInterval`, at most 240 frames per second), so `secondsUntilFrame()` never reports a frame due sooner
+(`setMinFrameInterval`: at most the refresh rate of the monitor the window is on, `platform::Window::refreshRate()`
+through `unsyncedFrameRate()`, or 240 frames per second when it isn't known), so `secondsUntilFrame()` never reports a frame due sooner
 than that after the last one began.
 
 All of it runs on one monotonic **app clock**, `clockTime()` in `imlui.ui.clock` (a steady clock): the frame
@@ -1341,7 +1342,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imgui` | Re-exports the ImGui API subset that imlui uses (types, flags, `ImGui::` functions, the user-texture calls `RegisterUserTexture`/`UnregisterUserTexture`); macros become `constexpr` functions |
 | `stb_image` | stb_image (PNG and JPEG only, from memory) in namespace `stbi`; the implementation is compiled in `external/imlui_stb_image.c` |
 | `imlui.log` | spdlog behind a `std::format` API: `imlui::log::info(...)`, `write(level, msg, source)`, `addFileSink(path)` (opened by its `std::filesystem::path`, so any file name on Windows; false when it can't be opened; safe while other threads log: the logger is replaced by a copy with the sink, and the replaced one is kept for writers still using it, so writing takes no lock), `setLevel`, `enabled(level)` (spdlog's `should_log`: the `info`/`debug`/... templates check it before formatting, and Lua's `log.*` through `native.logEnabled`) |
-| `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
+| `imlui.platform.window` | `platform::Window` + `Window::Config`: GLFW window, GL 3.3 context, ImGui context and backends, refresh and content-scale callbacks, `waitEvents`, `postEmptyEvent`, `setScaledSize`, `refreshRate` (of the monitor the window is on; cached until it moves or the monitors change), `setTitleBarColors` (DWM on Windows: dark mode, caption and text colors) |
 | `imlui.platform.process` | `executablePath()` (from the OS: `GetModuleFileNameW`, `/proc/self/exe`), `processArguments(argc, argv)` (`ProcessArguments`: the arguments as paths, from the UTF-16 command line on Windows when `argv` is the process's own, and whether it is) |
 | `imlui.platform.stack` | `stackRemaining()`: the bytes of the calling thread's stack left below the caller (`GetCurrentThreadStackLimits` on Windows, less what the thread can't grow into: the guard page, the bottom page and the overflow handler's `SetThreadStackGuarantee`, at least 64 KiB; `pthread_getattr_np` on Linux; nullopt elsewhere), which the renderer checks per level (`Renderer::stackReserve`) |
 | `zstd` | The zstd decompressor: `zstd::contentSize(frame)`, `zstd::decompress(frame, out)`. The tools wrap the compressor themselves (`zstd.compress`, in `tools/lib/`). |
@@ -1380,7 +1381,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.lua.node` | `Node`: typed, binding-aware prop reads, `set`/`setTop` (write-back), `emit` (signals) |
 | `imlui.lua.listeners` | `setListenerDispatch` (the DSL's `connect` dispatch, at a registry key), `callListeners` (what `ScriptObject::emit`/`notify` call after the slot), `changedSignal` (`"value"` -> `"onValueChanged"`) |
 | `imlui.lua.theme_table` | `themeFromTable` (Lua table → `Theme`), `pushScheme` (`Scheme` → `{ role = "#hex" }`) |
-| `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint` |
+| `imlui.lua.painter` | Canvas painter: `registerPainter`, `beginPaint`, `endPaint`; `setPainterFaultForTesting` (tests: throws inside the methods' C++-exception guard) |
 | `imlui.lua.native` | `NativeHooks` (quit, reload, title, zoom, window size) and `registerNative`: the `imlui.native` Lua library |
 | `imlui.lua.resources` | `registerResources(state, resources, loaded)`: the `imlui.resource` Lua library (`resolve`, `read`, `exists`, `load`, `find`) and the `package.searchers` entry for `imlui:/` |
 
@@ -1451,7 +1452,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | Module | Purpose |
 |---|---|
 | `imlui.ui.clock` | The app clock: `clockTime()` (monotonic seconds, current between frames), `setClockSource` (tests) |
-| `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, wake handler |
+| `imlui.ui.frame_request` | On-demand rendering: `requestFrame`, `requestFrameAfter`, `requestFramesFor`, `secondsUntilFrame`, `beginFrameRequests`, `setMinFrameInterval`, `unsyncedFrameRate` (the cap with vsync off: the refresh rate, else `fallbackFrameRate`, 240), wake handler |
 | `imlui.ui.main_timers` | C++ main-thread timers: `addMainTimer(seconds, fn)` / `removeMainTimer(id)` on the app clock, no Lua state needed; the engine's loop runs the due ones (`runDueMainTimers`, after the posts, outside a frame) and sleeps at most until the next (`secondsUntilMainTimer`); `clearMainTimers` drops them at shutdown. What `delay()` uses |
 | `imlui.ui.main_thread` | The main-thread queue: `post(fn)` (thread-safe, no `Engine&` needed; only a post into an empty queue calls the wake handler, outside the queue's lock), `runPosted` (exceptions reported), `clearPosted`, `postedCount`, `setPostWakeHandler` (the engine's `glfwPostEmptyEvent` while it runs; waits for a thread still inside the old one). Its state is never destroyed, so a post from a thread outliving `main()` is safe |
 | `imlui.ui.background` | The background pool: `runInBackground(work, lane)` (any thread; `work(std::stop_token)` on up to `backgroundThreadLimit()` workers, `hardware_concurrency() - 1` clamped to [2, 8], started lazily, first queued first run; `BackgroundLane::Decodes`, the image decodes' lane: up to `decodeThreadLimit` (2) workers of its own, newest first; a throw reported on the main thread), `shutdownBackground(wait)` (both lanes: tokens stopped, queues dropped, workers joined within `wait` or detached; a later task starts a new pool; `Engine::run()` calls it), `backgroundTaskCount` |
