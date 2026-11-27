@@ -764,10 +764,26 @@ Lua sees resources in two ways (`imlui.lua.resources`):
 
 `Image` elements draw from the `ImageCache` (module `imlui.image.image_cache`) that the Engine owns and hands to the
 `Renderer` (`Frame::images()`). The `Image` constructor in `src/resources/imlui.lua` stores the creating script's name
-as `__base`, and the element resolves `source` against it at every render. The cache decodes a name once with stb_image
-(PNG and JPEG) and keeps the pixels as an `ImTextureData` registered with `ImGui::RegisterUserTexture`: ImGui 1.92's
-texture list, so the OpenGL backend creates the GL texture before the first frame that draws it (status `WantCreate`)
-and no GL call is made outside the backend. A failure (missing file, not an image) is cached too and reported once.
+as `__base`, and the element resolves `source` against it at every render. The cache keys images by the normalized
+name (`app:/a/./b.png` is `app:/a/b.png`), decodes a name once with stb_image (PNG and JPEG) and keeps the pixels as an
+`ImTextureData` registered with `ImGui::RegisterUserTexture`: ImGui 1.92's texture list, so the OpenGL backend creates
+the GL texture before the first frame that draws it (status `WantCreate`) and no GL call is made outside the backend.
+The texture takes stb_image's pixel buffer as its own (set up as `ImTextureData::Create` would, without its unchecked
+`IM_ALLOC`, zero fill and copy) and frees it with `stbi_image_free` when it goes. A failure (missing file, not an image)
+is cached too and reported once.
+
+Decoding a large image takes hundreds of milliseconds, so `ImageCache::setAsync(true)` moves it to the background pool
+(`runInBackground`, `imlui.ui.background`): `get()` returns an image that is `loading()` (not ready, no error) at once,
+and a worker reads the file (from a copy of the `Resources`, which shares its mounts) and decodes it. The result goes to
+an inbox shared with the cache (so a decode that outlives the cache has somewhere to go), and the worker posts
+`requestFrame()` to the main thread (`imlui::post`, which wakes the loop). The next `get()` or `collect()` takes the
+results on the main thread, makes and registers the textures there, and the requested frame draws them. A decode the
+pool drops unrun (a shutdown) hands in a cancelled result from its destructor, so nothing waits for ever; the image is
+then an error that the next `refresh()` drops. `refresh()` and `clear()` drop loading images too (each decode carries a
+ticket, so a late result for a dropped image is ignored). `waitForPending()` blocks until the decodes in flight are done
+and takes them, for tests and tools without a frame loop. The default is synchronous (`get()` decodes before it
+returns).
+
 `refresh()` drops changed images: a texture the backend has uploaded is marked `WantDestroyNextFrame`, the backend
 destroys it after the next frame and `collect()` (after each frame) deletes it; one that was never uploaded is deleted
 at once. At shutdown the backend destroys the remaining textures with the window, and the cache deletes the data after
@@ -775,9 +791,16 @@ the ImGui context is gone. The decoded pixels are kept within a byte budget (`Im
 `defaultBudget` = 256 MiB, `0` for no limit; the root `ApplicationWindow`'s `imageCacheBudget` prop sets it): `get()`
 stamps an image with the ImGui frame, and `collect()` evicts the images drawn least recently (through the same
 release path) until the cache fits, never one drawn in the current or the previous frame, whose draw lists may still
-refer to it. `decodeImage` rejects an image whose pixels would take more than `maxImageBytes` (256 MiB, 8192 x 8192) from its header (`stbi_info_from_memory`) before decoding: a flat 16384 x 16384 PNG is about 1 MiB and would decode to 1 GiB, and its texture would allocate as much again, where a failed allocation aborts. A failure costs 0 bytes, so it stays cached and is still reported once; an evicted image is decoded again
-by its next `get()` (`decodeCount` counts it). So a reference from `get()` is valid until the end of the frame, or
-until `refresh()` or `clear()`. `smooth = false` uses the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
+refer to it. `decodeImage` rejects an image whose pixels would take more than `maxImageBytes` (256 MiB, 8192 x 8192)
+from its header (`stbi_info_from_memory`) before decoding: a flat 16384 x 16384 PNG is about 1 MiB and would decode to
+1 GiB, and its texture would allocate as much again, where a failed allocation aborts. A progressive JPEG (its frame
+header, found by walking the marker segments before it, is SOF2) gets half that, `maxProgressiveJpegBytes`: stb_image
+keeps all its DCT coefficients until the last scan (2 bytes per sample), which about doubles the peak. A failure costs
+0 bytes; failures are kept up to `ImageCache::maxFailures` (256), beyond which `collect()` drops those asked for least
+recently (again sparing the current and the previous frame), so a script making up names of missing files can't grow
+the cache without bound. An evicted image is decoded again by its next `get()` (`decodeCount` counts it). So a
+reference from `get()` is valid until the end of the frame, or until `refresh()` or `clear()`. `smooth = false` uses
+the backend's `DrawCallback_SetSamplerNearest`/`Linear` draw callbacks.
 
 ### Resource manifests
 
@@ -1373,9 +1396,9 @@ See [Registering C++ types](extending.md).
 
 | Module | Purpose |
 |---|---|
-| `imlui.image.decode` | `decodeImage(bytes)`: PNG/JPEG to RGBA8, at most `maxImageBytes` (256 MiB) of pixels (`DecodedImage`, move-only: `width`, `height`, `rgba` (a view of the decoder's buffer, `pixels`, not a copy), `error`) |
+| `imlui.image.decode` | `decodeImage(bytes)`: PNG/JPEG to RGBA8, at most `maxImageBytes` (256 MiB) of pixels (`maxProgressiveJpegBytes`, 128 MiB, for a progressive JPEG) (`DecodedImage`, move-only: `width`, `height`, `rgba` (a view of the decoder's buffer, `pixels`, not a copy), `error`) |
 | `imlui.image.fill_mode` | `FillMode` (`Stretch`, `Fit`, `Crop`, `Tile`; its Lua names are in `imlui.ui.enum_names`), `imageSize(natural, scale, w, h)` (natural size x dp, aspect from one side), `placeImage` (the `ImageQuad`s: screen rects and texture coordinates per fill mode) |
-| `imlui.image.image_cache` | `ImageCache`: one decode per resource name, kept as an ImGui user texture (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`), within a byte budget (`budget`/`setBudget`, `bytes`, `defaultBudget`: the least recently drawn images are evicted after a frame) |
+| `imlui.image.image_cache` | `ImageCache`: one decode per normalized resource name, kept as an ImGui user texture over the decoder's buffer (`get`, `contains`, `names`, `refresh` for changed files, `clear`, `collect`), within a byte budget (`budget`/`setBudget`, `bytes`, `defaultBudget`: the least recently drawn images are evicted after a frame) and at most `maxFailures` failures; optionally decoded on the background pool (`setAsync`, `Image::loading`, `pendingCount`, `waitForPending`) |
 
 ### App (`src/imlui/app/`)
 
