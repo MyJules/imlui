@@ -9,7 +9,7 @@ import imlui.resources.packed_mount;
 export namespace imlui {
 
 /// The files of one embedded block: a blob of bytes in the executable and a table that places each file in it.
-/// Compressed files are decompressed on first read and cached for the mount's lifetime (see PackedMount).
+/// Compressed files are decompressed when read, and the latest ones kept within a budget (see PackedMount).
 class EmbeddedMount final : public PackedMount {
 public:
     /// One file of the table, as the generated module writes it.

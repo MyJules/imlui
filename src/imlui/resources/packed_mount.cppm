@@ -12,11 +12,14 @@ import imlui.resources.name;
 export namespace imlui {
 
 /// Files packed into one block of memory (data compiled into the executable, a .pak archive read into memory).
-/// A stored file is served straight from that memory (zero-copy). A compressed one is decompressed on its first
-/// read and the result is cached until the mount is destroyed, so all bytes stay valid as long as the mount (the
-/// ResourceData handles have no owner). A file that fails to decompress (corrupt data) is reported once and then
-/// reads as missing; one too large to allocate reads as missing (the error is logged, nothing is thrown).
-/// The files never change: modified() is always nullopt.
+/// A stored file is served straight from that memory (zero-copy; the ResourceData has no owner, the bytes live as long
+/// as the mount). A compressed one is decompressed when it is read into a buffer that the handles share (their
+/// owner()), like a DirectoryMount's: the buffer lives while a handle holds it, and the mount itself keeps the buffers
+/// of the files read most recently, up to retainedBytes in all, so a file read again soon isn't decompressed again.
+/// Beyond that a buffer is freed with its last handle and decompressed again by the next read: a small archive that
+/// declares a few files of 2 GiB each doesn't pin their bytes for as long as it is mounted. A file that fails to
+/// decompress (corrupt data) is reported once and then reads as missing; one too large to allocate reads as missing
+/// (the error is logged, nothing is thrown). The files never change: modified() is always nullopt.
 class PackedMount : public Mount {
 public:
     /// One file of the table.
@@ -36,26 +39,46 @@ public:
     [[nodiscard]] std::vector<std::string> list(std::string_view path) const override;
     [[nodiscard]] std::optional<ResourceTime> modified(std::string_view path) const override;
 
+    /// The most bytes of decompressed files the mount keeps alive of its own (those read most recently): 16 MiB,
+    /// enough for an app's scripts and a few fonts. A larger file is kept only by its handles.
+    static constexpr std::size_t retainedBytes = std::size_t{16} << 20;
+
     /// The table, sorted by path.
     [[nodiscard]] const std::vector<Entry>& entries() const;
-    /// How many compressed files have been decompressed so far (they're decompressed on first read).
+    /// How many times a compressed file has been decompressed: on its first read, and again on a read after its
+    /// bytes were freed (no handle held them and the mount no longer kept them).
     [[nodiscard]] std::size_t decompressedCount() const;
+    /// The bytes of decompressed files the mount keeps alive of its own now (at most retainedBytes).
+    [[nodiscard]] std::size_t retainedSize() const;
 
 private:
     /// The index of file `path` in m_entries.
     [[nodiscard]] std::optional<std::size_t> find(std::string_view path) const;
 
-    /// The decompressed bytes of one compressed entry. `state` is written under `mutex` and read without it, so
-    /// files are decompressed in parallel, each once.
+    using Buffer = std::shared_ptr<const std::vector<std::byte>>;
+
+    /// The decompressed bytes of one compressed entry. `failed` and `bytes` are guarded by `mutex`, so files are
+    /// decompressed in parallel, each by one reader at a time (the others wait for its buffer).
     struct Decompressed {
-        enum class State : std::uint8_t { Pending, Ready, Failed };
         std::mutex mutex;
-        std::atomic<State> state = State::Pending;
-        std::vector<std::byte> bytes; ///< set once, before `state` becomes Ready
+        bool failed = false;                               ///< corrupt: reads as missing from now on
+        std::weak_ptr<const std::vector<std::byte>> bytes; ///< alive while `retained` or a handle holds it
+        // Guarded by m_retainMutex (an eviction resets another file's `retained`, holding only that lock).
+        Buffer retained;           ///< the mount's own reference, while among the files read most recently
+        std::uint64_t lastRead = 0; ///< m_reads at the last read; its key in m_recent while `retained`
     };
+
+    /// Marks entry `index` (holding `bytes`) as read now and keeps `bytes` among the retained buffers, then releases
+    /// the least recently read ones until they fit in retainedBytes.
+    void retain(std::size_t index, const Buffer& bytes) const;
 
     std::vector<Entry> m_entries;                   ///< sorted by path, unique
     std::unique_ptr<Decompressed[]> m_decompressed; ///< by entry index
+    mutable std::atomic<std::size_t> m_decompressions = 0;
+    mutable std::mutex m_retainMutex; ///< guards the fields below and Decompressed::retained / lastRead
+    mutable std::uint64_t m_reads = 0;                         ///< the clock of Decompressed::lastRead
+    mutable std::size_t m_retained = 0;                        ///< the bytes of the Decompressed::retained buffers
+    mutable std::map<std::uint64_t, std::size_t> m_recent;     ///< retained entries by lastRead, oldest first
 };
 
 } // namespace imlui
@@ -90,36 +113,66 @@ std::optional<ResourceData> PackedMount::read(std::string_view path) const {
     const Entry& entry = m_entries[*index];
     if (!entry.compressed) return ResourceData{entry.data};
 
-    using State = Decompressed::State;
     Decompressed& slot = m_decompressed[*index];
-    if (slot.state.load(std::memory_order_acquire) == State::Pending) {
+    Buffer bytes;
+    {
         std::scoped_lock lock{slot.mutex};
-        if (slot.state.load(std::memory_order_relaxed) == State::Pending) {
+        if (slot.failed) return std::nullopt;
+        bytes = slot.bytes.lock();
+        if (!bytes) {
             // Check the size the frame declares before allocating it.
             if (zstd::contentSize(entry.data) != entry.size) {
                 log::error("resource '{}' ({}): corrupt compressed data", path, origin());
-                slot.state.store(State::Failed, std::memory_order_release);
+                slot.failed = true;
                 return std::nullopt;
             }
-            std::vector<std::byte> bytes;
+            std::vector<std::byte> buffer;
             try {
-                bytes.resize(static_cast<std::size_t>(entry.size));
+                buffer.resize(static_cast<std::size_t>(entry.size));
+                if (!zstd::decompress(entry.data, buffer)) {
+                    log::error("resource '{}' ({}): corrupt compressed data", path, origin());
+                    slot.failed = true;
+                    return std::nullopt;
+                }
+                bytes = std::make_shared<const std::vector<std::byte>>(std::move(buffer));
             } catch (const std::bad_alloc&) {
                 // Not thrown (a failed read is "not found"), not remembered (it may fit later).
                 log::error("resource '{}' ({}): out of memory decompressing {} bytes", path, origin(), entry.size);
                 return std::nullopt;
             }
-            if (!zstd::decompress(entry.data, bytes)) {
-                log::error("resource '{}' ({}): corrupt compressed data", path, origin());
-                slot.state.store(State::Failed, std::memory_order_release);
-                return std::nullopt;
-            }
-            slot.bytes = std::move(bytes);
-            slot.state.store(State::Ready, std::memory_order_release);
+            slot.bytes = bytes;
+            ++m_decompressions;
         }
     }
-    if (slot.state.load(std::memory_order_acquire) != State::Ready) return std::nullopt;
-    return ResourceData{slot.bytes}; // owned by the mount until it is destroyed
+    try {
+        retain(*index, bytes);
+    } catch (const std::bad_alloc&) { // NOLINT(bugprone-empty-catch): not kept by the mount, still served
+    }
+    return ResourceData{*bytes, bytes}; // alive while a handle holds it (or the mount keeps it, retain())
+}
+
+void PackedMount::retain(std::size_t index, const Buffer& bytes) const {
+    std::scoped_lock lock{m_retainMutex};
+    Decompressed& slot = m_decompressed[index];
+    if (!slot.retained && bytes->size() > retainedBytes) return; // kept by its handles only
+    // The one step that can throw (bad_alloc) comes first, so a failure leaves everything as it was.
+    const std::uint64_t now = m_reads + 1;
+    m_recent.emplace(now, index);
+    m_reads = now;
+    if (slot.retained) m_recent.erase(slot.lastRead);
+    slot.lastRead = now;
+    if (!slot.retained) {
+        slot.retained = bytes;
+        m_retained += bytes->size();
+    }
+    // Release the least recently read (never this one: it was read last, and fits on its own).
+    while (m_retained > retainedBytes) {
+        const auto oldest = m_recent.begin();
+        Decompressed& old = m_decompressed[oldest->second];
+        m_retained -= old.retained->size();
+        old.retained.reset(); // freed here unless a handle still holds it
+        m_recent.erase(oldest);
+    }
 }
 
 bool PackedMount::exists(std::string_view path) const {
@@ -152,11 +205,11 @@ std::optional<ResourceTime> PackedMount::modified(std::string_view) const { retu
 
 const std::vector<PackedMount::Entry>& PackedMount::entries() const { return m_entries; }
 
-std::size_t PackedMount::decompressedCount() const {
-    std::size_t count = 0;
-    for (std::size_t i = 0; i < m_entries.size(); ++i)
-        if (m_decompressed[i].state.load(std::memory_order_acquire) == Decompressed::State::Ready) ++count;
-    return count;
+std::size_t PackedMount::decompressedCount() const { return m_decompressions.load(); }
+
+std::size_t PackedMount::retainedSize() const {
+    std::scoped_lock lock{m_retainMutex};
+    return m_retained;
 }
 
 } // namespace imlui

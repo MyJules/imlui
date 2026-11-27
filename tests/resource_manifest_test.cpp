@@ -280,6 +280,29 @@ TEST(ResourceManifest, ListedFilesMustBeSpelledAsOnDisk) {
     EXPECT_EQ(failure(dir, R"(return { prefix = "app", files = { "ui/main.lua" }, include = "**/*.lua" })"), "");
 }
 
+// Win32 finds a file by names that aren't its own: with a trailing `.` or space, or by its 8.3 short name. Such a name
+// would be embedded (`app:/main.lua.`) where the dev folder mount finds nothing, so it's an error, not a file. Where
+// the file system doesn't alias them (Linux), they aren't found at all.
+TEST(ResourceManifest, ListedFilesMustNameAnEntryOnDisk) {
+    test::TempDir dir;
+    dir.write("main.lua", "-- main");
+    dir.write("longscriptname.lua", "-- long");
+    dir.write("ui/cards/main.lua", "-- card");
+    for (const char* alias : {"main.lua.", "main.lua ", "LONGSC~1.LUA", "ui./cards/main.lua", "ui/cards /main.lua"}) {
+        const std::string error =
+            failure(dir, std::string{R"(return { prefix = "app", files = { ")"} + alias + R"(" } })");
+        // Win32 finds it by a name that isn't its own; elsewhere there's no such file.
+        EXPECT_TRUE(error.find("isn't the name of an entry on disk") != std::string::npos ||
+                    error.find("not found") != std::string::npos)
+            << "'" << alias << "': " << error;
+        if (fs::exists(dir.path() / tools::pathFromUtf8(alias)))
+            EXPECT_NE(error.find("isn't the name of an entry on disk"), std::string::npos) << error;
+    }
+    const std::string error = failure(dir, R"(return { prefix = "app", include = "ui./**" })");
+    if (fs::exists(dir.path() / "ui.")) EXPECT_NE(error.find("isn't the name of an entry on disk"), std::string::npos);
+    EXPECT_EQ(failure(dir, R"(return { prefix = "app", files = { "main.lua", "longscriptname.lua" } })"), "");
+}
+
 // The literal folder an `include` pattern starts with is checked the same way: on a file system that ignores case,
 // `UI/**` scans ui/ and named its files `UI/...`, which no mount finds.
 TEST(ResourceManifest, IncludeFoldersMustBeSpelledAsOnDisk) {
@@ -427,10 +450,49 @@ TEST(SourceFiles, ReplaceFileWritesWholeFilesOnly) {
     ASSERT_TRUE(tools::replaceFile(file, bytes("first")));
     ASSERT_TRUE(tools::replaceFile(file, bytes("second, longer")));
     EXPECT_EQ(tools::readFile(file)->size(), std::string_view{"second, longer"}.size());
-    EXPECT_FALSE(fs::exists(dir.path() / "out.bin.tmp"));
     std::string error;
     EXPECT_FALSE(tools::replaceFile(dir.path() / "no" / "such" / "folder.bin", bytes("x"), &error));
     EXPECT_NE(error, "");
+
+    // Several writers at once (two builds of one output): each through its own temporary file, so every write is
+    // whole and the file ends up as one of them.
+    {
+        std::vector<std::jthread> writers;
+        std::atomic<int> failed{0};
+        for (int i = 0; i < 8; ++i)
+            writers.emplace_back([&, i] {
+                const std::string text(std::size_t{1000} + static_cast<std::size_t>(i), static_cast<char>('a' + i));
+                for (int n = 0; n < 20; ++n)
+                    if (!tools::replaceFile(file, bytes(text))) ++failed;
+            });
+        writers.clear(); // joins them
+        EXPECT_EQ(failed, 0);
+    }
+    const auto written = tools::readFile(file);
+    ASSERT_TRUE(written);
+    ASSERT_GE(written->size(), 1000u);
+    const auto letter = static_cast<char>(std::to_integer<int>(written->front()));
+    EXPECT_EQ(written->size(), std::size_t{1000} + static_cast<std::size_t>(letter - 'a'));
+    EXPECT_TRUE(std::ranges::all_of(*written, [&](std::byte b) { return std::to_integer<int>(b) == letter; }));
+
+    // A reader that holds the file open (on Windows without sharing delete access, as compilers and scanners do)
+    // makes the rename fail until it lets go: the rename is retried meanwhile.
+    {
+        std::ifstream reader{file, std::ios::binary};
+        ASSERT_TRUE(reader);
+        std::jthread closer{[&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds{200});
+            reader.close();
+        }};
+        EXPECT_TRUE(tools::replaceFile(file, bytes("third"), &error)) << error;
+    }
+    EXPECT_EQ(tools::readFile(file)->size(), 5u);
+
+    // No temporary file is left behind.
+    std::vector<std::string> left;
+    for (const auto& entry : fs::directory_iterator(dir.path()))
+        left.push_back(tools::utf8(entry.path().filename()));
+    EXPECT_EQ(left, (std::vector<std::string>{"out.bin"}));
 }
 
 // A file an `include` pattern matches is checked like a `files` entry: a link to a file outside the base folder is

@@ -424,10 +424,11 @@ On this target:
   `linkFolder`: a symbolic link to a folder, or on Windows without the privilege for one a directory junction)
   and `test::MemoryMount` (`imlui.test.memory_mount`, an immutable in-memory mount, like an embedded one).
 - `resources_packed_test.cpp` covers the packed mounts: the compression rule, `EmbeddedMount` (stored and
-  compressed files, zero-copy reads, decompression on first read, concurrent reads, bad paths, corrupt data),
+  compressed files, zero-copy reads, decompression on first read, decompressed files kept within a budget and
+  decompressed again once let go, concurrent reads, bad paths, corrupt data),
   `.pak` archives written by the `imlui_pack` code (`tools::packFiles`) and read by `PakMount` (every truncation,
-  a bad magic or version, an escaping path, a mount point that isn't a folder name and corrupt compressed data are
-  rejected cleanly; `PakMount::open` checks the header before reading a large junk file and never throws; an archive built by
+  a bad magic or version, an escaping path, a mount point that isn't a folder name, a path over the length or segment
+  limit (a 1 MiB `a/a/a/...` path rejected at once) and corrupt compressed data are rejected cleanly; `PakMount::open` checks the header before reading a large junk file and never throws; an archive built by
   `imlui_add_pak` in `tests/CMakeLists.txt` from the smoke app, `tests/data/smoke_pak.lua`, opens), the override order embedded < `.pak` < directory, the library's
   embedded files and their packages against the sources, `defaultConfig` (release-style from embedded data alone;
   `.pak` archives in name order under the `app/` and `imlui/` override folders next to the executable; a package's
@@ -454,9 +455,10 @@ On this target:
   matched quickly), one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
-  base folder, a listed file or an `include` folder spelled differently on disk, the sandbox and its instruction and memory limits, strings
+  base folder, a listed file or an `include` folder spelled differently on disk or by a name that isn't an entry's
+  own (Win32's trailing `.` or space, 8.3 short names), the sandbox and its instruction and memory limits, strings
   that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), the scan and `collectFiles` past entries
-that can't be queried, linked files named by their own path, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
+that can't be queried, linked files named by their own path, `replaceFile` (concurrent writers, a reader holding the file open), `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
   hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is

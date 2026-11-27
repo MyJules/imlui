@@ -628,9 +628,10 @@ keeps them alive; `exists`, `list`, `listRecursive`, `modified` and `origin` com
 copy as a string.
 
 **Lifetime of the bytes.** They stay valid while the `ResourceData` (or a copy of it) exists **and** the mount that
-returned it does. Immutable mounts serve memory they own for their whole lifetime (`owner()` is null, zero-copy). A
-`DirectoryMount` reads a file into a buffer that its cache and the handles share; when the file changes, the cache
-moves on to a new buffer and the old one is freed with its last handle. So whoever keeps pointing into the bytes
+returned it does. Immutable mounts serve a stored file from memory they own for their whole lifetime (`owner()` is
+null, zero-copy). A `DirectoryMount` reads a file, and an immutable mount decompresses a compressed one, into a buffer
+that its cache and the handles share (`owner()`); when the file changes or the cache lets it go, the buffer is freed
+with its last handle. So whoever keeps pointing into the bytes
 keeps the handle: the font library holds one per atlas font, the icon font one for the icon atlas font; images copy
 their pixels when they're decoded and Lua copies the text it loads or reads, so they drop theirs at once.
 Hot-reloading a large file therefore holds at most the bytes in use plus the latest version, not every version ever
@@ -638,16 +639,20 @@ read.
 
 | Mount | Notes |
 |---|---|
-| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged. A buffer lives as long as a `ResourceData` holds it; the cache itself keeps alive only the latest buffers of the files read most recently, up to `DirectoryMount::retainedBytes` (8 MiB) in all (a larger file isn't kept, a removed file's is dropped), and otherwise finds a buffer only while a handle still holds it, so a file read once and dropped (an image, once decoded) doesn't stay in memory. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer while that is still alive (otherwise it reads as missing until it can be read), and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show. It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing, and an entry whose name has no UTF-8 form (an unpaired surrogate on Windows) is left out while the rest of its folder is served. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged, and a name missing from a listing read within 2 s of that time lists the folder again, since an entry added in the same tick leaves the time unchanged; a folder that can't be timed or listed fails the check, so nothing in it is found). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach. |
+| `DirectoryMount` | A folder on disk. Reads are cached per file while its time and size are unchanged. A buffer lives as long as a `ResourceData` holds it; the cache itself keeps alive only the latest buffers of the files read most recently, up to `DirectoryMount::retainedBytes` (8 MiB) in all (a larger file isn't kept, a removed file's is dropped), and otherwise finds a buffer only while a handle still holds it, so a file read once and dropped (an image, once decoded) doesn't stay in memory. Reports modification times. A changed file that can't be read at the moment (an editor holds it without sharing while it saves) is served from its previous buffer while that is still alive (otherwise it reads as missing until it can be read), and `modified` reports that buffer's time until a read succeeds, so hot reload tries again on its next poll. An optional `ResourceSelection` (a dev source folder's manifest group, below) limits it to the files the manifest selects: the others aren't read, found, timed or listed, and folders holding no selected file don't show (whether a folder holds one is kept per folder while its time is unchanged, so listing a folder or asking whether one exists times the folders under it instead of walking them and matching every file against the patterns). It never throws: a name that isn't valid UTF-8, a file too large to allocate or a folder that can't be listed reads as missing, and an entry whose name has no UTF-8 form (an unpaired surrogate on Windows) is left out while the rest of its folder is served. Names are case-sensitive, as in the embedded and `.pak` mounts, also on a file system that isn't (Windows, macOS): a name whose spelling on disk differs in case in any segment isn't found, and a warning names the spelling on disk, so a misspelled name fails in development, not once shipped (each folder's entry names are cached while its time is unchanged, and a name missing from a listing read within 2 s of that time lists the folder again, since an entry added in the same tick leaves the time unchanged; a folder that can't be timed or listed fails the check, so nothing in it is found). A link to a folder (a symbolic link, a Windows junction) isn't listed or walked, as the manifest scan doesn't descend into one either, so a link to the folder itself or a parent can't make the hot-reload walk endless; a file under it is still read by name. `listFiles` walks the folder once, pruning folders the selection can't reach. |
 | `EmbeddedMount` | Files compiled into the executable by `imlui_add_resources` (see [Embedding and archives](#embedding-and-archives)). Immutable. |
 | `PakMount` | A `.pak` archive, read into memory once when it's opened. No memory mapping: archives are small, and a plain read is portable. Immutable; the archive names its own mount point. |
 
 `EmbeddedMount` and `PakMount` share `PackedMount`: a sorted table of files, each stored as is or as one zstd frame.
 A stored file is served straight from the embedded data or the archive buffer (zero-copy). A compressed one is
-decompressed on its first read, under that file's own lock (files decompress in parallel, each once), and the
-buffer is kept until the mount is destroyed, so the bytes stay valid as long as the mount. Corrupt compressed data
-reads as a missing file and is logged once (the failure is remembered); a file too large to allocate reads as missing
-and is logged, without an exception (a failed read is "not found").
+decompressed when it is read, under that file's own lock (files decompress in parallel; readers of one file wait for
+the one decompressing it), into a buffer the handles share. Like a `DirectoryMount`, the mount itself keeps only the
+buffers of the files read most recently, up to `PackedMount::retainedBytes` (16 MiB) in all (a larger file is kept by
+its handles alone); a buffer it let go lives while a handle holds it, and a read after the last one is gone
+decompresses the file again (`decompressedCount` counts it). So a small archive that declares two files of 2 GiB
+doesn't pin 4 GiB for as long as it is mounted. Corrupt compressed data reads as a missing file and is logged once
+(the failure is remembered); a file too large to allocate reads as missing and is logged, without an exception (a
+failed read is "not found").
 
 `defaultConfig` builds the stack from the bottom (overridden) to the top (wins):
 
@@ -803,7 +808,10 @@ return {
   `files` to embed it (a dev build's folder mount then serves it too).
 - A listed file, and the folder an `include` pattern starts with (`UI/**` scans `ui/`), must be spelled as on disk,
   case included (`Main.lua` for `main.lua` is an error): resource names are case-sensitive, and on a file system that
-  ignores case the wrong spelling would be embedded under a name the dev folder mount doesn't serve.
+  ignores case the wrong spelling would be embedded under a name the dev folder mount doesn't serve. Each segment
+  must name an entry of its folder, exactly or in another ASCII case: Win32 also finds a file by a name with a
+  trailing `.` or space (`main.lua.`), by its 8.3 short name (`MAINSC~1.LUA`) or in a case differing beyond ASCII,
+  which would be embedded as `app:/main.lua.` where the dev folder mount finds nothing, so those are errors too.
 - Every path stays under `base`: a `..` segment, an absolute path, a `\` or a `:` is an error, and so is a listed
   file that doesn't exist, an unknown field, a value of the wrong type, a string that isn't valid UTF-8, a missing or
   malformed `prefix`, a group that selects nothing, and a `compress` entry that isn't one of the group's files.
@@ -853,8 +861,11 @@ listing, which NTFS updates lazily, so a file added to a scanned folder can be m
 custom target `imlui_resources_<target>_<name>_list` therefore runs `imlui_rc --list` on every build: it evaluates the
 manifest and rewrites the file list (`<name>.files`, an input of the embedding) only when the set of files changed.
 That's cheap (no file is read), and the tool rewrites its other outputs only when they change too, so touching a file
-without changing it rebuilds nothing. Each output is replaced whole (written to `<file>.tmp` and renamed over it), so
-an interrupted run never leaves a truncated blob or module that looks up to date. A changed blob rebuilds the module
+without changing it rebuilds nothing. Each output is replaced whole (written to a temporary file next to it,
+`<file>.tmp-<random>-<n>`, unique so two runs writing one output at once don't share it, and renamed over it), so an
+interrupted run never leaves a truncated blob or module that looks up to date. On Windows a rename over a file another
+process holds open (clang reading a module, an indexer, a scanner) fails until it lets go, so the rename is retried for
+about 2 s. A changed blob rebuilds the module
 even when the module's text is unchanged: clang lists a file pulled in with `#embed` in the module's own dependency
 file, like a header.
 
@@ -912,7 +923,9 @@ gets the libraries in a working order.
 
 `parsePak` checks the magic and the version, that the mount point is a full folder name in canonical form (`app:/`,
 `imlui:/fonts/`; not `app:/main.lua`, which would be mounted as a folder of that name), that every path is normalized and appears once and
-none is both a file and a folder (`a` and `a/b`), that every blob lies inside the archive, past the index, and shares no byte with
+none is both a file and a folder (`a` and `a/b`), that no path is longer than `pakMaxPathLength` (4 KiB) or has
+more than `pakMaxPathSegments` (256) segments (the checks on paths get slower with their length: a hostile 1 MiB
+`a/a/a/...` path took minutes before the file-and-folder check became one lookup per path), that every blob lies inside the archive, past the index, and shares no byte with
 another (so a small archive can't declare many large files over the same compressed bytes), and caps the sizes: each file at
 `pakMaxFileSize` (2 GiB) and all of them together at `pakMaxTotalSize` (4 GiB), decompressed. A truncated or corrupt
 archive is rejected with a reason instead of being read out of bounds.
@@ -922,8 +935,9 @@ archive is rejected with a reason instead of being read out of bounds.
 executables, `bin/<config>/<name>.pak` with a multi-config generator; tracked like `imlui_add_resources`: a
 dependency file and the list target `<name>_list`). `writePak` refuses what the reader would reject or a field would
 truncate (a file over the size cap, files over `pakMaxTotalSize` together, an archive over `pakMaxArchiveSize`, a
-duplicate path, a path that is also another's folder, a string longer than its u32 length), and `imlui_pack` writes
-`<out.pak>.tmp` and renames it over the output, so a failed run never leaves a partial archive.
+duplicate path, a path that is also another's folder, a path over the length or segment limit, a string longer than
+its u32 length), and `imlui_pack` writes a temporary file and renames it over the output (`replaceFile`, as above), so
+a failed run never leaves a partial archive.
 `imlui_pack <out.pak> <mount point> <base folder> [file...]` still builds one by hand (a folder under the base that
 can't be listed fails the run rather than packing an incomplete archive; an entry that can't be queried, such as a
 link to nothing, is skipped; linked folders aren't walked, and a linked file keeps its own name, as in a manifest). An archive keeps its single
@@ -1376,7 +1390,7 @@ The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke te
 | `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::packages()` (one `ResourcePackage` per manifest group), `mount(Resources&)`. The library has `imlui.embedded.imlui` (two packages: `imlui:/`, `imlui:/fonts/`). |
 | `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
 | `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data, compress)`, `compressible(path)`: the compression rule and its override |
-| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through `<file>.tmp` and a rename), `utf8`/`utf8Name`/`pathFromUtf8`, `toolMain` (the tools' `wmain`/`main`: UTF-8 arguments from Windows' UTF-16 command line, an exception printed instead of `abort()`) |
+| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through a unique temporary file and a rename, retried while another process holds the file), `utf8`/`utf8Name`/`pathFromUtf8`, `toolMain` (the tools' `wmain`/`main`: UTF-8 arguments from Windows' UTF-16 command line, an exception printed instead of `abort()`) |
 | `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup` (with the selection as written: `listed`, `include`, `exclude`), `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), its two halves `evaluateManifest` (the Lua, into `ManifestGroupFields`) and `resolveManifest` (the file system), `manifestDependencies`, `manifestListing` |
 | `imlui.tools.depfile` | `tools/lib/` | `depfileText`, `writeDepfile`: Make-style dependency files for Ninja |
 | `imlui.tools.rc` | `tools/lib/` | `runRc(args)`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |
