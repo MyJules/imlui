@@ -425,10 +425,11 @@ On this target:
   `linkFolder`: a symbolic link to a folder, or on Windows without the privilege for one a directory junction)
   and `test::MemoryMount` (`imlui.test.memory_mount`, an immutable in-memory mount, like an embedded one).
 - `resources_packed_test.cpp` covers the packed mounts: the compression rule, `EmbeddedMount` (stored and
-  compressed files, zero-copy reads, decompression on first read, concurrent reads, bad paths, corrupt data),
+  compressed files, zero-copy reads, decompression on first read, decompressed files kept within a budget and
+  decompressed again once let go, concurrent reads, bad paths, corrupt data),
   `.pak` archives written by the `imlui_pack` code (`tools::packFiles`) and read by `PakMount` (every truncation,
-  a bad magic or version, an escaping path, a mount point that isn't a folder name and corrupt compressed data are
-  rejected cleanly; `PakMount::open` checks the header before reading a large junk file and never throws; an archive built by
+  a bad magic or version, an escaping path, a mount point that isn't a folder name, a path over the length or segment
+  limit (a 1 MiB `a/a/a/...` path rejected at once) and corrupt compressed data are rejected cleanly; `PakMount::open` checks the header before reading a large junk file and never throws; an archive built by
   `imlui_add_pak` in `tests/CMakeLists.txt` from the smoke app, `tests/data/smoke_pak.lua`, opens), the override order embedded < `.pak` < directory, the library's
   embedded files and their packages against the sources, `defaultConfig` (release-style from embedded data alone;
   `.pak` archives in name order under the `app/` and `imlui/` override folders next to the executable; a package's
@@ -455,9 +456,11 @@ On this target:
   matched quickly), one group
   and a list of groups, include/exclude, the manifest never matching itself, new files found on the next parse (and
   the file listing changing), the compression override, errors (missing prefix, missing file, paths leaving the
-  base folder, a listed file or an `include` folder spelled differently on disk, the sandbox and its instruction and memory limits, strings
+  base folder, a listed file or an `include` folder spelled differently on disk or by a name that isn't an entry's
+  own (Win32's trailing `.` or space, 8.3 short names), the sandbox and its instruction and memory limits, strings
   that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), the scan and `collectFiles` past entries
-that can't be queried, linked files named by their own path, `replaceFile`, `manifestDependencies` and the dependency file format, merging groups into
+that can't be queried, linked files named by their own path, `replaceFile` (concurrent writers, a reader holding the file open), the encoding cache (the same result as
+  encoding, past damaged entries, and `imlui_rc` reruns writing the same blob), `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
   hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is
@@ -560,7 +563,7 @@ Tests that render use `imlui::test::HeadlessFrame`, a test-only module in `tests
 | `HeadlessFrame{}` / `HeadlessFrame{{.width = ..., .height = ..., .deltaTime = ..., .builtins = true}}` | Creates an ImGui context with no window, backend or GPU (`RendererHasTextures`, so fonts aren't prebuilt; `RendererHasVtxOffset`, so a window may hold more than 64k vertices, like the OpenGL 3 backend), a `TypeRegistry` and a `Renderer`. It mounts `imlui:/` on `IMLUI_RESOURCES_DIR` (`src/resources/`) and `imlui:/fonts/` on `IMLUI_FONT_DIR` (`external/fonts`), or the library's embedded files with `.embedded = true`, and loads the Roboto text fonts and the icon font through those resources into the context, like the engine, so the widgets measure and draw as in the app; tests don't load fonts themselves. `builtins` registers the built-in element types first, like the engine. Frames don't apply a pending theme: call `applyPendingTheme()` between frames to apply one (it also switches the theme's fonts; see `fonts_test.cpp`), and set the default theme back at the end. |
 | `registerType<T>(name)`, `renderer()`, `types()` | Register element types before the Lua state starts; the renderer (window title) and the registry. |
 | `resources()`, `loadedResources()` | The harness's `Resources`: mount more (`app:/` on a `test::TempDir`) before the state starts. The names the Lua state read or loaded. |
-| `images()` | The harness's `ImageCache`, which `Image` elements draw from (decoding from `resources()`). Its textures stay `WantCreate`: there is no backend. `renderFrame` ends with its `collect()`, like the Engine, so the byte budget applies. Test images live in `tests/data/` (`IMLUI_TEST_DATA_DIR`): mount `app:/` on it, or copy one into a `TempDir` with `write`. |
+| `images()` | The harness's `ImageCache`, which `Image` elements draw from (decoding from `resources()`). Its textures stay `WantCreate`: there is no backend. `renderFrame` ends with its `collect()`, like the Engine, so the byte budget applies. It decodes synchronously unless a test calls `setAsync(true)`; then `waitForPending()` waits for the background decodes and takes their results (each also posts a frame request: `clearPosted()` afterwards). Test images live in `tests/data/` (`IMLUI_TEST_DATA_DIR`): mount `app:/` on it, or copy one into a `TempDir` with `write`. |
 | `run(code) -> std::string` | Runs Lua in the UI script environment (`ui.env`: constructors, `state`, `bind`, ids, `ui`), starting the state on first use: the registered types, the real `imlui.native` with empty host hooks, the painter library, the resource loader and `imlui:/imlui.lua`. Returns the error message, `""` on success: `ASSERT_EQ(h.run("..."), "")`. Assignments to free names stay in the environment. |
 | `renderFrame(name)`, `renderFrames(name, n)` | One ImGui frame each (time advances by `deltaTime`): runs `ui.__tick` (timers, `onFrame`), then renders the element held by `name` in a full-display window, inside `luaui::renderProtected` like the engine (an escaped Lua error is reported and ImGui recovered). Events queued before (`native.injectKey`, `native.injectMouse`, `ImGui::GetIO()`) are seen. |
 | `click(root, x, y, framesAfter = 1)` | A left click at `(x, y)` (screen pixels) while rendering `root`: move, press and release through `native.injectMouse`, a frame after each, then `framesAfter - 1` more. Render one frame first on a fresh tree, so the window exists to be hovered. |

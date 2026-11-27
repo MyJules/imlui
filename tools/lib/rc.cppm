@@ -14,6 +14,11 @@
 // reads folder times from the parent folder's listing, which NTFS updates lazily. So the build also runs
 // `imlui_rc --list` on every build (cheap: no file is read) and makes the listing an input of the embedding.
 //
+// Encoding a file (zstd at level 19) is most of a run's time, so each file's encoded form is kept in
+// <output folder>/<name>.cache/ (imlui.tools.encoding_cache): a rerun encodes only the files that changed, with the same
+// result as encoding them all. The blob's size and hash are kept in <name>.bin.stamp, so an unchanged blob is
+// recognized without reading the old one back.
+//
 // The generated module is `imlui.embedded.<name>`, exporting `imlui::embedded::<name>::packages()` (one
 // ResourcePackage per group of the manifest: its files, its mount point and, with --dev-paths, the group's absolute
 // base folder as the dev source folder, plus the group's selection (its `files`, `include` and `exclude`, and the
@@ -25,6 +30,7 @@ export module imlui.tools.rc;
 import std;
 
 import imlui.tools.resource_encoding;
+import imlui.tools.encoding_cache;
 import imlui.tools.depfile;
 import imlui.tools.resource_manifest;
 import imlui.tools.source_files;
@@ -69,9 +75,47 @@ std::string escaped(std::string_view s) {
 /// replaces it whole (replaceFile), so an interrupted run never leaves a truncated blob or module whose time is newer
 /// than its inputs. Ninja then rebuilds what includes it: clang lists a file pulled in with `#embed` in the
 /// dependency file of the module that embeds it, like a header.
-bool writeIfChanged(const fs::path& file, std::span<const std::byte> bytes) {
-    if (auto old = readFile(file); old && std::ranges::equal(*old, bytes)) return true;
-    return replaceFile(file, bytes);
+///
+/// A file of another size has changed without reading it. With `stamped` (the blob, which may be large), the size, the
+/// hash (contentHash) and the time of the bytes last written are kept in `<file>.stamp`: when the file still has that
+/// size and time and the new bytes that hash, it holds them, without reading it back. Anything else (no stamp, a file
+/// touched or edited since) compares the old contents.
+bool writeIfChanged(const fs::path& file, std::span<const std::byte> bytes, bool stamped = false) {
+    fs::path stampFile = file;
+    stampFile += ".stamp";
+    std::error_code ec;
+    const auto size = fs::file_size(file, ec);
+    const bool sameSize = !ec && size == bytes.size();
+    const std::uint64_t hash = stamped ? contentHash(bytes) : 0;
+    const auto stamp = [&] {
+        std::error_code timeEc;
+        const auto time = fs::last_write_time(file, timeEc);
+        return timeEc ? std::string{}
+                      : std::format("{} {:016x} {}\n", bytes.size(), hash, time.time_since_epoch().count());
+    };
+    if (sameSize) {
+        if (stamped) {
+            const auto kept = readFile(stampFile);
+            const std::string current = stamp();
+            if (kept && !current.empty() &&
+                std::ranges::equal(*kept, std::as_bytes(std::span{current.data(), current.size()})))
+                return true;
+        }
+        if (auto old = readFile(file); old && std::ranges::equal(*old, bytes)) {
+            if (stamped) {
+                const std::string current = stamp();
+                (void)replaceFile(stampFile, std::as_bytes(std::span{current.data(), current.size()}));
+            }
+            return true;
+        }
+    }
+    if (stamped) fs::remove(stampFile, ec); // stale from here on, until the new one is written
+    if (!replaceFile(file, bytes)) return false;
+    if (stamped) {
+        const std::string current = stamp();
+        (void)replaceFile(stampFile, std::as_bytes(std::span{current.data(), current.size()})); // only a shortcut
+    }
+    return true;
 }
 
 struct Record {
@@ -274,19 +318,22 @@ int runRc(std::vector<std::string> args) {
 
     std::vector<std::byte> blob;
     std::vector<EmbeddedGroup> groups;
+    EncodingCache cache{outDir / (name + ".cache")};
     for (const auto& group : manifest->groups) {
         auto& out = groups.emplace_back(embeddedGroup(*manifest, group, devPaths));
         for (const auto& f : group.files) {
             const auto data = readFile(f.file);
             if (!data) return fail("can't read '" + utf8(f.file) + "'");
-            const EncodedResource encoded = encodeResource(f.path, *data, f.compress);
+            const EncodedResource encoded = cache.encode(f.path, *data, f.compress);
             out.records.push_back({f.path, blob.size(), encoded.stored.size(), encoded.size, encoded.compressed});
             blob.insert(blob.end(), encoded.stored.begin(), encoded.stored.end());
         }
     }
 
+    cache.prune();
+
     const std::string source = moduleSource(name, manifest->file, groups);
-    if (!writeIfChanged(outDir / (name + ".bin"), blob) ||
+    if (!writeIfChanged(outDir / (name + ".bin"), blob, true) ||
         !writeIfChanged(moduleFile, std::as_bytes(std::span{source})) ||
         !writeDepfile(outDir / (name + ".d"), moduleFile, manifestDependencies(*manifest)))
         return fail("can't write to '" + utf8(outDir) + "'");

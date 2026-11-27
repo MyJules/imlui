@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 import std;
+import zstd.compress;
 import imlui.resources;
 import imlui.resources.mount;
 import imlui.resources.directory_mount;
@@ -164,6 +165,53 @@ TEST(EmbeddedMount, DecompressesOnFirstReadAndCaches) {
     const auto again = mount.read("a.lua");
     EXPECT_EQ(first->data(), again->data()); // the cached buffer, not a second decompression
     EXPECT_EQ(mount.decompressedCount(), 1U);
+    EXPECT_NE(first->owner(), nullptr) << "the handles share the decompressed buffer";
+}
+
+// Decompressed files are kept within PackedMount::retainedBytes: the least recently read go (and are decompressed
+// again by their next read), a file larger than the budget is kept by its handles only, and a handle keeps its bytes
+// valid after the mount let them go. A tiny archive declaring huge files doesn't pin their bytes.
+TEST(EmbeddedMount, KeepsDecompressedFilesWithinABudget) {
+    const std::size_t third = PackedMount::retainedBytes * 4 / 10; // two fit, three don't
+    std::vector<std::byte> blob;
+    std::vector<EmbeddedMount::Record> records;
+    for (const auto& [name, size] : std::initializer_list<std::pair<const char*, std::size_t>>{
+             {"a.bin", third}, {"b.bin", third}, {"c.bin", third}, {"huge.bin", PackedMount::retainedBytes + 1}}) {
+        const auto frame = zstd::compress(std::vector<std::byte>(size, static_cast<std::byte>(name[0])), 1);
+        ASSERT_TRUE(frame);
+        records.push_back({name, blob.size(), frame->size(), size, true});
+        blob.insert(blob.end(), frame->begin(), frame->end());
+    }
+    const EmbeddedMount mount{"budget", blob, records};
+    const auto expectFile = [](const std::optional<ResourceData>& data, char letter, std::size_t size) {
+        ASSERT_TRUE(data);
+        ASSERT_EQ(data->size(), size);
+        EXPECT_EQ(data->bytes().front(), static_cast<std::byte>(letter));
+        EXPECT_EQ(data->bytes().back(), static_cast<std::byte>(letter));
+    };
+
+    const auto a = mount.read("a.bin"); // held: stays valid whatever the mount drops
+    expectFile(a, 'a', third);
+    const std::weak_ptr<const void> aBuffer = a->owner();
+    std::weak_ptr<const void> bBuffer = mount.read("b.bin")->owner();
+    EXPECT_FALSE(bBuffer.expired()) << "kept by the mount";
+    EXPECT_EQ(mount.retainedSize(), 2 * third);
+    expectFile(mount.read("c.bin"), 'c', third); // over the budget: `a`, read longest ago, goes
+    EXPECT_EQ(mount.retainedSize(), 2 * third);
+    EXPECT_FALSE(aBuffer.expired()) << "a handle still holds it";
+    expectFile(a, 'a', third);
+    EXPECT_EQ(mount.read("a.bin")->data(), a->data()) << "found again through the handle: no second decompression";
+    EXPECT_EQ(mount.decompressedCount(), 3U);
+    // Now `b` is read longest ago, and nothing holds it.
+    EXPECT_TRUE(bBuffer.expired()) << "dropped by the mount, held by nothing";
+    expectFile(mount.read("b.bin"), 'b', third);
+    EXPECT_EQ(mount.decompressedCount(), 4U) << "decompressed again";
+
+    std::weak_ptr<const void> hugeBuffer = mount.read("huge.bin")->owner();
+    EXPECT_TRUE(hugeBuffer.expired()) << "larger than the budget: kept by its handles only";
+    EXPECT_LE(mount.retainedSize(), PackedMount::retainedBytes);
+    expectFile(mount.read("huge.bin"), 'h', PackedMount::retainedBytes + 1);
+    EXPECT_EQ(mount.decompressedCount(), 6U);
 }
 
 TEST(EmbeddedMount, ConcurrentReadsShareOneBuffer) {
@@ -331,6 +379,69 @@ TEST(PakMount, RejectsOverlappingAndOversizedIndexes) {
     EXPECT_NE(error.find("too large together"), std::string::npos) << error;
 }
 
+namespace {
+
+/// An archive's bytes as the writer lays them out, without its checks: one empty stored file per path.
+std::vector<std::byte> rawPak(std::string_view mountPoint, const std::vector<std::string>& paths) {
+    std::vector<std::byte> out;
+    const auto u32 = [&](std::size_t v) {
+        for (std::size_t i = 0; i < 4; ++i)
+            out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xffU));
+    };
+    const auto string = [&](std::string_view s) {
+        u32(s.size());
+        for (const char c : s)
+            out.push_back(static_cast<std::byte>(c));
+    };
+    for (const char c : pakMagic)
+        out.push_back(static_cast<std::byte>(c));
+    u32(pakVersion);
+    u32(paths.size());
+    string(mountPoint);
+    for (const auto& path : paths) {
+        string(path);
+        out.insert(out.end(), 8 + 8 + 8 + 4, std::byte{0}); // offset 0, empty, stored
+    }
+    return out;
+}
+
+} // namespace
+
+// Path limits: a hostile archive with a 1 MiB `a/a/a/...` path is rejected at once (the file-and-folder check
+// looked up every prefix of every path, O(length²): minutes), and so is one deeper than the limit. The check itself
+// is one lookup per path, and `a-b` (sorted between `a` and `a/b`) doesn't hide that `a` is a folder too.
+TEST(PakMount, RejectsHugeAndDeepPathsQuickly) {
+    std::string error;
+    std::string deep;
+    for (int i = 0; i < 512 * 1024; ++i)
+        deep += i ? "/a" : "a";
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_FALSE(parsePak(rawPak("app:/", {deep, deep + "x"}), &error));
+    EXPECT_NE(error.find("is too long"), std::string::npos) << error.substr(0, 200);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds{5});
+
+    std::string segments;
+    for (std::size_t i = 0; i <= pakMaxPathSegments; ++i)
+        segments += i ? "/a" : "a";
+    EXPECT_FALSE(parsePak(rawPak("app:/", {segments}), &error));
+    EXPECT_NE(error.find("too many segments"), std::string::npos) << error;
+    segments.erase(segments.size() - 2);
+    EXPECT_TRUE(parsePak(rawPak("app:/", {segments}), &error)) << error;
+    const PakFile tooDeep[] = {{segments + "/a", {}, 0, false}};
+    EXPECT_FALSE(writePak("app:/", tooDeep, &error));
+    EXPECT_NE(error.find("too many segments"), std::string::npos) << error;
+    const PakFile tooLong[] = {{std::string(pakMaxPathLength + 1, 'x'), {}, 0, false}};
+    EXPECT_FALSE(writePak("app:/", tooLong, &error));
+    EXPECT_NE(error.find("is too long"), std::string::npos) << error;
+
+    EXPECT_FALSE(parsePak(rawPak("app:/", {"a", "a-b", "a/b"}), &error));
+    EXPECT_NE(error.find("'a' is both a file and a folder"), std::string::npos) << error;
+    EXPECT_TRUE(parsePak(rawPak("app:/", {"a", "a-b", "a.b/c", "ab/c"}), &error)) << error;
+    const PakFile hidden[] = {{"x/a", {}, 0, false}, {"x/a-b", {}, 0, false}, {"x/a/b", {}, 0, false}};
+    EXPECT_FALSE(writePak("app:/", hidden, &error));
+    EXPECT_NE(error.find("'x/a' is both a file and a folder"), std::string::npos) << error;
+}
+
 // imlui_pack writes a temporary file and renames it over the output: no partial archive, no file left behind.
 TEST(PakMount, PackToolReplacesTheOutputWhole) {
     test::TempDir dir;
@@ -340,7 +451,8 @@ TEST(PakMount, PackToolReplacesTheOutputWhole) {
     const std::string base = tools::utf8(dir.path() / "src");
     std::vector<std::string> args{output, "app:/", base};
     ASSERT_EQ(tools::runPack(args), 0);
-    EXPECT_FALSE(std::filesystem::exists(dir.path() / "out.pak.tmp"));
+    for (const auto& entry : std::filesystem::directory_iterator(dir.path())) // no temporary file left behind
+        EXPECT_TRUE(entry.path().filename() == "out.pak" || entry.path().filename() == "src") << entry.path();
     std::string error;
     const auto pak = PakMount::open(dir.path() / "out.pak", &error);
     ASSERT_TRUE(pak) << error;

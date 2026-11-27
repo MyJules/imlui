@@ -464,6 +464,35 @@ TEST(DirectoryMount, FindsAFileAddedWithoutChangingTheFolderTime) {
     EXPECT_FALSE(mount.exists("ui/c.lua"));
 }
 
+// Whether a folder holds a selected file is kept per folder while the folder's time is unchanged, and the answer for a
+// folder combines its own entries with its subfolders', each checked against its own time: a file added or removed
+// deep down (which changes only its own folder's time) shows at once in every folder above it.
+TEST(DirectoryMount, FoldersHoldingSelectedFilesFollowChangesDeepDown) {
+    test::TempDir dir;
+    dir.write("a/b/c/notes.txt", "not selected");
+    dir.write("a/other/x.txt", "not selected");
+    DirectoryMount mount{dir.path(), ResourceSelection{.include = {"**/*.lua"}}};
+    // Older than a tick, so the kept answers are used, not listed again (FindsAFileAddedWithoutChangingTheFolderTime).
+    for (const char* folder : {"a", "a/b", "a/b/c", "a/other", ""})
+        dir.touch(folder, -10);
+    for (int i = 0; i < 2; ++i) { // the second time from the kept answers
+        EXPECT_FALSE(mount.exists("a"));
+        EXPECT_EQ(mount.list(""), strings({}));
+        EXPECT_EQ(mount.list("a"), strings({}));
+    }
+    dir.write("a/b/c/deep.lua", "deep");
+    EXPECT_TRUE(mount.exists("a"));
+    EXPECT_TRUE(mount.exists("a/b"));
+    EXPECT_FALSE(mount.exists("a/other"));
+    EXPECT_EQ(mount.list(""), strings({"a/"}));
+    EXPECT_EQ(mount.list("a"), strings({"b/"}));
+    dir.touch("a/b/c", -10);
+    EXPECT_EQ(mount.list("a/b"), strings({"c/"}));
+    dir.remove("a/b/c/deep.lua");
+    EXPECT_FALSE(mount.exists("a"));
+    EXPECT_EQ(mount.list(""), strings({}));
+}
+
 // One entry that can't be queried (a link to nothing) doesn't end the listing of a folder.
 TEST(DirectoryMount, ListsPastAnEntryThatCantBeQueried) {
     test::TempDir dir;

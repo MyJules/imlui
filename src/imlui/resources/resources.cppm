@@ -173,8 +173,14 @@ std::vector<std::string> Resources::listRecursive(std::string_view name) const {
 std::optional<ResourceTime> Resources::modified(std::string_view name) const {
     const auto parsed = parseName(name);
     if (!parsed) return std::nullopt;
-    for (const Hit& hit : covering(*parsed))
-        if (hit.mount->exists(hit.path)) return hit.mount->modified(hit.path);
+    // The mount that serves the file decides. modified() is nullopt for a missing file, so a time is that mount's
+    // answer at once; only a nullopt needs exists() to tell a missing file (try the next mount) from one an immutable
+    // mount serves (no time). A directory mount, the one with times, is asked once per check instead of twice (each
+    // ask checks the spelling of every folder on the way and matches the selection's patterns).
+    for (const Hit& hit : covering(*parsed)) {
+        if (auto time = hit.mount->modified(hit.path)) return time;
+        if (hit.mount->exists(hit.path)) return std::nullopt;
+    }
     return std::nullopt;
 }
 

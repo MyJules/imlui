@@ -8,10 +8,12 @@ export namespace imlui {
 /// The bytes of a resource file (Mount::read, Resources::read). A cheap, copyable handle.
 ///
 /// Lifetime: the bytes stay valid as long as this handle, or any copy of it, exists **and** the mount that returned
-/// it exists. Immutable mounts (embedded, .pak) serve their own memory (zero-copy; `owner()` is null) and keep it
-/// for their lifetime. A directory mount reads a file into a buffer that the handles share (`owner()` holds it): once
-/// the file changed and the last handle to the old bytes is gone, they are freed. So keep the handle, not just the
-/// span, for as long as you use the bytes (the font library keeps one per atlas font, whose data it doesn't copy).
+/// it exists. Immutable mounts (embedded, .pak) serve a stored file from their own memory (zero-copy; `owner()` is
+/// null) and keep it for their lifetime. A file read into a buffer (any file of a directory mount, a compressed file
+/// of an embedded or .pak mount once decompressed) lives in a buffer that the handles share (`owner()` holds it): the
+/// mount keeps only the latest buffers within a budget, and a buffer it let go is freed with its last handle. So keep
+/// the handle, not just the span, for as long as you use the bytes (the font library keeps one per atlas font, whose
+/// data it doesn't copy).
 class ResourceData {
 public:
     ResourceData() = default;
