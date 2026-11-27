@@ -168,8 +168,8 @@ types.registerType<Rating>("Rating");
   `frame.attachMenu(clicked)` supports a `menu` prop. `frame.node()` reaches raw Lua. See
   [Registering C++ types](extending.md#element-types) for the whole `Frame`.
 - A prop `render()` reads from the table itself (`frame.size("size")`, an element prop, `menu`, a lazily read table)
-  is declared with [`type.rawProperty`](extending.md#raw-properties) for the editor; a stacking container calls
-  `rawStackProps(type)` for `spacing`, `align` and `cull`.
+  is declared with [`type.rawProperty`](extending.md#raw-properties) for the editor; a stacking container derives from `StackAlign`
+  and calls `stackProps(type)` for `spacing`, `align` and `cull`.
 - `type.nonVisual()` for elements that take no layout space (windows, timers); `setTicking(true)` for elements
   that act while they aren't rendered ([ticking elements](extending.md#ticking-elements)).
 

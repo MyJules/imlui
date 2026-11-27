@@ -20,6 +20,8 @@ import imlui.widgets.button;
 // ---- (B) inputs, text and data: imports
 // ---- end (B)
 // ---- (C) layout and theme: imports
+import imlui.theme.theme;
+import imlui.ui.props;
 // ---- end (C)
 
 // -- Button
@@ -41,4 +43,25 @@ struct imlui::EnumNames<imlui::md::ButtonVariant> {
 // ---- end (B)
 
 // ---- (C) layout and theme
+// -- the stacks' `align` (Column, Card, ScrollView, Window, Dialog, ...) and Text's
+template <>
+struct imlui::EnumNames<imlui::Align> {
+    static constexpr std::string_view name = "Align";
+    static constexpr std::string_view doc = "Where each child (a Text: its line) goes across the width.";
+    static constexpr std::pair<imlui::Align, std::string_view> values[] = {
+        {imlui::Align::Start, "start"}, {imlui::Align::Center, "center"}, {imlui::Align::End, "end"}};
+};
+
+// -- the theme's `preset`
+template <>
+struct imlui::EnumNames<imlui::ThemePreset> {
+    static constexpr std::string_view name = "ThemePreset";
+    static constexpr std::string_view doc = "How ImGui's own style is set: from the scheme, or a stock ImGui style.";
+    static constexpr std::pair<imlui::ThemePreset, std::string_view> values[] = {
+        {imlui::ThemePreset::Material, "material"},
+        {imlui::ThemePreset::ImguiDark, "imgui-dark"},
+        {imlui::ThemePreset::ImguiLight, "imgui-light"},
+        {imlui::ThemePreset::ImguiClassic, "imgui-classic"},
+    };
+};
 // ---- end (C)

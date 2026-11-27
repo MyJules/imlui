@@ -16,6 +16,8 @@ import imlui.lua.node;
 import imlui.lua.value;
 import imlui.resources.name;
 import imlui.skin;
+import imlui.types.lua_convert;
+import imlui.ui.enum_names;
 
 export namespace imlui::luaui {
 
@@ -51,12 +53,6 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
     idx = lua::absindex(state, idx);
     lua::StackGuard guard{state};
     Theme t;
-    auto str = [&](const char* k) -> std::optional<std::string> {
-        std::optional<std::string> r;
-        if (lua::getfield(state, idx, k) == lua::Type::String) r = std::string{lua::tostring(state, -1)};
-        lua::pop(state);
-        return r;
-    };
     // A number in lo..hi; another value is reported (`where` names it) and `out` keeps its default.
     auto num = [&](int tbl, const char* k, float& out, float lo, float hi, std::string_view where) {
         lua::Type type = lua::getfield(state, tbl, k);
@@ -91,7 +87,18 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
         }
     }
     lua::pop(state);
-    if (auto p = str("preset")) t.preset = *p;
+    // A preset is one of ImGui's style sources; another name would silently pick Material.
+    if (lua::getfield(state, idx, "preset") != lua::Type::Nil) {
+        if (LuaConvert<ThemePreset>::check(state, -1)) {
+            t.preset = LuaConvert<ThemePreset>::get(state, -1);
+        } else {
+            std::string known;
+            for (const auto& [value, name] : EnumNames<ThemePreset>::values)
+                known += (known.empty() ? "'" : ", '") + std::string{name} + "'";
+            reportError("theme.preset: unknown preset '" + toDisplayString(state, -1) + "' (one of: " + known + ")");
+        }
+    }
+    lua::pop(state);
     // The seed has no scheme of its own yet, so its roles come from the current theme.
     if (lua::getfield(state, idx, "seed") != lua::Type::Nil) {
         if (auto c = colorAt(lua::gettop(state), theme().scheme))

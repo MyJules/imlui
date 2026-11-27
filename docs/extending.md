@@ -135,7 +135,7 @@ Every built-in element is written this way, so the built-ins are the reference e
 | `size(key)` | A size prop in pixels, read like the built-ins read `width`/`height` (`fillWidth`, fill-minus values; 0 when unset). An unset `width` of a type declared [`fillsWidth()`](#nonvisual-defaultpropertyname-and-fillswidth) reads as `-1` (fill): the size policy lives in the type, not in the widget. Pass it to the `md::` widgets, which resolve it (0 is their natural size). |
 | `available()` | The space available at the cursor (`ImVec2`, pixels): the width to the right edge of the layout box the parent gave (a fixed `Column`, a `Row` share, a `Grid` cell, else the window's content region), and the height left in the window. Use it instead of `ImGui::GetContentRegionAvail()`, which only knows the window. |
 | `resolvedWidth(natural = 0)`, `resolvedHeight(natural = 0)` | `width` / `height` (`size()`) resolved to pixels against `available()` with the one size rule every element follows (`resolveSize`, module `imlui.ui.item_size`): fixed, `-1` fill, `< -1` fill minus, `natural` when unset; a type that fills by default fills. Use it when the element sizes itself (`ImGui::Dummy`, a draw-list box). |
-| `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; `"start"`/`"center"`/`"end"` as 0/0.5/1. |
+| `labelId(text, id)`, `alignFactor(align)` | `"text###id"` for labels whose text changes; an `Align` (`Align::Start`/`Center`/`End`, module `imlui.ui.props`) as 0/0.5/1. |
 | `dp(v)` | dp to pixels at the current scale (monitor content scale times the user zoom). |
 | `drawList()` | The current window's `ImDrawList*`. Use the [md shape helpers](development.md#adding-an-element) (`strokeArc`, `fillRoundRect`, `textTop`, ...) for Material-quality shapes; they build nothing outside the clip rect, and `md::rectVisible(dl, a, b)` lets your own drawing skip an off-screen element the same way. |
 | `requestFrame()`, `requestFrameAfter(s)` | Frames are [rendered on demand](architecture.md#on-demand-rendering): anything that changes on its own asks for the next one. |
@@ -300,8 +300,10 @@ type.rawProperty<double>("size")                                // type from Lua
 - It takes a [`doc`](#docs-doctext), shares the one namespace of member names, and is inherited by
   [`extends<Base>()`](#subclasses-extendsbase) (`docMember` replaces its doc).
 - The stacking containers' `spacing`, `align` and `cull` (read by `Frame::renderStack`) are declared with
-  `rawStackProps(type)` / `rawCullProp(type)` (module `imlui.ui.elements.stack_props`): call them in your own
-  stacking element's `declare` too.
+  `stackProps(type)` / `rawCullProp(type)` (module `imlui.ui.elements.stack_props`): call them in your own
+  stacking element's `declare` too. `stackProps` declares raw `spacing` and `cull` and the property `align` (an
+  `Align`), so the element derives from `StackAlign` too (`class Panel final : public Element, public StackAlign`):
+  the sync then reports a name that isn't an `Align` once, when the script writes it.
 
 ### Signals
 

@@ -12,14 +12,15 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.elements.stack_props;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// A sheet over a scrim, above everything, with its children stacked in a scrolling region. Clicking the scrim
 /// or pressing Escape closes it: `open` becomes false, then `onClosed` fires. Non-visual.
 ///
-/// Props:   open = false, width = 360 (dp)
-/// Raw:     spacing, align, cull
+/// Props:   open = false, width = 360 (dp), align = "start" ("center", "end"; the children's, StackAlign)
+/// Raw:     spacing, cull
 /// Signals: onClosed(self)
 /// Two-way: open
 ///
@@ -27,7 +28,7 @@ export namespace imlui {
 /// the element), a `bind(...)` (closing writes the bound state) or a function binding. A function owns the value,
 /// so the drawer can't set it: closing hides the sheet and fires `onClosed`, and the drawer stays hidden until
 /// the function has returned false (the handler updated the state it reads) and then true again.
-class ModalNavigationDrawer final : public Element {
+class ModalNavigationDrawer final : public Element, public StackAlign {
 public:
     static void declare(TypeBuilder<ModalNavigationDrawer>& type);
 
@@ -69,7 +70,7 @@ void ModalNavigationDrawer::declare(TypeBuilder<ModalNavigationDrawer>& type) {
         .signal<>("onClosed")
         .doc("Called when the scrim or Escape closes the drawer, after `open` was updated.")
         .nonVisual();
-    rawStackProps(type);
+    stackProps(type);
 }
 
 void ModalNavigationDrawer::render(Frame& frame) {

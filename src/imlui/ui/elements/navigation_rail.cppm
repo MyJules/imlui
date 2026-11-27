@@ -10,6 +10,7 @@ import imlui.widgets;
 import imlui.ui.navigation_scope;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_builder;
 
 export namespace imlui {
@@ -22,6 +23,9 @@ export namespace imlui {
 /// Raw:     header (an element), height
 class NavigationRail final : public Element {
 public:
+    /// Where the destinations sit in the height below the header while they fit.
+    enum class Align { Top, Center, Bottom };
+
     static void declare(TypeBuilder<NavigationRail>& type);
 
     void render(Frame& frame) override;
@@ -31,16 +35,27 @@ public:
     void setColor(std::optional<Color> color);
     [[nodiscard]] float spacing() const; ///< dp between destinations
     void setSpacing(float spacing);
-    [[nodiscard]] const std::string& align() const;
-    void setAlign(std::string align);
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
 
 private:
     std::optional<Color> m_color;
     float m_spacing = 12.0f;
-    std::string m_align = "top";
+    Align m_align = Align::Top;
 };
 
 } // namespace imlui
+
+template <>
+struct imlui::EnumNames<imlui::NavigationRail::Align> {
+    static constexpr std::string_view name = "RailAlign";
+    static constexpr std::string_view doc = "Where a NavigationRail's destinations sit in the height below its header.";
+    static constexpr std::pair<imlui::NavigationRail::Align, std::string_view> values[] = {
+        {imlui::NavigationRail::Align::Top, "top"},
+        {imlui::NavigationRail::Align::Center, "center"},
+        {imlui::NavigationRail::Align::Bottom, "bottom"},
+    };
+};
 
 module :private;
 
@@ -113,7 +128,7 @@ void NavigationRail::render(Frame& frame) {
         const ImVec2 q = ImGui::GetCursorScreenPos();
         const float spacing = frame.dp(m_spacing);
         // The children's IDs are in the region's ID scope: read their sizes in it too.
-        const float align = Frame::alignFactor(m_align);
+        const float align = m_align == Align::Center ? 0.5f : m_align == Align::Bottom ? 1.0f : 0.0f;
         // The destinations' scope, also while they are measured: a NavigationItem's size depends on it.
         const NavigationScope scope{{NavigationScope::Style::Rail, w}};
         float total = 0.0f;
@@ -150,7 +165,7 @@ const std::optional<Color>& NavigationRail::color() const { return m_color; }
 void NavigationRail::setColor(std::optional<Color> color) { m_color = color; }
 float NavigationRail::spacing() const { return m_spacing; }
 void NavigationRail::setSpacing(float spacing) { m_spacing = spacing; }
-const std::string& NavigationRail::align() const { return m_align; }
-void NavigationRail::setAlign(std::string align) { m_align = std::move(align); }
+NavigationRail::Align NavigationRail::align() const { return m_align; }
+void NavigationRail::setAlign(Align align) { m_align = align; }
 
 } // namespace imlui

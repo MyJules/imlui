@@ -11,14 +11,15 @@ import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.elements.stack_props;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// The Material basic dialog: modal and centered over a scrim; it stacks its children. Non-visual.
 ///
-/// Props:   open = false, title = "", icon = ""
+/// Props:   open = false, title = "", icon = "", align = "start" ("center", "end"; the children's, StackAlign)
 /// Raw:     width (unset: 280-560dp, fitting the content; a fill inside is the minimum or the title's width),
-///          spacing, align, cull
+///          spacing, cull
 /// Signals: onClosed(self)
 /// Two-way: open
 ///
@@ -27,7 +28,7 @@ export namespace imlui {
 /// ImGui shows one popup per level, so of sibling dialogs (at the same popup level) open at the same time, one is
 /// shown: a dialog whose `open` turns true while another is up waits, and opens the frame after that one closes.
 /// A dialog opened from inside another (one of its children) is a level up and shows over it.
-class Dialog final : public Element {
+class Dialog final : public Element, public StackAlign {
 public:
     static void declare(TypeBuilder<Dialog>& type);
 
@@ -69,7 +70,7 @@ void Dialog::declare(TypeBuilder<Dialog>& type) {
         .signal<>("onClosed")
         .doc("Called when the dialog closes (after `open = false` is written back).")
         .nonVisual();
-    rawStackProps(type);
+    stackProps(type);
 }
 
 namespace {

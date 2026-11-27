@@ -19,6 +19,7 @@ import std;
 import imgui;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_builder;
 import imlui.ui.layout_box;
 
@@ -31,6 +32,11 @@ export namespace imlui {
 /// Raw:     width (unset: the available width; it bounds the children)
 class Row final : public Element {
 public:
+    /// The children's vertical alignment against the tallest.
+    enum class Align { Top, Center, Bottom };
+    /// The horizontal distribution of the children, while the row has no fills.
+    enum class Justify { Start, Center, End, SpaceBetween };
+
     static void declare(TypeBuilder<Row>& type);
 
     void render(Frame& frame) override;
@@ -41,18 +47,38 @@ public:
 
     [[nodiscard]] std::optional<double> spacing() const;
     void setSpacing(std::optional<double> spacing);
-    [[nodiscard]] const std::string& align() const;
-    void setAlign(std::string align);
-    [[nodiscard]] const std::string& justify() const;
-    void setJustify(std::string justify);
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
+    [[nodiscard]] Justify justify() const;
+    void setJustify(Justify justify);
 
 private:
     std::optional<double> m_spacing;
-    std::string m_align = "center";
-    std::string m_justify = "start";
+    Align m_align = Align::Center;
+    Justify m_justify = Justify::Start;
 };
 
 } // namespace imlui
+
+template <>
+struct imlui::EnumNames<imlui::Row::Align> {
+    static constexpr std::string_view name = "RowAlign";
+    static constexpr std::string_view doc = "A Row's vertical alignment of its children against the tallest.";
+    static constexpr std::pair<imlui::Row::Align, std::string_view> values[] = {
+        {imlui::Row::Align::Top, "top"}, {imlui::Row::Align::Center, "center"}, {imlui::Row::Align::Bottom, "bottom"}};
+};
+
+template <>
+struct imlui::EnumNames<imlui::Row::Justify> {
+    static constexpr std::string_view name = "RowJustify";
+    static constexpr std::string_view doc = "A Row's horizontal distribution of its children (while it has no fills).";
+    static constexpr std::pair<imlui::Row::Justify, std::string_view> values[] = {
+        {imlui::Row::Justify::Start, "start"},
+        {imlui::Row::Justify::Center, "center"},
+        {imlui::Row::Justify::End, "end"},
+        {imlui::Row::Justify::SpaceBetween, "spaceBetween"},
+    };
+};
 
 module :private;
 
@@ -141,12 +167,14 @@ std::optional<Plan> plan(const Row& row, const Frame& frame, float rowW, bool he
     const float free = std::max(0.0f, rowW - fixedW - gaps);
     plan.share = plan.fills > 0 ? free / static_cast<float>(plan.fills) : 0.0f;
     if (plan.fills == 0) {
-        if (row.justify() == "center")
-            plan.offset = free * 0.5f;
-        else if (row.justify() == "end")
-            plan.offset = free;
-        else if (row.justify() == "spaceBetween" && count > 1)
-            plan.extraGap = free / static_cast<float>(count - 1);
+        switch (row.justify()) {
+        case Row::Justify::Center: plan.offset = free * 0.5f; break;
+        case Row::Justify::End: plan.offset = free; break;
+        case Row::Justify::SpaceBetween:
+            if (count > 1) plan.extraGap = free / static_cast<float>(count - 1);
+            break;
+        case Row::Justify::Start: break;
+        }
     } else if (heights || !expected) {
         std::size_t i = 0;
         frame.forEachChild([&](Frame::Child& c) {
@@ -173,7 +201,7 @@ void Row::render(Frame& frame) {
 
     // Pass 1: which children fill, how wide the others are, and (to align them) how tall the tallest is: their
     // intrinsic sizes, else last frame's (Frame::Child::expectedWidth / expectedHeight).
-    const bool alignsHeights = m_align == "center" || m_align == "bottom";
+    const bool alignsHeights = m_align != Align::Top;
     const Plan plan = *imlui::plan(*this, frame, rowW, alignsHeights, Sizes::Expected);
     const std::vector<Slot>& slots = plan.slots;
     const int count = static_cast<int>(slots.size());
@@ -192,7 +220,7 @@ void Row::render(Frame& frame) {
     // On a frame where a width the horizontal placement depends on is unknown (a child's first), the children render
     // unseen: measured, not drawn in the wrong place; the next frame (requested) places them. An unknown height only
     // offsets the alignment by a few pixels for a frame: the row renders seen, and asks for the frame that aligns it.
-    const bool unseen = unknownWidth && (plan.fills > 0 || m_justify != "start");
+    const bool unseen = unknownWidth && (plan.fills > 0 || m_justify != Justify::Start);
     if (unknownHeight && !unseen) frame.requestFrame();
 
     // Pass 2: place and render. A fill renders in a box of its share; any other child's box ends where the children
@@ -212,7 +240,7 @@ void Row::render(Frame& frame) {
         if (i > 0) x += plan.spacing + plan.extraGap;
         float y = top;
         if (alignsHeights && plan.rowH > 0 && slot.known)
-            y = top + std::floor(std::max(0.0f, (plan.rowH - slot.h) * (m_align == "center" ? 0.5f : 1.0f)));
+            y = top + std::floor(std::max(0.0f, (plan.rowH - slot.h) * (m_align == Align::Center ? 0.5f : 1.0f)));
         ImGui::SetCursorScreenPos({x, y});
         const float right = slot.fills ? x + plan.share : std::max(x, rowRight - after[i]);
         bool rendered = false;
@@ -248,7 +276,7 @@ std::optional<ImVec2> Row::intrinsicSize(const Frame& frame, float maxWidth) {
 
 bool Row::contentFillsWidth(const Frame& frame) {
     // Justified children spread over the available width, and fills take what the others leave.
-    if (m_justify != "start") return true;
+    if (m_justify != Justify::Start) return true;
     bool fills = false;
     frame.forEachChild([&](Frame::Child& c) { fills = fills || (c.isVisual() && c.fillsWidth()); });
     return fills;
@@ -256,9 +284,9 @@ bool Row::contentFillsWidth(const Frame& frame) {
 
 std::optional<double> Row::spacing() const { return m_spacing; }
 void Row::setSpacing(std::optional<double> spacing) { m_spacing = spacing; }
-const std::string& Row::align() const { return m_align; }
-void Row::setAlign(std::string align) { m_align = std::move(align); }
-const std::string& Row::justify() const { return m_justify; }
-void Row::setJustify(std::string justify) { m_justify = std::move(justify); }
+Row::Align Row::align() const { return m_align; }
+void Row::setAlign(Align align) { m_align = align; }
+Row::Justify Row::justify() const { return m_justify; }
+void Row::setJustify(Justify justify) { m_justify = justify; }
 
 } // namespace imlui

@@ -76,7 +76,7 @@ TEST_F(ThemeTableTest, EmptyTableGivesDefaults) {
 TEST_F(ThemeTableTest, ScalarFields) {
     Theme t =
         parse(R"(return { preset = "imgui-classic", seed = "#006A6A", dark = false, spacing = 6, fontScale = 1.25 })");
-    EXPECT_EQ(t.preset, "imgui-classic");
+    EXPECT_EQ(t.preset, ThemePreset::ImguiClassic);
     EXPECT_EQ(t.seed, *parseHex("#006A6A"));
     EXPECT_FALSE(t.dark);
     EXPECT_FLOAT_EQ(t.spacing, 6.0f);
@@ -246,6 +246,21 @@ TEST_F(ThemeTableTest, UnknownStyleFieldIsReported) {
     EXPECT_TRUE(hasError("unknown ImGuiStyle field 'NotAField'"));
     ASSERT_EQ(t.style.size(), 1u);
     EXPECT_EQ(t.style[0].name, "FrameRounding");
+}
+
+// A preset is a ThemePreset name: another one (a typo, a number) is reported with the names and keeps the default.
+TEST_F(ThemeTableTest, UnknownPresetIsReported) {
+    Theme t = parse(R"(return { preset = "imgui-drak", seed = "#006A6A" })");
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_TRUE(hasError("theme.preset: unknown preset 'imgui-drak' (one of: 'material', 'imgui-dark', "
+                         "'imgui-light', 'imgui-classic')"))
+        << luaui::errors()[0];
+    EXPECT_EQ(t.preset, ThemePreset::Material);
+    EXPECT_EQ(t.seed, *parseHex("#006A6A")); // the rest still applies
+    luaui::clearErrors();
+    t = parse("return { preset = 3 }");
+    EXPECT_TRUE(hasError("theme.preset: unknown preset '3'"));
+    EXPECT_EQ(t.preset, ThemePreset::Material);
 }
 
 TEST_F(ThemeTableTest, InvalidSeedIsReported) {

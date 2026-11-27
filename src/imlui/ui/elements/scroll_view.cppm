@@ -18,6 +18,8 @@ import imlui.types.frame;
 import imlui.types.type_builder;
 import imlui.ui.elements.stack_props;
 import imlui.ui.layout_box;
+import imlui.ui.enum_names;
+import imlui.ui.props;
 
 export namespace imlui {
 
@@ -45,8 +47,8 @@ public:
     [[nodiscard]] std::optional<double> spacing() const;
     void setSpacing(std::optional<double> spacing);
     /// Horizontal alignment of the children. Frame::renderStack() applies it.
-    [[nodiscard]] const std::string& align() const;
-    void setAlign(std::string align);
+    [[nodiscard]] Align align() const;
+    void setAlign(Align align);
 
     /// The scroll offset in pixels when the element was last rendered.
     [[nodiscard]] ImVec2 scroll() const;
@@ -65,7 +67,7 @@ private:
     std::optional<float> m_rounding;
     bool m_border = false;
     std::optional<double> m_spacing;
-    std::string m_align = "start";
+    Align m_align = Align::Start;
 
     ImVec2 m_scroll{0.0f, 0.0f}; ///< what the user scrolled to
     ImGuiID m_windowId = 0;      ///< the child window's ID last frame (0: never rendered)
@@ -180,8 +182,8 @@ bool ScrollView::border() const { return m_border; }
 void ScrollView::setBorder(bool border) { m_border = border; }
 std::optional<double> ScrollView::spacing() const { return m_spacing; }
 void ScrollView::setSpacing(std::optional<double> spacing) { m_spacing = spacing; }
-const std::string& ScrollView::align() const { return m_align; }
-void ScrollView::setAlign(std::string align) { m_align = std::move(align); }
+Align ScrollView::align() const { return m_align; }
+void ScrollView::setAlign(Align align) { m_align = align; }
 ImVec2 ScrollView::scroll() const { return m_scroll; }
 
 } // namespace imlui
