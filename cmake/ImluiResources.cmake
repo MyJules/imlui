@@ -60,6 +60,19 @@ endif()
 option(IMLUI_EMBED_RESOURCES "Embed the files of resource manifests (default: OFF with IMLUI_DEV_PATHS, else ON)"
        ${_imlui_embed_default})
 unset(_imlui_embed_default)
+# The default stays ON for every build type (a Release build you test locally still hot-reloads), so a plain Release
+# configure gets a dev build: nothing embedded, and the absolute source folders baked into the executable. Say so,
+# since that is rarely what a Release meant. A build that wants dev paths in Release on purpose (the `clang-release`
+# preset: optimization surfaces other warnings, not a shipped build) sets IMLUI_DEV_PATHS_RELEASE_OK to silence it.
+# Multi-config generators have no CMAKE_BUILD_TYPE: they pick the configuration at build time, so there's nothing to
+# check here.
+option(IMLUI_DEV_PATHS_RELEASE_OK "Don't warn about IMLUI_DEV_PATHS=ON in a Release or MinSizeRel build" OFF)
+if(IMLUI_DEV_PATHS AND NOT IMLUI_DEV_PATHS_RELEASE_OK AND CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
+    message(WARNING "IMLUI_DEV_PATHS is ON in a ${CMAKE_BUILD_TYPE} build: resources are loaded from the source "
+                    "folders (not embedded) and their absolute paths are baked into the executables. For a build you "
+                    "ship, configure with -DIMLUI_DEV_PATHS=OFF (imlui's `clang-ship` preset does). To keep dev paths "
+                    "in this build on purpose, set -DIMLUI_DEV_PATHS_RELEASE_OK=ON.")
+endif()
 if(NOT IMLUI_EMBED_RESOURCES AND NOT IMLUI_DEV_PATHS)
     message(FATAL_ERROR "IMLUI_EMBED_RESOURCES=OFF needs IMLUI_DEV_PATHS=ON: without the embedded files and without "
                         "the source folders an executable would have no resources. For a build you ship, set "

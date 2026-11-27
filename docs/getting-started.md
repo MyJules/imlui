@@ -135,6 +135,7 @@ the install either way.
 | `imlui_set_warnings(<target>)`, `imlui_set_hardening(<target>)` | imlui's warning policy (strict flags, `-Werror`) and Debug hardening ([CODE_STYLE.md](../CODE_STYLE.md#warnings-and-compiler-checks)), only on the targets you call them on. |
 | targets `imlui::imlui_rc`, `imlui::imlui_pack` | The build-time resource tools the functions above run: built on demand from source (a, b), or the installed executables (c). |
 | option `IMLUI_DEV_PATHS` (default `ON`) | Dev builds bake each embedded group's source folder in, for hot reload; `OFF` for a build you ship ([Dev and ship builds](#dev-and-ship-builds)). Applies to the app's `imlui_add_resources` calls, and as a subproject to the library's own files too. |
+| option `IMLUI_DEV_PATHS_RELEASE_OK` (default `OFF`) | Silences the configure warning about `IMLUI_DEV_PATHS=ON` in a `Release` or `MinSizeRel` build ([Dev and ship builds](#dev-and-ship-builds)). |
 | option `IMLUI_EMBED_RESOURCES` (default: the opposite of `IMLUI_DEV_PATHS`) | Whether `imlui_add_resources` embeds the files: `OFF` in dev builds, so editing a resource needs no build; `ON` for a build you ship. `OFF` needs `IMLUI_DEV_PATHS=ON`. |
 | variable `imlui_VERSION` | `0.1.0`: the `project()` version, or the found package's. |
 | options `IMLUI_BUILD_TESTS`, `IMLUI_INSTALL` | As a subproject (a, b): default `OFF` (`ON` when imlui is the top-level project). |
@@ -256,7 +257,8 @@ and type checks in your scripts: see [Editor support: Lua definitions](extending
 ## Hot reload
 
 While the app runs, the engine checks every 400 ms for changed `.lua` files: those in the app's folders (`app:/`,
-including subfolders) and the library (`imlui:/`, `src/resources/`), and every file a script read through `ui.resource`.
+including subfolders) and the library (`imlui:/`, `src/resources/`), and every file the running script read through
+`ui.resource` (a file it no longer reads after a reload stops being watched).
 When a file changes, it builds a **fresh Lua state** and runs the script again:
 
 - Lua state (all `state{}` tables, element-local values, timers) starts over, and the theme resets to the default
@@ -286,7 +288,10 @@ cmake --preset clang-ship    # ship: Release, everything embedded, no source pat
 `clang-ship` is `clang-release` with `IMLUI_DEV_PATHS=OFF` (`IMLUI_EMBED_RESOURCES` then defaults to `ON`); the other
 presets set neither option, so `clang-release` is an optimized dev build. Without the preset, configure a build you
 ship in a fresh build folder with `-DIMLUI_DEV_PATHS=OFF`; in a folder that was configured as a dev build, also pass
-`-DIMLUI_EMBED_RESOURCES=ON`, as the cached `OFF` stays. A dev build's
+`-DIMLUI_EMBED_RESOURCES=ON`, as the cached `OFF` stays. `IMLUI_DEV_PATHS` defaults to `ON` in every build type, so
+a configure with `CMAKE_BUILD_TYPE` `Release` or `MinSizeRel` that leaves it `ON` prints a warning (nothing embedded,
+absolute source paths in the executable): it's usually meant to be a build you ship. A Release build that keeps dev
+paths on purpose sets `-DIMLUI_DEV_PATHS_RELEASE_OK=ON` to silence it, as imlui's `clang-release` preset does. A dev build's
 executable needs the source tree: moved elsewhere, it logs an error naming each missing source folder.
 `imlui_add_resources(... EMBED ON)` embeds one manifest whatever the option says (a test that runs an executable
 alone, say).

@@ -84,6 +84,63 @@ TEST_F(LuaLibraryTest, OnFrameReturnsAFunctionThatRemovesTheCallback) {
     )");
 }
 
+// A write notifies the watchers there were when it happened: one added by a watcher runs from the next write on, one
+// removed by a watcher that runs first is still called this time. A watcher that writes a state again (this one or
+// another) notifies in turn without disturbing the outer notification.
+TEST_F(LuaLibraryTest, WatchersAddedOrRemovedWhileNotifyingWaitForTheNextWrite) {
+    run(R"(
+        local s, other = ui.state { x = 0 }, ui.state { y = 0 }
+        local log = {}
+        local stopB
+        ui.watch(s, "x", function(v)
+            log[#log + 1] = "a" .. v
+            if v == 1 then
+                stopB()
+                ui.watch(s, "x", function(w) log[#log + 1] = "c" .. w end)
+                other.y = v -- nested notification
+            end
+        end)
+        stopB = ui.watch(s, "x", function(v) log[#log + 1] = "b" .. v end)
+        ui.watch(other, "*", function(v) log[#log + 1] = "y" .. v end)
+        s.x = 1
+        assert(table.concat(log, " ") == "a1 y1 b1", table.concat(log, " "))
+        s.x = 2
+        assert(table.concat(log, " ") == "a1 y1 b1 a2 c2", table.concat(log, " "))
+    )");
+}
+
+// The frame callbacks of a frame are those there were when it started, however many (more than table.unpack can
+// return), and a callback that adds or removes callbacks, or runs a tick itself, doesn't change who runs this frame.
+TEST_F(LuaLibraryTest, FrameCallbacksRunFromASnapshotOfAnySize) {
+    run(R"(
+        local calls = 0
+        local function count() calls = calls + 1 end
+        local stops = {}
+        for i = 1, 1000001 do stops[i] = ui.onFrame(count) end
+        ui.__tick(1)
+        assert(calls == 1000001, calls)
+        for i = #stops, 1, -1 do stops[i]() end -- last first: a removal looks for its callback from the end
+
+        local log = {}
+        local stopB, nested
+        ui.onFrame(function(t)
+            log[#log + 1] = "a" .. t
+            if t == 1 then
+                stopB()
+                ui.onFrame(function(u) log[#log + 1] = "c" .. u end)
+                nested = true
+                ui.__tick(9) -- runs a, the new c and not b; the outer frame still goes on to b
+                nested = false
+            end
+        end)
+        stopB = ui.onFrame(function(t) log[#log + 1] = "b" .. t end)
+        ui.__tick(1)
+        assert(table.concat(log, " ") == "a1 a9 c9 b1", table.concat(log, " "))
+        ui.__tick(2)
+        assert(table.concat(log, " ") == "a1 a9 c9 b1 a2 c2", table.concat(log, " "))
+    )");
+}
+
 TEST_F(LuaLibraryTest, RadioButtonsWithAGroupShareAMemberSet) {
     run(R"(
         local a = ui.RadioButton { text = "A", group = "size" }

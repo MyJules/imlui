@@ -353,8 +353,19 @@ end
 -------------------------------------------------------------------------------
 
 local watchers = setmetatable({}, { __mode = "k" }) -- proxy -> { key -> {fn...} }
-local EMPTY_LIST = {}
 local stores = setmetatable({}, { __mode = "k" })   -- proxy -> raw data
+
+-- Calls each function of `list` with (v, old, k), iterating a snapshot: a watcher may remove itself (or others) or
+-- add one while it runs, and the call goes to the watchers there were when the write happened. The copy is a fresh
+-- table, not a reused one: a watcher that writes another state (or this one) runs this again before it returns.
+-- Most writes have no watcher for the key, or none for "*", so nothing is copied for those.
+local function notify(list, v, old, k)
+    if list == nil then return end
+    local n = #list
+    if n == 0 then return end
+    local copy = table.move(list, 1, n, 1, {})
+    for i = 1, n do copy[i](v, old, k) end
+end
 
 --- Observable state table. Reads/writes look like a plain table; writes
 --- notify watchers registered with ui.watch().
@@ -370,10 +381,9 @@ function ui.state(init)
             local old = data[k]
             if old == v then return end
             data[k] = v
-            -- Iterate copies: a watcher may remove itself (or others) while running.
             local w = watchers[proxy]
-            for _, fn in ipairs({ table.unpack(w[k] or EMPTY_LIST) }) do fn(v, old, k) end
-            for _, fn in ipairs({ table.unpack(w["*"] or EMPTY_LIST) }) do fn(v, old, k) end
+            notify(w[k], v, old, k)
+            notify(w["*"], v, old, k)
         end,
         __pairs = function() return next, data, nil end,
         __len = function() return #data end,
@@ -1721,6 +1731,19 @@ function ui.__futureAdopt(f, core, receiver)
     end
 end
 
+-- Scratch lists of ui.__tick, reused from frame to frame instead of a new table each (a frame with nothing due makes
+-- no garbage). Taken while in use (the local is nil then): a callback that runs ui.__tick again (a test, a script
+-- driving frames by hand) gets fresh ones and doesn't clobber the outer call's. Emptied after use, so they hold no
+-- callback alive and the next use starts at length 0.
+local dueScratch, frameScratch = {}, {}
+
+-- The order timers fire in when several come due in one frame: by due time, then by the order they were set.
+local function dueFirst(a, b)
+    local da, db = timers[a].due, timers[b].due
+    if da ~= db then return da < db end
+    return a < b
+end
+
 --- Called by the engine at the start of every frame. Returns the seconds until
 --- the next timer is due (nil when there are no timers), so the engine wakes up for it.
 function ui.__tick(now)
@@ -1728,20 +1751,21 @@ function ui.__tick(now)
     if pinned[1] ~= nil then pinned = {} end
     if unhandled[1] ~= nil then reportUnhandled() end
     -- Collect first: callbacks may add or clear timers.
-    local due = {}
+    local due = dueScratch or {}
+    dueScratch = nil
+    local ndue = 0
     for id, t in pairs(timers) do
-        if now >= t.due then due[#due + 1] = id end
+        if now >= t.due then
+            ndue = ndue + 1
+            due[ndue] = id
+        end
     end
     -- In the order they came due (then the order they were set), not pairs' order: a timeout of 10 ms and one of 20 ms
     -- that both come due in one frame fire in that order.
-    if #due > 1 then
-        table.sort(due, function(a, b)
-            local da, db = timers[a].due, timers[b].due
-            if da ~= db then return da < db end
-            return a < b
-        end)
-    end
-    for _, id in ipairs(due) do
+    if ndue > 1 then table.sort(due, dueFirst) end
+    for i = 1, ndue do
+        local id = due[i]
+        due[i] = nil -- emptied as it goes: the list is empty again however the loop ends
         local t = timers[id]
         if t then
             if t.rep then
@@ -1754,6 +1778,7 @@ function ui.__tick(now)
             protectedCall(t.fn)
         end
     end
+    dueScratch = due
     -- C++ elements that tick every frame, rendered or not (Timer). Dropped children are collected first, so a
     -- Timer that a container dropped and nothing references stops now (see `dropped` above).
     if types ~= nil and types.tick then
@@ -1763,8 +1788,20 @@ function ui.__tick(now)
         end
         protectedCall(types.tick, now)
     end
-    -- Iterate a copy: a callback may remove itself while running.
-    for _, fn in ipairs({ table.unpack(frameCallbacks) }) do protectedCall(fn, now) end
+    -- Iterate a snapshot: a callback may remove itself (or others), or add one, while running; the frame calls the
+    -- ones there were when it started. table.move, not table.unpack: no limit on how many there are.
+    local nframe = #frameCallbacks
+    if nframe > 0 then
+        local snapshot = frameScratch or {}
+        frameScratch = nil
+        table.move(frameCallbacks, 1, nframe, 1, snapshot)
+        for i = 1, nframe do
+            local fn = snapshot[i]
+            snapshot[i] = nil
+            protectedCall(fn, now)
+        end
+        frameScratch = snapshot
+    end
     local nextDue
     for _, t in pairs(timers) do
         -- A NaN due time never comes (and math.max(0, NaN) is 0: a frame every iteration); the checks above keep
@@ -1790,18 +1827,24 @@ function ui.snackbar(text, opts)
     snack.shownAt = native.time()
 end
 
--- Logging goes through spdlog on the C++ side.
+-- Logging goes through spdlog on the C++ side. A message at a level that's off isn't built: no string.format, and
+-- no __tostring of the arguments (a log.debug in a binding costs a call and a check when debug is off).
+local logEnabled = native.logEnabled or function() return true end -- (a stub native without it logs everything)
 local function logAt(level)
     return function(fmt, ...)
+        if not logEnabled(level) then return end
         local msg = select("#", ...) > 0 and string.format(fmt, ...) or tostring(fmt)
         native.log(level, msg)
     end
 end
 ui.log = { trace = logAt("trace"), debug = logAt("debug"), info = logAt("info"),
-           warn = logAt("warn"), error = logAt("error") }
+           warn = logAt("warn"), error = logAt("error"),
+           --- enabled(level) -> whether log[level] logs, for a message that costs something to gather.
+           enabled = logEnabled }
 
 --- print() in UI scripts logs at info level.
 function ui.print(...)
+    if not logEnabled("info") then return end
     local parts = {}
     for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
     native.log("info", table.concat(parts, "\t"))
@@ -1843,6 +1886,13 @@ ui.setWindowSize = native.setWindowSize     -- setWindowSize(w, h) in dp (times 
 -- ids in a component or delegate scope are in its `ids` table instead), then any
 -- Capitalized name becomes an element constructor (so elements registered
 -- from C++ just work; registered types get typed constructors).
+--
+-- Those constructors are cached in a table of their own, read after the ids, never in `ui`: `ui` is read first, so a
+-- constructor cached there would shadow an app id of the same name for good. An id read before its element registers
+-- (a binding `Details ~= nil` that runs before a Loader builds `Card { id = "Details" }`), or after a weak id was
+-- collected, would stay a constructor (`Details.text` then fails), and ui.checkId would report the id as colliding
+-- with "ui member 'ui.Details'". Cached here, the id wins as soon as it exists.
+local implicitCtors = {}
 ui.env = setmetatable({ ui = ui }, {
     __index = function(_, k)
         local v = ui[k]
@@ -1851,9 +1901,11 @@ ui.env = setmetatable({ ui = ui }, {
         if v ~= nil then return v end
         v = ui.ids[k]
         if v ~= nil then return v end
+        v = implicitCtors[k]
+        if v ~= nil then return v end
         if type(k) == "string" and k:match("^%u") then
             local ctor = ui.element(k)
-            ui[k] = ctor
+            implicitCtors[k] = ctor
             return ctor
         end
         return nil
@@ -1987,7 +2039,8 @@ end
 
 -- `require "MyComponent"` inside a UI script loads MyComponent.lua from the entry script's folder (a resource
 -- folder such as `app:/`) in its own environment (chunkEnv), like QML files as components. Modules not found there
--- are looked up in `imlui:/` by the engine's searcher, then on package.path.
+-- are looked up in `imlui:/` by the engine's searcher, and nowhere else: registerResources removed Lua's file and C
+-- searchers (no package.path, no DLLs).
 table.insert(package.searchers, 2, function(name)
     if not ui.__dir or resource == nil then return nil end
     local full, tried = resource.find(name, ui.__dir)

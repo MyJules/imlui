@@ -112,6 +112,17 @@ Color argColor(lua::State* state, int idx) {
     lua::error(state, "expected a color (hex string, role name or {r,g,b,a})");
 }
 
+/// The level named by argument `idx` of log() and logEnabled(): "trace", "debug", "info", "warn", "error"; anything
+/// else is info.
+log::Level levelArg(lua::State* state, int idx) {
+    const std::string_view lv = lua::tostring(state, idx);
+    return lv == "trace"   ? log::Level::Trace
+           : lv == "debug" ? log::Level::Debug
+           : lv == "warn"  ? log::Level::Warn
+           : lv == "error" ? log::Level::Error
+                           : log::Level::Info;
+}
+
 struct NativeFn {
     const char* name;
     lua::CFunction fn;
@@ -308,17 +319,19 @@ constexpr NativeFn nativeFns[] = {
          lua::pushstring(state, ImGui::GetVersion());
          return 1;
      }},
-    // log(level, message) — level: "trace" | "debug" | "info" | "warn" | "error"
+    // log(level, message) — level: "trace" | "debug" | "info" | "warn" | "error". At a level that's off, `message`
+    // isn't turned into a string: its __tostring doesn't run.
     {"log",
      [](lua::State* state) -> int {
-         std::string_view lv = lua::tostring(state, 1);
-         log::Level l = lv == "trace"   ? log::Level::Trace
-                        : lv == "debug" ? log::Level::Debug
-                        : lv == "warn"  ? log::Level::Warn
-                        : lv == "error" ? log::Level::Error
-                                        : log::Level::Info;
-         log::write(l, lua::toStringAny(state, 2), "lua");
+         const log::Level l = levelArg(state, 1);
+         if (log::enabled(l)) log::write(l, lua::toStringAny(state, 2), "lua");
          return 0;
+     }},
+    // logEnabled(level) -> bool — whether log(level, ...) logs: the DSL's log.* check it before string.format.
+    {"logEnabled",
+     [](lua::State* state) -> int {
+         lua::pushboolean(state, log::enabled(levelArg(state, 1)));
+         return 1;
      }},
     // setScopeHooks(scopes, callIn) — the DSL's element scopes, for C++ calls of element functions (element_scope).
     {"setScopeHooks",
