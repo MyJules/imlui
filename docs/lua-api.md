@@ -197,6 +197,9 @@ connect(saveButton, "onClicked", function(self) log.info("saved") end)
 stop() -- that listener no longer runs
 ```
 
+In the editor, the [Lua definitions](extending.md#editor-support-lua-definitions) type the listener like the handler:
+`connect(slider, "onMoved", function(self, value) ... end)` gets `self: Slider` and `value: number`.
+
 - **Order.** The handler field (`onClicked = ...`) first, then the listeners in connect order.
 - **During a dispatch.** A listener may disconnect itself or others: a disconnected one that hasn't run yet doesn't.
   One connected during a dispatch runs from the next one on.

@@ -1302,7 +1302,7 @@ declaration order, so they can be committed and diffed.
 | File | What |
 |---|---|
 | `imlui.lua` | The DSL (`---@meta imlui`, so `require "imlui"` is typed too): `state`, `watch`, `bind`, `component`, the theme, timers, `async`/`await`/`sleep`/`all`/`future`, `snackbar`, `log`, `ui.resource`, the misc functions, `native`, all also as `ui.*`; the classes `Element` (the common props), `ElementProps` (what every constructor takes: the common props and the children), `Binding`, `Future<T>`, `ListModel<T>`, the aliases `Color`, `SizeClass`, `Scheme`, and the Lua-side props of `Repeater`, `ListView`, `If`, `Loader`, `Responsive`. Hand-written, shipped with the library's files as `imlui:/definitions/imlui.lua` (`src/resources/definitions/imlui.lua`) and copied as it is. |
-| `types.lua` | Generated from the `TypeRegistry`. Per element type `Gauge`: `GaugeProps: ElementProps` (each writable property as its value, a binding function or a `bind`; the `on*` handlers), `Gauge: Element` (the element table: properties, handlers, methods), the constructor `Gauge(props)` and `ui.Gauge`, and the alias `GaugeSignal` (its signal names). Per singleton `backend`: a class `backend` and the global (a singleton that is a [list model](#list-models): the global, typed `ListModel<T>`). The named structs and enums the members use. `connect`, with an overload per type and the alias `ImluiSignal` of every signal name. |
+| `types.lua` | Generated from the `TypeRegistry`. Per element type `Gauge`: `GaugeProps: ElementProps` (each writable property as its value, a binding function or a `bind`; the `on*` handlers), `Gauge: Element` (the element table: properties, handlers, methods), the constructor `Gauge(props)` and `ui.Gauge`, and the alias `GaugeSignal` (its signal names). Per singleton `backend`: a class `backend` and the global (a singleton that is a [list model](#list-models): the global, typed `ListModel<T>`). The named structs and enums the members use. `connect`, with an overload per signal (`fn` typed like the handler) and the alias `ImluiSignal` of every signal name. |
 
 ```lua
 -- types.lua (excerpt)
@@ -1380,7 +1380,11 @@ client use the same server and the same file.
   records the way each named type's values go (`LuaTypes::Flow`: `Output` for property values, results, signal
   arguments and value singletons, `Input` for writable properties in the props class, parameters and raw props; a
   struct passes its flow on to the types of its fields), the second writes the declarations.
-- **`connect`** takes the signal names of the registered types (`ImluiSignal`), so a misspelled one is flagged.
+- **`connect`** takes the signal names of the registered types (`ImluiSignal`), so a misspelled one is flagged. It has
+  an overload per signal, `fun(target: Slider, signal: "onMoved", fn: (fun(self: Slider, value: number))): fun()`,
+  so the listener's parameters are typed like the handler's: `connect(slider, "onMoved", function(self, value) ...
+  end)` gets `self: Slider` and `value: number`, and a listener with a parameter too many is flagged. That needs the
+  target's type: on an untyped one (`ui.ids.x` is `any`) `fn` is an untyped function.
 
 **Types of values.** Each `LuaConvert<T>` describes its values as a LuaLS type expression (`luaTypeOf<T>()`, module
 `imlui.types.lua_convert`):

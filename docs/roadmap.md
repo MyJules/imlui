@@ -17,8 +17,6 @@ Follow-ups not scheduled yet:
   modules (`fluent/common`, `fluent/button`, `skin`, and the existing `widgets/button`).
 - **Run `tidy` (and the sanitizer preset) in CI**: no CI yet, GitHub Actions deferred. When it lands, it runs `tidy`,
   `lua_check` and the `clang-debug-headless` / `clang-asan-headless` test presets (no GL smoke tests).
-- Lua definitions: typed signals (`signal<Args...>`) and parameter names for the built-ins, whose handlers are
-  `fun(self, ...: any)` in `types.lua` for now.
 - Per-child cost in big containers: a `Row` builds a `Frame::Child` per pass (fills, sizes, render, and its parent's
   `contentFillsWidth` / size questions), each an instance lookup and an ImGui ID; in the `nested` bench an element's
   props are read ~18 times a frame (`visible` 3, `width`/`fillWidth` 3, `__children` 2.5). Keep a container's

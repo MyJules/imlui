@@ -9,8 +9,8 @@
 //    handlers) and a `<Name>` class (the element table: properties, raw properties, handlers, methods) per element
 //    type, the constructor `<Name>(props)` (also as `ui.<Name>`), a class and a global per singleton (a typed global
 //    for a value singleton, a ListModel), the named structs and enums the members use, and `connect` with an
-//    overload per type whose signal names are a
-//    `<Name>Signal` alias.
+//    overload per signal (target type, signal name and handler type, so `fn` gets the handler's parameters); each
+//    type's signal names are also a `<Name>Signal` alias.
 //
 // Member types come from LuaConvert (luaTypeOf<V>, recorded by TypeBuilder in TypeInfo), the hover docs from
 // TypeBuilder::doc (`---` lines above the classes, the constructor and each field). Each member is described in the
@@ -189,21 +189,30 @@ std::string rawPropType(const std::string& self, const TypeInfo::RawProperty& p,
     return propType(self, false, type);
 }
 
+/// One `connect` overload: a signal of a type, and the handler type its `fn` gets.
 struct Connectable {
-    std::string type;   ///< the target's class
-    std::string alias;  ///< its signal alias
-    std::string signal; ///< the handler type connect's fn gets
+    std::string type;    ///< the target's class
+    std::string signal;  ///< the signal's name
+    std::string handler; ///< the handler type connect's fn gets
 };
 
+/// What `connect` gets from a type with signals: its `<Name>Signal` alias and an overload per signal.
+void addConnectables(const std::string& type, const std::string& alias, const std::vector<Signal>& signals,
+                     std::vector<std::string>& aliases, std::vector<Connectable>& connectables) {
+    aliases.push_back(alias);
+    for (const Signal& s : signals)
+        connectables.push_back({type, s.name, s.type});
+}
+
 std::string elementDefinitions(const std::string& name, const TypeInfo& info, LuaTypes& named,
-                               std::vector<Connectable>& connectables) {
+                               std::vector<std::string>& aliases, std::vector<Connectable>& connectables) {
     const std::vector<Signal> signals = signalsOf(info, name, named);
     const std::string alias = name + "Signal";
     std::string out = "-- " + name + "\n\n";
     out += signalAlias(alias, signals);
     if (!signals.empty()) {
         out += "\n";
-        connectables.push_back({name, alias, "fun(self: " + name + ", ...: any)"});
+        addConnectables(name, alias, signals, aliases, connectables);
     }
 
     const std::string doc = LuaTypes::docLines(info.doc());
@@ -236,7 +245,7 @@ std::string elementDefinitions(const std::string& name, const TypeInfo& info, Lu
 }
 
 std::string singletonDefinitions(const std::string& name, const TypeInfo& info, LuaTypes& named,
-                                 std::vector<Connectable>& connectables) {
+                                 std::vector<std::string>& aliases, std::vector<Connectable>& connectables) {
     if (const LuaTypes::Describe value = info.valueType()) { // a value singleton (a ListModel): its global's type
         std::string out = "-- " + name + " (singleton)\n\n";
         out += LuaTypes::docLines(info.doc());
@@ -251,7 +260,7 @@ std::string singletonDefinitions(const std::string& name, const TypeInfo& info, 
     out += signalAlias(alias, signals);
     if (!signals.empty()) {
         out += "\n";
-        connectables.push_back({name, alias, "fun(...: any)"});
+        addConnectables(name, alias, signals, aliases, connectables);
     }
     out += LuaTypes::docLines(info.doc());
     out += "---@class " + name + "\n";
@@ -260,15 +269,17 @@ std::string singletonDefinitions(const std::string& name, const TypeInfo& info, 
     return out;
 }
 
-std::string connectDefinitions(const std::vector<Connectable>& connectables) {
+/// `connect`: the alias of every signal name (`aliases`, the types' `<Name>Signal`) and an overload per signal, so
+/// `connect(slider, "onMoved", function(self, value) ... end)` gets `self: Slider` and `value: number`.
+std::string connectDefinitions(const std::vector<std::string>& aliases, const std::vector<Connectable>& connectables) {
     std::string out = "-- connect\n\n";
     out += "---Every signal name of the registered types and singletons (`connect` raises for any other).\n";
-    if (connectables.empty()) {
+    if (aliases.empty()) {
         out += "---@alias ImluiSignal string\n\n";
     } else {
         out += "---@alias ImluiSignal ";
-        for (std::size_t i = 0; i < connectables.size(); ++i)
-            out += (i ? "|" : "") + connectables[i].alias;
+        for (std::size_t i = 0; i < aliases.size(); ++i)
+            out += (i ? "|" : "") + aliases[i];
         out += "\n\n";
     }
     out += "---Adds a listener to a signal of a C++ element or singleton: `fn` runs whenever `target` emits `signal`, "
@@ -278,7 +289,8 @@ std::string connectDefinitions(const std::vector<Connectable>& connectables) {
     out += "---@param fn function\n";
     out += "---@return fun() disconnect\n";
     for (const Connectable& c : connectables)
-        out += "---@overload fun(target: " + c.type + ", signal: " + c.alias + ", fn: " + c.signal + "): fun()\n";
+        out += "---@overload fun(target: " + c.type + ", signal: " + LuaTypes::quoted(c.signal) +
+               ", fn: " + LuaTypes::grouped(c.handler) + "): fun()\n";
     out += "function connect(target, signal, fn) end\n";
     out += "ui.connect = connect\n";
     return out;
@@ -303,6 +315,7 @@ std::string writeFile(const fs::path& file, std::string_view text) {
 
 /// The text of types.lua, one pass (see luaTypeDefinitions).
 std::string typeDefinitions(const TypeRegistry& registry, LuaTypes& named) {
+    std::vector<std::string> aliases;
     std::vector<Connectable> connectables;
     std::string elements;
     std::string skipped;
@@ -313,7 +326,7 @@ std::string typeDefinitions(const TypeRegistry& registry, LuaTypes& named) {
             skipped += "-- skipped: element type " + LuaTypes::quoted(name) + " (not a Lua name)\n";
             continue;
         }
-        elements += elementDefinitions(name, *info, named, connectables);
+        elements += elementDefinitions(name, *info, named, aliases, connectables);
     }
     std::string singletons;
     for (const auto& [name, info] : registry.singletonTypes()) {
@@ -321,7 +334,7 @@ std::string typeDefinitions(const TypeRegistry& registry, LuaTypes& named) {
             skipped += "-- skipped: singleton " + LuaTypes::quoted(name) + " (not a Lua name)\n";
             continue;
         }
-        singletons += singletonDefinitions(name, *info, named, connectables);
+        singletons += singletonDefinitions(name, *info, named, aliases, connectables);
     }
 
     std::string out = "---@meta _\n"
@@ -339,7 +352,7 @@ std::string typeDefinitions(const TypeRegistry& registry, LuaTypes& named) {
     }
     out += elements;
     out += singletons;
-    out += connectDefinitions(connectables);
+    out += connectDefinitions(aliases, connectables);
     return out;
 }
 
