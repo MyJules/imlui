@@ -1242,6 +1242,7 @@ implementation goes after `module :private;`. See [Development](development.md#m
 | `imlui.skin.fluent.common` | The Fluent primitives (namespace `imlui::fluent`): `Look`, the metrics, item state, fills, `drawControl`, `drawUnderline`, `drawFocusRect`, content layout |
 | `imlui.skin.fluent.button` | `fluent::button`, `buttonSize`, `variantFill` |
 | `imlui.skin.fluent.chrome` | Fluent's element chrome: `applicationBackground`, `windowChrome`, `scrollViewRounding` |
+| `imlui.skin.fluent.inputs` | Fluent's inputs (group B): `fluent::textField`, `spinBox`, `dropdown`, `colorField` and their sizes; `headerHeight`, `descriptionHeight`, `flyoutRowHeight` and the Fluent constants without a token (`innerButtonWidth`, `innerButtonMargin`, `descriptionGap`, `flyoutGap`, `flyoutPaddingY`, `rowInsetX`/`Y`, `swatchInset`, `pickerPadding`, `pickerWidth`). Privately, a list flyout (`beginFlyout`, `flyoutRow`) for the combo box until group (C)'s Fluent menus land |
 
 ### UI (`src/imlui/ui/`)
 
