@@ -181,13 +181,25 @@ void Box::render(Frame& frame) {
         ImGui::PushOverrideID(c.id());
         const ImGuiID windowId = ImGui::GetID("##imlui.box.layer");
         ImGui::PopID();
-        if (ImGui::BeginChild(windowId, {std::max(1.0f, size->x), std::max(1.0f, size->y)}, childFlags, windowFlags)) {
+        // What the child draws past its rect (an outline stroked across its fractional edge: ImGui truncates a child
+        // window's size; a focus ring, a shadow) isn't cut at the window's edge: its clip rect reaches `bleed` further,
+        // within the box window's own clip. The window itself stays as large as the child, as it takes the mouse.
+        const ImDrawList* outer = ImGui::GetWindowDrawList();
+        const ImVec2 outerMin = outer->GetClipRectMin(), outerMax = outer->GetClipRectMax();
+        const float bleed = frame.dp(16.0f);
+        const ImVec2 windowSize{std::max(1.0f, std::ceil(size->x)), std::max(1.0f, std::ceil(size->y))};
+        if (ImGui::BeginChild(windowId, windowSize, childFlags, windowFlags)) {
+            ImGui::PushClipRect({std::max(outerMin.x, pos.x - bleed), std::max(outerMin.y, pos.y - bleed)},
+                                {std::min(outerMax.x, pos.x + windowSize.x + bleed),
+                                 std::min(outerMax.y, pos.y + windowSize.y + bleed)},
+                                false);
             ImGui::PushOverrideID(seed);
             {
                 const layout::BoxScope box{area};
                 if (!c.render()) ImGui::Dummy({0.0f, 0.0f});
             }
             ImGui::PopID();
+            ImGui::PopClipRect();
         }
         ImGui::EndChild();
     });
