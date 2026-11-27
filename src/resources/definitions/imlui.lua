@@ -44,6 +44,8 @@ ui = {}
 ---@field visible? boolean
 ---@field enabled? boolean
 ---@field tooltip? string
+---@field hovered? boolean True while the mouse is over the element (opt-in: give it `hovered = false` or `onHoverChanged`).
+---@field onHoverChanged? fun(self: Element, hovered: boolean)
 ---@field width? number dp; -1 fills, < -1 fills minus |v| dp, 0 is automatic.
 ---@field height? number dp; -1 fills, < -1 fills minus |v| dp, 0 is automatic.
 ---@field fillWidth? boolean
@@ -64,6 +66,8 @@ ui = {}
 ---@field visible? boolean|(fun(self: Element): boolean?)|Binding
 ---@field enabled? boolean|(fun(self: Element): boolean?)|Binding
 ---@field tooltip? string|(fun(self: Element): string?)|Binding
+---@field hovered? boolean|Binding Opt-in hover tracking: imlui keeps it true while the mouse is over the element.
+---@field onHoverChanged? fun(self: Element, hovered: boolean) Called when `hovered` changes; turns hover tracking on.
 ---@field width? number|(fun(self: Element): number?)|Binding dp; -1 fills, < -1 fills minus |v| dp.
 ---@field height? number|(fun(self: Element): number?)|Binding dp; -1 fills, < -1 fills minus |v| dp.
 ---@field fillWidth? boolean|(fun(self: Element): boolean?)|Binding
