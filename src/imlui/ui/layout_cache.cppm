@@ -48,6 +48,15 @@ void assumeHeight(ImGuiID id, float size);
 /// culling doesn't trust it (settledSize) until a render without such a placement records it.
 void recordSize(ImGuiID id, ImVec2 size, bool provisional = false);
 
+/// Counts the times a frame's layout was stale: a size differed from the one a layout assumed (recordSize), or an
+/// element rendered unseen to measure itself (noteStale). Compare the count taken before a frame with the one after:
+/// when it moved, the frame placed something by a size it didn't have, and the next frame places it right. The
+/// Engine renders such a frame again before presenting it after the window size changed (a resize drag shows each
+/// size once, so a layout that settles a frame later would trail the window's edge).
+[[nodiscard]] std::uint64_t staleCount();
+/// Counts a stale layout that recordSize() doesn't see (Renderer::renderUnseen: drawn clipped, shown next frame).
+void noteStale();
+
 /// Consecutive frames a size may differ from the assumed one before its mismatches stop requesting frames.
 inline constexpr int maxSettleFrames = 8;
 
@@ -206,6 +215,7 @@ void recordSize(ImGuiID id, ImVec2 size, bool provisional) {
     e.size = size;
     e.scale = dpiScale();
     if (!mismatch) return;
+    noteStale();
     if (e.mismatchFrame == frame) return; // already counted (and requested) this frame
     e.streak = e.mismatchFrame == frame - 1 ? e.streak + 1 : 1;
     e.mismatchFrame = frame;
@@ -219,5 +229,12 @@ void recordSize(ImGuiID id, ImVec2 size, bool provisional) {
 }
 
 std::size_t cacheEntries() { return entries().size(); }
+
+namespace {
+std::uint64_t staleLayouts = 0; // main thread only, like the cache
+}
+
+std::uint64_t staleCount() { return staleLayouts; }
+void noteStale() { ++staleLayouts; }
 
 } // namespace imlui::layout

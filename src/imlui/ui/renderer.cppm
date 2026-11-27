@@ -584,7 +584,10 @@ bool Renderer::renderUnseen(lua::State* state, int idx) {
     ImGui::PushClipRect(at, at, true);
     const bool rendered = render(state, idx);
     ImGui::PopClipRect();
-    if (rendered) requestFrame(); // to show it, placed by the size it just took
+    if (rendered) {
+        requestFrame(); // to show it, placed by the size it just took
+        layout::noteStale();
+    }
     return rendered;
 }
 

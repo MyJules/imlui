@@ -44,6 +44,7 @@ import imlui.ui.background;
 import imlui.ui.clock;
 import imlui.ui.frame_request;
 import imlui.ui.layout_box;
+import imlui.ui.layout_cache;
 import imlui.ui.main_thread;
 import imlui.ui.main_timers;
 import imlui.ui.renderer;
@@ -122,9 +123,16 @@ private:
     /// Undoes what runWindow() set up (wake handlers, timers, posts, the Lua state, the window, the background pool).
     /// run() calls it however the loop leaves; a second call does nothing harmful.
     void shutdown();
-    /// One complete frame. Also called from inside event processing while
-    /// the window is being resized.
+    /// One complete frame, presented. Also called from inside event processing while
+    /// the window is being resized. After the window size or the scale changed, a frame whose layout was stale
+    /// (layout::staleCount: placed by sizes of the last frame's width) is rendered again before it is presented, up to
+    /// resizePasses times, so a resize shows each size laid out for it rather than a frame late.
     void renderFrame();
+    /// renderFrame() up to drawing it into the back buffer (not presented).
+    void renderPass();
+    /// Renders per presented frame after a size or scale change, at most (a layout that settles over more frames
+    /// still does, on the frames after).
+    static constexpr int resizePasses = 3;
     /// Applies a pending zoom and re-applies the theme when the effective scale changed.
     void syncScale();
     /// Adds the fonts the current theme declares to the resources watched for hot reload.
@@ -166,6 +174,8 @@ private:
     int m_appliedHeight = 0;
     float m_themeScale = 0.0f; ///< dpiScale() the ImGui style was last built for
     float m_wheelZoom = 0.0f;  ///< Ctrl + wheel notches not yet turned into zoom steps
+    std::pair<int, int> m_presentedSize{-1, -1}; ///< framebuffer size of the last presented frame
+    float m_presentedScale = 0.0f;               ///< dpiScale() of the last presented frame
     FileSnapshot m_snapshot;
     ResourceTime m_snapshotTime; ///< when the scan of m_snapshot started
     struct ScanInbox;
@@ -409,6 +419,26 @@ void Engine::shutdown() {
 // ------------------------------------------------------------ frame
 
 void Engine::renderFrame() {
+    // A new window size (a resize, maximize) or scale: layouts that place children by their sizes on the last frame
+    // (a Row, a stack's align, the TopAppBar, a branch the new size class switches on) are a frame late. Such a frame
+    // is drawn again before it's shown: a live resize presents one frame per size, which would show each size laid
+    // out for the one before. A frame that rendered nothing stale is presented as it is (one pass: the common case).
+    const std::pair<int, int> size = m_window.framebufferSize();
+    for (int pass = 1;; ++pass) {
+        const std::uint64_t stale = layout::staleCount();
+        renderPass();
+        const bool changed = size != m_presentedSize || dpiScale() != m_presentedScale;
+        if (!changed || pass >= resizePasses || layout::staleCount() == stale) break;
+    }
+    m_window.present();
+    m_presentedSize = size;
+    m_presentedScale = dpiScale();
+    m_images.collect(); // textures the backend destroyed while drawing this frame
+    if (!m_renderer.windowTitle().empty()) m_window.setTitle(m_renderer.windowTitle());
+    applyPendingWindowSize();
+}
+
+void Engine::renderPass() {
     beginFrameRequests(); // requests made from here on are for the next frame
     syncScale();
     m_window.beginFrame();
@@ -419,12 +449,9 @@ void Engine::renderFrame() {
     if (io.WantTextInput) requestFrameAfter(caretBlinkSeconds);
     // Held buttons: repeat buttons, drags that pause, press animations.
     if (ImGui::IsAnyMouseDown()) requestFrameAfter(1.0 / 30.0);
-    ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    const ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
     syncTitleBar();
-    m_window.endFrame(bg.x, bg.y, bg.z);
-    m_images.collect(); // textures the backend destroyed while drawing this frame
-    if (!m_renderer.windowTitle().empty()) m_window.setTitle(m_renderer.windowTitle());
-    applyPendingWindowSize();
+    m_window.draw(bg.x, bg.y, bg.z);
 }
 
 void Engine::syncTitleBar() {

@@ -74,8 +74,15 @@ public:
     /// Starts a new ImGui frame.
     void beginFrame();
 
-    /// Renders the ImGui frame over a cleared background and presents it.
+    /// Renders the ImGui frame over a cleared background and presents it (draw(), then present()).
     void endFrame(float r, float g, float b);
+    /// Ends the ImGui frame and draws it over a cleared background into the back buffer, without presenting it: a
+    /// frame drawn again before it is shown (beginFrame() ... draw() once more) replaces it.
+    void draw(float r, float g, float b);
+    /// Shows the last frame draw() drew.
+    void present();
+    /// The framebuffer size in pixels.
+    [[nodiscard]] std::pair<int, int> framebufferSize() const;
 
     void setTitle(const std::string& title);
     /// Colors the OS title bar (sRGB, 0..1) to match the app: on Windows 10 (20H1+) a dark `background` switches
@@ -99,8 +106,11 @@ public:
     [[nodiscard]] float contentScale() const;
 
 private:
-    void refreshDuringEvents();
+    /// `resized`: called for a new framebuffer size (else for a repaint the OS asked for).
+    void refreshDuringEvents(bool resized);
     void installEventCallbacks();
+    /// After an event poll: resumes vsync (refreshDuringEvents) and forgets the frames it presented.
+    void endPoll();
     static void markEvent();
     void onContentScale(float scale);
 
@@ -108,6 +118,12 @@ private:
     std::function<void()> m_refresh;
     std::function<void(float)> m_onContentScale;
     bool m_inPoll = false, m_inRefresh = false;
+    bool m_vsync = true;
+    /// Vsync is off for the rest of this event poll: while a live resize renders frames from inside it.
+    bool m_vsyncPaused = false;
+    /// The framebuffer size of the last frame presented from inside this event poll (a refresh after a resize
+    /// already shows that size: not rendered again), or none.
+    std::optional<std::pair<int, int>> m_presentedInPoll;
     bool m_hadEvents = false;
     GLFWwindow* m_window = nullptr;
     bool m_glfwInitialized = false;
@@ -145,6 +161,7 @@ bool Window::create(const Config& cfg) {
     m_window = glfwCreateWindow(cfg.width, cfg.height, cfg.title.c_str(), nullptr, nullptr);
     if (!m_window) return false;
     glfwMakeContextCurrent(m_window);
+    m_vsync = cfg.vsync;
     glfwSwapInterval(cfg.vsync ? 1 : 0);
 
     float sx = 1.0f, sy = 1.0f;
@@ -169,13 +186,14 @@ bool Window::create(const Config& cfg) {
     // While the user drags a window edge, Windows runs a modal loop inside
     // glfwPollEvents() and the app loop is stalled. GLFW still calls these
     // callbacks, so frames are rendered from them to keep the UI live.
+    // A resize step sends both: the new size, then a repaint at that size, rendered only once.
     glfwSetWindowRefreshCallback(m_window, [](GLFWwindow*) {
-        if (m_self) m_self->refreshDuringEvents();
+        if (m_self) m_self->refreshDuringEvents(false);
     });
     glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow*, int, int) {
         if (!m_self) return;
         m_self->m_hadEvents = true;
-        m_self->refreshDuringEvents();
+        m_self->refreshDuringEvents(true);
     });
     log::info("window created ({}x{}, content scale {:.2f})", cfg.width, cfg.height, m_scale);
     return true;
@@ -242,7 +260,7 @@ void Window::pollEvents() {
         // Don't spin while minimized.
         glfwWaitEventsTimeout(0.1);
     }
-    m_inPoll = false;
+    endPoll();
 }
 
 bool Window::waitEvents(double seconds) {
@@ -253,7 +271,7 @@ bool Window::waitEvents(double seconds) {
         glfwWaitEvents();
     else
         glfwWaitEventsTimeout(seconds);
-    m_inPoll = false;
+    endPoll();
     const bool had = m_hadEvents;
     m_hadEvents = false;
     return had;
@@ -270,14 +288,31 @@ void Window::beginFrame() {
 }
 
 void Window::endFrame(float r, float g, float b) {
+    draw(r, g, b);
+    present();
+}
+
+void Window::draw(float r, float g, float b) {
     ImGui::Render();
     int w = 0, h = 0;
     glfwGetFramebufferSize(m_window, &w, &h);
     glViewport(0, 0, w, h);
     glClearColor(r, g, b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    // Also when the frame is drawn again before it's shown: the backend creates and updates the textures the frame
+    // asked for (new glyphs, images) here.
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+void Window::present() {
     glfwSwapBuffers(m_window);
+    if (m_inPoll) m_presentedInPoll = framebufferSize();
+}
+
+std::pair<int, int> Window::framebufferSize() const {
+    int w = 0, h = 0;
+    glfwGetFramebufferSize(m_window, &w, &h);
+    return {w, h};
 }
 
 void Window::setTitle(const std::string& title) {
@@ -389,12 +424,31 @@ void Window::keepInWorkArea() {
 
 float Window::contentScale() const { return m_scale; }
 
-void Window::refreshDuringEvents() {
+void Window::refreshDuringEvents(bool resized) {
     // Only from inside pollEvents(): no frame is in progress then.
     if (!m_inPoll || m_inRefresh || !m_refresh) return;
+    // The repaint that follows a resize step, at the size just presented: that frame shows it already. Rendering it
+    // again would wait for another vertical blank on every step of the drag.
+    if (!resized && m_presentedInPoll == framebufferSize()) return;
+    // A live resize (Windows runs it as a modal loop inside the poll) renders a frame for each step: with vsync
+    // each would wait for a vertical blank, and the window's content would trail its edge. The compositor shows a
+    // windowed app's frames without tearing anyway; vsync is back when the poll returns.
+    if (m_vsync && !m_vsyncPaused) {
+        glfwSwapInterval(0);
+        m_vsyncPaused = true;
+    }
     m_inRefresh = true;
     m_refresh();
     m_inRefresh = false;
+}
+
+void Window::endPoll() {
+    m_inPoll = false;
+    m_presentedInPoll.reset();
+    if (m_vsyncPaused) {
+        glfwSwapInterval(1);
+        m_vsyncPaused = false;
+    }
 }
 
 } // namespace imlui::platform

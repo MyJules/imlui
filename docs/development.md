@@ -610,7 +610,11 @@ in a 1180 x 820 display, each inside a page-like `ScrollView`. Per scenario and 
 tree (`build`: the constructors; a `Repeater` builds its delegates on its first frame, so they count in `first`), the
 first frame, and the median and mean time per frame over 100 frames (after 10 to settle) twice: `anim`, with a `Timer`
 that changes a value every item reads through a binding on every frame, and `idle`, with nothing changing (a forced
-frame: what any redraw costs). `vertices` is ImGui's vertex count of the last frame. The list-model scenarios
+frame: what any redraw costs). `resize` is the median and max over 100 frames whose display width changes by a few
+pixels each (a live resize drag), each rendered again while its layout was stale, up to 3 passes, as the Engine does
+after a size change ([frames after a size change](architecture.md)); `stale` is how many of them were stale on their
+first pass (shown a frame late without the extra passes) and `passes` the passes per frame. `vertices` is ImGui's
+vertex count of the last frame. The list-model scenarios
 (`model`, `modelkey`, `luarows`, `luarowskey`) print a table of their own: one `ListView` of `--rows` rows (100 000 by
 default) of `ListItem`s, from a C++ [`VectorModel`](extending.md#list-models) without and with keys, or from a Lua list
 of row tables without and with a `key` function; `build` is filling the rows and building the tree, then the first

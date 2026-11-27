@@ -1486,6 +1486,27 @@ TEST_F(LayoutTest, ACenteredLabelSettlesAfterATimerChangesIt) {
     EXPECT_TRUE(luaui::errors().empty());
 }
 
+// layout::staleCount() moves on a frame that placed something by a size it didn't have (what the Engine renders again
+// before presenting after a resize), and stays put on a settled frame.
+TEST_F(LayoutTest, TheStaleCountMovesOnlyOnAStaleFrame) {
+    run(R"(
+        root = Column { align = "center",
+                        Last { id = "boxed", Text { id = "caption", text = "Hi" } } })");
+    m_h.renderFrame("root");
+    renderWhileRequested("root");
+    std::uint64_t before = layout::staleCount();
+    m_h.renderFrame("root");
+    EXPECT_EQ(layout::staleCount(), before); // settled
+
+    run("caption.text = 'A much longer label than before'");
+    before = layout::staleCount();
+    m_h.renderFrame("root"); // centered by the old width
+    EXPECT_GT(layout::staleCount(), before);
+    before = layout::staleCount();
+    m_h.renderFrame("root"); // by the new one
+    EXPECT_EQ(layout::staleCount(), before);
+}
+
 // A layout that can never settle (a child that grows every frame) asks for a few frames, then stops.
 TEST_F(LayoutTest, AnUnsettledLayoutStopsAskingForFrames) {
     run(R"(root = Column { align = "center", Grower {} })");
