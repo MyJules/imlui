@@ -892,7 +892,15 @@ of the same name (as the library's two variants below do).
 when it is at least 64 bytes, its extension isn't an already-compressed format (PNG, JPEG, zstd, zip, ...), and
 compression saves at least 10 %. Otherwise it's stored as is. A manifest's `compress = { [path] = true|false }`
 overrides that rule for single files (true compresses any non-empty file). `imlui.lua` shrinks to about a third,
-the fonts to about half.
+the fonts to about half. Level 19 takes about a second per MiB, so the tools keep each file's encoded form between
+runs (`imlui.tools.encoding_cache`): `imlui_rc` in `<name>.cache/` next to its outputs, `imlui_pack` (with `--depfile`,
+as `imlui_add_pak` runs it) in `<depfile>.cache/`. An entry is keyed by what decides the encoding (the content's size
+and hash, whether the extension is compressible, the `compress` override, the zstd level and version, and
+`encodingRuleVersion`), checksummed, and used only when intact and, for a zstd frame, when it decompresses to exactly
+the file, so a rerun encodes only the files that changed and writes the same bytes as a run without the cache; a stale
+or damaged entry is encoded again. Each run removes the entries it didn't use. `imlui_rc` also keeps the blob's size,
+hash and time in `<name>.bin.stamp`, so an unchanged blob is recognized without reading it back (a blob of another
+size is changed without reading it either).
 
 The library embeds its own files this way (`src/resources/resources.lua`, module `imlui.embedded.imlui` with two
 packages), and so does every app (its `src/resources/resources.lua`, as `app:/`) and the test host `imlui_smoke_host`
@@ -1390,7 +1398,8 @@ The library's own host is `tests/smoke_host/main.cpp`, used only by the smoke te
 | `imlui.embedded.<name>` | build tree, one per `imlui_add_resources` call | `imlui::embedded::<name>::packages()` (one `ResourcePackage` per manifest group), `mount(Resources&)`. The library has `imlui.embedded.imlui` (two packages: `imlui:/`, `imlui:/fonts/`). |
 | `zstd.compress` | `tools/lib/` | The zstd compressor (`zstd::compress`) |
 | `imlui.tools.resource_encoding` | `tools/lib/` | `encodeResource(path, data, compress)`, `compressible(path)`: the compression rule and its override |
-| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `readFile`, `replaceFile` (through a unique temporary file and a rename, retried while another process holds the file), `utf8`/`utf8Name`/`pathFromUtf8`, `toolMain` (the tools' `wmain`/`main`: UTF-8 arguments from Windows' UTF-16 command line, an exception printed instead of `abort()`) |
+| `imlui.tools.encoding_cache` | `tools/lib/` | `EncodingCache`: `encodeResource` results kept between runs of the tools, keyed by the content's hash and what decides the encoding, checked before use |
+| `imlui.tools.source_files` | `tools/lib/` | `SourceFile` (path, file, compression override), `collectFiles`, `contentHash`, `readFile`, `replaceFile` (through a unique temporary file and a rename, retried while another process holds the file), `utf8`/`utf8Name`/`pathFromUtf8`, `toolMain` (the tools' `wmain`/`main`: UTF-8 arguments from Windows' UTF-16 command line, an exception printed instead of `abort()`) |
 | `imlui.tools.resource_manifest` | `tools/lib/` | `ResourceGroup` (with the selection as written: `listed`, `include`, `exclude`), `ResourceManifest`, `loadManifest`/`parseManifest` (sandboxed Lua), its two halves `evaluateManifest` (the Lua, into `ManifestGroupFields`) and `resolveManifest` (the file system), `manifestDependencies`, `manifestListing` |
 | `imlui.tools.depfile` | `tools/lib/` | `depfileText`, `writeDepfile`: Make-style dependency files for Ninja |
 | `imlui.tools.rc` | `tools/lib/` | `runRc(args)`: the `imlui_rc` tool (writes the blob, the generated module and the dependency file; `--list`) |

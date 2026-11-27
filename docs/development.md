@@ -458,7 +458,8 @@ On this target:
   base folder, a listed file or an `include` folder spelled differently on disk or by a name that isn't an entry's
   own (Win32's trailing `.` or space, 8.3 short names), the sandbox and its instruction and memory limits, strings
   that aren't UTF-8, bad shapes; `evaluateManifest` and `resolveManifest` on their own), the scan and `collectFiles` past entries
-that can't be queried, linked files named by their own path, `replaceFile` (concurrent writers, a reader holding the file open), `manifestDependencies` and the dependency file format, merging groups into
+that can't be queried, linked files named by their own path, `replaceFile` (concurrent writers, a reader holding the file open), the encoding cache (the same result as
+  encoding, past damaged entries, and `imlui_rc` reruns writing the same blob), `manifestDependencies` and the dependency file format, merging groups into
   one `.pak` (`tools::mergeGroups`), and end to end: generated modules match their manifest. The library's packages
   hold exactly what `src/resources/resources.lua` lists (and not the manifest itself, which sits in the folder it
   embeds), or, not embedded, name its groups' folders; `imlui.embedded.smoke_embedded` (forced `EMBED ON`) is

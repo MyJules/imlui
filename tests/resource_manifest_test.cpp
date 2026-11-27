@@ -17,6 +17,8 @@ import imlui.embedded.smoke_embedded;
 import imlui.embedded.smoke_sources;
 #endif
 import imlui.tools.depfile;
+import imlui.tools.encoding_cache;
+import imlui.tools.rc;
 import imlui.resources.glob;
 import imlui.tools.pack;
 import imlui.tools.resource_encoding;
@@ -615,6 +617,110 @@ TEST(Depfile, WritesOneRuleWithEscapedPaths) {
     const std::vector<fs::path> deps{fs::path{"C:/src/a b.lua"}, fs::path{"C:/src/c#$.txt"}};
     EXPECT_EQ(tools::depfileText(fs::path{"C:/build/out.cppm"}, deps),
               "C:/build/out.cppm: \\\n  C:/src/a\\ b.lua \\\n  C:/src/c\\#$$.txt\n");
+}
+
+// ------------------------------------------------------------------ the encoding cache
+
+// The cache gives exactly what encodeResource() gives, from an entry when it holds an intact one for the same input
+// (content, compression override and rule), and encodes again past a stale, truncated or corrupt entry.
+TEST(EncodingCache, GivesWhatEncodingGivesAndSurvivesBadEntries) {
+    test::TempDir dir;
+    const fs::path folder = dir.path() / "cache";
+    const std::string script = repeated("local x = require('something') -- a comment\n", 200);
+    const std::string small = "tiny";
+    const auto bytes = [](const std::string& s) { return std::as_bytes(std::span{s.data(), s.size()}); };
+    const auto same = [](const tools::EncodedResource& a, const tools::EncodedResource& b) {
+        return a.compressed == b.compressed && a.size == b.size && std::ranges::equal(a.stored, b.stored);
+    };
+    const auto fresh = tools::encodeResource("main.lua", bytes(script));
+    ASSERT_TRUE(fresh.compressed);
+
+    {
+        tools::EncodingCache cache{folder};
+        EXPECT_TRUE(same(cache.encode("main.lua", bytes(script), std::nullopt), fresh));
+        EXPECT_TRUE(same(cache.encode("main.lua", bytes(script), std::nullopt), fresh));
+        EXPECT_TRUE(same(cache.encode("tiny.txt", bytes(small), std::nullopt),
+                         tools::encodeResource("tiny.txt", bytes(small))));
+        EXPECT_TRUE(same(cache.encode("tiny.txt", bytes(small), std::nullopt),
+                         tools::encodeResource("tiny.txt", bytes(small))));
+        EXPECT_EQ(cache.hits(), 2u);
+        EXPECT_EQ(cache.misses(), 2u);
+        // What decides the encoding is part of the key: the override, and whether the extension is compressible.
+        EXPECT_FALSE(cache.encode("main.lua", bytes(script), false).compressed);
+        EXPECT_FALSE(cache.encode("main.png", bytes(script), std::nullopt).compressed);
+        EXPECT_EQ(cache.misses(), 4u);
+    }
+
+    std::vector<fs::path> entries;
+    for (const auto& e : fs::directory_iterator(folder))
+        entries.push_back(e.path());
+    ASSERT_EQ(entries.size(), 4u);
+    // Every entry damaged: a byte flipped in the middle, or cut short. Each is encoded again (and rewritten).
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        auto content = *tools::readFile(entries[i]);
+        if (i % 2 == 0)
+            content[content.size() / 2] ^= std::byte{0x20};
+        else
+            content.resize(content.size() - 3);
+        ASSERT_TRUE(tools::replaceFile(entries[i], content));
+    }
+    {
+        tools::EncodingCache cache{folder};
+        EXPECT_TRUE(same(cache.encode("main.lua", bytes(script), std::nullopt), fresh));
+        EXPECT_TRUE(same(cache.encode("tiny.txt", bytes(small), std::nullopt),
+                         tools::encodeResource("tiny.txt", bytes(small))));
+        EXPECT_EQ(cache.misses(), 2u);
+        EXPECT_TRUE(same(cache.encode("main.lua", bytes(script), std::nullopt), fresh)) << "rewritten";
+        EXPECT_EQ(cache.hits(), 1u);
+        // A changed file is another entry; prune() keeps only those this run used.
+        const std::string changed = script + "-- one more line\n";
+        EXPECT_TRUE(same(cache.encode("main.lua", bytes(changed), std::nullopt),
+                         tools::encodeResource("main.lua", bytes(changed))));
+        dir.write("cache/0123456789abcdef.enc.tmp-1-2", "left by an interrupted run");
+        cache.prune();
+    }
+    std::size_t left = 0;
+    for ([[maybe_unused]] const auto& e : fs::directory_iterator(folder))
+        ++left;
+    EXPECT_EQ(left, 3u) << "main.lua twice and tiny.txt";
+}
+
+// imlui_rc keeps each file's encoded form between runs: a rerun writes the same blob, from the cache, and recognizes
+// the unchanged blob by its stamp. Without the cache (deleted), the blob is the same too.
+TEST(EncodingCache, ResourceCompilerRerunsGiveTheSameBlob) {
+    test::TempDir dir;
+    dir.write("src/main.lua", repeated("return Column { Text { text = 'hello' } }\n", 100));
+    dir.write("src/data.json", repeated("{\"a\": 1}\n", 100));
+    dir.write("src/resources.lua", R"(return { prefix = "app", include = { "*.lua", "*.json" } })");
+    const std::string manifestPath = tools::utf8(dir.path() / "src" / "resources.lua");
+    const std::string out = tools::utf8(dir.path() / "out");
+    const fs::path blob = dir.path() / "out" / "res.bin";
+    ASSERT_EQ(tools::runRc({manifestPath, "res", out}), 0);
+    const auto first = tools::readFile(blob);
+    ASSERT_TRUE(first);
+    EXPECT_TRUE(fs::exists(dir.path() / "out" / "res.bin.stamp"));
+    std::size_t entries = 0;
+    for ([[maybe_unused]] const auto& e : fs::directory_iterator(dir.path() / "out" / "res.cache"))
+        ++entries;
+    EXPECT_EQ(entries, 2u);
+
+    const auto time = fs::last_write_time(blob);
+    ASSERT_EQ(tools::runRc({manifestPath, "res", out}), 0);
+    EXPECT_EQ(fs::last_write_time(blob), time) << "unchanged: not rewritten";
+    EXPECT_EQ(*tools::readFile(blob), *first);
+
+    fs::remove_all(dir.path() / "out" / "res.cache");
+    fs::remove(dir.path() / "out" / "res.bin.stamp");
+    ASSERT_EQ(tools::runRc({manifestPath, "res", out}), 0);
+    EXPECT_EQ(fs::last_write_time(blob), time) << "the same bytes, compared without the stamp";
+    EXPECT_EQ(*tools::readFile(blob), *first);
+
+    // A blob edited behind the tool's back (same size, its time changed) is compared and rewritten.
+    auto edited = *first;
+    edited.front() ^= std::byte{1};
+    ASSERT_TRUE(tools::replaceFile(blob, edited));
+    ASSERT_EQ(tools::runRc({manifestPath, "res", out}), 0);
+    EXPECT_EQ(*tools::readFile(blob), *first);
 }
 
 // ------------------------------------------------------------------ .pak archives of several groups

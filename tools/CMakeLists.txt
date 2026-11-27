@@ -18,6 +18,7 @@ target_sources(imlui_resource_tools
         FILES
             lib/zstd_compress.cppm
             lib/resource_encoding.cppm
+            lib/encoding_cache.cppm
             lib/source_files.cppm
             lib/depfile.cppm
             lib/resource_manifest.cppm

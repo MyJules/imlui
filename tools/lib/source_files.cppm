@@ -24,6 +24,9 @@ struct SourceFile {
 [[nodiscard]] std::optional<std::vector<SourceFile>>
 collectFiles(const std::filesystem::path& base, const std::vector<std::filesystem::path>& files, std::string& error);
 
+/// A 64-bit FNV-1a hash of `bytes` (not cryptographic: it tells versions of a file apart).
+[[nodiscard]] std::uint64_t contentHash(std::span<const std::byte> bytes);
+
 /// The contents of `file`; nullopt when it can't be read.
 [[nodiscard]] std::optional<std::vector<std::byte>> readFile(const std::filesystem::path& file);
 
@@ -117,6 +120,15 @@ int toolMain(std::string_view tool, int argc, const wchar_t* const* argv, ToolRu
 
 int toolMain(std::string_view tool, int argc, const char* const* argv, ToolRun run) {
     return guardedMain(tool, run, [&] { return std::vector<std::string>{argv + std::min(argc, 1), argv + argc}; });
+}
+
+std::uint64_t contentHash(std::span<const std::byte> bytes) {
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    for (const std::byte b : bytes) {
+        h ^= std::to_integer<std::uint64_t>(b);
+        h *= 0x100000001b3ULL;
+    }
+    return h;
 }
 
 std::optional<std::vector<std::byte>> readFile(const fs::path& file) {
