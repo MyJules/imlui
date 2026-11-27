@@ -107,7 +107,10 @@ Who requests frames:
 `md::animateKeepFrames` 600 frames is dropped, and its widget starts at rest again), not in the window's
 `ImGuiStorage`: that is a sorted vector, and a page showing thousands of widgets for the first time inserted into it
 in quadratic time (18% of such a first frame). It caps the frame time it advances by at 1/30 s, so a transition that
-starts on the first frame after a long sleep doesn't jump to its end.
+starts on the first frame after a long sleep doesn't jump to its end. A value settles on its target within an epsilon,
+`md::fractionEpsilon` (0.0015) by default, for a 0..1 fraction; a value in pixels or dp (a tab indicator's ends, a
+Fluent knob or dot) passes `md::pixelEpsilon` (a quarter pixel), and stops requesting frames ~20 frames sooner on a
+long slide. The Fluent knob and dot sizes animate in dp, so a zoom or monitor change resizes them at once.
 
 ### Scaling
 
@@ -693,7 +696,8 @@ paths.
 The fonts are added to the ImGui atlas without a copy
 (`FontDataOwnedByAtlas = false`), pointing into the bytes `Resources::read` returned. The font library keeps their
 `ResourceData` with each atlas font and drops it when the font leaves the atlas (`useFontSet` removes fonts replaced
-by newer bytes; `clearFontLibrary` when the atlas is cleared or destroyed). Immutable mounts own those bytes, so the
+by newer bytes and the ones neither the new set nor the one before it needs; `clearFontLibrary` when the atlas is
+cleared or destroyed). Immutable mounts own those bytes, so the
 `Resources` in `EngineConfig` must still outlive the atlas. The Engine keeps it for its whole lifetime, and the atlas
 dies with the window in `run()`. Before a font goes to the atlas, `checkFont` (module `imlui.theme.font_check`)
 checks its structure (once per font data: the library keeps the verdict, keyed by the bytes' address and size, while
@@ -724,9 +728,10 @@ high at 0) or in a part of one. It mirrors stb_truetype's parser rather than run
 because stb_truetype reads glyph data through raw pointers (`ttUSHORT(p)`, `*points++`) that a reader can't intercept.
 **What ImGui does with the result** is checked too: `hhea` must give the font a positive height (ascender > descender:
 ImGui scales by its inverse, and a negative scale turns the rasterizer's edges upside down, which trips its
-`STBTT_assert`s); a glyph's box (from its header, or for CFF from its charstring) must not be inverted or more than 16
+`STBTT_assert`s); a glyph's box (from its header, or for CFF from its charstring) must not be inverted or more than 8
 font heights wide or high (ImGui sizes the glyph's bitmap by it and `IM_ASSERT`s on a size <= 0 or one its atlas can't
-hold); and a TrueType glyph whose box ends at or below the baseline must not have an outline that rises above the
+hold: text is at most `maxTextPixels`, 512 pixels, so a glyph is at most 4096, half the side of the 8192-pixel atlas;
+see [Theming](theming.md#typography)); and a TrueType glyph whose box ends at or below the baseline must not have an outline that rises above the
 baseline, curves included: its bitmap can then start at the baseline, and stb_truetype's rasterizer asserts on an edge
 wholly above a bitmap's first row (it clamps such edges only elsewhere). That last check takes the glyph's vertices from
 `stbtt_GetGlyphShape` itself, through the private copy below, once the outlines are known to be sound. CFF outlines are
@@ -963,7 +968,7 @@ with `registerSkin(name, factory)` ([Skins](extending.md#skins)).
 | Element chrome | `applicationBackground`, `windowChrome`, `scrollViewRounding`, `navigationBarColor`, `navigationRailColor`, `topAppBarChrome`, `tableChrome`, `separatorTextColor`, `linkColor` ([Element chrome](extending.md#element-chrome)) |
 
 The engine's error overlay draws its buttons through the skin too. **What stays a direct `md::` call** decides no
-look: the drawing helpers (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `strokeCircle`, `hLine`, `vLine`,
+look: the drawing helpers (`fillRoundRect`, `strokeRoundRect`, `fillCircle`, `strokeCircle`, `hLine`, `vLine`, `fillAreaBelow`,
 `drawIcon`; the Canvas painter uses them), the `Text` and `Icon` items (`md::text`/`textSize`, `md::icon`/`iconSize`),
 `itemWidth`, `scopedWindowName`, the constants (`hugeExtent`, `maxIconPixels`) and the widgets' own stacks: the surface stack
 (`pushSurface`/`popSurface`/`surfaceColor`) carries the color an element chose, and `cardDepth`/`surfaceDepth` with
@@ -1199,8 +1204,8 @@ implementation goes after `module :private;`. See [Development](development.md#m
 |---|---|
 | `imlui.theme.dpi` | `contentScale`/`setContentScale`, `zoom`/`setZoom`, `zoomStep`, `dpiScale` (their product), `dp(v)` |
 | `imlui.theme.scheme` | `Scheme` (all M3 color roles), `roles()`, `findRole`, `generateScheme(seed, dark)` |
-| `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font` (the scope's face override, else the theme's face for the weight), `fontSize`, `fontPixels`, `pushFont` |
-| `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount`, `fontCheckCount` |
+| `imlui.theme.typography` | `TextStyle`, `Weight`, `textStyleInfo`, `textStyleFromName`, `loadFonts(resources)`, `font` (the scope's face override, else the theme's face for the weight), `fontSize`, `fontPixels` (at most `maxTextPixels`, 512), `linePixels` (`GetFontSize()` inside `pushFont`, without the push), `pushFont` |
+| `imlui.theme.font_library` | The text fonts in the atlas, one per resource name + fallback list, reused while the bytes are unchanged: `FontSet` (a theme's `regular`, `medium`, `fallback`, `named`), `resetFontLibrary(resources)`, `clearFontLibrary`, `loadFontSet` (adds fonts, returns errors; safe in a frame), `useFontSet` (makes a set current and removes replaced fonts and those neither it nor the set before needs; between frames), `regularFace`, `mediumFace`, `namedFont`, `declaresFont`, `faceOverride`/`setFaceOverride`, `libraryFontCount`, `fontCheckCount` |
 | `imlui.theme.font_check` | `checkFont(bytes)`: why font data can't go to ImGui (`notAFont`, or what is damaged), nullopt when it can; a structural check of what stb_truetype reads, then the glyphs ImGui can draw (`lastCodepoint`): TrueType outlines decoded like `stbtt_GetGlyphShape`, CFF charstrings run through stb_truetype |
 | `imlui.theme.font_face_scope` | `FontFaceScope`: RAII override of the type scale's faces with a named font (the `font` prop) |
 | `imlui.theme.icons` | `loadIcons(resources)`, `iconFont`, `iconText(name)`, `hasIcon(name)` |

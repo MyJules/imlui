@@ -37,9 +37,7 @@ float spinInputY(std::string_view label, bool outlined, float h, float lineH) {
 ImVec2 spinBoxSize(std::string_view label, float width, bool outlined) {
     const float w = itemWidth(width == 0.0f ? dp(200) : width, dp(200));
     const float h = dp(56);
-    pushFont(TextStyle::BodyLarge);
-    const float lineH = ImGui::GetFontSize();
-    ImGui::PopFont();
+    const float lineH = linePixels(TextStyle::BodyLarge); // GetFontSize() inside pushFont(BodyLarge), without the push
     // The container, and the input on its line (taller only with a large font).
     return {w, std::max(h, spinInputY(label, outlined, h, lineH) + lineH)};
 }
@@ -66,7 +64,7 @@ bool spinBox(const char* id, double* v, double vmin, double vmax, double step, i
     field::drawFieldBackground(f, st->GetBool(focusKey, false), field::containerHovered(f), field::scopeDisabled());
 
     pushFont(TextStyle::BodyLarge);
-    const float lineH = ImGui::GetFontSize();
+    const float lineH = linePixels(TextStyle::BodyLarge);
     const float inputY = spinInputY(label, outlined, h, lineH);
     ImGui::SetCursorScreenPos({f.inputX, f.p.y + inputY});
     ImGui::PushStyleColor(ImGuiCol_FrameBg, Color{0, 0, 0, 0}.vec4());

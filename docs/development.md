@@ -81,7 +81,8 @@ using `imlui.widgets.common`:
 - `stateLayer(id, hovered, active)` for the hover and press overlay.
 - `itemDisabled()` with `disabledContent()`/`disabledContainer()` for the disabled state.
 - `dp()` for every size.
-- `animate(id, target)` for transitions. It requests frames while the value moves. Anything else that changes on
+- `animate(id, target)` for transitions. It requests frames while the value moves; for a value in pixels or dp pass
+  `pixelEpsilon` as its settling distance (`animate(id, x, speed, pixelEpsilon)`). Anything else that changes on
   its own over time must call `requestFrame()` from `imlui.ui.frame_request` (frames are rendered on demand).
 - `itemWidth(requested, natural)` so `width`/`fillWidth` behave like the other widgets.
 - `scopedWindowName(label, id)` to name a top-level window or a modal popup (`ImGui::Begin`, `BeginPopupModal`).

@@ -47,7 +47,8 @@ void clearFontLibrary();
 std::vector<std::string> loadFontSet(const FontSet& set);
 
 /// Makes `set` the fonts in use (loading what's missing, failures logged; a face that fails falls back to the
-/// built-in one) and removes from the atlas the fonts replaced by newer bytes. Call between frames.
+/// built-in one) and removes from the atlas, with their bytes, the fonts replaced by newer bytes and the ones that
+/// neither `set` nor the set used before it needs (nor a loadFontSet() since then). Call between frames.
 void useFontSet(const FontSet& set);
 
 /// The type scale's Regular / Medium face in use; nullptr before resetFontLibrary() (e.g. a bare ImGui context).
@@ -61,7 +62,8 @@ void useFontSet(const FontSet& set);
 /// Whether the set in use declares `name` (true also when that font failed to load: the error was reported then).
 [[nodiscard]] bool declaresFont(std::string_view name);
 
-/// Atlas fonts the library holds (cached and replaced-but-not-yet-removed); for tests.
+/// Atlas fonts the library holds (cached and replaced-but-not-yet-removed); for tests. Bounded by the fonts of the
+/// last two sets used and of the loadFontSet() calls since the last useFontSet().
 [[nodiscard]] std::size_t libraryFontCount();
 
 /// How many times checkFont() ran since the last resetFontLibrary(); for tests. Each font's bytes are checked once
@@ -99,12 +101,16 @@ struct Entry {
     /// The bytes the atlas font points into (FontDataOwnedByAtlas = false): kept alive with it. While they are, a
     /// newer read of a changed file can't land at the same address, so `sources` tell the versions apart.
     std::vector<ResourceData> data;
+    /// The useFontSet() call (`setsUsed`) that last needed it, or that a loadFontSet() since needed it for.
+    std::uint64_t lastUse = 0;
 };
 
 const Resources* library = nullptr;
 std::map<std::string, Entry, std::less<>> cache; ///< by cacheKey()
 std::vector<Entry> replaced;                     ///< removed from the atlas (and their bytes released) at useFontSet()
 ImFont* defaultFont = nullptr;                   ///< ImGui's own, when the built-in Regular face is missing
+/// How many times useFontSet() ran since the last resetFontLibrary(): what Entry::lastUse counts in.
+std::uint64_t setsUsed = 0;
 
 ImFont* currentRegular = nullptr;
 ImFont* currentMedium = nullptr;
@@ -192,9 +198,13 @@ ImFont* fontFor(std::string_view name, std::span<const std::string> fallback, st
     }
 
     const std::string key = cacheKey(name, fallback);
+    entry.lastUse = setsUsed;
     auto it = cache.find(key);
     if (it != cache.end()) {
-        if (it->second.sources == entry.sources) return it->second.font;
+        if (it->second.sources == entry.sources) {
+            it->second.lastUse = setsUsed;
+            return it->second.font;
+        }
         // Its file changed: build a new font. The old one may be pushed in this frame; it goes at useFontSet().
         replaced.push_back(std::move(it->second));
         cache.erase(it);
@@ -253,6 +263,7 @@ void clearFontLibrary() {
     cache.clear();
     replaced.clear();
     defaultFont = nullptr;
+    setsUsed = 0;
     currentRegular = currentMedium = currentOverride = nullptr;
     currentNamed.clear();
     loggedErrors.clear();
@@ -271,6 +282,7 @@ std::vector<std::string> loadFontSet(const FontSet& set) {
 
 void useFontSet(const FontSet& set) {
     if (!library) return;
+    ++setsUsed; // every font `set` needs is marked with this call below (fontFor())
     std::vector<std::string> errors = fallbackErrors(set);
     currentRegular = typeScaleFace("regular", set.regular, builtinRegularFont, set, errors);
     currentMedium = typeScaleFace("medium", set.medium, builtinMediumFont, set, errors);
@@ -286,8 +298,23 @@ void useFontSet(const FontSet& set) {
         if (loggedErrors.insert(e).second) log::warn("theme.fonts.{}", e);
     ImGui::GetIO().FontDefault = currentRegular;
 
-    // Between frames nothing is pushed, and the faces in use were just looked up again, so the fonts replaced
-    // by newer bytes are unused now.
+    // Fonts no set needs any more: each theme with other faces or fallbacks added atlas fonts (and kept their
+    // bytes) for good, so cycling through themes grew the atlas and the memory until the next resetFontLibrary().
+    // The fonts of the set used before this one stay, so switching back and forth between two themes (light and
+    // dark, a theme picker) reuses them instead of reading, checking and rasterizing them again; so do the fonts a
+    // loadFontSet() needed since that set was made current, which a theme still pending (set but not yet applied)
+    // will use. An entry not needed by this call nor the one before it goes.
+    for (auto it = cache.begin(); it != cache.end();) {
+        if (it->second.lastUse + 1 < setsUsed) {
+            replaced.push_back(std::move(it->second));
+            it = cache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // Between frames nothing is pushed (the face override is a FontFaceScope's, inside a frame), no widget keeps a
+    // font across frames, and the faces in use were just looked up again, so the fonts replaced by newer bytes and
+    // the ones no set needs are unused now.
     for (const Entry& e : replaced)
         ImGui::GetIO().Fonts->RemoveFont(e.font);
     replaced.clear(); // and with them the last handles to their bytes, unless another font shares them

@@ -50,12 +50,19 @@ inline constexpr float hugeExtent = 3.4e38f;
 /// keeps its position, size and popup state across frames and title changes.
 [[nodiscard]] std::string scopedWindowName(std::string_view label, std::string_view id);
 
+/// animate()'s settling distances. A fraction (an opacity, a 0..1 progress) needs a fine one to end without a visible
+/// step; a length doesn't: with the fraction's, a tab indicator sliding 300px kept requesting frames about 20 frames
+/// after it had come within a quarter pixel, where nothing visible moves any more.
+inline constexpr float fractionEpsilon = 0.0015f;
+inline constexpr float pixelEpsilon = 0.25f;
 /// Smoothly moves a per-id stored value towards `target`. Requests another frame while it moves. A non-finite
 /// target is ignored (the stored value stays); a non-finite stored value jumps to the target. The first call for an
 /// id starts at `target`. Values are kept per ImGui context, in a hash map of imlui's (not the window's ImGuiStorage,
 /// a sorted vector: a page showing thousands of widgets for the first time inserted into it in quadratic time); one
 /// not asked for in animateKeepFrames frames is dropped (its widget starts at its target again, as if at rest).
-float animate(ImGuiID id, float target, float speed = 14.0f);
+/// The value settles on the target (and stops requesting frames) once within `epsilon` of it: the default suits a
+/// 0..1 fraction; a value in pixels or dp passes pixelEpsilon.
+float animate(ImGuiID id, float target, float speed = 14.0f, float epsilon = fractionEpsilon);
 /// Frames an animate() value is kept without being asked for.
 inline constexpr int animateKeepFrames = 600;
 /// Hover/press state-layer opacity (Material: 8% hover, 10% pressed), animated.
@@ -116,6 +123,9 @@ void strokeArc(ImDrawList* dl, ImVec2 center, float radius, float a0, float a1, 
 void hLine(ImDrawList* dl, float x0, float x1, float y, Color c, float thickness);
 /// Vertical line covering the pixel columns [x, x + thickness) from y0 to y1.
 void vLine(ImDrawList* dl, float x, float y0, float y1, Color c, float thickness);
+/// Fills the quad from the segment a-b down to the horizontal line y = `bottom` (a chart's area under its line),
+/// with a vertical gradient: `top` at a and b, `bottomColor` at the bottom line.
+void fillAreaBelow(ImDrawList* dl, ImVec2 a, ImVec2 b, float bottom, ImU32 top, ImU32 bottomColor);
 
 } // namespace imlui::md
 
@@ -188,7 +198,7 @@ float& animatedValue(ImGuiID id, float initial) {
 
 } // namespace
 
-float animate(ImGuiID id, float target, float speed) {
+float animate(ImGuiID id, float target, float speed, float epsilon) {
     float* v = &animatedValue(id, target);
     // A NaN target (a Slider value of 0/0) would never converge and request frames forever.
     if (!std::isfinite(target)) return std::isfinite(*v) ? *v : 0.0f;
@@ -197,7 +207,7 @@ float animate(ImGuiID id, float target, float speed) {
     // transition that starts then (hover, press) from jumping to its end.
     float dt = std::min(ImGui::GetIO().DeltaTime, 1.0f / 30.0f);
     *v += (target - *v) * std::min(1.0f, dt * speed);
-    if (std::fabs(*v - target) < 0.0015f)
+    if (std::fabs(*v - target) < epsilon)
         *v = target;
     else
         requestFrame();
@@ -419,6 +429,23 @@ void vLine(ImDrawList* dl, float x, float y0, float y1, Color c, float thickness
     const float sx = snap(x), sy0 = snap(y0), sy1 = snap(y1);
     const ImVec2 a{sx, sy0}, b{sx + strokePixels(thickness), sy1};
     if (sy1 > sy0 && rectVisible(dl, a, b)) dl->AddRectFilled(a, b, col(c));
+}
+
+void fillAreaBelow(ImDrawList* dl, ImVec2 a, ImVec2 b, float bottom, ImU32 top, ImU32 bottomColor) {
+    // ImDrawIdx is 16 or 32 bits (imconfig). The draw list's own index type, rather than a fixed unsigned short: with
+    // 32-bit indices a draw list past 65535 vertices numbers them on (no VtxOffset), and a 16-bit cast wrapped the
+    // quad's indices onto vertices drawn earlier. With 16-bit indices PrimReserve() starts a new VtxOffset when the
+    // vertices would pass 65535, so _VtxCurrentIdx + 3 always fits.
+    using DrawIdx = std::remove_pointer_t<decltype(ImDrawList::_IdxWritePtr)>;
+    const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+    dl->PrimReserve(6, 4);
+    const unsigned base = dl->_VtxCurrentIdx;
+    dl->PrimWriteVtx(a, uv, top);
+    dl->PrimWriteVtx(b, uv, top);
+    dl->PrimWriteVtx({b.x, bottom}, uv, bottomColor);
+    dl->PrimWriteVtx({a.x, bottom}, uv, bottomColor);
+    for (const unsigned corner : {0u, 1u, 2u, 0u, 2u, 3u})
+        dl->PrimWriteIdx(static_cast<DrawIdx>(base + corner));
 }
 
 } // namespace imlui::md

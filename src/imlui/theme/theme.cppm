@@ -161,6 +161,16 @@ const StyleField styleFields[] = {
     {"SeparatorTextPadding", &ImGuiStyle::SeparatorTextPadding},
 };
 
+/// The ImGuiStyle fields that are the width of a line (borders, separators, the text cursor): applyNow() keeps one
+/// that is set at least a pixel wide at any DPI scale.
+constexpr std::array<FloatField, 13> lineWidthFields{
+    &ImGuiStyle::WindowBorderSize,  &ImGuiStyle::ChildBorderSize,         &ImGuiStyle::PopupBorderSize,
+    &ImGuiStyle::FrameBorderSize,   &ImGuiStyle::TabBorderSize,           &ImGuiStyle::TabBarBorderSize,
+    &ImGuiStyle::TabBarOverlineSize, &ImGuiStyle::SeparatorTextBorderSize, &ImGuiStyle::SeparatorSize,
+    &ImGuiStyle::ImageBorderSize,   &ImGuiStyle::DragDropTargetBorderSize, &ImGuiStyle::TreeLinesSize,
+    &ImGuiStyle::InputTextCursorSize,
+};
+
 void applyMaterial(const Theme& t, ImGuiStyle& st) {
     const Scheme& s = t.scheme;
     const float sp = t.spacing;
@@ -369,7 +379,16 @@ void applyNow(const Theme& t) {
     st.AntiAliasedFill = true;
 
     const float scale = dpiScale();
+    // ScaleAllSizes truncates every size, line widths included: below a scale of 1 a 1px border became 0 and ImGui
+    // drew none (under Fluent, which sets them from its strokeWidth token, every raw ImGui border vanished at zoom
+    // 90%), and at 1.5 it became 1 where the skins draw round(dp(1)) = 2. A line that is there before the scale
+    // stays at least a pixel wide after it, rounded the way the skins round theirs.
+    std::array<float, lineWidthFields.size()> lineWidths{};
+    for (std::size_t i = 0; i < lineWidthFields.size(); ++i)
+        lineWidths[i] = st.*lineWidthFields[i];
     st.ScaleAllSizes(scale);
+    for (std::size_t i = 0; i < lineWidthFields.size(); ++i)
+        if (lineWidths[i] > 0.0f) st.*lineWidthFields[i] = std::max(1.0f, std::round(lineWidths[i] * scale));
     // ScaleAllSizes truncates: below a scale of 1 an accepted WindowMinSize of 1 becomes 0, and NewFrame asserts on
     // either of these below 1.
     st.WindowMinSize = {std::max(st.WindowMinSize.x, 1.0f), std::max(st.WindowMinSize.y, 1.0f)};
