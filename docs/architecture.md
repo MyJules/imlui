@@ -1317,28 +1317,28 @@ implementation goes after `module :private;`. See [Development](development.md#m
 
 | Module | Purpose |
 |---|---|
-| `imlui.widgets.common` | Shared helpers: `col`, `scheme()`, `shape()`, disabled colors, `animate`, `stateLayer`, `itemWidth`, text/icon/shadow drawing, the shape helpers, all culled to the clip rect (`rectVisible`) |
+| `imlui.widgets.common` | Shared helpers: `col`, `scheme()`, `shape()`, disabled colors, `animate`, `stateLayer`, `itemWidth`, `scopedWindowName` (and `scopedWindowId`, its allocation-free form without a title), text/icon/shadow drawing, the shape helpers (arcs rotate one point by a fixed step: one sincos per arc), all culled to the clip rect (`rectVisible`) |
 | `imlui.widgets.surface` | Surface stack (`pushSurface`, `popSurface`, `surfaceColor`) for cutouts on cards and dialogs |
 | `imlui.widgets.text` | `text`, `textSize`, `icon`, `iconSize`, `tooltip`, `divider` |
 | `imlui.widgets.button` | `button`, `buttonSize` (+ `ButtonVariant`), `iconButton`, `iconButtonSize` (+ `IconButtonVariant`) |
 | `imlui.widgets.selection` | `checkbox`, `radio`, `switchToggle`, `chip` (+ `ChipVariant`), `segmented` |
-| `imlui.widgets.slider` | `slider`, `sliderSize`; `checkedSliderFormat` (an invalid format reported once) and `snapToStep`, shared with the Fluent slider |
+| `imlui.widgets.slider` | `slider`, `sliderSize`; shared with the Fluent slider: `checkedSliderFormat` (an invalid format reported once), `snapToStep`, and the value logic `sliderRange` (+ `SliderRange`), `sliderDragTo`, `sliderFraction`, `sliderStops`, `sliderStopAt` |
 | `imlui.widgets.progress` | `progress` (linear), `circularProgress` |
 | `imlui.widgets.field` | Shared text-field plumbing (`FieldFrame`, decoration, background, supporting text) |
-| `imlui.widgets.text_field` | `textField` (+ `TextFieldOptions`, `TextFieldResult`) |
+| `imlui.widgets.text_field` | `textField` (+ `TextFieldOptions`, `TextFieldResult`: `changed`, `accepted` on Enter, `committed` when the input lost focus after an edit, `trailingClicked`) |
 | `imlui.widgets.anchored_popup` | `placeAnchoredPopup` (below the anchor, kept in the main viewport, the shadow at last frame's size; a shadow radius for other skins) and `trackAnchoredPopup` (+ `AnchoredPopup`): the menus', dropdowns' and pickers' placement, the Fluent flyouts' too |
 | `imlui.widgets.menu` | Menu styling, `menuItem`, `menuDivider`, `beginMenu`/`endMenu` (menu-bar menus, submenus), `beginAnchoredMenu`/`endAnchoredMenu` |
 | `imlui.widgets.dropdown` | `dropdown` (+ `DropdownOptions`) |
-| `imlui.widgets.spin_box` | `spinBox` |
-| `imlui.widgets.color_field` | `colorField` (swatch and picker popup) |
+| `imlui.widgets.spin_box` | `spinBox`; its value rules, shared with the Fluent number box: `spinStepSize` (a step that isn't finite and positive is its magnitude, else 1) and `spinBoxApply` (a typed non-finite value reverts, the step, the clamp, a change only when the value differs) |
+| `imlui.widgets.color_field` | `colorField` (swatch and picker popup); shared with the Fluent color field: `colorPickerBody` (the popup's picker and hex box, + `HexField`, the skin's box) and `applyHexInput` (while typing only a whole `#RRGGBB`/`#RRGGBBAA`, the short forms when the edit ends) |
 | `imlui.widgets.tabs` | `tabs` (+ `TabInfo`, `TabsVariant`: the TabBar's `variant`) |
 | `imlui.widgets.navigation` | Navigation destinations: `navigationItem` (drawer), `navigationBarItem`, `navigationRailItem` |
-| `imlui.widgets.navigation_drawer` | `beginModalDrawer`/`endModalDrawer`: scrim and sliding sheet in a window above the app |
+| `imlui.widgets.navigation_drawer` | `beginModalDrawer`/`endModalDrawer`: scrim and sliding sheet in a window above the app; shared with the Fluent pane: `beginModalDrawerWindow` (+ `ModalDrawerFrame`: the slide, the window, the scrim click and Escape) and `beginModalDrawerSheet` |
 | `imlui.widgets.list` | `listItem` (+ `ListItemOptions`), `expander` |
 | `imlui.widgets.card` | `beginCard`/`endCard` (+ `CardVariant`) |
-| `imlui.widgets.dialog` | `beginDialog`/`endDialog` |
+| `imlui.widgets.dialog` | `beginDialog`/`endDialog`; shared with the Fluent dialog: `beginModal` (open, center, size limits) and `closeModalOnRequest` (`*open` turned false, or Escape when no popup over it takes the key) |
 | `imlui.widgets.snackbar` | `snackbar` |
-| `imlui.widgets.chart` | `chart` (+ `ChartOptions`), `chartSize`, `chartAxis` (+ `ChartAxis`: the y axis, shared with the Fluent chart) |
+| `imlui.widgets.chart` | `chart` (+ `ChartOptions`), `chartSize`, `chartAxis` (+ `ChartAxis`: the y axis); `drawChart` with a `ChartPalette` (a skin's colors, bar radius and readout) draws every skin's chart: the hovered point from the mouse's x, a reused point buffer, and a line with more points than pixel columns drawn through each column's lowest and highest point |
 | `imlui.widgets.table` | `tableHeaderCell`, `tableCell` |
 | `imlui.widgets.top_app_bar` | `TopAppBarVariant` (the TopAppBar element draws the bar; `Skin::topAppBarChrome` takes the variant) |
 | `imlui.widgets` | Umbrella: `export import` of all widget modules |

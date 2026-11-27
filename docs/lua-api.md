@@ -538,7 +538,7 @@ See [Theming](theming.md) for the table fields and the color roles.
 | Function | Description |
 |---|---|
 | `theme(t) -> scheme` | Applies theme table `t` **at the start of the next frame**. Returns the scheme `t` produces, as `{ role = "#RRGGBB" }`. Also stores `t` in `ui.__theme`. Fonts in `t.fonts` are loaded at once and errors reported (see [Fonts](theming.md#fonts)). |
-| `scheme() -> scheme` | The scheme of the theme **currently in effect**. Right after `theme{}` it still returns the old scheme until the next frame. |
+| `scheme() -> scheme` | The scheme of the theme **currently in effect**. Right after `theme{}` it still returns the old scheme until the next frame. Cheap enough for a binding: the table is built once per theme and each call returns a fresh copy of it (changing your copy changes nothing else). |
 | `schemeFor(t) -> scheme` | The scheme `t` would produce, without applying it. |
 | `themeState(init) -> state` | A `state` that applies itself as the theme now and on every change. Bind controls straight to it. |
 
