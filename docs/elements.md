@@ -16,7 +16,7 @@ built-in and your own.
 - [Positional strings](#positional-strings)
 - [Windows and overlays](#windows-and-overlays): [ApplicationWindow](#applicationwindow), [Window](#window),
   [Dialog](#dialog), [Snackbar](#snackbar), [ImGuiDemo](#imguidemo)
-- [Layout](#layout): [Column / Item](#column--item), [Row](#row), [Grid](#grid), [ScrollView](#scrollview),
+- [Layout](#layout): [Column / Item](#column--item), [Row](#row), [Box](#box), [Grid](#grid), [ScrollView](#scrollview),
   [ListView](#listview), [Card](#card), [TabBar / Tab](#tabbar--tab), [Section / Expander](#section--expander),
   [TreeNode](#treenode)
 - [Inline containers](#inline-containers): Repeater, If, Loader, Responsive
@@ -297,6 +297,9 @@ A vertical stack. `Item` is an alias.
 | `spacing` | number | ImGui item spacing | Gap between visible children (dp). |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Horizontal position of each child, by its width ([how it knows it](#stacking-containers)). |
 | `padding` | number | `0` | Inset on every side: the children start `padding` in and fill up to `padding` from the column's right edge. The column's size (what a `Row` places it by) includes the padding on both sides. |
+| `paddingLeft`, `paddingTop`, `paddingRight`, `paddingBottom` | number | `padding` | One side's inset, overriding `padding` there: `Column { paddingTop = 80, ... }` starts its children 80dp down. (A `Card`'s and the `ApplicationWindow`'s padding is the same on every side: give them `padding = 0` and put a `Column` with the sides you need inside.) |
+| `justify` | `"start"` \| `"center"` \| `"end"` \| `"spaceBetween"` | `"start"` | With a `height`: the children's vertical distribution in it (`spaceBetween` puts the free space in the gaps). Ignored while a child fills the height. |
+| `height` | size | `0` (auto) | *Raw.* The column's own height, padding included: fixed, or `-1` (fill minus) for the height left below it. The children with a fill height (`height = -1`, fill minus; a `Spacer { height = -1 }` too) share in equal parts what the others leave (their intrinsic heights, else last frame's); without such a child, `justify` places them in it. The column is that tall even when its children are shorter; taller children overflow it. `Column { height = -1, justify = "center", align = "center", Text "Hi" }` centers the text in what is left of the window. |
 | `width` | size | `0` (auto) | *Raw.* A fixed or fill width: the column's own, padding included (like a `Card`'s), so `Column { padding = 16, width = -1 }` fills the available width and its children get that less 16dp on each side. The children's available width is the width less the padding: they fill it (`fillWidth`, fill-minus widths, the elements that fill by default), `align` within it and wrap text at it (`Text { wrap = true }`, raw `ImGui::TextWrapped`), also inside a `Row`. Unset, a column that holds a child that fills is as wide as the available width, so it fills itself: a `Row` gives it a share. |
 
 ### Row
@@ -328,6 +331,38 @@ noticeable than a row that blinks in.
 `Row { Spacer { fill = true }, Button { "OK" } }` right-aligns the button; `Row { TextField {}, Button { "Send" } }`
 gives the field what the button leaves; `Row { Button { "A", fillWidth = true }, Button { "B", fillWidth = true } }`
 gives each button half. Non-visual children take no place in the row.
+
+### Box
+
+Children **layered** over each other instead of stacked. Each child is placed in the box by its own `anchor` and
+margins, at the size it renders at (its intrinsic size, else last frame's, like a `Row`'s children; on a child's very
+first frame without either it is laid out unseen and shown in place on the next). Later children draw over earlier
+ones and take the mouse first, also over a `Card`, a `ScrollView` or anything else that is an ImGui child window: the
+first visual child renders in the box's window, and every later one in a transparent child window of its own, as large
+as the child, begun after the ones under it.
+
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `width` | size | `0 (fill)` | *Raw.* Unset, the box fills the available width (in a `Row`, a share). |
+| `height` | size | `0` (auto) | *Raw.* Fixed, `-1` (fill minus) for the height left below it, or unset for the tallest child with its top and bottom margins. A child's fill height (`height = -1`) fills the box's height less its margins when the box has a height. |
+
+Each child takes these props (any element; elsewhere they do nothing):
+
+| Child prop | Type | Default | Notes |
+|---|---|---|---|
+| `anchor` | `"topLeft"` \| `"top"` \| `"topRight"` \| `"left"` \| `"center"` \| `"right"` \| `"bottomLeft"` \| `"bottom"` \| `"bottomRight"` | `"topLeft"` | Where it sits: a corner, the middle of an edge, or the center. An unknown name is reported. |
+| `margin` | number | `0` | dp between it and the box's edges, on every side: it is anchored in the box less its margins, and a fill width is the box's width less its left and right margins. |
+| `marginLeft`, `marginTop`, `marginRight`, `marginBottom` | number | `margin` | One side's margin, overriding `margin` there. |
+
+```lua
+Box { height = -1, Text { "Hello, world!", anchor = "center" } }   -- centered in what is left of the window
+Box { Card { Text "Inbox" }, Chip { text = "3", anchor = "topRight", margin = 8 } } -- a badge on the card
+Box { height = -1, ListView { ... },                                -- a floating button over a list
+      IconButton { icon = "add", variant = "filled", anchor = "bottomRight", margin = 16 } }
+```
+
+Overlapping children are hit in drawing order: the topmost takes the mouse. Two children inside the *same* layer that
+overlap follow ImGui's rule instead (the first one submitted is hovered).
 
 ### Grid
 

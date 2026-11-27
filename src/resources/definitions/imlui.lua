@@ -47,6 +47,15 @@ ui = {}
 ---@field width? number dp; -1 fills, < -1 fills minus |v| dp, 0 is automatic.
 ---@field height? number dp; -1 fills, < -1 fills minus |v| dp, 0 is automatic.
 ---@field fillWidth? boolean
+---@field anchor? Anchor Inside a `Box`: where the element sits in it.
+---@field margin? number Inside a `Box`: dp from its anchored edges, every side.
+---@field marginLeft? number
+---@field marginTop? number
+---@field marginRight? number
+---@field marginBottom? number
+
+---Where an element sits in a `Box`: a corner, the middle of an edge, or the center.
+---@alias Anchor "topLeft"|"top"|"topRight"|"left"|"center"|"right"|"bottomLeft"|"bottom"|"bottomRight"
 
 ---What every constructor takes: the common props and the children (positional values).
 ---@class ElementProps
@@ -58,6 +67,12 @@ ui = {}
 ---@field width? number|(fun(self: Element): number?)|Binding dp; -1 fills, < -1 fills minus |v| dp.
 ---@field height? number|(fun(self: Element): number?)|Binding dp; -1 fills, < -1 fills minus |v| dp.
 ---@field fillWidth? boolean|(fun(self: Element): boolean?)|Binding
+---@field anchor? Anchor|(fun(self: Element): Anchor?)|Binding Inside a `Box`: where the element sits in it (`"topLeft"` by default).
+---@field margin? number|(fun(self: Element): number?)|Binding Inside a `Box`: dp from its anchored edges, every side.
+---@field marginLeft? number|(fun(self: Element): number?)|Binding Inside a `Box`; overrides `margin` on that side.
+---@field marginTop? number|(fun(self: Element): number?)|Binding Inside a `Box`; overrides `margin` on that side.
+---@field marginRight? number|(fun(self: Element): number?)|Binding Inside a `Box`; overrides `margin` on that side.
+---@field marginBottom? number|(fun(self: Element): number?)|Binding Inside a `Box`; overrides `margin` on that side.
 
 ---Returns a constructor for element type `name`. Calling it with a table turns that table into the element.
 ---@param name string

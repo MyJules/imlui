@@ -236,6 +236,17 @@ public:
     /// the stack doesn't read it from the table again. (`align` is read from the table: a name that isn't an Align
     /// places the children at the start, while the element's property keeps the value it had.)
     float renderStack(const luaui::Node& node, std::optional<double> spacing);
+    /// How a stack with a height of its own (a Column's `height`) distributes it, in pixels: `offset` before the
+    /// first child (`justify` center / end), `extraGap` added to every gap (`spaceBetween`), and `fillHeight`, the
+    /// height a child with a fill height (`height = -1`, fill minus) resolves against: each such child renders in a
+    /// layout box whose bottom is that far below it. With `fillHeight` 0 a fill height keeps the usual rule (the
+    /// height left below it).
+    struct StackFlow {
+        float offset = 0.0f;
+        float extraGap = 0.0f;
+        float fillHeight = 0.0f;
+    };
+    float renderStack(const luaui::Node& node, std::optional<double> spacing, const StackFlow& flow);
     /// The `align` renderStack(node) places the children by, read from the table (a value or a binding): Start when
     /// it is unset or not an Align name. The element's `align` property (Column's, StackAlign) reports such a name,
     /// once, when its field is written: this read doesn't, as it runs every frame.
@@ -916,6 +927,10 @@ Align Renderer::stackAlign(const Node& node) {
 float Renderer::renderStack(const Node& node) { return renderStack(node, node.number("spacing")); }
 
 float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
+    return renderStack(node, spacing, StackFlow{});
+}
+
+float Renderer::renderStack(const Node& node, std::optional<double> spacing, const StackFlow& flow) {
     const float align = alignFactor(stackAlign(node));
     lua::State* state = node.state();
     const float boxAvail = layout::availableWidth();
@@ -945,6 +960,11 @@ float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
     float knownHeights = 0.0f;
     int known = 0;
     bool first = true;
+    // `justify` center / end: the first child starts lower (a whole pixel, like ImGui's lines).
+    if (flow.offset > 0.0f) {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos({at.x, std::floor(at.y + flow.offset)});
+    }
     forEachChild(node, Memo::Reuse, [&](const ChildRef& ref) {
         if (!culling.next(ref)) {
             render(ref);
@@ -953,9 +973,18 @@ float Renderer::renderStack(const Node& node, std::optional<double> spacing) {
         if (!ref.shown()) return;
         const int idx = ref.index();
         const Node c{state, idx};
-        if (!first && spacing)
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + static_cast<float>(*spacing) * dpiScale() -
-                                 ImGui::GetStyle().ItemSpacing.y);
+        if (!first && (spacing || flow.extraGap > 0.0f)) {
+            const float gap = spacing ? static_cast<float>(*spacing) * dpiScale() - ImGui::GetStyle().ItemSpacing.y : 0.0f;
+            const float y = ImGui::GetCursorPosY() + gap + flow.extraGap;
+            ImGui::SetCursorPosY(flow.extraGap > 0.0f ? std::floor(y) : y);
+        }
+        // A fill height in a stack with a height of its own: resolved in its share (the box's bottom).
+        std::optional<layout::BoxScope> share;
+        if (flow.fillHeight > 0.0f && sizeProp(c, "height") < 0.0f) {
+            layout::Box b = layout::insetBox(0.0f);
+            b.bottom = ImGui::GetCursorScreenPos().y + flow.fillHeight;
+            share.emplace(b);
+        }
         bool unseen = false;
         float fillOffset = 0.0f;
         // Every child starts at the stack's left edge, set explicitly: ImGui starts a new line at the window's

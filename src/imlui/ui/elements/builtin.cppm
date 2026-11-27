@@ -12,6 +12,7 @@ import imlui.ui.elements.checkbox;
 import imlui.ui.elements.chip;
 import imlui.ui.elements.circular_progress;
 import imlui.ui.elements.color_picker;
+import imlui.ui.elements.box;
 import imlui.ui.elements.column;
 import imlui.ui.elements.combo_box;
 import imlui.ui.elements.dialog;
@@ -78,6 +79,7 @@ void registerBuiltinTypes(TypeRegistry& types) {
     types.registerType<ImGuiDemo>("ImGuiDemo");
 
     // Layout
+    types.registerType<Box>("Box");
     types.registerType<Column>("Column");
     types.registerType<Column>("Item");
     types.registerType<Row>("Row");

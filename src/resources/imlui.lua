@@ -415,7 +415,7 @@ local BUILTIN = {
     -- windows
     "ApplicationWindow", "Window", "Dialog",
     -- layout
-    "Column", "Item", "Row", "Grid", "ScrollView", "Card", "TabBar", "Tab", "Section", "Expander", "TreeNode",
+    "Column", "Item", "Row", "Box", "Grid", "ScrollView", "Card", "TabBar", "Tab", "Section", "Expander", "TreeNode",
     -- app bars, navigation & menus
     "TopAppBar", "NavigationItem", "NavigationBar", "NavigationRail", "ModalNavigationDrawer",
     "MenuBar", "Menu", "MenuItem",

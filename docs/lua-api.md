@@ -155,7 +155,7 @@ instance at their first render.) See [Registering C++ types](extending.md).
 The registered element type names, sorted: every built-in (`Button`, `Column`, ..., aliases such as `Item` and
 `Label` included, and `Repeater`, `If`, `Loader`, `Responsive`) and the app's own types.
 
-Built-in constructors (the `BUILTIN` list): `ApplicationWindow`, `Window`, `Dialog`, `Column`, `Item`, `Row`,
+Built-in constructors (the `BUILTIN` list): `ApplicationWindow`, `Window`, `Dialog`, `Column`, `Item`, `Row`, `Box`,
 `Grid`, `ScrollView`, `Card`, `TabBar`, `Tab`, `Section`, `Expander`, `TreeNode`, `TopAppBar`, `NavigationItem`,
 `NavigationBar`, `NavigationRail`, `ModalNavigationDrawer`, `MenuBar`, `Menu`, `MenuItem`, `Text`, `Label`, `Icon`, `Image`, `Link`, `Separator`, `Divider`, `Spacer`, `Button`,
 `IconButton`, `Checkbox`, `Switch`, `RadioButton`, `RadioGroup`, `Chip`, `SegmentedButton`, `ListItem`, `Slider`,
