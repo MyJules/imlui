@@ -28,9 +28,10 @@ export namespace imlui {
 /// are cached while its modification time is unchanged; a name missing from a listing read within 2 s of that time
 /// lists the folder again (an entry added in the same tick of the folder's time leaves the time as it was).
 ///
-/// A link to a folder (a symbolic link, a Windows junction or another reparse point) isn't listed or walked, as the
-/// manifest scan doesn't descend into one: a link to the folder itself or to a parent would make a walk endless. A
-/// file under one is still found by its name.
+/// A link to a folder (a symbolic link, a Windows junction or another reparse point) is listed and walked like a
+/// folder, so a file reached through one is listed (and watched by hot reload) as well as read, unless the link leads
+/// back to a folder the walk came through (the folder holding it or one above it, as resolved on disk): that would
+/// make a walk endless (loop/loop/...). A file under such a link is still found by its name.
 ///
 /// Like the other mounts, it never throws: a path that isn't valid UTF-8, a file too large to allocate or a folder
 /// that can't be listed reads as missing. An entry whose name has no UTF-8 form (on Windows, an unpaired surrogate)
@@ -71,13 +72,14 @@ private:
     using Cache = std::map<std::string, Cached, std::less<>>;
 
     /// What one folder holds for holdsSelected(), as of its modification time: whether a selected file is among its
-    /// own entries, and its subfolders (not links) otherwise. A file added deeper down changes only its own folder's
+    /// own entries, and its subfolders (links included) otherwise. A file added deeper down changes only its own folder's
     /// time, so the answer for a folder is its own entry and its subfolders' answers, each checked against its time.
     struct Holding {
         ResourceTime time;
         ResourceTime listedAt; ///< when the entries were read (the file system's clock)
         bool selectedFile = false;
         std::vector<std::string> subfolders; ///< entry names; empty when `selectedFile`
+        std::vector<std::string> links;      ///< the subfolders that are links to folders, sorted
     };
 
     /// The entry names of one folder, as of its modification time.
@@ -108,6 +110,11 @@ private:
     /// for every subfolder, or a hot-reload poll asking again, times the folders under it instead of listing them and
     /// matching every file against the selection's patterns.
     [[nodiscard]] bool holdsSelected(std::string_view path, const std::filesystem::path& folder) const;
+    /// True when `link`, a link to a folder found in folder `path`, may be walked: it leads to none of the folders
+    /// from the root down to `path` (each resolved on disk, through the links on the way). A walk that follows only
+    /// such links ends: each link it follows adds a folder that the links below must avoid, and there are finitely
+    /// many. False when the link or a folder on the way can't be resolved.
+    [[nodiscard]] bool walkable(std::string_view path, const std::filesystem::path& link) const;
 
     // The read cache, with m_mutex held.
     /// Marks `entry` (holding `bytes`) as read now and keeps `bytes` among the retained buffers, then releases the
@@ -184,8 +191,8 @@ std::string joined(std::string_view folder, std::string_view name) {
     return out;
 }
 
-/// True when `entry` is a link to a folder: a symbolic link, a junction or another reparse point (or an entry that
-/// can't be queried, so that it isn't walked either).
+/// True when `entry` (a folder, links followed) is a link to one: a symbolic link, a junction or another reparse
+/// point, or an entry that can't be queried (which walkable() can't resolve either, so it isn't walked).
 bool linkedFolder(const fs::directory_entry& entry) {
     std::error_code ec;
     return entry.symlink_status(ec).type() != fs::file_type::directory;
@@ -258,29 +265,59 @@ bool DirectoryMount::holdsSelected(std::string_view path, const fs::path& folder
         }
         auto it = m_holding.find(current);
         if (it == m_holding.end() || it->second.time != time || it->second.listedAt - it->second.time < timeTick) {
-            Holding listed{time, fs::file_time_type::clock::now(), false, {}};
+            Holding listed{time, fs::file_time_type::clock::now(), false, {}, {}};
             for (auto entry = fs::directory_iterator(onDisk, ec); !ec && entry != fs::directory_iterator();
                  entry.increment(ec)) {
                 std::error_code entryEc; // one entry that can't be queried mustn't end the listing
                 const auto name = utf8Name(entry->path().filename());
                 if (!name) continue;
                 if (entry->is_directory(entryEc)) {
-                    if (!linkedFolder(*entry)) listed.subfolders.push_back(*name);
+                    listed.subfolders.push_back(*name);
+                    if (linkedFolder(*entry)) listed.links.push_back(*name);
                 } else if (entry->is_regular_file(entryEc) && selected(joined(current, *name))) {
                     listed.selectedFile = true;
                     listed.subfolders.clear(); // not needed: the folder holds one
+                    listed.links.clear();
                     break;
                 }
             }
             if (ec && !listed.selectedFile) continue; // can't be listed: not cached, holds nothing for now
+            std::ranges::sort(listed.links);
             it = m_holding.insert_or_assign(current, std::move(listed)).first;
         }
         if (it->second.selectedFile) return true;
-        for (const std::string& sub : it->second.subfolders)
-            if (std::string child = joined(current, sub); m_selection->mayContainUnder(child))
-                if (const auto subPath = pathFromUtf8(sub)) pending.emplace_back(std::move(child), onDisk / *subPath);
+        const Holding& holding = it->second;
+        for (const std::string& sub : holding.subfolders) {
+            std::string child = joined(current, sub);
+            if (!m_selection->mayContainUnder(child)) continue;
+            const auto subPath = pathFromUtf8(sub);
+            if (!subPath) continue;
+            // A link back to a folder on the way down isn't walked (see walkable()).
+            if (std::ranges::binary_search(holding.links, sub) && !walkable(current, onDisk / *subPath)) continue;
+            pending.emplace_back(std::move(child), onDisk / *subPath);
+        }
     }
     return false;
+}
+
+bool DirectoryMount::walkable(std::string_view path, const fs::path& link) const {
+    std::error_code ec;
+    const fs::path target = fs::canonical(link, ec);
+    if (ec) return false;
+    // The folders from the root down to `path`, each resolved on its own: one reached through a link resolves to
+    // where the link leads.
+    fs::path folder = m_root;
+    std::size_t start = 0;
+    while (true) {
+        const fs::path resolved = fs::canonical(folder, ec);
+        if (ec || resolved == target) return false;
+        if (start >= path.size()) return true;
+        const std::size_t slash = path.find('/', start);
+        const auto segment = pathFromUtf8(path.substr(start, slash - start));
+        if (!segment) return false;
+        folder /= *segment;
+        start = slash == std::string_view::npos ? path.size() : slash + 1;
+    }
 }
 
 bool DirectoryMount::spelledAsOnDisk(std::string_view path) const {
@@ -484,7 +521,7 @@ std::vector<std::string> DirectoryMount::listIn(std::string_view path) const {
         std::string name = std::move(*converted);
         const std::string child = joined(path, name);
         if (it->is_directory(entryEc)) {
-            if (linkedFolder(*it) || !holdsSelected(child, it->path())) continue;
+            if ((linkedFolder(*it) && !walkable(path, it->path())) || !holdsSelected(child, it->path())) continue;
             name += '/';
         } else if (!it->is_regular_file(entryEc) || !selected(child)) {
             continue;
@@ -504,20 +541,28 @@ std::vector<std::string> DirectoryMount::listFilesIn(std::string_view path) cons
     const auto folder = file(path);
     std::error_code ec;
     if (!folder || !fs::is_directory(*folder, ec)) return out;
-    for (auto it = fs::recursive_directory_iterator(*folder, ec); !ec && it != fs::recursive_directory_iterator();
-         it.increment(ec)) {
-        std::error_code entryEc; // one entry that can't be queried mustn't end the walk
-        const auto relative = utf8Name(it->path().lexically_relative(*folder));
-        if (!relative) {
-            it.disable_recursion_pending(); // no resource name, so none for anything under it either
-            continue;
-        }
-        const std::string inMount = joined(path, *relative);
-        if (it->is_directory(entryEc)) {
-            if (linkedFolder(*it) || (m_selection && !m_selection->mayContainUnder(inMount)))
-                it.disable_recursion_pending();
-        } else if (it->is_regular_file(entryEc) && selected(inMount)) {
-            out.push_back(*relative);
+    // Depth first over (the folder's name below `path`, its path on disk). Not a recursive_directory_iterator, which
+    // follows every link or none: a link is followed when walkable().
+    std::vector<std::pair<std::string, fs::path>> pending;
+    pending.emplace_back(std::string{}, *folder);
+    while (!pending.empty()) {
+        auto [relative, onDisk] = std::move(pending.back());
+        pending.pop_back();
+        const std::string inMountFolder = joined(path, relative);
+        ec.clear(); // a folder that can't be listed holds nothing; the walk goes on
+        for (auto it = fs::directory_iterator(onDisk, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            std::error_code entryEc; // one entry that can't be queried mustn't end the walk
+            const auto name = utf8Name(it->path().filename());
+            if (!name) continue; // no resource name, so none for anything under it either
+            std::string entry = joined(relative, *name);
+            const std::string inMount = joined(path, entry);
+            if (it->is_directory(entryEc)) {
+                if (m_selection && !m_selection->mayContainUnder(inMount)) continue;
+                if (linkedFolder(*it) && !walkable(inMountFolder, it->path())) continue;
+                pending.emplace_back(std::move(entry), it->path());
+            } else if (it->is_regular_file(entryEc) && selected(inMount)) {
+                out.push_back(std::move(entry));
+            }
         }
     }
     std::ranges::sort(out);
