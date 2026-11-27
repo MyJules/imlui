@@ -90,7 +90,8 @@ TEST_F(SkinTest, MaterialIsTheDefault) {
     EXPECT_EQ(Theme{}.design, "material");
     EXPECT_TRUE(hasSkin("material"));
     EXPECT_TRUE(hasSkin("test"));
-    EXPECT_FALSE(hasSkin("fluent"));
+    EXPECT_TRUE(hasSkin("fluent")); // built in
+    EXPECT_FALSE(hasSkin("nope"));
     EXPECT_EQ(skin().name(), "material");
 }
 

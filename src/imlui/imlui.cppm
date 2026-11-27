@@ -9,6 +9,8 @@ export import imlui.theme.scheme;
 export import imlui.theme.typography;
 export import imlui.theme.icons;
 export import imlui.theme.theme;
+export import imlui.theme.skin_tokens;
+export import imlui.theme.fluent_colors;
 export import imlui.theme.font_scope;
 export import imlui.theme.font_library;
 export import imlui.theme.font_face_scope;

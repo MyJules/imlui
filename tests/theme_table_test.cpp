@@ -6,6 +6,7 @@ import lua;
 import imgui;
 import imlui.color;
 import imlui.theme.scheme;
+import imlui.theme.skin_tokens;
 import imlui.theme.theme;
 import imlui.lua.errors;
 import imlui.lua.theme_table;
@@ -68,6 +69,7 @@ TEST_F(ThemeTableTest, EmptyTableGivesDefaults) {
         EXPECT_EQ(t.scheme.*role.member, defaults.scheme.*role.member) << role.name;
     EXPECT_TRUE(t.imguiColors.empty());
     EXPECT_TRUE(t.style.empty());
+    EXPECT_TRUE(t.tokens.empty());
     EXPECT_TRUE(luaui::errors().empty());
 }
 
@@ -346,4 +348,79 @@ TEST_F(ThemeTableTest, NonStringKeysAreReportedAndSkipped) {
     EXPECT_EQ(t.imguiColors[0].second, (Color{0, 0, 1, 1}));
     ASSERT_EQ(t.style.size(), 1u);
     EXPECT_EQ(t.style[0].name, "FrameRounding");
+}
+
+// tokens = { ... }: each a number in its range, a boolean or a ButtonFill name, kept in order, applied over a design's
+// defaults by name.
+TEST_F(ThemeTableTest, TokenOverrides) {
+    Theme t = parse(R"(return { tokens = { controlHeight = 40, inputUnderline = false, buttonFill = "outline" } })");
+    EXPECT_TRUE(luaui::errors().empty());
+    ASSERT_EQ(t.tokens.size(), 3u);
+    const SkinTokens k = applyTokenOverrides(fluentTokens(), t.tokens);
+    EXPECT_FLOAT_EQ(k.controlHeight, 40.0f);
+    EXPECT_FALSE(k.inputUnderline);
+    EXPECT_EQ(k.buttonFill, ButtonFill::Outline);
+    EXPECT_FLOAT_EQ(k.controlRadius, fluentTokens().controlRadius); // not overridden
+    EXPECT_EQ(fluentTokensFor(t), k);
+}
+
+TEST_F(ThemeTableTest, BadTokensAreReportedAndKeepTheirDefaults) {
+    Theme t = parse(R"(return { tokens = {
+        nope = 1, controlHeight = 1000, controlRadius = 0/0, density = "2", inputUnderline = 1,
+        buttonFill = "tonal", gap = {}, strokeWidth = 2, [1] = 4,
+    } })");
+    ASSERT_EQ(t.tokens.size(), 1u);
+    EXPECT_EQ(t.tokens[0].name, "strokeWidth");
+    for (const char* error : {"theme.tokens: unknown token 'nope' (known: controlHeight, compactHeight",
+                              "theme.tokens.controlHeight: expected a number in 8..200",
+                              "theme.tokens.controlRadius: expected a number in 0..100",
+                              "theme.tokens.density: expected a number in 0.5..2",
+                              "theme.tokens.inputUnderline: expected a boolean",
+                              R"(theme.tokens.buttonFill: expected "filled" or "outline")",
+                              "theme.tokens.gap: expected a number in 0..100", "theme.tokens: keys must be token names"})
+        EXPECT_TRUE(hasError(error)) << error;
+    EXPECT_EQ(luaui::errors().size(), 8u);
+    const SkinTokens k = fluentTokensFor(t);
+    EXPECT_FLOAT_EQ(k.controlHeight, fluentTokens().controlHeight);
+    EXPECT_FLOAT_EQ(k.strokeWidth, 2.0f);
+
+    luaui::clearErrors();
+    t = parse("return { tokens = 5 }");
+    EXPECT_TRUE(t.tokens.empty());
+    EXPECT_TRUE(hasError("theme.tokens: expected a table"));
+}
+
+// A Theme built in C++ is held to the same limits: setTheme drops a token override with a problem.
+TEST_F(ThemeTableTest, SetThemeDropsBadTokenOverrides) {
+    Theme t;
+    t.tokens = {{"controlHeight", 1.0f}, {"nope", 1.0f}, {"inputUnderline", 2.0f}, {"gap", 4.0f},
+                {"buttonFill", std::string{"outline"}}, {"density", std::numeric_limits<float>::infinity()}};
+    setTheme(t);
+    ASSERT_TRUE(applyPendingTheme());
+    ASSERT_EQ(theme().tokens.size(), 2u);
+    EXPECT_EQ(theme().tokens[0].name, "gap");
+    EXPECT_EQ(theme().tokens[1].name, "buttonFill");
+    setTheme(Theme{});
+    applyPendingTheme();
+}
+
+TEST(SkinTokens, TheTableNamesEveryTokenOnce) {
+    std::set<std::string_view> names;
+    for (const TokenInfo& info : tokenInfos()) {
+        EXPECT_TRUE(names.insert(info.name).second) << info.name;
+        EXPECT_EQ(findToken(info.name), &info);
+        EXPECT_FALSE(info.doc.empty()) << info.name;
+        // Each design's default is in the token's range.
+        if (info.kind == TokenKind::Number) {
+            for (const SkinTokens& d : {fluentTokens(), materialTokens()}) {
+                const float v = d.*std::get<float SkinTokens::*>(info.member);
+                EXPECT_GE(v, info.min) << info.name;
+                EXPECT_LE(v, info.max) << info.name;
+            }
+        }
+    }
+    EXPECT_EQ(findToken("nope"), nullptr);
+    EXPECT_EQ(tokenProblem("controlHeight", 32.0f), "");
+    EXPECT_EQ(tokenProblem("controlHeight", true), "expected a number in 8..200");
+    EXPECT_EQ(tokenProblem("nope", 1.0f), "unknown token");
 }

@@ -241,7 +241,8 @@ function setWindowSize(w, h) end
 
 ---A theme table (docs/theming.md). Every field is optional.
 ---@class ThemeTable
----@field design? "material"|string The skin that draws the controls: `"material"` (default) or one the app registered in C++ (`registerSkin`). An unknown name reports an error and keeps `"material"`.
+---@field design? "material"|"fluent"|string The skin that draws the controls: `"material"` (default), `"fluent"` or one the app registered in C++ (`registerSkin`). An unknown name reports an error and keeps `"material"`.
+---@field tokens? ThemeTokens Overrides of the design's metrics (control height, radii, strokes, ...); Fluent draws with them, Material ignores them.
 ---@field preset? "material"|"imgui-dark"|"imgui-light"|"imgui-classic" How ImGui's own style is set (default `"material"`).
 ---@field seed? Color The color the scheme is generated from (default `"#6750A4"`).
 ---@field dark? boolean Dark or light scheme (default `true`).
@@ -252,6 +253,24 @@ function setWindowSize(w, h) end
 ---@field imgui? table<string, Color> Raw `ImGuiCol_*` overrides by name.
 ---@field style? table<string, number|number[]> Raw `ImGuiStyle` overrides by field name.
 ---@field fonts? table<string, string|string[]> Text fonts by resource name: `regular`, `medium`, `fallback`, named fonts.
+
+---A design's metrics (docs/theming.md, Tokens): what `theme { tokens = { ... } }` overrides. Every field is optional;
+---lengths are dp. An unknown token or a value out of range reports an error and keeps the default.
+---@class ThemeTokens
+---@field controlHeight? number A standard control's height: buttons, text fields, combo boxes (8..200; Fluent 32).
+---@field compactHeight? number A compact control's height: menu rows, small buttons (8..200; Fluent 24).
+---@field controlRadius? number The corner radius of controls (0..100; Fluent 4).
+---@field overlayRadius? number The corner radius of overlays and containers: cards, flyouts, dialogs (0..100; Fluent 8).
+---@field strokeWidth? number A control's border width; 0: none (0..8; Fluent 1).
+---@field focusStrokeWidth? number The keyboard focus rectangle's outer stroke width; 0: none (0..8; Fluent 2).
+---@field focusOffset? number How far the focus rectangle lies outside the control (0..16; Fluent 3).
+---@field inputUnderline? boolean Whether inputs carry an accent underline when focused (Fluent true).
+---@field inputUnderlineWidth? number The focused input underline's width (0..8; Fluent 2).
+---@field buttonFill? "filled"|"outline" How accent buttons (`filled`, `tonal`) are drawn (Fluent `"filled"`).
+---@field paddingX? number The horizontal padding inside controls (0..100; Fluent 12).
+---@field gap? number The gap between a control's parts: icon and label, label and glyph (0..100; Fluent 8).
+---@field iconSize? number The size of icons inside controls (8..64; Fluent 16).
+---@field density? number Multiplies heights, paddings and gaps, not radii or strokes (0.5..2; Fluent 1).
 
 ---Applies theme table `t` at the start of the next frame and returns the scheme it produces (docs/theming.md).
 ---@param t ThemeTable

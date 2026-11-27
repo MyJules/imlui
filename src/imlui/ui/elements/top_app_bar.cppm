@@ -5,7 +5,6 @@ import std;
 
 import imgui;
 import imlui.color;
-import imlui.theme.scheme;
 import imlui.theme.typography;
 import imlui.widgets;
 import imlui.skin;
@@ -75,14 +74,14 @@ void TopAppBar::declare(TypeBuilder<TopAppBar>& type) {
 }
 
 void TopAppBar::render(Frame& frame) {
-    const Scheme& s = frame.scheme();
     const bool medium = m_variant == "medium", large = m_variant == "large";
-    const float barH = frame.dp(64);
-    const float h = medium ? frame.dp(112) : large ? frame.dp(152) : barH;
+    const Skin::TopAppBarChrome chrome = skin().topAppBarChrome(m_variant);
+    const float barH = chrome.rowHeight;
+    const float h = chrome.height;
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float w = frame.resolvedWidth();
     ImDrawList* dl = frame.drawList();
-    const Color bg = m_color.value_or(md::surfaceColor());
+    const Color bg = m_color.value_or(chrome.background);
     dl->AddRectFilled(p, {p.x + w, p.y + h}, ImGui::ColorConvertFloat4ToU32(bg.vec4()));
 
     float titleX = p.x + frame.dp(16);
@@ -115,7 +114,7 @@ void TopAppBar::render(Frame& frame) {
         x += rendered ? ImGui::GetItemRectSize().x : 0.0f;
     });
 
-    const ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(s.onSurface.vec4());
+    const ImU32 titleColor = ImGui::ColorConvertFloat4ToU32(chrome.title.vec4());
     if (medium || large) {
         const TextStyle ts = large ? TextStyle::HeadlineMedium : TextStyle::HeadlineSmall;
         const float th = font(ts)->CalcTextSizeA(fontPixels(ts), 3.4e38f, 0.0f, m_title.c_str()).y;
@@ -132,9 +131,10 @@ void TopAppBar::render(Frame& frame) {
 }
 
 std::optional<ImVec2> TopAppBar::intrinsicSize(const Frame& frame, float maxWidth) {
-    const float barH = frame.dp(64);
+    const Skin::TopAppBarChrome chrome = skin().topAppBarChrome(m_variant);
+    const float barH = chrome.rowHeight;
     const float w = frame.widthIn(maxWidth);
-    float h = m_variant == "medium" ? frame.dp(112) : m_variant == "large" ? frame.dp(152) : barH;
+    float h = chrome.height;
     // The actions are centered in the 64dp row, asked with the bar's width like render() asks them.
     bool known = true;
     frame.forEachChild([&](Frame::Child& child) {

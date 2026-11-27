@@ -5,6 +5,7 @@ import std;
 
 import imgui;
 import imlui.color;
+import imlui.skin;
 import imlui.widgets;
 import imlui.ui.navigation_scope;
 import imlui.types.element;
@@ -53,7 +54,7 @@ void NavigationBar::render(Frame& frame) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float w = frame.resolvedWidth();
     const float h = frame.dp(80);
-    const Color bg = m_color.value_or(frame.scheme().surfaceContainer);
+    const Color bg = m_color.value_or(skin().navigationBarColor());
     md::fillRoundRect(frame.drawList(), p, {p.x + w, p.y + h}, 0.0f, bg);
     md::pushSurface(bg);
     int count = 0;

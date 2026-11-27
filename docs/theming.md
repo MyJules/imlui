@@ -10,7 +10,8 @@ from the default theme on every (re)load: `design = "material"`, seed `#6750A4`,
 
 ```lua
 theme {
-    design    = "material",   -- the skin that draws the controls; see Designs
+    design    = "material",   -- the skin that draws the controls: "material" or "fluent"; see Designs
+    tokens    = { controlHeight = 32, controlRadius = 4 }, -- a token-driven design's metrics; see Tokens
     preset    = "material",   -- or "imgui-dark" | "imgui-light" | "imgui-classic"
     seed      = "#6750A4",    -- any color spec; the scheme is generated from it
     dark      = true,
@@ -26,8 +27,9 @@ theme {
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `design` | string | `"material"` | The skin that draws and measures the controls: `"material"`, or a skin the app registered in C++. An unknown name (or a value that isn't a string) reports an error (`theme.design: unknown design 'x' (registered: 'material')`) and keeps `"material"`. See [Designs](#designs). |
-| `preset` | string | `"material"` | `"material"` maps the scheme onto `ImGuiStyle`. `"imgui-dark"`, `"imgui-light"` and `"imgui-classic"` use ImGui's stock styles instead. Material widgets always draw with the scheme. |
+| `design` | string | `"material"` | The skin that draws and measures the controls: `"material"`, `"fluent"`, or a skin the app registered in C++. An unknown name (or a value that isn't a string) reports an error (`theme.design: unknown design 'x' (registered: 'fluent', 'material')`) and keeps `"material"`. See [Designs](#designs). |
+| `tokens` | `{ token = value }` | the design's | Overrides of the design's metrics: control height, radii, strokes, focus and underline styles, padding, density. Fluent draws with them; Material ignores them. An unknown token, or a value of the wrong kind or out of range, reports an error and keeps the default. See [Tokens](#tokens). |
+| `preset` | string | `"material"` | `"material"` maps the scheme onto `ImGuiStyle` (under design `"fluent"`: the Fluent colors and the tokens, see [The Fluent design](#the-fluent-design)). `"imgui-dark"`, `"imgui-light"` and `"imgui-classic"` use ImGui's stock styles instead. The skins always draw with the scheme. |
 | `seed` | color | `"#6750A4"` | Seed color: hex, `{r,g,b,a}`, or a role (`"primary"`, `"tertiary/1"`) of the theme currently in effect. An invalid value reports an error and keeps the default. |
 | `dark` | bool | `true` | Dark or light scheme. |
 | `spacing` | number | `8` | Base unit for ImGui paddings and spacings. It's also the default gap in `Column` and `Row`. 0 to 10000. |
@@ -69,18 +71,101 @@ After the preset and the overrides, every style size is scaled by the DPI factor
 ## Designs
 
 `design` picks the **skin**: the C++ object that draws every control (buttons, toggles, fields, menus, cards,
-dialogs, tooltips, ...) and reports its natural size. imlui has one, `"material"` (Material 3), the default. An app
-adds its own in C++ with `registerSkin(name, factory)` (see [Writing a skin](extending.md#skins)), and a script picks
-it by name:
+dialogs, tooltips, ...), reports its natural size, and gives the chrome some elements draw themselves (window and bar
+backgrounds, table rules). imlui has two, `"material"` (Material 3, the default) and `"fluent"` (Fluent 2, the
+Windows 11 look). An app adds its own in C++ with `registerSkin(name, factory)` (see
+[Writing a skin](extending.md#skins)), and a script picks it by name:
 
 ```lua
-theme { design = "material" }
+theme { design = "fluent", dark = false, seed = "#0067C0" }
 ```
 
 A skin decides how controls look and how big they are; the rest of the theme stays what it is under every design:
 the color scheme and its roles (a skin draws with them), `shape`, `spacing`, `fontScale`, the fonts and the ImGui
 `preset`. The design switches with the theme, at the start of the next frame, and layouts follow the new sizes on
 that frame. `themeState` works too (`themeState { design = "material" }`).
+
+### The Fluent design
+
+`design = "fluent"` draws with the [tokens](#tokens) (Fluent's defaults, plus the theme's `tokens`) and with the
+[Fluent colors](#fluent-colors), derived from the same scheme roles Material uses: `primary` is the accent, so
+`seed` and `colors = { ... }` restyle it too. Fonts stay the theme's (Roboto by default; Segoe UI Variable can't be
+bundled), at Fluent's body size (`bodyMedium`, 14dp) for control labels.
+
+Fluent-drawn so far; the other controls are being added, and until then they draw Material:
+
+| What | Fluent look |
+|---|---|
+| `Button` | 32dp high (`controlHeight`), `paddingX` on each side, 4dp corners (`controlRadius`). `filled` and `tonal` are Fluent's **accent** button (an accent outline with `tokens = { buttonFill = "outline" }`), `outlined` and `elevated` the **standard** button (a subtle neutral fill, a 1dp stroke with a darker bottom edge), `text` the **subtle** button (transparent at rest), `fab` an accent button 16dp taller with the overlay radius (square without a label). Hover and press change the fill (no state layer); disabled uses Fluent's disabled fills. Keyboard focus (Tab, arrows; Space or Enter clicks) shows Fluent's focus rectangle: a `focusStrokeWidth` outer stroke `focusOffset` outside the button and a thin inner one. A mouse click shows none. |
+| `ApplicationWindow` | Fluent's solid background (unless `imgui = { WindowBg = ... }` sets it). |
+| `Window` | A layer over the background, a 1dp divider-colored border, title bars of the background color. |
+| `ScrollView` | The overlay radius (8dp) when it has no `rounding`. |
+| ImGui's own style | With the `"material"` preset: `FrameRounding`, `TabRounding` and `GrabRounding` = `controlRadius`; `WindowRounding`, `ChildRounding` and `PopupRounding` = `overlayRadius`; the border sizes = `strokeWidth`; `FramePadding` from `paddingX` and `controlHeight` (an ImGui frame is as high as a Fluent control); `ItemInnerSpacing.x` = `gap`; the colors from the Fluent colors (`WindowBg` = background, `PopupBg` = flyout, `FrameBg` = control fill, `Header*` = subtle fills, `Separator` and table borders = divider, `TextLink` = accent text, `NavCursor` = focus stroke, ...). So raw ImGui (scrollbars, popups, `InputText`, `TreeNode`, menu bars, `ImGuiDemo`) matches. `style` and `imgui` overrides still apply after it; the `imgui-*` presets are untouched. |
+
+### Tokens
+
+Tokens are a flat design's metrics. Each design has defaults; `tokens = { ... }` overrides some of them by name
+(lengths in dp, scaled by the DPI factor and zoom like everything else):
+
+```lua
+theme { design = "fluent", tokens = { controlHeight = 40, controlRadius = 8, density = 0.9 } }
+```
+
+| Token | Type | Range | Fluent | Material | Meaning |
+|---|---|---|---|---|---|
+| `controlHeight` | number | 8..200 | 32 | 40 | A standard control's height: buttons, text fields, combo boxes. |
+| `compactHeight` | number | 8..200 | 24 | 32 | A compact control's height: menu rows, small buttons. |
+| `controlRadius` | number | 0..100 | 4 | 20 | The corner radius of controls. |
+| `overlayRadius` | number | 0..100 | 8 | 28 | The corner radius of overlays and containers: cards, flyouts, dialogs. |
+| `strokeWidth` | number | 0..8 | 1 | 1 | A control's border width; 0: none. |
+| `focusStrokeWidth` | number | 0..8 | 2 | 2 | The keyboard focus rectangle's outer stroke; 0: none. |
+| `focusOffset` | number | 0..16 | 3 | 2 | How far the focus rectangle lies outside the control. |
+| `inputUnderline` | boolean | | `true` | `true` | Inputs carry an accent underline at their bottom edge when focused. |
+| `inputUnderlineWidth` | number | 0..8 | 2 | 2 | The focused underline's width (1dp at rest). |
+| `buttonFill` | `"filled"` or `"outline"` | | `"filled"` | `"filled"` | How accent buttons (`filled`, `tonal`) are drawn: an accent fill, or an accent outline with accent text. |
+| `paddingX` | number | 0..100 | 12 | 24 | The horizontal padding inside controls. |
+| `gap` | number | 0..100 | 8 | 8 | The gap between a control's parts: icon and label, label and glyph. |
+| `iconSize` | number | 8..64 | 16 | 18 | The size of icons inside controls. |
+| `density` | number | 0.5..2 | 1 | 1 | Multiplies heights, paddings and gaps (not radii or strokes): below 1 compact, above 1 roomy. |
+
+Under Fluent every token takes effect. Under Material they are **informational**: the Material widgets keep
+Material 3's own metrics, and `skin().tokens()` reports them (the Material column) whatever the theme overrides.
+A wrong token reports an error and is ignored, the token keeping its default: `theme.tokens: unknown token 'x'
+(known: controlHeight, ...)`, `theme.tokens.controlHeight: expected a number in 8..200`,
+`theme.tokens.inputUnderline: expected a boolean`, `theme.tokens.buttonFill: expected "filled" or "outline"`. A
+`Theme` built in C++ is held to the same rules by `setTheme`, which drops an override with a problem
+(`tokenProblem`).
+
+### Fluent colors
+
+The Fluent skin paints with Fluent 2's brushes, derived from the scheme (`imlui::fluent::colorsFor(scheme, dark)`,
+module `imlui.theme.fluent_colors`). Fluent's neutral brushes are white or black at an opacity; here **white** and
+**black** are roles, so they carry the scheme's tint and follow `colors = { ... }`: in a dark scheme white is
+`onSurface` and black `surfaceContainerLowest`, in a light one the other way round. The opacities are Fluent's
+(rounded here). Translucent colors are painted over whatever is below.
+
+| Fluent color | Dark | Light | Used for |
+|---|---|---|---|
+| `accent` / `accentHover` / `accentPressed` | `primary` / at 90% / at 80% | the same | accent buttons, checked toggles, sliders, the focused underline |
+| `accentDisabled` | white 16% | black 22% | a disabled accent fill |
+| `onAccent` | `onPrimary` | `onPrimary` | text and icons on accent (pressed: at 70%) |
+| `onAccentDisabled` | white 53% | white | text on a disabled accent fill |
+| `accentStroke` / `accentBottomStroke` | white 8% / black 14% | white 8% / black 40% | an accent control's border and its darker bottom edge |
+| `accentText` | `primary` | `primary` | hyperlinks, an outline accent button |
+| `control` / `controlHover` / `controlPressed` / `controlDisabled` | white 6% / 8% / 3% / 4% | white 70% / 50% / 30% / 30% | standard controls |
+| `controlInputActive` | black 70% | white | a focused text input |
+| `controlStroke` / `controlBottomStroke` | white 7% / white 9% | black 6% / black 16% | a standard control's border and bottom edge |
+| `controlStrongStroke` / `controlStrongStrokeDisabled` | white 54% / 16% | black 45% / 22% | unchecked checkbox and radio outlines, slider tracks, scrollbar thumbs |
+| `controlAlt` / `controlAltHover` / `controlAltPressed` | black 10% / white 4% / white 7% | black 2% / 6% / 9% | an unchecked checkbox's or radio's fill |
+| `subtle` / `subtleHover` / `subtlePressed` | transparent / white 6% / white 4% | transparent / black 4% / black 2% | text buttons, list rows, menu items |
+| `text` / `textSecondary` / `textTertiary` / `textDisabled` | white / 79% / 54% / 36% | black 90% / 61% / 45% / 36% | text |
+| `background` | `surfaceContainer` | `surfaceContainerLow` | the window background (Mica's solid fallback) |
+| `layer` | `background` 60% toward `surfaceContainerHigh` | `background` 50% toward white | content layers, `Window` |
+| `card` / `cardStroke` | white 5% / black 10% | white 70% / black 6% | cards |
+| `flyout` / `flyoutStroke` | `surfaceContainerHigh` / black 20% | `background` 60% toward white / black 6% | menus, popups, tooltips, dialogs |
+| `smoke` | black 30% | black 30% | the dim behind a modal |
+| `divider` | white 8% | black 8% | dividers, table rules |
+| `focusOuter` / `focusInner` | `text` / black 70% | `text` / white 70% | the keyboard focus rectangle |
 
 ## Scheme generation
 
@@ -143,10 +228,11 @@ All 34 roles, usable anywhere a color is accepted and in `theme{ colors = ... }`
 `inverseSurface`, `inverseOnSurface`, `inversePrimary`,
 `scrim`, `shadow`.
 
-With the `material` preset, ImGui's own colors are mapped from the roles: `WindowBg` = `surface`,
+With the `material` preset (and design `"material"`), ImGui's own colors are mapped from the roles: `WindowBg` = `surface`,
 `Text` = `onSurface`, `PopupBg` = `surfaceContainer`, `FrameBg` = `surfaceContainerHighest`,
 `Border` and `Separator` = `outlineVariant`, `TextLink` = `primary`, and so on. That way raw ImGui widgets, such
-as those in `ImGuiDemo`, match the theme.
+as those in `ImGuiDemo`, match the theme. Under design `"fluent"` they map from the
+[Fluent colors](#fluent-colors) instead.
 
 ## Color specs
 
@@ -249,6 +335,9 @@ Icon props: `icon` on `Button`, `IconButton`, `Chip`, `ListItem`, `NavigationIte
 `SegmentedButton` and `ComboBox`; `p:icon` in Canvas.
 
 ## States: hover, press, disabled
+
+These are Material's. The Fluent skin changes fills instead of drawing state layers, uses Fluent's disabled colors,
+and shows a focus rectangle for keyboard focus (see [The Fluent design](#the-fluent-design)).
 
 - **State layers.** Interactive widgets draw an animated overlay in their content color: **8%** on hover and
   **10%** while pressed. It fades in and out per widget ID.

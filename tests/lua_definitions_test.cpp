@@ -10,6 +10,7 @@ import std;
 import lua;
 import imlui.color;
 import imlui.app.config;
+import imlui.theme.skin_tokens;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.future;
@@ -921,6 +922,25 @@ TEST(LuaDefinitions, PreludeDefinitionsCoverEveryUiMember) {
         if #extra > 0 then error("not in the prelude: " .. table.concat(extra, ", "), 0) end
     )"),
               "");
+}
+
+// The theme table's `tokens` class names every token (imlui.theme.skin_tokens), with the right type, and nothing else.
+TEST(LuaDefinitions, ThemeTokensCoverEveryToken) {
+    std::string prelude = readSource(std::filesystem::path{IMLUI_RESOURCES_DIR} / "definitions" / "imlui.lua");
+    std::erase(prelude, '\r'); // a checkout may have CRLF line ends
+    const std::size_t begin = prelude.find("---@class ThemeTokens\n");
+    ASSERT_NE(begin, std::string::npos);
+    const std::string_view cls{prelude.data() + begin, prelude.find("\n\n", begin) - begin};
+    std::size_t fields = 0;
+    for (std::size_t at = cls.find("---@field "); at != std::string_view::npos; at = cls.find("---@field ", at + 1))
+        ++fields;
+    EXPECT_EQ(fields, tokenInfos().size());
+    for (const TokenInfo& info : tokenInfos()) {
+        const std::string_view type = info.kind == TokenKind::Number ? "number"
+                                      : info.kind == TokenKind::Bool ? "boolean"
+                                                                     : R"("filled"|"outline")";
+        EXPECT_NE(cls.find(std::format("---@field {}? {} ", info.name, type)), std::string_view::npos) << info.name;
+    }
 }
 
 TEST(LuaDefinitions, WritesBothFilesAndLeavesUnchangedOnesAlone) {

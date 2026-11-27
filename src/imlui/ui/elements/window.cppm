@@ -4,7 +4,7 @@ export module imlui.ui.elements.window;
 import std;
 
 import imgui;
-import imlui.theme.scheme;
+import imlui.skin;
 import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
@@ -134,17 +134,17 @@ void Window::render(Frame& frame) {
     if (menu) flags |= ImGuiWindowFlags_MenuBar;
     const bool closable = frame.node().has("open");
     bool keep = true;
-    const Scheme& s = frame.scheme();
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, s.surfaceContainerLow.vec4());
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, s.surfaceContainer.vec4());
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, s.surfaceContainerHigh.vec4());
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, frame.dp(1));
-    ImGui::PushStyleColor(ImGuiCol_Border, s.outlineVariant.vec4());
+    const Skin::WindowChrome chrome = skin().windowChrome();
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, chrome.background.vec4());
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, chrome.titleBar.vec4());
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, chrome.titleBarActive.vec4());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, chrome.borderSize);
+    ImGui::PushStyleColor(ImGuiCol_Border, chrome.border.vec4());
     const bool shown = ImGui::Begin(title.c_str(), closable ? &keep : nullptr, flags);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(4);
     if (shown) {
-        md::pushSurface(s.surfaceContainerLow);
+        md::pushSurface(chrome.background);
         if (menu) frame.renderElementProp("menuBar");
         if (autoResize) {
             // The window takes its content's width: a fill is the minimum width (`width`, else defaultFillWidth),

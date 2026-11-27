@@ -9,6 +9,7 @@ import lua.stack_guard;
 import imlui.color;
 import imlui.theme.font_library;
 import imlui.theme.scheme;
+import imlui.theme.skin_tokens;
 import imlui.theme.theme;
 import imlui.lua.errors;
 import imlui.lua.node;
@@ -201,6 +202,44 @@ Theme themeFromTable(lua::State* state, int idx, std::string_view script) {
             }
             lua::pop(state);
         }
+    }
+    lua::pop(state);
+
+    // Token overrides: tokens = { controlHeight = 40, inputUnderline = false, buttonFill = "outline" }
+    if (const lua::Type type = lua::getfield(state, idx, "tokens"); type == lua::Type::Table) {
+        int ct = lua::gettop(state);
+        lua::pushnil(state);
+        while (lua::next(state, ct)) {
+            // lua::tostring would convert a number key in place, which breaks lua::next.
+            if (lua::type(state, -2) != lua::Type::String) {
+                reportError("theme.tokens: keys must be token names");
+                lua::pop(state);
+                continue;
+            }
+            std::string name{lua::tostring(state, -2)};
+            // A value of another Lua type (a table, a function) reads as NaN, which every token rejects with what
+            // it expects.
+            TokenValue value = std::numeric_limits<float>::quiet_NaN();
+            switch (lua::type(state, -1)) {
+            case lua::Type::Number: value = styleFloat(lua::tonumber(state, -1)); break;
+            case lua::Type::Boolean: value = lua::toboolean(state, -1); break;
+            case lua::Type::String: value = std::string{lua::tostring(state, -1)}; break;
+            default: break;
+            }
+            if (!findToken(name)) {
+                std::string known;
+                for (const TokenInfo& info : tokenInfos())
+                    known += (known.empty() ? "" : ", ") + std::string{info.name};
+                reportError("theme.tokens: unknown token '" + name + "' (known: " + known + ")");
+            } else if (const std::string problem = tokenProblem(name, value); !problem.empty()) {
+                reportError("theme.tokens." + name + ": " + problem);
+            } else {
+                t.tokens.push_back({std::move(name), std::move(value)});
+            }
+            lua::pop(state);
+        }
+    } else if (type != lua::Type::Nil) {
+        reportError("theme.tokens: expected a table");
     }
     lua::pop(state);
 

@@ -7,7 +7,6 @@ import std;
 import lua;
 import imgui;
 import imlui.color;
-import imlui.theme.scheme;
 import imlui.widgets.card;
 import imlui.widgets.table;
 import imlui.skin;
@@ -44,7 +43,7 @@ public:
     void setCurrentRow(int row);
 
 private:
-    void renderRows(const Frame& frame, float rowHeight, int columnCount);
+    void renderRows(const Frame& frame, float rowHeight, int columnCount, Color selectedText);
 
     std::vector<std::string> m_columns;
     double m_rowHeight = 52.0;
@@ -90,15 +89,15 @@ void Table::render(Frame& frame) {
     if (m_columns.size() > maxColumns)
         luaui::reportError(std::format("Table: {} columns, at most {} are shown", m_columns.size(), maxColumns));
     const int columnCount = static_cast<int>(std::min(m_columns.size(), maxColumns));
-    const Scheme& s = frame.scheme();
-    const float rowH = frame.dp(static_cast<float>(m_rowHeight)), headH = frame.dp(56);
+    const Skin::TableChrome chrome = skin().tableChrome();
+    const float rowH = frame.dp(static_cast<float>(m_rowHeight)), headH = chrome.headerHeight;
     if (m_outlined)
         skin().beginCard("##tablecard", md::CardVariant::Outlined, frame.size("width"), 0.0f, 0.0f, std::nullopt,
                          -1.0f);
-    ImGui::PushStyleColor(ImGuiCol_TableBorderLight, s.outlineVariant.vec4());
-    ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, s.outlineVariant.vec4());
-    ImGui::PushStyleColor(ImGuiCol_Header, s.secondaryContainer.vec4());
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {frame.dp(16), 0});
+    ImGui::PushStyleColor(ImGuiCol_TableBorderLight, chrome.border.vec4());
+    ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, chrome.border.vec4());
+    ImGui::PushStyleColor(ImGuiCol_Header, chrome.header.vec4());
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {chrome.cellPaddingX, 0});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {frame.dp(8), 0});
     const ImGuiTableFlags flags =
         ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX;
@@ -112,7 +111,7 @@ void Table::render(Frame& frame) {
             ImGui::TableNextColumn();
             skin().tableHeaderCell(m_columns[static_cast<std::size_t>(c)], headH);
         }
-        renderRows(frame, rowH, columnCount);
+        renderRows(frame, rowH, columnCount, chrome.selectedText);
         ImGui::EndTable();
     }
     ImGui::PopStyleVar(2);
@@ -120,10 +119,9 @@ void Table::render(Frame& frame) {
     if (m_outlined) skin().endCard();
 }
 
-void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
+void Table::renderRows(const Frame& frame, float rowH, int columnCount, Color selectedText) {
     const luaui::Node& n = frame.node();
     lua::State* state = n.state();
-    const Scheme& s = frame.scheme();
     // A click is handled after the loop: its handlers may change `rows` (remove the clicked row, ...), while the
     // loop walks this frame's rows table and count.
     int clicked = 0;
@@ -161,7 +159,7 @@ void Table::renderRows(const Frame& frame, float rowH, int columnCount) {
                         ImGui::PopID();
                     }
                     skin().tableCell(cell, rowH,
-                                     selected == i ? std::optional<Color>{s.onSecondaryContainer} : std::nullopt);
+                                     selected == i ? std::optional<Color>{selectedText} : std::nullopt);
                 }
                 lua::pop(state);
             }
