@@ -730,7 +730,7 @@ ApplicationWindow { menuBar = MenuBar {
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `text` | string | `""` | Positional. Content. |
-| `style` | style | `"bodyLarge"` | Type-scale role. Unknown names draw as `bodyLarge`. |
+| `style` | `TextStyle`: `"displayLarge"` \| ... \| `"labelSmall"` | `"bodyLarge"` | Type-scale role, one of the 15 [type scale](theming.md#typography) names. An unknown name is reported (with the names) and the text keeps its style. |
 | `color` | color | — | Text color. Unset: the theme's text color (`onSurface`). |
 | `wrap` | bool | `false` | Wraps at the available width (a fixed `Column`'s, a `Grid` cell's, ...). In a `Row`, wrapping text takes a share of the free width and wraps at it. |
 | `align` | `"start"` \| `"center"` \| `"end"` | `"start"` | Position of the line in the available width. Ignored while `wrap` is on. Aligned text fills: it is as wide as the available width (its offset and its line), and takes a share of a `Row`. |
@@ -759,12 +759,12 @@ and drawn as a texture. It's drawn at its natural size times the DPI scale (one 
 |---|---|---|---|
 | `source` | string | `""` | Positional. A resource name: `app:/img/logo.png`, or relative (`logo.png`, `../img/x.jpg`) to the folder of the script that created the `Image` (a relative name from a binding too). Empty: nothing is drawn and no space is taken. |
 | `width`, `height` | size | `0` | *Raw.* Unset: the natural size times the DPI scale. Only one set: the other follows the image's aspect ratio. Fill values work. |
-| `fillMode` | `"stretch"` \| `"fit"` \| `"crop"` \| `"tile"` | `"stretch"` | How the image fills its size when the aspect ratios differ: stretched; scaled to fit inside, centered (`preserveAspectFit` too); scaled to cover, centered and cut off (`preserveAspectCrop` too); repeated at its natural size from the top left. An unknown name is reported and stretches. |
+| `fillMode` | `"stretch"` \| `"fit"` \| `"crop"` \| `"tile"` | `"stretch"` | How the image fills its size when the aspect ratios differ: stretched; scaled to fit inside, centered; scaled to cover, centered and cut off; repeated at its natural size from the top left. QML's `"preserveAspectFit"` and `"preserveAspectCrop"` are aliases of `"fit"` and `"crop"`. An unknown name is reported (with the names) and the image keeps its fill mode. |
 | `radius` | number | `0` | Corner radius (dp). With `fit`, the corners of the drawn image; not applied to `tile`. `radius` = half the size and `crop` make a circle. |
 | `opacity` | number | `1` | 0 to 1. |
 | `tint` | color | — | Multiplies the pixels (`"primary"`, `"#FFFFFF80"`); its alpha multiplies the opacity. |
 | `smooth` | bool | `true` | `false` samples the nearest pixel (pixel art, scaled-up icons) instead of filtering. |
-| `status` | string | — | *Read-only.* `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render. Decoding happens on the first render that needs it. |
+| `status` | `"loading"` \| `"ready"` \| `"error"` \| `"none"` | — | *Read-only* (`ImageStatus`). `"ready"`, `"error"` (missing or undecodable file), `"none"` (no source), or `"loading"` before the first render. Decoding happens on the first render that needs it. |
 | `implicitWidth`, `implicitHeight` | number | `0` | *Read-only.* The image's size in pixels (dp at its natural size); 0 until it's ready. |
 
 Images are PNG or JPEG, at most 16384 pixels on a side and 256 MiB of pixels (4 bytes each, 8192 x 8192:
@@ -983,7 +983,7 @@ A numeric field (56dp) with decrement and increment icon buttons.
 | `stepSize` | number | `1` | Button step. |
 | `decimals` | integer | `0` | Shown decimals, clamped to 0..15. |
 | `label` | string | `""` | Floating label. |
-| `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
+| `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
 | `width` | size | `0` (200dp) | *Raw.* |
 
 **Signals:** `onValueModified(self, value)`.
@@ -999,12 +999,12 @@ multi-line. Clicking anywhere in the container (but the trailing icon) focuses t
 | `text` | string | `""` | **two-way.** Content. |
 | `label` | string | `""` | Floating label. |
 | `placeholderText` | string | `""` | Hint, shown while focused (or always if there's no label). Single-line only. |
-| `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
+| `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
 | `leadingIcon`, `trailingIcon` | icon | `""` | Icons. The trailing icon is clickable. |
 | `supportingText` | string | `""` | Helper text below. Error-colored while `error` is set. |
 | `error` | bool | `false` | Error colors. |
 | `password` | bool | `false` | Masks the input and adds a visibility toggle, unless `trailingIcon` is set. |
-| `echoMode` | string | `""` | `"password"` does the same as `password = true`. |
+| `echoMode` | `"normal"` \| `"password"` | `"normal"` | `"password"` does the same as `password = true`. `""` is an alias of `"normal"`. |
 | `readOnly` | bool | `false` | |
 | `width` | size | `0` (fill) | *Raw.* |
 | `height` | size | `0` (`TextArea`: 120dp) | *Raw.* **`TextArea` only;** a single-line field is always 56dp. |
@@ -1031,7 +1031,7 @@ A Material exposed dropdown menu: a text-field look, with the menu anchored belo
 | `label` | string | `""` | Floating label. |
 | `leadingIcon` | icon | `""` | |
 | `supportingText` | string | `""` | |
-| `variant` | `"filled"` \| `"outlined"` | `"filled"` | |
+| `variant` | `"filled"` \| `"outlined"` | `"filled"` | `FieldVariant`. An unknown name is reported. |
 | `error` | bool | `false` | |
 | `width` | size | `0` (240dp) | *Raw.* |
 
@@ -1092,7 +1092,7 @@ A line or bar chart with a grid, a gradient area and a hover readout.
 | Prop | Type | Default | Notes |
 |---|---|---|---|
 | `values` | list of numbers | `{}` | Data. Non-finite values (NaN, ±inf) are gaps: no point, bar or readout, the line breaks around them, and the automatic range ignores them. |
-| `kind` | `"lines"` \| `"bars"` \| `"histogram"` | `"lines"` | `histogram` is the same as `bars`. |
+| `kind` | `"lines"` \| `"bars"` | `"lines"` | `"histogram"` is an alias of `"bars"`. An unknown name is reported. |
 | `fill` | bool | `true` | Gradient area under lines. |
 | `title` | string | — | Chart title. Unset: `label`. |
 | `label` | string | `""` | Chart title when `title` isn't set. |
@@ -1157,7 +1157,7 @@ use ImGui's anti-aliased lines.
 | `p:line(x1, y1, x2, y2, color, thickness)` | `color = "onSurface"`, `thickness = 1` |
 | `p:rect(x, y, w, h, color, rounding, outline, thickness)` | `color = "primary"`, `rounding = 0`, `outline = false` (filled), `thickness = 1` |
 | `p:circle(cx, cy, r, color, outline, thickness)` | `color = "primary"`, `outline = false` (filled), `thickness = 1` |
-| `p:text(x, y, text, color, style, font)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"`, `font` = a [named font](theming.md#fonts) (unset: the style's face) |
+| `p:text(x, y, text, color, style, font)` | top-left at `(x, y)`, `color = "onSurface"`, `style = "bodyMedium"` (a `TextStyle` name; any other value raises an error), `font` = a [named font](theming.md#fonts) (unset: the style's face) |
 | `p:icon(cx, cy, name, size, color)` | centered on `(cx, cy)`, `size = 24`, `color = "onSurfaceVariant"`; a size below a pixel draws nothing, the glyph is at most 1024 pixels |
 | `p:polyline({x1, y1, x2, y2, ...}, color, thickness, closed)` | `color = "primary"`, `thickness = 1`, `closed = false` |
 

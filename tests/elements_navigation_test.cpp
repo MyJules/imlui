@@ -129,15 +129,13 @@ TEST_F(NavigationElementsTest, TextTakesItsPropsAndPositionalTextAndLabelIsAnAli
             Text { id = "positional", "hello" },
             Text { id = "styled", text = function() return s.t end, style = "titleMedium", color = "#FF0000",
                    wrap = true, align = "center" },
-            Text { id = "unknownStyle", text = "x", style = "nope" },
             Label { id = "label", "a label" },
         })");
     frames();
     const Text* plain = m_h.instance<Text>("plain");
     ASSERT_NE(plain, nullptr);
     EXPECT_EQ(plain->text(), "");
-    EXPECT_EQ(plain->style(), "bodyLarge");
-    EXPECT_EQ(plain->textStyle(), TextStyle::BodyLarge);
+    EXPECT_EQ(plain->style(), TextStyle::BodyLarge);
     EXPECT_FALSE(plain->color().has_value());
     EXPECT_FALSE(plain->wrap());
     EXPECT_EQ(plain->align(), "start");
@@ -145,12 +143,11 @@ TEST_F(NavigationElementsTest, TextTakesItsPropsAndPositionalTextAndLabelIsAnAli
     EXPECT_EQ(m_h.instance<Text>("positional")->text(), "hello");
     const Text* styled = m_h.instance<Text>("styled");
     EXPECT_EQ(styled->text(), "bound");
-    EXPECT_EQ(styled->textStyle(), TextStyle::TitleMedium);
+    EXPECT_EQ(styled->style(), TextStyle::TitleMedium);
     ASSERT_TRUE(styled->color().has_value());
     EXPECT_EQ(*styled->color(), (Color{1.0f, 0.0f, 0.0f, 1.0f}));
     EXPECT_TRUE(styled->wrap());
     EXPECT_EQ(styled->align(), "center");
-    EXPECT_EQ(m_h.instance<Text>("unknownStyle")->textStyle(), TextStyle::BodyLarge);
     ASSERT_NE(m_h.instance<Text>("label"), nullptr);
     EXPECT_EQ(m_h.instance<Text>("label")->text(), "a label");
 
@@ -160,6 +157,20 @@ TEST_F(NavigationElementsTest, TextTakesItsPropsAndPositionalTextAndLabelIsAnAli
     // A non-empty text takes space; an empty one is a zero-width line.
     EXPECT_GT(rects["positional"].width(), 0.0f);
     expectNoErrors();
+}
+
+// A style is one of the TextStyle names: a typo is reported with the names, and the text keeps its style.
+TEST_F(NavigationElementsTest, TextReportsAnUnknownStyle) {
+    run(R"(root = Probe { Text { id = "t", "x", style = "titleSmall" } })");
+    frames();
+    run(R"(t.style = "titelSmall")");
+    frames();
+    EXPECT_EQ(m_h.instance<Text>("t")->style(), TextStyle::TitleSmall);
+    ASSERT_EQ(luaui::errors().size(), 1u);
+    EXPECT_NE(luaui::errors()[0].find(R"(Text.style: TextStyle ('displayLarge'|)"), std::string::npos)
+        << luaui::errors()[0];
+    EXPECT_NE(luaui::errors()[0].find(R"(|'labelSmall') expected, got string "titelSmall")"), std::string::npos)
+        << luaui::errors()[0];
 }
 
 TEST_F(NavigationElementsTest, IconPicksNameThenIconThenText) {

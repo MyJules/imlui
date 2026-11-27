@@ -8,6 +8,7 @@ import imlui.skin;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
@@ -38,8 +39,8 @@ public:
     void setDecimals(int decimals);
     [[nodiscard]] const std::string& label() const;
     void setLabel(std::string label);
-    [[nodiscard]] const std::string& variant() const;
-    void setVariant(std::string variant);
+    [[nodiscard]] FieldVariant variant() const;
+    void setVariant(FieldVariant variant);
 
 private:
     double m_value = 0.0;
@@ -48,7 +49,7 @@ private:
     double m_stepSize = 1.0;
     int m_decimals = 0;
     std::string m_label;
-    std::string m_variant = "filled";
+    FieldVariant m_variant = FieldVariant::Filled;
 };
 
 } // namespace imlui
@@ -91,7 +92,7 @@ void SpinBox::render(Frame& frame) {
     // decimal digits anyway.
     const int decimals = std::clamp(m_decimals, 0, maxDecimals);
     if (skin().spinBox("##spin", &v, m_from, m_to, m_stepSize, decimals, m_label, frame.size("width"),
-                       m_variant == "outlined")) {
+                       m_variant == FieldVariant::Outlined)) {
         m_value = v;
         notify("value");
         emit("onValueModified", m_value);
@@ -110,11 +111,11 @@ int SpinBox::decimals() const { return m_decimals; }
 void SpinBox::setDecimals(int decimals) { m_decimals = decimals; }
 const std::string& SpinBox::label() const { return m_label; }
 void SpinBox::setLabel(std::string label) { m_label = std::move(label); }
-const std::string& SpinBox::variant() const { return m_variant; }
-void SpinBox::setVariant(std::string variant) { m_variant = std::move(variant); }
+FieldVariant SpinBox::variant() const { return m_variant; }
+void SpinBox::setVariant(FieldVariant variant) { m_variant = variant; }
 
 std::optional<ImVec2> SpinBox::intrinsicSize(const Frame& frame, float maxWidth) {
-    return skin().spinBoxSize(m_label, frame.widthIn(maxWidth), m_variant == "outlined");
+    return skin().spinBoxSize(m_label, frame.widthIn(maxWidth), m_variant == FieldVariant::Outlined);
 }
 
 } // namespace imlui

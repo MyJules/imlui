@@ -11,6 +11,7 @@ import imlui.widgets;
 import imlui.types.element;
 import imlui.types.frame;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
@@ -28,9 +29,9 @@ public:
 
     [[nodiscard]] const std::string& text() const;
     void setText(std::string text);
-    /// A type-scale role name ("bodyLarge", "titleMedium", ...); unknown names draw as bodyLarge.
-    [[nodiscard]] const std::string& style() const;
-    void setStyle(std::string style);
+    /// A type-scale role ("bodyLarge", "titleMedium", ... in Lua).
+    [[nodiscard]] TextStyle style() const;
+    void setStyle(TextStyle style);
     [[nodiscard]] const std::optional<Color>& color() const;
     void setColor(std::optional<Color> color);
     [[nodiscard]] bool wrap() const;
@@ -46,13 +47,9 @@ public:
     [[nodiscard]] const std::string& font() const;
     void setFont(std::string font);
 
-    /// The style drawn (`style` resolved).
-    [[nodiscard]] TextStyle textStyle() const;
-
 private:
     std::string m_text;
-    std::string m_style = "bodyLarge";
-    TextStyle m_textStyle = TextStyle::BodyLarge;
+    TextStyle m_style = TextStyle::BodyLarge;
     std::optional<Color> m_color;
     bool m_wrap = false;
     std::string m_align = "start";
@@ -72,8 +69,8 @@ void Text::declare(TypeBuilder<Text>& type) {
         .property("text", &Text::text, &Text::setText)
         .doc("The content. The positional value: `Text { \"Hello\" }`.")
         .property("style", &Text::style, &Text::setStyle)
-        .doc("A type-scale role: `\"bodyLarge\"` (default), `\"titleMedium\"`, `\"headlineSmall\"`, ...; unknown "
-             "names draw as `bodyLarge`.")
+        .doc("A type-scale role: `\"bodyLarge\"` (default), `\"titleMedium\"`, `\"headlineSmall\"`, ... (a "
+             "`TextStyle`).")
         .property("color", &Text::color, &Text::setColor)
         .doc("The text color; unset: the theme's text color (`onSurface`).")
         .property("wrap", &Text::wrap, &Text::setWrap)
@@ -90,21 +87,18 @@ void Text::declare(TypeBuilder<Text>& type) {
 
 void Text::render(Frame&) {
     FontFaceScope face{m_font};
-    md::text(m_text, m_textStyle, m_color, m_wrap, Frame::alignFactor(m_align));
+    md::text(m_text, m_style, m_color, m_wrap, Frame::alignFactor(m_align));
 }
 
 std::optional<ImVec2> Text::intrinsicSize(const Frame&, float maxWidth) {
     FontFaceScope face{m_font};
-    return md::textSize(m_text, m_textStyle, m_wrap, Frame::alignFactor(m_align), maxWidth);
+    return md::textSize(m_text, m_style, m_wrap, Frame::alignFactor(m_align), maxWidth);
 }
 
 const std::string& Text::text() const { return m_text; }
 void Text::setText(std::string text) { m_text = std::move(text); }
-const std::string& Text::style() const { return m_style; }
-void Text::setStyle(std::string style) {
-    m_style = std::move(style);
-    m_textStyle = textStyleFromName(m_style).value_or(TextStyle::BodyLarge);
-}
+TextStyle Text::style() const { return m_style; }
+void Text::setStyle(TextStyle style) { m_style = style; }
 const std::optional<Color>& Text::color() const { return m_color; }
 void Text::setColor(std::optional<Color> color) { m_color = color; }
 bool Text::wrap() const { return m_wrap; }
@@ -114,6 +108,5 @@ const std::string& Text::align() const { return m_align; }
 void Text::setAlign(std::string align) { m_align = std::move(align); }
 const std::string& Text::font() const { return m_font; }
 void Text::setFont(std::string font) { m_font = std::move(font); }
-TextStyle Text::textStyle() const { return m_textStyle; }
 
 } // namespace imlui

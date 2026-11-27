@@ -12,14 +12,17 @@ import imlui.image.fill_mode;
 import imlui.image.image_cache;
 import imlui.types.element;
 import imlui.types.frame;
+import imlui.types.lua_convert;
 import imlui.types.type_builder;
+import imlui.ui.enum_names;
 
 export namespace imlui {
 
 /// A PNG or JPEG image from the app's resources, decoded once per resource name and drawn as a texture.
 ///
 /// Props:   source = "" (positional; a resource name, relative ones resolved against the folder of the script
-///          that created the Image), fillMode = "stretch" ("fit", "crop", "tile"), radius = 0 (dp), opacity = 1,
+///          that created the Image), fillMode = "stretch" ("fit", "crop", "tile";
+///          "preserveAspectFit" is fit, "preserveAspectCrop" crop), radius = 0 (dp), opacity = 1,
 ///          tint = unset (multiplies the pixels), smooth = true (false: nearest-neighbor sampling)
 /// Read-only: status ("loading", "ready", "error", or "none" without a source), implicitWidth, implicitHeight
 ///          (the image's size in pixels, drawn as dp)
@@ -30,6 +33,9 @@ export namespace imlui {
 /// A missing or undecodable file is reported once and drawn as a placeholder (a broken-image icon).
 class Image final : public Element {
 public:
+    /// Where the image is: its read-only `status`.
+    enum class Status { Loading, Ready, Error, None };
+
     static void declare(TypeBuilder<Image>& type);
 
     void render(Frame& frame) override;
@@ -39,8 +45,8 @@ public:
 
     [[nodiscard]] const std::string& source() const;
     void setSource(std::string source);
-    [[nodiscard]] const std::string& fillMode() const;
-    void setFillMode(std::string fillMode);
+    [[nodiscard]] FillMode fillMode() const;
+    void setFillMode(FillMode fillMode);
     [[nodiscard]] float radius() const; ///< dp
     void setRadius(float radius);
     [[nodiscard]] double opacity() const;
@@ -50,7 +56,7 @@ public:
     [[nodiscard]] bool smooth() const;
     void setSmooth(bool smooth);
 
-    [[nodiscard]] const std::string& status() const;
+    [[nodiscard]] Status status() const;
     [[nodiscard]] double implicitWidth() const;
     [[nodiscard]] double implicitHeight() const;
 
@@ -71,17 +77,17 @@ private:
     [[nodiscard]] Lookup lookup(const Frame& frame) const;
 
     /// Sets the read-only properties and tells Lua about the ones that changed.
-    void publish(std::string status, double implicitWidth, double implicitHeight);
+    void publish(Status status, double implicitWidth, double implicitHeight);
     /// Reports `message` to the error overlay the first time this element meets it.
     void reportOnce(const std::string& message);
 
     std::string m_source;
-    std::string m_fillMode{"stretch"};
+    FillMode m_fillMode = FillMode::Stretch;
     float m_radius = 0.0f;
     double m_opacity = 1.0;
     std::optional<Color> m_tint;
     bool m_smooth = true;
-    std::string m_status{"loading"};
+    Status m_status = Status::Loading;
     double m_implicitWidth = 0.0;
     double m_implicitHeight = 0.0;
     ImVec2 m_lastSize{0.0f, 0.0f};
@@ -90,6 +96,18 @@ private:
 };
 
 } // namespace imlui
+
+template <>
+struct imlui::EnumNames<imlui::Image::Status> {
+    static constexpr std::string_view name = "ImageStatus";
+    static constexpr std::string_view doc = "Where an Image is: loading, ready, error or none (no source).";
+    static constexpr std::pair<imlui::Image::Status, std::string_view> values[] = {
+        {imlui::Image::Status::Loading, "loading"},
+        {imlui::Image::Status::Ready, "ready"},
+        {imlui::Image::Status::Error, "error"},
+        {imlui::Image::Status::None, "none"},
+    };
+};
 
 module :private;
 
@@ -112,7 +130,8 @@ void Image::declare(TypeBuilder<Image>& type) {
              "`Image`. The positional value. `\"\"`: nothing is drawn and no space is taken.")
         .property("fillMode", &Image::fillMode, &Image::setFillMode)
         .doc("How the image fills its size when the aspect ratios differ: `\"stretch\"` (default), `\"fit\"` (inside, "
-             "centered), `\"crop\"` (covers it, centered and cut off) or `\"tile\"` (repeated at its natural size).")
+             "centered), `\"crop\"` (covers it, centered and cut off) or `\"tile\"` (repeated at its natural size). "
+             "QML's `\"preserveAspectFit\"` and `\"preserveAspectCrop\"` are `\"fit\"` and `\"crop\"`.")
         .property("radius", &Image::radius, &Image::setRadius)
         .doc("The corner radius (dp); not applied to `\"tile\"`. Half the size with `\"crop\"`: a circle.")
         .property("opacity", &Image::opacity, &Image::setOpacity)
@@ -165,13 +184,12 @@ void Image::render(Frame& frame) {
     const ImageCache::Image* image = found.image;
     const std::string& error = found.error;
     m_resolved = found.resolved;
-    const auto mode = parseFillMode(m_fillMode);
-    if (!mode) reportOnce("Image: unknown fillMode '" + m_fillMode + "' (stretch, fit, crop or tile)");
     if (!error.empty()) reportOnce(error);
 
     const bool ready = image && image->ready();
     const ImVec2 natural = found.natural;
-    publish(ready ? "ready" : !error.empty() ? "error" : "none", ready ? image->width() : 0, ready ? image->height() : 0);
+    const Status status = ready ? Status::Ready : !error.empty() ? Status::Error : Status::None;
+    publish(status, ready ? image->width() : 0, ready ? image->height() : 0);
 
     // Lay out: one item of the computed size.
     // Unset (0) stays 0: imageSize() then derives the size from the image.
@@ -196,7 +214,7 @@ void Image::render(Frame& frame) {
     color.a *= static_cast<float>(std::clamp(m_opacity, 0.0, 1.0)) * ImGui::GetStyle().Alpha; // Alpha: disabled
     const ImU32 col = color.u32();
     const ImTextureRef texture = image->texture();
-    const auto quads = placeImage(pos, size, natural, frame.dp(1.0f), mode.value_or(FillMode::Stretch));
+    const auto quads = placeImage(pos, size, natural, frame.dp(1.0f), m_fillMode);
 
     // Nearest-neighbor sampling through the backend's standard draw callbacks (absent without a backend).
     const ImGuiPlatformIO& io = ImGui::GetPlatformIO();
@@ -211,11 +229,11 @@ void Image::render(Frame& frame) {
     if (nearest) dl->AddCallback(io.DrawCallback_SetSamplerLinear, nullptr);
 }
 
-void Image::publish(std::string status, double implicitWidth, double implicitHeight) {
+void Image::publish(Status status, double implicitWidth, double implicitHeight) {
     const bool statusChanged = status != m_status;
     const bool widthChanged = implicitWidth != m_implicitWidth;
     const bool heightChanged = implicitHeight != m_implicitHeight;
-    m_status = std::move(status);
+    m_status = status;
     m_implicitWidth = implicitWidth;
     m_implicitHeight = implicitHeight;
     if (widthChanged) notify("implicitWidth");
@@ -229,8 +247,8 @@ void Image::reportOnce(const std::string& message) {
 
 const std::string& Image::source() const { return m_source; }
 void Image::setSource(std::string source) { m_source = std::move(source); }
-const std::string& Image::fillMode() const { return m_fillMode; }
-void Image::setFillMode(std::string fillMode) { m_fillMode = std::move(fillMode); }
+FillMode Image::fillMode() const { return m_fillMode; }
+void Image::setFillMode(FillMode fillMode) { m_fillMode = fillMode; }
 float Image::radius() const { return m_radius; }
 void Image::setRadius(float radius) { m_radius = radius; }
 double Image::opacity() const { return m_opacity; }
@@ -240,7 +258,7 @@ void Image::setTint(std::optional<Color> tint) { m_tint = tint; }
 bool Image::smooth() const { return m_smooth; }
 void Image::setSmooth(bool smooth) { m_smooth = smooth; }
 
-const std::string& Image::status() const { return m_status; }
+Image::Status Image::status() const { return m_status; }
 double Image::implicitWidth() const { return m_implicitWidth; }
 double Image::implicitHeight() const { return m_implicitHeight; }
 
