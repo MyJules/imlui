@@ -26,13 +26,16 @@ public:
     /// it still doesn't after `timeout`.
     bool runUntil(const std::function<bool()>& done, std::chrono::seconds timeout = std::chrono::seconds{10});
 
-    /// Waits until at least `count` posts (wakes) were made since this waiter was created, without running them.
+    /// Waits until at least `count` more functions are queued than when this waiter was created, without running them
+    /// (so call it before runUntil(), which runs them). Only a post into an empty queue wakes the waiter, so it also
+    /// looks at the queue's length every millisecond.
     bool waitForPosts(std::size_t count, std::chrono::seconds timeout = std::chrono::seconds{10});
 
 private:
     std::mutex m_mutex;
     std::condition_variable m_posted;
-    std::size_t m_posts = 0; ///< guarded by m_mutex
+    std::size_t m_posts = 0;  ///< guarded by m_mutex
+    std::size_t m_queued = 0; ///< postedCount() when the waiter was created
 };
 
 } // namespace imlui::test
@@ -41,9 +44,9 @@ module :private;
 
 namespace imlui::test {
 
-// The handler runs with the queue's lock held: it only takes m_mutex, and nothing here holds m_mutex while calling
-// into the queue, so the two locks are never taken in the other order.
-PostWaiter::PostWaiter() {
+// The handler runs on the posting thread, outside the queue's lock, for a post that found the queue empty: counting
+// those is enough, as runUntil() runs the queue (emptying it) before it waits for the next one.
+PostWaiter::PostWaiter() : m_queued{postedCount()} {
     setPostWakeHandler([this] {
         {
             const std::scoped_lock lock{m_mutex};
@@ -71,8 +74,15 @@ bool PostWaiter::runUntil(const std::function<bool()>& done, std::chrono::second
 }
 
 bool PostWaiter::waitForPosts(std::size_t count, std::chrono::seconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto done = [&] { return postedCount() >= m_queued + count; };
     std::unique_lock lock{m_mutex};
-    return m_posted.wait_for(lock, timeout, [&] { return m_posts >= count; });
+    while (!done()) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        // Woken by the first post; the ones after it don't wake (the queue isn't empty), hence the short wait.
+        m_posted.wait_for(lock, std::chrono::milliseconds{1});
+    }
+    return true;
 }
 
 } // namespace imlui::test
